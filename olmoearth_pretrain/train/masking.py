@@ -1881,6 +1881,18 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
             for m in batch.modalities
             if m not in self.only_decode_modalities + ["timestamps"] + none_modalites
         ]
+
+        has_decode_only_modalities = (
+            len(
+                [
+                    m
+                    for m in batch.modalities
+                    if m in self.only_decode_modalities and m not in none_modalites
+                ]
+            )
+            > 0
+        )
+
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
             missing_per_time: torch.Tensor | None = None
@@ -1924,7 +1936,8 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
 
-            if len(encode_decode_bandsets) == 1:
+            if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
+                # this branch should barely ever trigger
                 modality_name, bandset_idx = encode_decode_bandsets[0]
                 masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                     modality_name

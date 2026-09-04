@@ -58,9 +58,14 @@ from rslearn.dataset.dataset import Dataset as RslearnDataset
 from tqdm import tqdm
 from upath import UPath
 
+from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES
 from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
+)
+from olmoearth_pretrain.evals.studio_ingest.provenance import (
+    repo_relative_config_dir,
+    sha256_of_file,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     EvalDatasetEntry,
@@ -160,6 +165,11 @@ class IngestConfig:
         # Archive handling
         untar_source: If True, source_path points to a .tar.gz archive on GCS
             that will be streamed and extracted directly to the destination.
+
+        # Timestamps
+        start_time: Imagery time range start ("YYYY-MM-DD"), recorded on the
+            registry entry so eval-time timestamps match the imagery months.
+        end_time: Imagery time range end ("YYYY-MM-DD").
     """
 
     # Required
@@ -181,6 +191,14 @@ class IngestConfig:
 
     # Archive handling
     untar_source: bool = False
+
+    # Timestamps
+    start_time: str | None = None
+    end_time: str | None = None
+
+    # Re-ingest behavior: refresh the model.yaml copy at the dataset folder
+    # instead of keeping an existing (possibly stale) one.
+    overwrite_configs: bool = False
 
 
 # =============================================================================
@@ -253,13 +271,18 @@ def _ensure_config_json(dataset_path: str, model_config_dir: str) -> None:
     logger.info("  Wrote config.json to dataset folder")
 
 
-def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
+def _copy_model_yaml(
+    dataset_path: str, model_config_dir: str, overwrite: bool = False
+) -> None:
     """Copy model.yaml into the dataset folder for canonical access at eval time.
 
-    Skips if model.yaml already exists in the dataset folder.
+    Skips if model.yaml already exists in the dataset folder, unless
+    ``overwrite`` is set — without it, re-ingesting a dataset whose model.yaml
+    gained new inputs silently keeps the stale copy (which eval jobs and the
+    registry modality extraction both read).
     """
     dest = Path(dataset_path) / "model.yaml"
-    if dest.exists():
+    if dest.exists() and not overwrite:
         logger.info("  model.yaml already exists in dataset folder, skipping copy")
         return
 
@@ -1109,7 +1132,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Copy model.yaml to the dataset folder so it's canonically accessible
     # at eval time without depending on the original source location
-    _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
+    _copy_model_yaml(
+        weka_path, config.olmoearth_run_config_path, overwrite=config.overwrite_configs
+    )
 
     # Step 0a: Load dataset config from the dataset folder
     logger.info("[Step 0a] Loading dataset config...")
@@ -1130,10 +1155,14 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     dataset_config = DatasetConfig.model_validate(dataset_dict)
     logger.info("[Step 0a] Dataset config loaded successfully")
 
-    # Step 0b: Load and validate model config from the canonical weka location
+    # Step 0b: Load and validate the model config from the source config dir
+    # (the same file eval jobs read when it is git-tracked). The Weka copy
+    # written above is only a snapshot; reading the source here keeps
+    # validation, modality extraction, and band stats consistent with what
+    # evals will use even when a no-overwrite re-ingest kept an older copy.
     logger.info("[Step 0b] Loading and validating model.yaml with rslearn...")
-    model_yaml_path = Path(weka_path) / "model.yaml"
-    with open(model_yaml_path) as f:
+    model_yaml_path = UPath(config.olmoearth_run_config_path) / "model.yaml"
+    with model_yaml_path.open() as f:
         model_config = yaml.safe_load(f)
     # Validate that rslearn can parse the model config
     parse_model_config(str(model_yaml_path))
@@ -1144,10 +1173,33 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # sentinel2_l2a_feb, _may, _aug, _nov all resolve to sentinel2_l2a).
     # We deduplicate and aggregate max_matches across temporal layers.
     logger.info("[Step 0c] Extracting modalities from dataset config...")
+    # Modalities whose model.yaml input stacks all of its layers on the time
+    # dimension (load_all_layers): distinct layers each contribute their
+    # timesteps (sum), instead of being alternatives (max).
+    load_all_layer_modalities: set[str] = set()
+    for input_cfg in model_config["data"]["init_args"].get("inputs", {}).values():
+        if input_cfg.get("is_target") or not input_cfg.get("load_all_layers"):
+            continue
+        for input_layer in input_cfg.get("layers", []):
+            try:
+                load_all_layer_modalities.add(rslearn_to_olmoearth(input_layer).name)
+            except KeyError:
+                continue
+
     modality_max_timesteps: dict[str, int] = {}
     modality_layer_names = []
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
+            # Directly-written layers (no data source): precomputed embedding
+            # products baked in by an export script are real input modalities
+            # (single-timestep); anything else (e.g. label rasters) is not.
+            try:
+                mod_name = rslearn_to_olmoearth(layer_name).name
+            except KeyError:
+                continue
+            if mod_name in EMBEDDING_PRODUCT_MODALITIES:
+                modality_layer_names.append(layer_name)
+                modality_max_timesteps.setdefault(mod_name, 1)
             continue
         try:
             olmoearth_modality = rslearn_to_olmoearth(layer_name)
@@ -1160,7 +1212,10 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         query_config = layer_config.data_source.query_config
         mod_name = olmoearth_modality.name
         prev = modality_max_timesteps.get(mod_name, 0)
-        modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
+        if mod_name in load_all_layer_modalities:
+            modality_max_timesteps[mod_name] = prev + query_config.max_matches
+        else:
+            modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
 
     modalities = list(modality_max_timesteps.keys())
     num_timesteps = (
@@ -1288,11 +1343,30 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         else:
             logger.warning("No windows found to infer window_size, leaving as None")
 
+    # Config provenance: when the model.yaml source dir lives inside the repo
+    # checkout, record its repo-relative path so eval jobs read the git-tracked
+    # file (pinned by commit) instead of the Weka copy. config.json must stay
+    # in the dataset folder (rslearn reads it from the dataset root), so pin
+    # it by hash instead — computed after the step-0a patching that may have
+    # rewritten it.
+    config_repo_dir = repo_relative_config_dir(config.olmoearth_run_config_path)
+    if config_repo_dir is None:
+        logger.warning(
+            "Config dir %s is outside the repo checkout — eval jobs will read "
+            "the model.yaml copy at the dataset folder, which can go stale. "
+            "Consider committing the config under data/rslearn_dataset_configs/ "
+            "and re-ingesting.",
+            config.olmoearth_run_config_path,
+        )
+    config_json_sha256 = sha256_of_file(config_json_path)
+
     logger.info("Creating EvalDatasetEntry...")
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
         weka_path=weka_path,
+        config_repo_dir=config_repo_dir,
+        config_json_sha256=config_json_sha256,
         task_type=task_type,
         num_classes=num_classes,
         classes=label_values,
@@ -1303,6 +1377,8 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         split_tag_key=EVAL_SPLIT_TAG_KEY,
         split_stats=split_stats,
         norm_stats=norm_stats,
+        start_time=config.start_time,
+        end_time=config.end_time,
     )
 
     logger.info(f"{'=' * 60}")

@@ -5,9 +5,13 @@
         "0",
         "1"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "africa_crop_mask",
@@ -102,10 +106,141 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/africa_crop_mask",
+      "window_size": 32
+    },
+    "africa_crop_mask_year_aligned": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "config_json_sha256": "40b17145e38a61be78b84504d5ecb84713f75d30b1d79d6ea3e5b4817f9285c9",
+      "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2",
+        "landsat"
+      ],
+      "name": "africa_crop_mask_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 11.930849075317383,
+            "mean": -16.333033272569104,
+            "min": -34.92313003540039,
+            "std": 3.7410372916667134
+          },
+          "vv": {
+            "max": 19.675762176513672,
+            "mean": -10.25361683141047,
+            "min": -32.548728942871094,
+            "std": 3.827782060868456
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 16828.0,
+            "mean": 947.7851339624555,
+            "min": 0.0,
+            "std": 1671.592348581624
+          },
+          "B02": {
+            "max": 17936.0,
+            "mean": 1125.3461347672608,
+            "min": 1.0,
+            "std": 1647.9708406988702
+          },
+          "B03": {
+            "max": 16992.0,
+            "mean": 1376.2284497847309,
+            "min": 1.0,
+            "std": 1530.9872870466934
+          },
+          "B04": {
+            "max": 16376.0,
+            "mean": 1542.970141642457,
+            "min": 1.0,
+            "std": 1581.5955648045965
+          },
+          "B05": {
+            "max": 16111.0,
+            "mean": 1911.4078778086396,
+            "min": 0.0,
+            "std": 1616.870954626914
+          },
+          "B06": {
+            "max": 15788.0,
+            "mean": 2541.6735281632773,
+            "min": 0.0,
+            "std": 1491.8229310562863
+          },
+          "B07": {
+            "max": 15649.0,
+            "mean": 2788.8937744958516,
+            "min": 0.0,
+            "std": 1488.5298519188573
+          },
+          "B08": {
+            "max": 15592.0,
+            "mean": 2897.965727686283,
+            "min": 1.0,
+            "std": 1399.6856088826846
+          },
+          "B09": {
+            "max": 17084.0,
+            "mean": 3111.0269900119083,
+            "min": 0.0,
+            "std": 2507.2028813001
+          },
+          "B11": {
+            "max": 15164.0,
+            "mean": 2947.2860076750944,
+            "min": 0.0,
+            "std": 1473.3318187829063
+          },
+          "B12": {
+            "max": 15095.0,
+            "mean": 2243.921158322537,
+            "min": 0.0,
+            "std": 1408.4287689826492
+          },
+          "B8A": {
+            "max": 15520.0,
+            "mean": 2983.0709116055536,
+            "min": 0.0,
+            "std": 1467.9884876023877
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/africa_crop_mask_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 1078
+        },
+        "train": {
+          "count": 400
+        },
+        "val": {
+          "count": 1078
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/africa_crop_mask_year_aligned",
       "window_size": 32
     },
     "awf_lulc_map": {
@@ -120,6 +255,9 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "8384edbe0305325e4fc376b3805fb92d9bcbdb4e70453e7b839de0d98d826eb4",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -217,6 +355,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -228,6 +367,9 @@
         "0",
         "1"
       ],
+      "config_json_sha256": "ac910832632dfae2381e2114985df6a5119149401797677063a1c1d2595ca8f0",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -326,6 +468,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -344,9 +487,13 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "canada_crops_coarse",
@@ -441,10 +588,148 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_coarse",
+      "window_size": 32
+    },
+    "canada_crops_coarse_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587",
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "canada_crops_coarse_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 18.330005645751953,
+            "mean": -17.206926659266156,
+            "min": -100.0,
+            "std": 5.52213404509857
+          },
+          "vv": {
+            "max": 24.988208770751953,
+            "mean": -10.49734596379598,
+            "min": -100.0,
+            "std": 5.716611824415248
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 35845.0,
+            "mean": 2171.85941011556,
+            "min": 0.0,
+            "std": 3154.2040023915556
+          },
+          "B02": {
+            "max": 31472.0,
+            "mean": 2426.99008972168,
+            "min": 0.0,
+            "std": 3210.3133084519964
+          },
+          "B03": {
+            "max": 27520.0,
+            "mean": 2572.76442960612,
+            "min": 0.0,
+            "std": 3045.076781857848
+          },
+          "B04": {
+            "max": 24416.0,
+            "mean": 2622.5067588297525,
+            "min": 0.0,
+            "std": 3050.524584795925
+          },
+          "B05": {
+            "max": 22999.0,
+            "mean": 2909.2657236328123,
+            "min": 0.0,
+            "std": 2944.92236386127
+          },
+          "B06": {
+            "max": 21256.0,
+            "mean": 3543.0291395670574,
+            "min": 0.0,
+            "std": 2582.9051690577767
+          },
+          "B07": {
+            "max": 20385.0,
+            "mean": 3732.0158447265626,
+            "min": 0.0,
+            "std": 2427.9228335575
+          },
+          "B08": {
+            "max": 19792.0,
+            "mean": 4052.0099846191406,
+            "min": 0.0,
+            "std": 2453.6538445510455
+          },
+          "B09": {
+            "max": 19450.0,
+            "mean": 3874.9847888997397,
+            "min": 0.0,
+            "std": 2835.9547647654113
+          },
+          "B11": {
+            "max": 28000.0,
+            "mean": 2137.1593131917316,
+            "min": 0.0,
+            "std": 1237.271580066369
+          },
+          "B12": {
+            "max": 15206.0,
+            "mean": 1587.208529663086,
+            "min": 0.0,
+            "std": 1092.3327421834406
+          },
+          "B8A": {
+            "max": 28000.0,
+            "mean": 3848.484598958333,
+            "min": 0.0,
+            "std": 2279.6642009838165
+          }
+        }
+      },
+      "num_classes": 9,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/canada_crops_coarse_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 6624
+        },
+        "train": {
+          "count": 2831
+        },
+        "val": {
+          "count": 6624
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_coarse_year_aligned",
       "window_size": 32
     },
     "canada_crops_fine": {
@@ -474,9 +759,13 @@
         "22",
         "23"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "canada_crops_fine",
@@ -571,10 +860,163 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_fine",
+      "window_size": 32
+    },
+    "canada_crops_fine_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23"
+      ],
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587",
+      "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "canada_crops_fine_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 15.775501251220703,
+            "mean": -16.983872953414917,
+            "min": -100.0,
+            "std": 4.417973244902538
+          },
+          "vv": {
+            "max": 29.005630493164062,
+            "mean": -10.507223611831664,
+            "min": -100.0,
+            "std": 4.439635773808105
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 28000.0,
+            "mean": 2118.1878611653647,
+            "min": 0.0,
+            "std": 3085.6526770991745
+          },
+          "B02": {
+            "max": 26352.0,
+            "mean": 2369.364393269857,
+            "min": 0.0,
+            "std": 3175.2016799411017
+          },
+          "B03": {
+            "max": 21856.0,
+            "mean": 2505.44492574056,
+            "min": 0.0,
+            "std": 3019.167380339812
+          },
+          "B04": {
+            "max": 18288.0,
+            "mean": 2535.3649877115886,
+            "min": 0.0,
+            "std": 3035.9973092792425
+          },
+          "B05": {
+            "max": 18025.0,
+            "mean": 2824.975693115234,
+            "min": 0.0,
+            "std": 2927.923980123292
+          },
+          "B06": {
+            "max": 16936.0,
+            "mean": 3471.3364810791018,
+            "min": 0.0,
+            "std": 2566.7299614579683
+          },
+          "B07": {
+            "max": 16746.0,
+            "mean": 3654.2862830810545,
+            "min": 0.0,
+            "std": 2411.739795362603
+          },
+          "B08": {
+            "max": 17376.0,
+            "mean": 3968.139700846354,
+            "min": 0.0,
+            "std": 2442.601174683867
+          },
+          "B09": {
+            "max": 18812.0,
+            "mean": 3774.305434733073,
+            "min": 0.0,
+            "std": 2768.935162869965
+          },
+          "B11": {
+            "max": 28000.0,
+            "mean": 2002.0765002441406,
+            "min": 0.0,
+            "std": 1248.1104504413474
+          },
+          "B12": {
+            "max": 15293.0,
+            "mean": 1458.1341962890624,
+            "min": 0.0,
+            "std": 1082.015320245172
+          },
+          "B8A": {
+            "max": 16426.0,
+            "mean": 3769.321634358724,
+            "min": 0.0,
+            "std": 2267.3195919974046
+          }
+        }
+      },
+      "num_classes": 24,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/canada_crops_fine_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 4501
+        },
+        "train": {
+          "count": 5565
+        },
+        "val": {
+          "count": 4500
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/canada_crops_fine_year_aligned",
       "window_size": 32
     },
     "canada_wildfire_sat_eval_split": {
@@ -582,6 +1024,9 @@
         "0",
         "1"
       ],
+      "config_json_sha256": "5718ec3753983905d3636a863b82a389f03d545e61605e035c76e98a9f9016c9",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -682,6 +1127,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -694,9 +1140,13 @@
         "1",
         "2"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/descals",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "descals",
@@ -791,10 +1241,142 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/descals",
+      "window_size": 32
+    },
+    "descals_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2"
+      ],
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587",
+      "config_repo_dir": "data/rslearn_dataset_configs/descals_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "descals_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 17.4349365234375,
+            "mean": -13.485692223889089,
+            "min": -30.154613494873047,
+            "std": 2.3534905383244897
+          },
+          "vv": {
+            "max": 25.85858917236328,
+            "mean": -6.733150959572597,
+            "min": -27.321748733520508,
+            "std": 2.537853187056494
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 27752.0,
+            "mean": 1531.453147700795,
+            "min": 0.0,
+            "std": 2561.861585628556
+          },
+          "B02": {
+            "max": 23344.0,
+            "mean": 1626.260915227522,
+            "min": 0.0,
+            "std": 2509.9725279216354
+          },
+          "B03": {
+            "max": 19008.0,
+            "mean": 1705.2314397443804,
+            "min": 0.0,
+            "std": 2289.5420731462905
+          },
+          "B04": {
+            "max": 17552.0,
+            "mean": 1519.771791335435,
+            "min": 0.0,
+            "std": 2244.2782187689245
+          },
+          "B05": {
+            "max": 18010.0,
+            "mean": 1967.4953666106999,
+            "min": 0.0,
+            "std": 2287.248704244929
+          },
+          "B06": {
+            "max": 17098.0,
+            "mean": 3190.919916164108,
+            "min": 0.0,
+            "std": 1878.9368132740294
+          },
+          "B07": {
+            "max": 16933.0,
+            "mean": 3716.9801058228254,
+            "min": 0.0,
+            "std": 1798.2733963783196
+          },
+          "B08": {
+            "max": 16736.0,
+            "mean": 3756.9748603686953,
+            "min": 0.0,
+            "std": 1652.604248648535
+          },
+          "B09": {
+            "max": 19576.0,
+            "mean": 4658.026544510691,
+            "min": 0.0,
+            "std": 3702.8452922046604
+          },
+          "B11": {
+            "max": 12157.0,
+            "mean": 2386.8889171578035,
+            "min": 0.0,
+            "std": 1366.5036351464807
+          },
+          "B12": {
+            "max": 12344.0,
+            "mean": 1523.7432320221126,
+            "min": 0.0,
+            "std": 1283.8128773960698
+          },
+          "B8A": {
+            "max": 16389.0,
+            "mean": 3924.282994391904,
+            "min": 0.0,
+            "std": 1747.6432096150645
+          }
+        }
+      },
+      "num_classes": 3,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/descals_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 8439
+        },
+        "train": {
+          "count": 600
+        },
+        "val": {
+          "count": 8438
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/descals_year_aligned",
       "window_size": 32
     },
     "ethiopia_crops": {
@@ -804,9 +1386,13 @@
         "2",
         "3"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "ethiopia_crops",
@@ -901,10 +1487,407 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops",
+      "window_size": 32
+    },
+    "ethiopia_crops_10band_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "config_json_sha256": "40b17145e38a61be78b84504d5ecb84713f75d30b1d79d6ea3e5b4817f9285c9",
+      "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_10band_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2",
+        "landsat"
+      ],
+      "name": "ethiopia_crops_10band_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 8.97866153717041,
+            "mean": -18.232894288261317,
+            "min": -100.0,
+            "std": 10.224747935741641
+          },
+          "vv": {
+            "max": 18.428821563720703,
+            "mean": -11.556149831632288,
+            "min": -100.0,
+            "std": 11.069005247576321
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 17769.0,
+            "mean": 967.7536852190857,
+            "min": 0.0,
+            "std": 1829.9794281733823
+          },
+          "B02": {
+            "max": 17936.0,
+            "mean": 1179.5839144787583,
+            "min": 0.0,
+            "std": 1756.387335855458
+          },
+          "B03": {
+            "max": 16672.0,
+            "mean": 1402.7446283391405,
+            "min": 0.0,
+            "std": 1576.4696140440658
+          },
+          "B04": {
+            "max": 15880.0,
+            "mean": 1569.5469278829578,
+            "min": 0.0,
+            "std": 1499.6885742964305
+          },
+          "B05": {
+            "max": 16407.0,
+            "mean": 1870.5779558596018,
+            "min": 0.0,
+            "std": 1499.7134236954712
+          },
+          "B06": {
+            "max": 15252.0,
+            "mean": 2431.395208378702,
+            "min": 0.0,
+            "std": 1430.2213703476884
+          },
+          "B07": {
+            "max": 14685.0,
+            "mean": 2677.5384196814207,
+            "min": 0.0,
+            "std": 1440.6602131279028
+          },
+          "B08": {
+            "max": 14648.0,
+            "mean": 2846.229199275461,
+            "min": 0.0,
+            "std": 1370.52766092105
+          },
+          "B09": {
+            "max": 16612.0,
+            "mean": 3069.03481116389,
+            "min": 0.0,
+            "std": 2520.1418479036615
+          },
+          "B11": {
+            "max": 14197.0,
+            "mean": 2642.015740690331,
+            "min": 0.0,
+            "std": 1188.5502957886636
+          },
+          "B12": {
+            "max": 13796.0,
+            "mean": 2001.5076205334458,
+            "min": 0.0,
+            "std": 1071.3223989626717
+          },
+          "B8A": {
+            "max": 14371.0,
+            "mean": 2886.1489776717663,
+            "min": 0.0,
+            "std": 1424.678704633726
+          }
+        }
+      },
+      "num_classes": 4,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/ethiopia_crops_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 978
+        },
+        "train": {
+          "count": 574
+        },
+        "val": {
+          "count": 978
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops_year_aligned",
+      "window_size": 32
+    },
+    "ethiopia_crops_ccmos_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "config_json_sha256": "6d569a4dc88bbf815f4c6e587a2c20db7fb68a90d706dcf8c6dec01984f4184a",
+      "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_ccmos_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2",
+        "landsat"
+      ],
+      "name": "ethiopia_crops_ccmos_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 8.97866153717041,
+            "mean": -18.232894288261317,
+            "min": -100.0,
+            "std": 10.224747935741641
+          },
+          "vv": {
+            "max": 18.428821563720703,
+            "mean": -11.556149831632288,
+            "min": -100.0,
+            "std": 11.069005247576321
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 17769.0,
+            "mean": 967.7536852190857,
+            "min": 0.0,
+            "std": 1829.9794281733823
+          },
+          "B02": {
+            "max": 17936.0,
+            "mean": 1179.5839144787583,
+            "min": 0.0,
+            "std": 1756.387335855458
+          },
+          "B03": {
+            "max": 16672.0,
+            "mean": 1402.7446283391405,
+            "min": 0.0,
+            "std": 1576.4696140440658
+          },
+          "B04": {
+            "max": 15880.0,
+            "mean": 1569.5469278829578,
+            "min": 0.0,
+            "std": 1499.6885742964305
+          },
+          "B05": {
+            "max": 16407.0,
+            "mean": 1870.5779558596018,
+            "min": 0.0,
+            "std": 1499.7134236954712
+          },
+          "B06": {
+            "max": 15252.0,
+            "mean": 2431.395208378702,
+            "min": 0.0,
+            "std": 1430.2213703476884
+          },
+          "B07": {
+            "max": 14685.0,
+            "mean": 2677.5384196814207,
+            "min": 0.0,
+            "std": 1440.6602131279028
+          },
+          "B08": {
+            "max": 14648.0,
+            "mean": 2846.229199275461,
+            "min": 0.0,
+            "std": 1370.52766092105
+          },
+          "B09": {
+            "max": 16612.0,
+            "mean": 3069.03481116389,
+            "min": 0.0,
+            "std": 2520.1418479036615
+          },
+          "B11": {
+            "max": 14197.0,
+            "mean": 2642.015740690331,
+            "min": 0.0,
+            "std": 1188.5502957886636
+          },
+          "B12": {
+            "max": 13796.0,
+            "mean": 2001.5076205334458,
+            "min": 0.0,
+            "std": 1071.3223989626717
+          },
+          "B8A": {
+            "max": 14371.0,
+            "mean": 2886.1489776717663,
+            "min": 0.0,
+            "std": 1424.678704633726
+          }
+        }
+      },
+      "num_classes": 4,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/ethiopia_crops_ccmos_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 978
+        },
+        "train": {
+          "count": 574
+        },
+        "val": {
+          "count": 978
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops_ccmos_year_aligned",
+      "window_size": 32
+    },
+    "ethiopia_crops_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "config_json_sha256": "40b17145e38a61be78b84504d5ecb84713f75d30b1d79d6ea3e5b4817f9285c9",
+      "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2",
+        "landsat"
+      ],
+      "name": "ethiopia_crops_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 8.97866153717041,
+            "mean": -18.232894288261317,
+            "min": -100.0,
+            "std": 10.224747935741641
+          },
+          "vv": {
+            "max": 18.428821563720703,
+            "mean": -11.556149831632288,
+            "min": -100.0,
+            "std": 11.069005247576321
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 17769.0,
+            "mean": 967.7536852190857,
+            "min": 0.0,
+            "std": 1829.9794281733823
+          },
+          "B02": {
+            "max": 17936.0,
+            "mean": 1179.5839144787583,
+            "min": 0.0,
+            "std": 1756.387335855458
+          },
+          "B03": {
+            "max": 16672.0,
+            "mean": 1402.7446283391405,
+            "min": 0.0,
+            "std": 1576.4696140440658
+          },
+          "B04": {
+            "max": 15880.0,
+            "mean": 1569.5469278829578,
+            "min": 0.0,
+            "std": 1499.6885742964305
+          },
+          "B05": {
+            "max": 16407.0,
+            "mean": 1870.5779558596018,
+            "min": 0.0,
+            "std": 1499.7134236954712
+          },
+          "B06": {
+            "max": 15252.0,
+            "mean": 2431.395208378702,
+            "min": 0.0,
+            "std": 1430.2213703476884
+          },
+          "B07": {
+            "max": 14685.0,
+            "mean": 2677.5384196814207,
+            "min": 0.0,
+            "std": 1440.6602131279028
+          },
+          "B08": {
+            "max": 14648.0,
+            "mean": 2846.229199275461,
+            "min": 0.0,
+            "std": 1370.52766092105
+          },
+          "B09": {
+            "max": 16612.0,
+            "mean": 3069.03481116389,
+            "min": 0.0,
+            "std": 2520.1418479036615
+          },
+          "B11": {
+            "max": 14197.0,
+            "mean": 2642.015740690331,
+            "min": 0.0,
+            "std": 1188.5502957886636
+          },
+          "B12": {
+            "max": 13796.0,
+            "mean": 2001.5076205334458,
+            "min": 0.0,
+            "std": 1071.3223989626717
+          },
+          "B8A": {
+            "max": 14371.0,
+            "mean": 2886.1489776717663,
+            "min": 0.0,
+            "std": 1424.678704633726
+          }
+        }
+      },
+      "num_classes": 4,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/ethiopia_crops_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 978
+        },
+        "train": {
+          "count": 574
+        },
+        "val": {
+          "count": 978
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/ethiopia_crops_year_aligned",
       "window_size": 32
     },
     "forest_loss_driver": {
@@ -920,6 +1903,9 @@
         "8",
         "9"
       ],
+      "config_json_sha256": "f53418b156fe53cf5f54b89bf116b659f79e7203c81a02d8a2e4ac07f00043ab",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1018,6 +2004,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "classification",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -1139,6 +2126,9 @@
         "110",
         "111"
       ],
+      "config_json_sha256": "5cc22cc8a9c070b84e7c8c6abbc6c60898a8dac5c73900364c2442ee4f5f5953",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1236,6 +2226,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -1256,9 +2247,13 @@
         "9",
         "10"
       ],
+      "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
+      "config_repo_dir": "data/rslearn_dataset_configs/glance",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "glance",
@@ -1353,10 +2348,150 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/glance",
+      "window_size": 32
+    },
+    "glance_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10"
+      ],
+      "config_json_sha256": "ef4cadc0197cb9a462bd2bb7f1647568874a1f27fb5f5af6e83c93082092a587",
+      "config_repo_dir": "data/rslearn_dataset_configs/glance_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "glance_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 20.455875396728516,
+            "mean": -17.386178646087647,
+            "min": -100.0,
+            "std": 7.070710047060497
+          },
+          "vv": {
+            "max": 29.08857536315918,
+            "mean": -11.059800961176554,
+            "min": -100.0,
+            "std": 7.459149969232719
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 20959.0,
+            "mean": 1478.9658655598957,
+            "min": 0.0,
+            "std": 2323.197376669015
+          },
+          "B02": {
+            "max": 20608.0,
+            "mean": 1698.3622943115233,
+            "min": 0.0,
+            "std": 2291.063508111681
+          },
+          "B03": {
+            "max": 19088.0,
+            "mean": 1967.3525065917968,
+            "min": 0.0,
+            "std": 2177.9792179010933
+          },
+          "B04": {
+            "max": 17904.0,
+            "mean": 2177.661037190755,
+            "min": 0.0,
+            "std": 2261.015750348777
+          },
+          "B05": {
+            "max": 17286.0,
+            "mean": 2447.134212443034,
+            "min": 0.0,
+            "std": 2265.1463422041206
+          },
+          "B06": {
+            "max": 17118.0,
+            "mean": 2906.83844148763,
+            "min": 0.0,
+            "std": 2067.365201643561
+          },
+          "B07": {
+            "max": 17093.0,
+            "mean": 3093.701286295573,
+            "min": 0.0,
+            "std": 2025.205328829935
+          },
+          "B08": {
+            "max": 17232.0,
+            "mean": 3248.55971875,
+            "min": 0.0,
+            "std": 2004.1913280476251
+          },
+          "B09": {
+            "max": 18291.0,
+            "mean": 3386.3191506347657,
+            "min": 0.0,
+            "std": 2912.780806268417
+          },
+          "B11": {
+            "max": 15416.0,
+            "mean": 2693.7551278889973,
+            "min": 0.0,
+            "std": 1829.1574994037696
+          },
+          "B12": {
+            "max": 15380.0,
+            "mean": 2156.379012451172,
+            "min": 0.0,
+            "std": 1722.7676391141256
+          },
+          "B8A": {
+            "max": 16693.0,
+            "mean": 3203.675485229492,
+            "min": 0.0,
+            "std": 1983.5571148007036
+          }
+        }
+      },
+      "num_classes": 11,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/glance_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 15793
+        },
+        "train": {
+          "count": 3300
+        },
+        "val": {
+          "count": 15792
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/glance_year_aligned",
       "window_size": 32
     },
     "kenya_intercropping": {
@@ -1365,6 +2500,9 @@
         "1",
         "2"
       ],
+      "config_json_sha256": "91f09869987e22b33137b684823196ef58a6d05646f976bb83f6bf2d6193d2f5",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1462,6 +2600,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -1477,9 +2616,13 @@
         "4",
         "5"
       ],
+      "config_json_sha256": "e90327b731ed420526ac661f861d736e50965e498e4abab261c7b3855c068741",
+      "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "lcmap_lu",
@@ -1574,16 +2717,154 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/lcmap_lu",
       "window_size": 32
     },
+    "lcmap_lu_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "config_json_sha256": "cd766b3dfa7167208aa44a59c47d8f70ae99d1e91f94bf9dfebabdebf527ad61",
+      "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "lcmap_lu_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 16.640350341796875,
+            "mean": -17.988808654617376,
+            "min": -100.0,
+            "std": 5.470669769177311
+          },
+          "vv": {
+            "max": 34.3443717956543,
+            "mean": -11.634570771384157,
+            "min": -100.0,
+            "std": 5.5204155725821495
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 19224.0,
+            "mean": 1150.3346072790991,
+            "min": 0.0,
+            "std": 2164.631652359935
+          },
+          "B02": {
+            "max": 19008.0,
+            "mean": 1354.2569542544798,
+            "min": 0.0,
+            "std": 2227.691709991437
+          },
+          "B03": {
+            "max": 17760.0,
+            "mean": 1541.9732274028488,
+            "min": 0.0,
+            "std": 2142.523337057925
+          },
+          "B04": {
+            "max": 17008.0,
+            "mean": 1618.4378862204267,
+            "min": 0.0,
+            "std": 2166.1665063302416
+          },
+          "B05": {
+            "max": 16712.0,
+            "mean": 1875.8942289948584,
+            "min": 0.0,
+            "std": 2136.63168135718
+          },
+          "B06": {
+            "max": 16563.0,
+            "mean": 2386.016982513347,
+            "min": 0.0,
+            "std": 2021.8991353419526
+          },
+          "B07": {
+            "max": 16381.0,
+            "mean": 2579.361030692021,
+            "min": 0.0,
+            "std": 1992.148047540189
+          },
+          "B08": {
+            "max": 16200.0,
+            "mean": 2785.5120535671676,
+            "min": 0.0,
+            "std": 2021.2907250421717
+          },
+          "B09": {
+            "max": 17228.0,
+            "mean": 2725.119399828669,
+            "min": 0.0,
+            "std": 2374.528284225595
+          },
+          "B11": {
+            "max": 15329.0,
+            "mean": 2089.6260736023087,
+            "min": 0.0,
+            "std": 1368.65753675305
+          },
+          "B12": {
+            "max": 15186.0,
+            "mean": 1531.4819684425747,
+            "min": 0.0,
+            "std": 1178.9466898287512
+          },
+          "B8A": {
+            "max": 16093.0,
+            "mean": 2730.6264062321034,
+            "min": 0.0,
+            "std": 1951.58307793577
+          }
+        }
+      },
+      "num_classes": 6,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/lcmap_lu_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 12357
+        },
+        "train": {
+          "count": 1800
+        },
+        "val": {
+          "count": 12356
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/lcmap_lu_year_aligned",
+      "window_size": 32
+    },
     "lfmc_woody_3k": {
       "classes": [
         "0"
       ],
+      "config_json_sha256": "d998336af1a19d9d339c5179e1a89f36c4f572e55cb3543d1c4c964b669b7644",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1696,6 +2977,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "regression",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -1733,6 +3015,9 @@
         "26",
         "27"
       ],
+      "config_json_sha256": "e04e9d4016c0c8289f521b89994dd70d8ee6fc301be35be37998eebe59e39bd1",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1830,6 +3115,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -1851,6 +3137,9 @@
         "10",
         "11"
       ],
+      "config_json_sha256": "e04e9d4016c0c8289f521b89994dd70d8ee6fc301be35be37998eebe59e39bd1",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -1948,6 +3237,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -1965,6 +3255,9 @@
         "6",
         "7"
       ],
+      "config_json_sha256": "827f36040d2c734c09b1d7ead45da25ee8b14e361f63c46ead401a0e264feb5b",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2144,6 +3437,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -2155,6 +3449,9 @@
         "0",
         "1"
       ],
+      "config_json_sha256": "bc86b4aa5ca837fabb448e756af9085705c4c4a53497e0174fc520906f34f34c",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2252,6 +3549,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -2263,6 +3561,9 @@
         "0",
         "1"
       ],
+      "config_json_sha256": "803131154db45e56f59fd819457d98d15b0f50f8b01fede46638e077545c2fde",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2300,16 +3601,313 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": false,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
       "window_size": 128
     },
+    "pastis_rslearn": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "config_json_sha256": "c00291bba30406a946dc01b3eeb72883dbf6087676a6e4fb788d6d0d557834d5",
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_rslearn",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "pastis_rslearn",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 19.68572425842285,
+            "mean": -16.361109214593032,
+            "min": -100.0,
+            "std": 3.0656779240164145
+          },
+          "vv": {
+            "max": 35.75605773925781,
+            "mean": -9.9867434725577,
+            "min": -100.0,
+            "std": 3.150031488685353
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21157.0,
+            "mean": 647.691312898808,
+            "min": 0.0,
+            "std": 1262.330341490884
+          },
+          "B02": {
+            "max": 19968.0,
+            "mean": 751.2715023876773,
+            "min": 0.0,
+            "std": 1222.9657243488316
+          },
+          "B03": {
+            "max": 19648.0,
+            "mean": 992.5020089614897,
+            "min": 0.0,
+            "std": 1129.2111017671414
+          },
+          "B04": {
+            "max": 18272.0,
+            "mean": 1010.9958015006331,
+            "min": 0.0,
+            "std": 1163.766157318768
+          },
+          "B05": {
+            "max": 17561.0,
+            "mean": 1459.1256845379403,
+            "min": 0.0,
+            "std": 1131.1022976049078
+          },
+          "B06": {
+            "max": 17187.0,
+            "mean": 2456.6356387761857,
+            "min": 0.0,
+            "std": 1138.367109706842
+          },
+          "B07": {
+            "max": 16975.0,
+            "mean": 2812.586430277394,
+            "min": 0.0,
+            "std": 1232.2394396131242
+          },
+          "B08": {
+            "max": 16752.0,
+            "mean": 3003.699059136884,
+            "min": 0.0,
+            "std": 1294.6202200514176
+          },
+          "B09": {
+            "max": 16524.0,
+            "mean": 3173.910584282919,
+            "min": 0.0,
+            "std": 1546.4394862265563
+          },
+          "B11": {
+            "max": 15440.0,
+            "mean": 2320.7043786373806,
+            "min": 0.0,
+            "std": 1002.6818882235024
+          },
+          "B12": {
+            "max": 15229.0,
+            "mean": 1586.7242845285882,
+            "min": 0.0,
+            "std": 967.4802844044757
+          },
+          "B8A": {
+            "max": 16661.0,
+            "mean": 3040.3085061875936,
+            "min": 0.0,
+            "std": 1234.176028357105
+          }
+        }
+      },
+      "num_classes": 19,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/pastis_rslearn",
+      "split_stats": {
+        "test": {
+          "count": 496
+        },
+        "train": {
+          "count": 1455
+        },
+        "val": {
+          "count": 482
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_rslearn",
+      "window_size": 128
+    },
+    "pastis_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "config_json_sha256": "407880b19e563b20c3651a1eca0612f5e12ab2801883bffd55cab65e0db802b2",
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_year_aligned",
+      "end_time": "2019-12-31",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2",
+        "landsat"
+      ],
+      "name": "pastis_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 27.872779846191406,
+            "mean": -16.02337369866134,
+            "min": -100.0,
+            "std": 3.080131654169802
+          },
+          "vv": {
+            "max": 33.129364013671875,
+            "mean": -9.604016077013526,
+            "min": -100.0,
+            "std": 3.165719098446274
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21157.0,
+            "mean": 784.2738241824436,
+            "min": 0.0,
+            "std": 1544.1036539609636
+          },
+          "B02": {
+            "max": 19968.0,
+            "mean": 881.5961787046429,
+            "min": 0.0,
+            "std": 1498.8845419293707
+          },
+          "B03": {
+            "max": 18640.0,
+            "mean": 1116.1583144888693,
+            "min": 0.0,
+            "std": 1401.5208394908234
+          },
+          "B04": {
+            "max": 18208.0,
+            "mean": 1111.6713900065554,
+            "min": 0.0,
+            "std": 1421.3531674753967
+          },
+          "B05": {
+            "max": 17561.0,
+            "mean": 1569.5472217651143,
+            "min": 0.0,
+            "std": 1400.6298460291775
+          },
+          "B06": {
+            "max": 17187.0,
+            "mean": 2590.4877040575,
+            "min": 0.0,
+            "std": 1345.0333006218086
+          },
+          "B07": {
+            "max": 16975.0,
+            "mean": 2955.1939492691067,
+            "min": 0.0,
+            "std": 1402.08745826338
+          },
+          "B08": {
+            "max": 16752.0,
+            "mean": 3142.2713949017325,
+            "min": 0.0,
+            "std": 1468.758604106172
+          },
+          "B09": {
+            "max": 16524.0,
+            "mean": 3396.5326188510735,
+            "min": 0.0,
+            "std": 1971.960176798226
+          },
+          "B11": {
+            "max": 15440.0,
+            "mean": 2329.726577224872,
+            "min": 0.0,
+            "std": 1098.5923089707687
+          },
+          "B12": {
+            "max": 15229.0,
+            "mean": 1600.2374255213729,
+            "min": 0.0,
+            "std": 1051.4129049656106
+          },
+          "B8A": {
+            "max": 16661.0,
+            "mean": 3172.980303853915,
+            "min": 0.0,
+            "std": 1393.5464844886317
+          }
+        }
+      },
+      "num_classes": 19,
+      "num_timesteps": 212,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/pastis_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 496
+        },
+        "train": {
+          "count": 1455
+        },
+        "val": {
+          "count": 482
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2019-01-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_year_aligned",
+      "window_size": 128
+    },
     "small_landsat_vessel_length": {
       "classes": [
         "0"
       ],
+      "config_json_sha256": "7a607028e2193dd637053c8f0202742e3e08382ff62dd717ad79fd303ce0e5b3",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2401,6 +3999,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "scalar_regression",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2419,6 +4018,9 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "7a607028e2193dd637053c8f0202742e3e08382ff62dd717ad79fd303ce0e5b3",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2510,6 +4112,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "classification",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2520,6 +4123,9 @@
       "classes": [
         "0"
       ],
+      "config_json_sha256": "a21bc70c6f8a3c596b558902733e07153db8259e8f36749fe237a39bbf1915e9",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2557,6 +4163,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "scalar_regression",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2575,6 +4182,9 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "a21bc70c6f8a3c596b558902733e07153db8259e8f36749fe237a39bbf1915e9",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2612,6 +4222,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "classification",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2622,6 +4233,9 @@
       "classes": [
         "0"
       ],
+      "config_json_sha256": "9244b1af2e5ce26a9c6eae64f437c9acd6da135e950be92737c9b3651d0e93dc",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2719,6 +4333,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "scalar_regression",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2737,6 +4352,9 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "9244b1af2e5ce26a9c6eae64f437c9acd6da135e950be92737c9b3651d0e93dc",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2834,6 +4452,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "classification",
       "timeseries": false,
       "use_pretrain_norm": true,
@@ -2872,6 +4491,9 @@
         "27",
         "28"
       ],
+      "config_json_sha256": "15862519de2c2e6a0c0f74675d34363c1f0c36f60a25ebbc500de3bd8e354302",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -2969,6 +4591,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -2985,6 +4608,9 @@
         "5",
         "6"
       ],
+      "config_json_sha256": "72b1ecdd8fa62a3c8ee2f58d00c46c94733749f1bf5e59fba4e1912f861b271d",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -3082,6 +4708,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -3130,9 +4757,13 @@
         "37",
         "38"
       ],
+      "config_json_sha256": "e90327b731ed420526ac661f861d736e50965e498e4abab261c7b3855c068741",
+      "config_repo_dir": "data/rslearn_dataset_configs/us_trees",
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
+        "gse",
         "sentinel2_l2a"
       ],
       "name": "us_trees",
@@ -3227,10 +4858,178 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees",
+      "window_size": 32
+    },
+    "us_trees_year_aligned": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38"
+      ],
+      "config_json_sha256": "fcd6c869b3e1d4732fae304a8608fb8b81db404b235d83799dae47dd94dc0158",
+      "config_repo_dir": "data/rslearn_dataset_configs/us_trees_year_aligned",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "landsat",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "us_trees_year_aligned",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 17.07649040222168,
+            "mean": -15.33361171468099,
+            "min": -100.0,
+            "std": 4.277159663817368
+          },
+          "vv": {
+            "max": 29.221555709838867,
+            "mean": -9.47825010685126,
+            "min": -100.0,
+            "std": 4.51416687856866
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21217.0,
+            "mean": 762.7543108317058,
+            "min": 0.0,
+            "std": 1462.8286171946324
+          },
+          "B02": {
+            "max": 21576.0,
+            "mean": 919.7823784179687,
+            "min": 0.0,
+            "std": 1573.3191076921198
+          },
+          "B03": {
+            "max": 18176.0,
+            "mean": 1101.7934900309244,
+            "min": 0.0,
+            "std": 1505.0731335333205
+          },
+          "B04": {
+            "max": 17248.0,
+            "mean": 1114.5133588053386,
+            "min": 0.0,
+            "std": 1529.6537754033232
+          },
+          "B05": {
+            "max": 17198.0,
+            "mean": 1432.7126264648437,
+            "min": 0.0,
+            "std": 1485.9513469253113
+          },
+          "B06": {
+            "max": 16762.0,
+            "mean": 2179.7724126790363,
+            "min": 0.0,
+            "std": 1439.908288610184
+          },
+          "B07": {
+            "max": 16536.0,
+            "mean": 2443.8438997395833,
+            "min": 0.0,
+            "std": 1463.0467310324686
+          },
+          "B08": {
+            "max": 16464.0,
+            "mean": 2661.043690063477,
+            "min": 0.0,
+            "std": 1467.7985481028857
+          },
+          "B09": {
+            "max": 18177.0,
+            "mean": 2592.732569417318,
+            "min": 0.0,
+            "std": 1806.266930525718
+          },
+          "B11": {
+            "max": 15353.0,
+            "mean": 1925.5131643473308,
+            "min": 0.0,
+            "std": 1089.7175539018815
+          },
+          "B12": {
+            "max": 15202.0,
+            "mean": 1314.3809402669272,
+            "min": 0.0,
+            "std": 964.3140954431393
+          },
+          "B8A": {
+            "max": 16102.0,
+            "mean": 2634.51216422526,
+            "min": 0.0,
+            "std": 1446.7261298384942
+          }
+        }
+      },
+      "num_classes": 39,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/us_trees_year_aligned",
+      "split_stats": {
+        "test": {
+          "count": 16841
+        },
+        "train": {
+          "count": 11700
+        },
+        "val": {
+          "count": 16841
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees_year_aligned",
       "window_size": 32
     },
     "yemen_crop": {
@@ -3245,6 +5044,9 @@
         "7",
         "8"
       ],
+      "config_json_sha256": "c1c8882f6fc85018b62687bdf5582fae9599500057b303a17637693561829abe",
+      "config_repo_dir": null,
+      "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
@@ -3342,6 +5144,7 @@
         }
       },
       "split_tag_key": "eval_split",
+      "start_time": null,
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
@@ -3349,6 +5152,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-07-04T06:07:35.030913",
+  "updated_at": "2026-08-19T20:51:22.017287",
   "version": "1.0"
 }

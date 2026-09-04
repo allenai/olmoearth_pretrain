@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from datetime import datetime
 from importlib.resources import files
@@ -19,9 +20,14 @@ from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset, IterableDataset, Subset
 
-from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
+from olmoearth_pretrain.data.constants import (
+    EMBEDDING_PRODUCT_MODALITIES,
+    YEAR_NUM_TIMESTEPS,
+    Modality,
+)
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
+from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.constants import (
     RSLEARN_TO_OLMOEARTH,
     resolve_rslearn_layer_name,
@@ -32,12 +38,29 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     get_modality_layers,
     get_task_info,
     parse_model_config,
+    require_stack_inputs,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
+from olmoearth_pretrain.evals.studio_ingest.provenance import (
+    log_eval_dataset_provenance_to_wandb,
+    sha256_of_file,
+    verify_config_json_hash,
+)
 from olmoearth_pretrain.evals.task_types import TaskType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSample
 
 from .normalize import normalize_bands
+
+logger = logging.getLogger(__name__)
+
+# Fallback imagery time range for timestamp synthesis, used when the imagery
+# carries no acquisition times of its own and the registry entry does not
+# record the dataset's actual time range.
+DEFAULT_START_TIME = "2022-09-01"
+DEFAULT_END_TIME = "2023-09-01"
+
+# The year-aligned eval exports are twelve ascending monthly layers.
+MONTHS_PER_YEAR = 12
 
 
 def get_timestamps(
@@ -80,6 +103,43 @@ def get_timestamps(
     return dates
 
 
+def timestamps_from_time_ranges(
+    time_ranges: list[tuple[datetime, datetime]],
+) -> torch.Tensor:
+    """Convert per-timestep acquisition ranges to OlmoEarth timestamps.
+
+    Each range's *start* is used, matching how pretraining timestamps are built
+    from the stored imagery (``dataset/sample.py``: the period start of each
+    monthly mosaic), so eval-time dates are on the same convention the model
+    was trained with.
+
+    Args:
+        time_ranges: one (start, end) datetime tuple per timestep, in the order
+            the timesteps appear on the imagery's time axis.
+
+    Returns:
+        Long tensor of shape (T, 3) holding [day, month (0-indexed), year].
+    """
+    return torch.stack(
+        [
+            torch.tensor(
+                [int(start.day), int(start.month) - 1, int(start.year)],
+                dtype=torch.long,
+            )
+            for start, _ in time_ranges
+        ]
+    )
+
+
+def _window_key(metadata: Any) -> str | None:
+    """Rslearn SampleMetadata -> the "group/name" key used by sidecars."""
+    group = getattr(metadata, "window_group", None)
+    name = getattr(metadata, "window_name", None)
+    if name is None:
+        return None
+    return f"{group}/{name}" if group else str(name)
+
+
 class RslearnToOlmoEarthDataset(Dataset):
     """Convert rslearn ModelDataset to OlmoEarth Pretrain MaskedOlmoEarthSample dataset.
 
@@ -95,6 +155,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
+        # Precomputed embedding products, baked in as layers by the embedding
+        # materializer (olmoearth_pretrain/evals/embedding_materializer) or a
+        # dataset export/inference script (tessera_v2).
+        Modality.GSE.name,
+        Modality.TESSERA_V2.name,
     }
 
     def __init__(
@@ -107,9 +172,14 @@ class RslearnToOlmoEarthDataset(Dataset):
         norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
-        start_time: str = "2022-09-01",
-        end_time: str = "2023-09-01",
+        start_time: str = DEFAULT_START_TIME,
+        end_time: str = DEFAULT_END_TIME,
         num_timesteps: int = 12,
+        window_size: int | None = None,
+        label_at_center_pixel: bool = False,
+        tile_samples: bool = False,
+        sample_size: int | None = None,
+        declared_bands: dict[str, list[str]] | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -124,9 +194,38 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_method: Normalization method when not using pretrain stats.
             ds_norm_stats_json: Path to dataset norm stats JSON.
             ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
-            start_time: Start time for timestamp generation.
-            end_time: End time for timestamp generation.
+            start_time: Fallback start time for synthesized timestamps, used
+                only when the imagery carries no acquisition times.
+            end_time: Fallback end time for synthesized timestamps.
             num_timesteps: Number of timesteps per sample.
+            window_size: If set, center-crop every sample (imagery and label
+                rasters) to window_size x window_size, fixing the spatial
+                context each embedding is computed from (per-pixel
+                embedding-product convention). Unlike the PASTIS tiling
+                window_size, this crops (one window per sample) because these
+                datasets carry a single labeled pixel. Segmentation targets
+                only.
+            label_at_center_pixel: If set, the segmentation label raster is
+                reduced to the single labeled pixel's class and the sample is
+                emitted as a classification example. The crop (window_size) is
+                centered on that labeled pixel, so with use_center_token the
+                probe reads exactly the token that carries the label.
+                Requires a segmentation target with exactly one labeled pixel
+                per sample (extra labeled pixels: the one nearest the raster
+                center is used).
+            tile_samples: If set (with window_size), every stored sample (and
+                its label raster) is tiled into non-overlapping
+                window_size x window_size windows at load time — the PASTIS
+                dense-label convention — instead of center-cropping one window
+                per sample. Requires sample_size, a dense (segmentation or
+                per-pixel regression) target, and is mutually exclusive with
+                label_at_center_pixel.
+            sample_size: Stored sample height/width in pixels (required with
+                tile_samples; must be divisible by window_size).
+            declared_bands: modality -> the band list model.yaml declares. When a
+                modality stores fewer than its canonical bands, read channels are
+                scattered to their canonical positions and the rest zeroed after
+                normalization (see _init_band_scatter). None assumes full bands.
         """
         if (
             not norm_stats_from_pretrained
@@ -149,10 +248,13 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.norm_stats_from_pretrained = norm_stats_from_pretrained
         self.input_modalities = input_modalities
 
-        # Store temporal config for per-sample timestamp generation
+        # Fallback temporal config, used only when the imagery carries no
+        # acquisition times of its own (see _build_timestamps).
         self.start_time = start_time
         self.end_time = end_time
         self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
+        self._warned_synthesized_timestamps = False
+        self._warned_ragged = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -166,6 +268,43 @@ class RslearnToOlmoEarthDataset(Dataset):
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
             )
+
+        if (
+            window_size is not None or label_at_center_pixel
+        ) and self.target_task_type != TaskType.SEGMENTATION:
+            raise ValueError(
+                "window_size and label_at_center_pixel require a segmentation "
+                f"target, got {self.target_task_type.value}"
+            )
+        self.window_size = window_size
+        self.label_at_center_pixel = label_at_center_pixel
+
+        if tile_samples:
+            if label_at_center_pixel:
+                raise ValueError(
+                    "tile_samples and label_at_center_pixel are mutually exclusive"
+                )
+            if window_size is None or sample_size is None:
+                raise ValueError(
+                    "tile_samples requires both window_size and sample_size"
+                )
+            if sample_size % window_size != 0:
+                raise ValueError(
+                    f"window_size {window_size} must divide sample_size {sample_size}"
+                )
+        self.sample_size = sample_size
+        # Each stored sample yields _tiles_per_side^2 windows (1 = no tiling).
+        self._tiles_per_side = (
+            sample_size // window_size if tile_samples else 1  # type: ignore[operator]
+        )
+        # Last (base_idx, (input_dict, target)) loaded in tiled mode. A tiled
+        # sample's windows have consecutive indices, so with sequential access
+        # this avoids re-reading the full stored sample for every tile. Each
+        # DataLoader worker holds its own copy post-fork. Reuse is safe because
+        # _transform_sample doesn't mutate its inputs.
+        self._cached_base: tuple[int, Any] | None = None
+
+        self._init_band_scatter(declared_bands)
 
         if self.norm_stats_from_pretrained:
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -187,14 +326,18 @@ class RslearnToOlmoEarthDataset(Dataset):
         norm_method: str = NormMethod.NORM_NO_CLIP_2_STD,
         ds_norm_stats_json: str | None = None,
         ds_norm_stats: dict[str, Any] | None = None,
-        start_time: str = "2022-09-01",
-        end_time: str = "2023-09-01",
+        start_time: str = DEFAULT_START_TIME,
+        end_time: str = DEFAULT_END_TIME,
         max_samples: int | None = None,
         num_timesteps: int = 12,
         groups_override: list[str] | None = None,
         tags_override: dict[str, str] | None = None,
         label_fraction: float = 1.0,
         label_fraction_seed: int = 42,
+        window_size: int | None = None,
+        label_at_center_pixel: bool = False,
+        tile_samples: bool = False,
+        sample_size: int | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -210,8 +353,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             norm_method: Normalization method.
             ds_norm_stats_json: Path to dataset norm stats.
             ds_norm_stats: Dataset norm stats blob (e.g. from registry entry).
-            start_time: Start time for timestamps (used for timestamp generation).
-            end_time: End time for timestamps (used for timestamp generation).
+            start_time: Fallback start time for synthesized timestamps, used
+                only when the imagery carries no acquisition times.
+            end_time: Fallback end time for synthesized timestamps.
             max_samples: Optional sample limit.
             num_timesteps: Max expected timesteps from config (actual per-sample
                 timesteps are derived from data).
@@ -221,6 +365,14 @@ class RslearnToOlmoEarthDataset(Dataset):
                 datasets. Non-train splits always use the full split.
             label_fraction_seed: Seed for the deterministic label_fraction
                 subsample so the same low-label subset is used across runs.
+            window_size: Center-crop every sample to window_size x window_size
+                (see RslearnToOlmoEarthDataset).
+            label_at_center_pixel: Emit the labeled pixel's class as a scalar
+                classification label (see RslearnToOlmoEarthDataset).
+            tile_samples: Tile every sample into window_size x window_size
+                windows instead of center-cropping (see
+                RslearnToOlmoEarthDataset).
+            sample_size: Stored sample height/width, required with tile_samples.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -229,8 +381,20 @@ class RslearnToOlmoEarthDataset(Dataset):
         if label_fraction != 1.0 and max_samples is not None:
             raise ValueError("Use either max_samples or label_fraction, not both.")
 
+        # Resolved before the dataset is built: require_stack_inputs needs the
+        # consumed stack to decide whether window resolution has to narrow.
+        if input_modalities is None:
+            layers = get_modality_layers(model_config)
+            input_modalities = []
+            for layer in layers:
+                resolved = resolve_rslearn_layer_name(layer)
+                if resolved is not None:
+                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
+                else:
+                    input_modalities.append(layer)
+
         model_dataset = build_model_dataset(
-            model_config=model_config,
+            model_config=require_stack_inputs(model_config, input_modalities),
             source_path=source_path,
             split=split,
             max_samples=max_samples,
@@ -251,21 +415,25 @@ class RslearnToOlmoEarthDataset(Dataset):
             ].tolist()
             model_dataset = Subset(model_dataset, indices)
 
-        if input_modalities is None:
-            layers = get_modality_layers(model_config)
-            input_modalities = []
-            for layer in layers:
-                resolved = resolve_rslearn_layer_name(layer)
-                if resolved is not None:
-                    input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
-                else:
-                    input_modalities.append(layer)
-
         task_info = get_task_info(model_config)
+
+        # Per-input band lists as declared in model.yaml. A dataset may store a
+        # subset of a modality's canonical bands; see band_scatter.
+        declared_bands = {
+            name: list(cfg["bands"])
+            for name, cfg in (
+                model_config.get("data", {})
+                .get("init_args", {})
+                .get("inputs", {})
+                .items()
+            )
+            if not cfg.get("is_target") and cfg.get("bands")
+        }
 
         return wrap_rslearn_dataset(
             model_dataset=model_dataset,
             input_modalities=input_modalities,
+            declared_bands=declared_bands,
             target_task_name=task_info["task_name"],
             target_task_type=task_info["task_type"],
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -275,6 +443,10 @@ class RslearnToOlmoEarthDataset(Dataset):
             start_time=start_time,
             end_time=end_time,
             num_timesteps=num_timesteps,
+            window_size=window_size,
+            label_at_center_pixel=label_at_center_pixel,
+            tile_samples=tile_samples,
+            sample_size=sample_size,
         )
 
     @staticmethod
@@ -344,32 +516,179 @@ class RslearnToOlmoEarthDataset(Dataset):
             blob = json.load(f)
         return RslearnToOlmoEarthDataset._parse_norm_stats(blob)
 
+    def _locate_labeled_pixel(self, classes: torch.Tensor) -> tuple[int, int]:
+        """Locate the labeled pixel in a (H, W) segmentation raster.
+
+        With multiple labeled pixels, the one nearest the raster center wins
+        (these datasets carry a single labeled center pixel by construction).
+        """
+        valid = (classes != SEGMENTATION_IGNORE_LABEL).nonzero()
+        if len(valid) == 0:
+            raise ValueError(
+                "label_at_center_pixel requires at least one labeled pixel, "
+                "but the sample's label raster is entirely ignore-labeled"
+            )
+        h, w = classes.shape
+        center = torch.tensor([(h - 1) / 2, (w - 1) / 2])
+        distances = ((valid.float() - center) ** 2).sum(dim=1)
+        row, col = valid[distances.argmin()].tolist()
+        return row, col
+
+    def _label_crop_slices(
+        self, classes: torch.Tensor
+    ) -> tuple[slice | None, slice | None, torch.Tensor]:
+        """Compute crop slices and the emitted label for a segmentation raster.
+
+        Returns (rows, cols, label): rows/cols crop every spatial raster of the
+        sample (None = no crop), and label is either the cropped raster or, with
+        label_at_center_pixel, the labeled pixel's class as a scalar. The crop
+        is centered on the labeled pixel (clamped to raster bounds) so the
+        labeled pixel sits at the center token of the cropped window.
+        """
+        rows: slice | None = None
+        cols: slice | None = None
+        if self.window_size is not None:
+            h, w = classes.shape
+            ws = self.window_size
+            if ws > h or ws > w:
+                raise ValueError(
+                    f"window_size {ws} exceeds the sample's label raster ({h}x{w})"
+                )
+            if self.label_at_center_pixel:
+                row, col = self._locate_labeled_pixel(classes)
+            else:
+                row, col = h // 2, w // 2
+            row0 = min(max(row - ws // 2, 0), h - ws)
+            col0 = min(max(col - ws // 2, 0), w - ws)
+            rows, cols = slice(row0, row0 + ws), slice(col0, col0 + ws)
+            classes = classes[rows, cols]
+        if self.label_at_center_pixel:
+            row, col = self._locate_labeled_pixel(classes)
+            return rows, cols, classes[row, col]
+        return rows, cols, classes
+
     def _transform_sample(
-        self, input_dict: dict, target: dict
+        self,
+        input_dict: dict,
+        target: dict,
+        tile: tuple[int, int] | None = None,
+        window_key: str | None = None,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label)."""
+        """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
+
+        With tile set (tile_samples mode), (tile_row, tile_col) selects which
+        window_size x window_size tile of the stored sample to emit.
+        """
         sample_dict: dict[str, Any] = {}
         sample_timesteps: int | None = None
+        # Real acquisition ranges rslearn read off the imagery, per modality.
+        stored_time_ranges: dict[str, list[tuple[datetime, datetime]]] = {}
 
+        # Parse the target first: with window_size / label_at_center_pixel the
+        # imagery crop is derived from the label raster (centered on the
+        # labeled pixel), so the label must be known before imagery is built.
+        label = self._parse_label(target)
+        crop_rows: slice | None = None
+        crop_cols: slice | None = None
+        if tile is not None:
+            assert self.window_size is not None
+            if label.shape != (self.sample_size, self.sample_size):
+                raise ValueError(
+                    f"tile_samples expects {self.sample_size}x{self.sample_size} "
+                    f"label rasters, got {tuple(label.shape)}"
+                )
+            tile_row, tile_col = tile
+            ws = self.window_size
+            crop_rows = slice(tile_row * ws, (tile_row + 1) * ws)
+            crop_cols = slice(tile_col * ws, (tile_col + 1) * ws)
+            label = label[crop_rows, crop_cols]
+        elif self.window_size is not None or self.label_at_center_pixel:
+            crop_rows, crop_cols, label = self._label_crop_slices(label)
+
+        # First pass: read every present modality (crop, dB-convert), keeping
+        # the raw arrays so ragged imagery can be aligned onto a shared
+        # temporal axis before normalization.
+        raw: dict[str, np.ndarray] = {}
+        absent: list[str] = []
         for modality in self.input_modalities:
-            if modality not in input_dict:
-                raise ValueError(f"Modality {modality} not found in dataset inputs")
-            x = input_dict[modality]
+            x = input_dict.get(modality)
+            if x is None:
+                # Optional imagery (landsat) is simply absent on windows with
+                # no coverage; it is represented as all-MISSING below. A
+                # precomputed embedding product keeps the loud failure -- a
+                # coverage gap there must not silently become a zero vector.
+                if modality in EMBEDDING_PRODUCT_MODALITIES:
+                    raise ValueError(f"Modality {modality} not found in dataset inputs")
+                absent.append(modality)
+                continue
             if not isinstance(x, RasterImage):
                 raise TypeError(
                     f"Input modality '{modality}' must be RasterImage, got {type(x).__name__}"
                 )
 
+            if x.timestamps is not None:
+                stored_time_ranges[modality] = list(x.timestamps)
+
             img = x.image
             if isinstance(img, torch.Tensor):
                 img = img.numpy()
-            x = rearrange(img, "c t h w -> h w t c")
-
-            if sample_timesteps is None:
-                sample_timesteps = x.shape[2]
+            arr = rearrange(img, "c t h w -> h w t c")
+            if crop_rows is not None and crop_cols is not None:
+                arr = arr[crop_rows, crop_cols]
 
             if modality == Modality.SENTINEL1.name:
-                x = convert_to_db(x)
+                arr = convert_to_db(arr)
+            if modality in self.band_scatter:
+                arr = self._scatter_bands(modality, arr)
+            raw[modality] = arr
+
+        if not raw:
+            raise ValueError("No input modalities present in sample")
+
+        # Canonical temporal axis: the longest present imagery modality,
+        # preferring one with stored acquisition times (the S2/S1 monthlies
+        # in practice -- required inputs, so complete on surviving windows).
+        # Embedding products are exempt from alignment: they are consumed
+        # exactly as stored (typically T=1 annual) and bypass time encodings.
+        imagery = [m for m in raw if m not in EMBEDDING_PRODUCT_MODALITIES]
+        canonical = max(
+            imagery or raw,
+            key=lambda m: (raw[m].shape[2], m in stored_time_ranges),
+        )
+        canonical_t = raw[canonical].shape[2]
+        sample_timesteps = canonical_t
+        height, width = raw[canonical].shape[:2]
+
+        # Slots each ragged modality is missing on the canonical axis; they
+        # get MaskValue.MISSING after the masked sample is built.
+        ragged_missing: dict[str, list[int]] = {}
+        for modality in absent:
+            n_bands = len(Modality.get(modality).band_order)
+            raw[modality] = np.zeros(
+                (height, width, canonical_t, n_bands), dtype=np.float32
+            )
+            ragged_missing[modality] = list(range(canonical_t))
+            self._warn_ragged_once(f"'{modality}' absent from sample")
+        for modality in imagery:
+            if raw[modality].shape[2] == canonical_t:
+                continue
+            raw[modality], missing = self._align_to_canonical(
+                modality,
+                raw[modality],
+                stored_time_ranges.get(modality),
+                stored_time_ranges.get(canonical),
+                canonical_t,
+            )
+            ragged_missing[modality] = missing
+
+        for modality in self.input_modalities:
+            x = raw[modality]
+            if modality in EMBEDDING_PRODUCT_MODALITIES:
+                # Precomputed embedding products are consumed exactly as
+                # stored; imagery normalization does not apply, and dataset
+                # registries carry no norm stats for them.
+                sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
+                continue
 
             if self.norm_stats_from_pretrained:
                 x = self.normalizer_computed.normalize(Modality.get(modality), x)
@@ -383,34 +702,233 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
+            # Post-normalization, so the value the model sees is exactly 0 --
+            # raw 0 would normalize to (0 - (mean - 2*std)) / (4*std) instead.
+            for band_index in self.absent_bands.get(modality, []):
+                x[..., band_index] = 0.0
+
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         sample_timesteps = sample_timesteps or self.max_timesteps
-        timestamps = get_timestamps(
-            self.start_time, self.end_time, num_timesteps=sample_timesteps
+        sample_dict["timestamps"] = self._build_timestamps(
+            sample_timesteps, stored_time_ranges
         )
-        sample_dict["timestamps"] = torch.stack(timestamps)
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
 
-        for modality in self.input_modalities:
-            modality_spec = Modality.get(modality)
-            if modality_spec.is_spatial:
-                mask_attr_name = MaskedOlmoEarthSample.get_masked_modality_name(
-                    modality
-                )
-                masked_attr = getattr(masked_sample, mask_attr_name)
-                if masked_attr is None:
-                    raise ValueError(
-                        f"Modality mask {mask_attr_name} not found for modality {modality}"
-                    )
-                if masked_attr.shape[1:3] != sample_dict[modality].shape[1:3]:
-                    raise ValueError(
-                        f"Modality mask {mask_attr_name} and modality {modality} have different hw shapes: "
-                        f"{masked_attr.shape[1:3]} != {sample_dict[modality].shape[1:3]}"
-                    )
+        # Slots a ragged/absent modality has no observation for are MISSING,
+        # so the encoder ignores them instead of reading zeros as data.
+        for modality, slots in ragged_missing.items():
+            if not slots:
+                continue
+            mask = getattr(
+                masked_sample,
+                MaskedOlmoEarthSample.get_masked_modality_name(modality),
+            )
+            mask[:, :, slots, :] = MaskValue.MISSING.value
 
+        return masked_sample, label
+
+    def _warn_ragged_once(self, reason: str) -> None:
+        """Warn about ragged/absent optional imagery once per dataset instance."""
+        if not self._warned_ragged:
+            logger.warning(
+                f"ragged imagery: {reason}; representing missing timesteps as "
+                "MaskValue.MISSING (expected for optional inputs with coverage "
+                "gaps, e.g. landsat)"
+            )
+            self._warned_ragged = True
+
+    def _align_to_canonical(
+        self,
+        modality: str,
+        arr: np.ndarray,
+        ranges: list[tuple[datetime, datetime]] | None,
+        canonical_ranges: list[tuple[datetime, datetime]] | None,
+        canonical_t: int,
+    ) -> tuple[np.ndarray, list[int]]:
+        """Scatter a ragged modality's timesteps onto the canonical time axis.
+
+        A modality with coverage gaps (landsat at a 16-day revisit misses
+        whole months) arrives with T < canonical_t, and its timestep i is NOT
+        month i -- consuming it positionally would desynchronize the data
+        from the shared timestamps tensor and its own mask. Each timestep is
+        placed into the canonical slot whose acquisition period it belongs to
+        (nearest period start, within half a period), and unfilled slots are
+        reported for MISSING-masking.
+
+        Args:
+            modality: the modality name (for the warning).
+            arr: (H, W, T, C) with T < canonical_t.
+            ranges: the modality's stored acquisition ranges (len T), if any.
+            canonical_ranges: the canonical modality's ranges (len
+                canonical_t), if any.
+            canonical_t: the shared temporal length.
+
+        Returns:
+            ((H, W, canonical_t, C) array, canonical slots left unfilled).
+        """
+        height, width, t, channels = arr.shape
+        aligned = np.zeros((height, width, canonical_t, channels), dtype=arr.dtype)
+        filled: set[int] = set()
+        if ranges and canonical_ranges and len(canonical_ranges) == canonical_t:
+            for i, (start, _) in enumerate(ranges):
+                deltas = [
+                    abs((start - c_start).days) for c_start, _ in canonical_ranges
+                ]
+                slot = min(range(canonical_t), key=deltas.__getitem__)
+                if deltas[slot] <= 16 and slot not in filled:
+                    aligned[:, :, slot] = arr[:, :, i]
+                    filled.add(slot)
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps; aligned by "
+                "acquisition date"
+            )
+        else:
+            # No dates to align on -- place positionally and mask the tail.
+            # Defensive: the monthly exports always carry acquisition times.
+            aligned[:, :, :t] = arr
+            filled = set(range(t))
+            self._warn_ragged_once(
+                f"'{modality}' has {t}/{canonical_t} timesteps and no "
+                "acquisition dates; padded positionally"
+            )
+        return aligned, sorted(set(range(canonical_t)) - filled)
+
+    def _build_timestamps(
+        self,
+        num_timesteps: int,
+        stored_time_ranges: dict[str, list[tuple[datetime, datetime]]],
+    ) -> torch.Tensor:
+        """Build the sample's (T, 3) timestamps tensor.
+
+        Prefers the acquisition ranges rslearn read off the imagery, so every
+        timestep carries its own real date. A single dataset-level
+        (start_time, end_time) range cannot describe these datasets: their
+        windows are dated per label (the AEF supplemental datasets span
+        2016-2024), and several store their imagery item groups in *descending*
+        time order, so synthesized ascending months mislabel every timestep.
+
+        A sample carries one timestamps tensor for all modalities, so when
+        several provide times the first ``input_modalities`` entry whose axis
+        length matches wins (co-registered modalities share their period
+        boundaries by construction; see the monthly layer scheme in
+        scripts/tools/build_year_aligned_eval_configs.py).
+
+        Falls back to synthesizing monthly timestamps over
+        [start_time, end_time] only when the imagery carries no times at all
+        (rslearn leaves ``RasterImage.timestamps`` unset for single-timestep
+        layers whose items have no time range).
+
+        Args:
+            num_timesteps: the sample's time axis length.
+            stored_time_ranges: modality -> per-timestep (start, end) ranges, as
+                read from the imagery.
+
+        Returns:
+            Long tensor of shape (num_timesteps, 3): [day, month0, year].
+        """
+        for modality in self.input_modalities:
+            time_ranges = stored_time_ranges.get(modality)
+            if time_ranges is None:
+                continue
+            if len(time_ranges) != num_timesteps:
+                logger.warning(
+                    f"Modality {modality} has {len(time_ranges)} stored time "
+                    f"ranges but the sample has {num_timesteps} timesteps; "
+                    "ignoring them for timestamp construction."
+                )
+                continue
+            return timestamps_from_time_ranges(time_ranges)
+
+        if not self._warned_synthesized_timestamps:
+            logger.warning(
+                "No stored acquisition times on any of "
+                f"{self.input_modalities}; synthesizing {num_timesteps} monthly "
+                f"timestamps from {self.start_time}..{self.end_time}. These are "
+                "the same for every window, so multi-year datasets get the "
+                "wrong year."
+            )
+            self._warned_synthesized_timestamps = True
+        return torch.stack(
+            get_timestamps(self.start_time, self.end_time, num_timesteps=num_timesteps)
+        )
+
+    def _init_band_scatter(self, declared_bands: dict[str, list[str]] | None) -> None:
+        """Record which canonical bands this dataset actually stores.
+
+        A dataset may declare a SUBSET of a modality's bands -- e.g. an export
+        built from a fetch that never pulled S2's 60 m band set. The model still
+        tokenizes the full band_order (S2_SINGLE_BANDSET indexes B01/B09 at
+        channels 10/11) and normalization carries one stat per canonical band, so
+        read channels are scattered into full width and the rest are zeroed AFTER
+        normalization -- which is what pretraining's band dropout produces.
+        Full-band datasets get no entry and are untouched.
+
+        Args:
+            declared_bands: modality -> the band list model.yaml declares.
+
+        Raises:
+            ValueError: if a declared band is not in the modality's band order.
+        """
+        self.band_scatter: dict[str, list[int]] = {}
+        self.absent_bands: dict[str, list[int]] = {}
+        for modality, bands in (declared_bands or {}).items():
+            if modality not in self.input_modalities:
+                continue
+            canonical = list(Modality.get(modality).band_order)
+            unknown = [band for band in bands if band not in canonical]
+            if unknown:
+                raise ValueError(
+                    f"modality '{modality}' declares bands {unknown} that are not "
+                    f"in its canonical band order {canonical}"
+                )
+            indices = [canonical.index(band) for band in bands]
+            if indices == list(range(len(canonical))):
+                continue
+            self.band_scatter[modality] = indices
+            self.absent_bands[modality] = sorted(
+                set(range(len(canonical))) - set(indices)
+            )
+            logger.info(
+                f"'{modality}' stores {len(indices)}/{len(canonical)} bands; "
+                f"missing {[canonical[i] for i in self.absent_bands[modality]]} "
+                "will be zero after normalization"
+            )
+
+    def _scatter_bands(self, modality: str, arr: np.ndarray) -> np.ndarray:
+        """Widen a subset-band array to the modality's canonical band count.
+
+        Read channels land at their canonical positions; the rest stay 0 here and
+        are re-zeroed after normalization (which is the value that matters).
+
+        Args:
+            modality: modality name.
+            arr: (H, W, T, n_declared) array as read.
+
+        Returns:
+            (H, W, T, n_canonical) array.
+
+        Raises:
+            ValueError: if the array's channel count does not match the number of
+                declared bands, which means the config and the rasters disagree.
+        """
+        indices = self.band_scatter[modality]
+        if arr.shape[-1] != len(indices):
+            raise ValueError(
+                f"modality '{modality}' declares {len(indices)} bands but its "
+                f"rasters carry {arr.shape[-1]}; config and data disagree"
+            )
+        widened = np.zeros(
+            (*arr.shape[:-1], len(Modality.get(modality).band_order)),
+            dtype=arr.dtype,
+        )
+        widened[..., indices] = arr
+        return widened
+
+    def _parse_label(self, target: dict) -> torch.Tensor:
+        """Parse the raw rslearn target dict into a label tensor."""
         if self.target_task_name:
             data_dict = target.get(self.target_task_name, {})
         else:
@@ -434,14 +952,14 @@ class RslearnToOlmoEarthDataset(Dataset):
                 data_dict["valid"].image, dtype=torch.float32
             ).squeeze()
             values[valid == 0] = float("nan")
-            return masked_sample, values
+            return values
         elif self.target_task_type == TaskType.WINDOW_REGRESSION:
             # Vector RegressionTask emits a single value/valid per window.
             value = torch.as_tensor(data_dict["value"], dtype=torch.float32).squeeze()
             valid = torch.as_tensor(data_dict["valid"], dtype=torch.float32).squeeze()
             if valid == 0:
                 value = torch.tensor(float("nan"), dtype=torch.float32)
-            return masked_sample, value
+            return value
         else:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
@@ -450,16 +968,33 @@ class RslearnToOlmoEarthDataset(Dataset):
         if valid is not None:
             assert classes is not None, "valid mask present but no classes tensor"
             classes = classes.masked_fill(valid == 0, SEGMENTATION_IGNORE_LABEL)
-        return masked_sample, classes
+        return classes
 
     def __len__(self) -> int:
         """Length of the dataset."""
-        return len(self.dataset)
+        return len(self.dataset) * self._tiles_per_side**2
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a MaskedOlmoEarthSample and target tensor."""
-        input_dict, target, _ = self.dataset[idx]
-        return self._transform_sample(input_dict, target)
+        if self._tiles_per_side > 1:
+            base_idx, tile = divmod(idx, self._tiles_per_side**2)
+            if self._cached_base is None or self._cached_base[0] != base_idx:
+                input_dict, target, metadata = self.dataset[base_idx]
+                self._cached_base = (
+                    base_idx,
+                    (input_dict, target, _window_key(metadata)),
+                )
+            input_dict, target, window_key = self._cached_base[1]
+            return self._transform_sample(
+                input_dict,
+                target,
+                tile=divmod(tile, self._tiles_per_side),
+                window_key=window_key,
+            )
+        input_dict, target, metadata = self.dataset[idx]
+        return self._transform_sample(
+            input_dict, target, window_key=_window_key(metadata)
+        )
 
 
 class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDataset):
@@ -467,8 +1002,18 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
 
     def __iter__(self) -> Iterator[tuple[MaskedOlmoEarthSample, torch.Tensor]]:
         """Iterate over the dataset."""
-        for input_dict, target, _ in self.dataset:
-            yield self._transform_sample(input_dict, target)
+        for input_dict, target, metadata in self.dataset:
+            window_key = _window_key(metadata)
+            if self._tiles_per_side > 1:
+                for tile in range(self._tiles_per_side**2):
+                    yield self._transform_sample(
+                        input_dict,
+                        target,
+                        tile=divmod(tile, self._tiles_per_side),
+                        window_key=window_key,
+                    )
+            else:
+                yield self._transform_sample(input_dict, target, window_key=window_key)
 
 
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
@@ -489,11 +1034,18 @@ def from_registry_entry(
     tags_override: dict[str, str] | None = None,
     label_fraction: float = 1.0,
     label_fraction_seed: int = 42,
+    window_size: int | None = None,
+    label_at_center_pixel: bool = False,
+    tile_samples: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
-    Uses jsonargparse to build ModelDataset directly from model.yaml.
-    Requires model.yaml at entry.weka_path/model.yaml (set during ingestion).
+    Uses jsonargparse to build ModelDataset directly from model.yaml. The
+    model.yaml is read from the git checkout when the entry records a
+    config_repo_dir (pinned by the commit being run), otherwise from the copy
+    at entry.weka_path/model.yaml written during ingestion. The dataset
+    folder's config.json is verified against the sha256 recorded in the
+    registry before building.
 
     Uses the split tags written during ingestion to filter windows by default.
 
@@ -512,6 +1064,13 @@ def from_registry_entry(
             datasets. Non-train splits always use the full split.
         label_fraction_seed: Seed for the deterministic label_fraction
             subsample so the same low-label subset is used across runs.
+        window_size: Center-crop every sample to window_size x window_size
+            (see RslearnToOlmoEarthDataset).
+        label_at_center_pixel: Emit the labeled pixel's class as a scalar
+            classification label (see RslearnToOlmoEarthDataset).
+        tile_samples: Tile every sample into window_size x window_size windows
+            instead of center-cropping; the stored sample size is taken from
+            the registry entry's window_size (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -539,7 +1098,26 @@ def from_registry_entry(
             "model.yaml must be at weka_path/model.yaml. Run migrate_model_yaml or re-ingest."
         )
 
-    model_yaml_path = f"{entry.weka_path}/model.yaml"
+    # Resolves to the git-tracked config when the entry records a
+    # config_repo_dir; otherwise the copy in the Weka dataset folder.
+    model_yaml_path = entry.model_yaml_path
+
+    # config.json must live in the dataset folder (rslearn reads it from the
+    # dataset root), so pin it by hash instead: fail loudly if it has drifted
+    # from what was registered at ingest time.
+    config_json_sha256 = verify_config_json_hash(
+        entry.name, entry.weka_path, entry.config_json_sha256
+    )
+    log_eval_dataset_provenance_to_wandb(
+        entry.name,
+        {
+            "model_yaml_path": model_yaml_path,
+            "model_yaml_sha256": sha256_of_file(model_yaml_path),
+            "config_json_sha256": config_json_sha256,
+            "config_repo_dir": entry.config_repo_dir,
+            "weka_path": entry.weka_path,
+        },
+    )
 
     # Use override if provided, otherwise use modalities from entry
     if input_modalities_override:
@@ -579,11 +1157,21 @@ def from_registry_entry(
         raise ValueError(
             f"Dataset '{entry.name}' has use_pretrain_norm=False but no norm_stats in registry."
         )
+    if tile_samples and not entry.window_size:
+        raise ValueError(
+            f"tile_samples requires registry entry '{entry.name}' to record its "
+            "stored sample size in window_size."
+        )
     return RslearnToOlmoEarthDataset.from_model_config(
         model_config=model_config,
         source_path=dataset_path,
         split=normalized_split,
         input_modalities=input_modalities,
+        # Per-dataset imagery time range, used only as the fallback when the
+        # imagery has no acquisition times of its own (see _build_timestamps);
+        # fall back further to the defaults when the entry records no range.
+        start_time=entry.start_time or DEFAULT_START_TIME,
+        end_time=entry.end_time or DEFAULT_END_TIME,
         norm_stats_from_pretrained=use_pretrain_norm,
         norm_method=norm_method,
         ds_norm_stats_json=None,
@@ -593,4 +1181,8 @@ def from_registry_entry(
         tags_override=effective_tags,
         label_fraction=label_fraction,
         label_fraction_seed=label_fraction_seed,
+        window_size=window_size,
+        label_at_center_pixel=label_at_center_pixel,
+        tile_samples=tile_samples,
+        sample_size=entry.window_size if tile_samples else None,
     )

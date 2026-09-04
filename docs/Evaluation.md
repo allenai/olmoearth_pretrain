@@ -22,8 +22,9 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 4. [KNN / Linear Probing](#knn--linear-probing)
 5. [Finetune](#finetune-sweep)
 6. [Monitoring & Outputs](#monitoring--outputs)
-7. [Helpful Files](#helpful-files)
-8. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
+7. [Landsat Eval Variants](#landsat-eval-variants-year-aligned-internal)
+8. [Helpful Files](#helpful-files)
+9. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
 
 ---
 
@@ -33,9 +34,10 @@ We run evaluations through the same `olmoearth_pretrain/internal/experiment.py` 
 
 - `olmoearth_pretrain/internal/full_eval_sweep.py` runs KNN (classification) and linear probing (segmentation) sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate, pretrained / dataset normalizers, and pooling (mean or max).
 - `olmoearth_pretrain/internal/full_eval_sweep_finetune.py` runs fine-tuning sweeps for OlmoEarth checkpoints or baseline models, with optional sweeps over learning rate and pretrained / dataset normalizers.
+- `olmoearth_pretrain/internal/embedding_eval_sweep.py` runs the embedding-product evals (`EMBEDDING_EVAL_TASKS`: the per-pixel ws16/ps1 tasks) for an OlmoEarth checkpoint or the precomputed products (`--model=aef` / `--model=tessera_v2_precomputed`). Normalization is held fixed (pretraining stats; embedding products are consumed as stored) and only the probe learning rate is swept — the KNN twins of the AEF supplemental tasks run once in their own job.
 
-Both scripts use:
-- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, and `FT_EVAL_TASKS` for fine-tuning).
+The scripts use:
+- [`olmoearth_pretrain/internal/all_evals.py`](../olmoearth_pretrain/internal/all_evals.py) for the task registry (`EVAL_TASKS` for KNN and linear probing, `FT_EVAL_TASKS` for fine-tuning, and `EMBEDDING_EVAL_TASKS` for the embedding-product convention).
 - [`olmoearth_pretrain/evals`](../olmoearth_pretrain/evals) for dataset and model wrappers.
 
 Every launch uses one of the evaluation subcommands in `experiment.py`:
@@ -54,6 +56,46 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
 
 - **OlmoEarth models:** Nano, Tiny, Base, and Large size.
 - **Others:** Supported baseline models are defined in `olmoearth_pretrain/evals/models/__init__.py`, which includes Galileo, Satlas, Terramind, Prithvi v2, Panopticon, CROMA, AnySat etc. Multi-size variants (if available) are also supported.
+- **Precomputed embedding products:** `--model=aef` (AlphaEarth / Google
+  Satellite Embeddings) and `--model=tessera_v2_precomputed` evaluate embedding
+  products instead of running a forward pass — the embeddings are read off the
+  sample as data modalities (`gse`, `tessera_v2`) baked into eval dataset
+  stores, then flow through the exact same probe/KNN code as every other
+  model. Tasks run only where the modality has been baked in — see
+  [`PrecomputedEmbeddingCoverage.md`](PrecomputedEmbeddingCoverage.md) for
+  per-dataset coverage and the caveats that belong in any reported comparison.
+  To onboard
+  a dataset: bake the rasters with
+  `olmoearth_pretrain/evals/embedding_materializer` (or
+  `scripts/tools/materialize_aef_supplemental_embeddings.py` for the AEF
+  supplemental set), then run `scripts/tools/wire_embedding_modalities.py` to
+  declare the layer in the dataset's `config.json`, add the model.yaml input,
+  and list the modality in the registry, followed by
+  `scripts/tools/backfill_eval_registry_provenance.py` to re-stamp
+  `config_json_sha256`.
+
+  For head-to-head comparisons with these products, `all_evals.py` defines
+  a separate `EMBEDDING_EVAL_TASKS` registry (swept via
+  `embedding_eval_sweep.py`, see above) under a per-pixel embedding-product
+  convention: 16×16 windows,
+  `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
+  (`quantize_embeddings=True`) so forward-pass models are scored as int8
+  products too. The downloaded AEF product is *not* re-quantized because its
+  stored values already carry that loss, but
+  `tessera_v2` — which we bake ourselves in float32 — is; see
+  `QUANTIZE_AT_EVAL_MODALITIES` and the quantization section of
+  `docs/TesseraV2Inference.md`, which also covers why the fixed-scale power
+  quantizer clips LayerNorm-geometry embeddings (ours included). The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
+  128×128 PASTIS sample into 16×16 windows, reading the `pastis_rslearn`
+  dataset — an rslearn export whose S1/S2 inputs mirror the pretraining
+  dataset (see `olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py`)
+  rather than the benchmark-shipped imagery; the `<dataset>_ws16_ps1` tasks
+  (the eight AEF supplemental
+  datasets) center-crop each sample to a 16×16 window around its single
+  labeled pixel and run as center-pixel classification
+  (`label_at_center_pixel` + `use_center_token`), keeping only the token that
+  actually carries a label. Their primary metric is balanced accuracy (the
+  AEF paper's protocol).
 
 ---
 
@@ -276,6 +318,32 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
 
 - **W&B logging:** Both scripts default to `EVAL_WANDB_PROJECT`. Override with `--project_name` or disable W&B via `--trainer.callbacks.wandb.enabled=False`.
 - **Inspecting results:** Use [`scripts/tools/get_max_eval_metrics_from_wandb.py`](../scripts/tools/get_max_eval_metrics_from_wandb.py) to pull the best metric per task across runs.
+
+---
+
+## Landsat Eval Variants (Year-Aligned, Internal)
+
+The `*_year_aligned` embedding tasks exist in Landsat variants, selected purely
+by task-name suffix in `EMBEDDING_EVAL_TASKS`:
+
+| suffix | what it does | data prerequisite on the **registered** tree (`registry weka_path`) |
+|---|---|---|
+| `..._landsat` | adds Landsat as an input modality | `landsat_mo*` layers **and** `landsat` in the registry entry's `modalities` |
+
+**Setup** (once per dataset; see the script's docstring for the full runbook):
+`scripts/tools/setup_extra_layers.py` adds the Landsat layers to the dataset
+config and prepares/materializes them via Beaker jobs. **Mind the two trees**:
+materialization typically runs on the staging tree
+(`rslearn-eai/datasets/olmoearth_evals`), but evals read the registered tree
+(`olmoearth/eval_datasets`) — rasters must be copied across, and
+`backfill_eval_registry_provenance.py` must re-stamp the config hash after any
+config.json change (evals fail loudly on a stale stamp).
+
+**Failure mode is graceful but silent-ish — check the job logs.** The Landsat
+input is `required: false`, so a dataset missing it does not crash: the
+modality runs **all-MISSING** (`ragged imagery` warnings clustered at loader
+startup — one per worker within seconds — instead of scattered singles;
+landsat scores equal to the non-landsat variant are the tell).
 
 ---
 

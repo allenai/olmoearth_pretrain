@@ -1,11 +1,14 @@
 """Launch script for evaluation allowing you to easily run all the evals for your model by just pointing at your training script."""
 
 import importlib.util
+import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
+from olmo_core.config import Config
 from olmo_core.train.callbacks import (
     BeakerCallback,
     ConfigSaverCallback,
@@ -15,8 +18,10 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -24,6 +29,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -33,6 +39,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamTaskConfig,
     EvalMode,
 )
+from olmoearth_pretrain.train.train_module.train_module import _strip_unknown_fields
 
 logger = getLogger(__name__)
 
@@ -61,6 +68,56 @@ def load_user_module(path: str) -> Any:
     assert loader is not None
     loader.exec_module(user_mod)
     return user_mod
+
+
+def _load_path_from_argv() -> str | None:
+    """Extract the checkpoint path from a ``--trainer.load_path=...`` CLI override."""
+    prefix = "--trainer.load_path="
+    for arg in sys.argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
+    """Wrap a model-config builder to reconstruct the architecture from a checkpoint.
+
+    When ``LOAD_ARCH_FROM_CHECKPOINT`` is set, the returned builder reads
+    ``{load_path}/config.json`` -- the fully-resolved config that ConfigSaverCallback
+    writes alongside every checkpoint -- and deserializes its ``model`` block. This
+    rebuilds the EXACT architecture the checkpoint weights expect, so train-time
+    architecture overrides (e.g. ``--model.encoder_config.register_dim=768``) do NOT
+    need to be re-passed at eval time.
+
+    Falls back to ``fallback_builder`` (the training module's ``build_model_config``)
+    when no ``--trainer.load_path`` is given or the ``config.json`` is missing -- e.g.
+    older checkpoints or baseline models -- so existing flows are unaffected.
+    """
+
+    def builder(common: Any) -> Any:
+        load_path = _load_path_from_argv()
+        if load_path is None:
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but no --trainer.load_path was "
+                "provided; falling back to the module's build_model_config."
+            )
+            return fallback_builder(common)
+        config_path = UPath(load_path) / "config.json"
+        if not config_path.exists():
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but %s does not exist; falling back "
+                "to the module's build_model_config.",
+                config_path,
+            )
+            return fallback_builder(common)
+        logger.info("Reconstructing model architecture from %s", config_path)
+        # Use the same reconstruction pipeline as the train-module compatibility check
+        # (patch legacy fields, strip fields unknown to the current schema) so the eval
+        # model and that check agree exactly.
+        config_dict = patch_legacy_encoder_config(json.loads(config_path.read_text()))
+        return Config.from_dict(_strip_unknown_fields(config_dict["model"]))
+
+    return builder
 
 
 EVAL_TASKS = {
@@ -137,6 +194,42 @@ EVAL_TASKS = {
     ),
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    # 64x64-tiled variants of the two 256px segmentation tasks: each native
+    # 256x256 image becomes 16 non-overlapping 64x64 tiles, shrinking the token
+    # grid the register read sees (64/patch vs 256/patch). Used to test whether
+    # the large-grid read dilution drives the register regressions on these tasks.
+    # Not directly comparable in absolute terms to the 256px versions (less spatial
+    # context per window); the signal is the rope-vs-latents gap at 64 vs 256.
+    "m_sa_crop_type_64": DownstreamTaskConfig(
+        dataset="m-sa-crop-type",
+        tile_size=64,
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "m_cashew_plant_64": DownstreamTaskConfig(
+        dataset="m-cashew-plant",
+        tile_size=64,
         embedding_batch_size=32,
         probe_batch_size=8,
         num_workers=2,
@@ -1228,6 +1321,408 @@ EVAL_TASKS.update(
     }
 )
 
+# The AEF supplemental evaluation datasets (arXiv:2507.22291): S2 timeseries
+# crops carrying a single labeled center pixel each, ingested via the registry
+# (their plain 32x32 segmentation variants are defined above).
+AEF_SUPPLEMENTAL_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
+
+# Year-aligned re-exports (2026-08-04): the same labels and windows, but the
+# imagery is twelve ASCENDING 30-day Sentinel-1 + Sentinel-2 layers spanning the
+# calendar year of the label, matching what AEF and Tessera are built over. The
+# parents feed OlmoEarth a trailing year from the observation date (canada,
+# ethiopia, us_trees) or a fixed Sep-Aug year (pastis), so the published
+# comparisons were not input-matched. See
+# scripts/tools/reanchor_year_aligned_dataset.py.
+#
+# Registered at ws16 only: the point is the three-way comparison against the
+# precomputed products, which are ws16-only. Add the smaller context sizes if the
+# spatial-context ablation is wanted here too.
+#
+# All eight AEF supplemental datasets are now re-exported and registered.
+#
+# lcmap_lu and us_trees additionally carry tessera as a *required* input, so on
+# those two the resolved window set is intersected with Tessera's coverage
+# (lcmap 26 409/26 513, us_trees 44 886/45 382) rather than being the
+# S1+S2+gse intersection the other six use. That keeps AEF / Tessera /
+# OlmoEarth on one identical window set per dataset -- which is the point --
+# but it does mean their window counts are not comparable to the other six.
+AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
+    # Ordered by window count, smallest first. Task registration order is
+    # execution order inside every eval job (the evaluator walks the registry
+    # dict), so this makes each job report its cheap datasets within minutes
+    # instead of queueing them behind us_trees's ~75-minute tasks.
+    "ethiopia_crops_year_aligned",  # 2 530 windows
+    "africa_crop_mask_year_aligned",  # 2 556
+    "canada_crops_fine_year_aligned",  # 14 566
+    "canada_crops_coarse_year_aligned",  # 16 079
+    "descals_year_aligned",  # 17 477
+    "lcmap_lu_year_aligned",  # 26 513
+    "glance_year_aligned",  # 34 885
+    "us_trees_year_aligned",  # 45 382
+)
+
+# Window sizes the embedding evals run at by default for OlmoEarth
+# checkpoints: the ws16 embedding-product convention plus smaller spatial
+# contexts (8, 4, 1) to measure how much surrounding context the per-pixel
+# embeddings rely on (and what a cheaper eval would cost in accuracy). ws16
+# is registered first so the precomputed baselines — which keep one task per
+# dataset — stay on the ws16 convention.
+EMBEDDING_EVAL_WINDOW_SIZES = (16, 8, 4, 1)
+
+
+def _embedding_eval_batch_scale(window_size: int) -> int:
+    """Batch-size multiplier keeping tokens per batch constant across ws.
+
+    Each window carries (window_size/patch_size)^2 spatial tokens, so halving
+    the window quarters the tokens per window; scaling the batch by
+    (16/ws)^2 keeps the token throughput (and for PASTIS the
+    one-stored-sample-per-batch tiling property) identical to ws16.
+    """
+    return (16 // window_size) ** 2
+
+
+# AEF's per-dataset "Max Trial Size (n)" column (their Table 1, read per class),
+# used directly as our per-class draw size. Keyed by dataset-name prefix so the
+# _year_aligned re-exports inherit their parent's value.
+#
+# Taking the whole column -- including the odd entries -- rather than only the
+# round ones is what gives exact training-budget parity with AEF on all eight
+# datasets. It also sidesteps a question we could not settle: whether 49/75/68
+# are caps they chose or their least-populated classes binding. It does not
+# matter, because every one of OUR least classes exceeds the corresponding
+# value (ethiopia 96>49, canada fine 87>75, coarse 106>68, africa 318>200,
+# descals 290>200, lcmap 588>300, glance 467>300, us_trees 393>300), so the
+# value binds first everywhere and the draw is theirs by construction.
+#
+# The earlier reading -- that only the round values were caps and the odd ones
+# were least classes -- implied AEF draws its rarest class in full on those
+# three datasets, leaving ZERO of it in the remainder they evaluate on, in every
+# fold. That would make their published ethiopia/canada figures K-1-class
+# balanced accuracies with a wrong 1/K chance line, which a paper about
+# rare-class performance under sparse labels is unlikely to be doing. Reading
+# the column as a budget avoids attributing that to them AND leaves 12-288
+# rarest-class rows in our eval set per dataset.
+AEF_MAX_TRIAL_CAPS = {
+    "ethiopia_crops": 49,
+    "canada_crops_fine": 75,
+    "canada_crops_coarse": 68,
+    "africa_crop_mask": 200,
+    "descals": 200,
+    "lcmap_lu": 300,
+    "glance": 300,
+    "us_trees": 300,
+}
+DEFAULT_AEF_MAX_TRIAL_CAP = 300
+
+
+def _aef_max_trial_cap(dataset: str) -> int:
+    """AEF's per-class draw cap for a dataset (300 unless Table 1 says otherwise)."""
+    for prefix, cap in AEF_MAX_TRIAL_CAPS.items():
+        if dataset.startswith(prefix):
+            return cap
+    return DEFAULT_AEF_MAX_TRIAL_CAP
+
+
+def _aef_ps1_task(
+    name: str,
+    eval_mode: EvalMode,
+    window_size: int = 16,
+    input_modalities: list[str] | None = None,
+) -> DownstreamTaskConfig:
+    """AEF supplemental task under the per-pixel embedding-product convention.
+
+    Each sample is center-cropped to a window_size x window_size window around
+    its labeled pixel, OlmoEarth emits per-pixel (patch_size=1) embeddings
+    int8 round-tripped like an embedding product, and only the labeled pixel's
+    token is kept — the task runs as center-pixel classification
+    (label_at_center_pixel + use_center_token). Balanced accuracy is the AEF
+    paper's protocol metric.
+
+    The KNN twin additionally runs AEF's balanced-trial protocol (their S4) on
+    the embeddings it already materializes: a class-balanced draw from the
+    pooled splits, scored on the remainder, repeated over AEF's k draws. It is
+    hosted here rather than on the LP tasks because the KNN twin is the only
+    single-instance job (embedding_eval_sweep.py emits one KNN job but eight LP
+    jobs, one per swept LR), so the trials compute once instead of eight
+    redundant times, and a neighbor lookup is the cheapest job to hang
+    millisecond-scale closed-form fits off. The precomputed baselines (AEF,
+    Tessera) run these same task objects, so they inherit the trials and stay
+    directly comparable.
+    """
+    scale = _embedding_eval_batch_scale(window_size)
+    return DownstreamTaskConfig(
+        dataset=name,
+        embedding_batch_size=32 * scale,
+        probe_batch_size=8 * scale,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=input_modalities or [Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=eval_mode,
+        primary_metric=EvalMetric.BALANCED_ACCURACY,
+        window_size=window_size,
+        patch_size=1,
+        quantize_embeddings=True,
+        use_center_token=True,
+        label_at_center_pixel=True,
+        balanced_trial=(
+            BalancedTrialConfig(cap=_aef_max_trial_cap(name))
+            if eval_mode == EvalMode.KNN
+            else None
+        ),
+    )
+
+
+# Embedding-product evals: OlmoEarth scored under the same conventions as the
+# precomputed embedding products (AEF/Tessera) — per-pixel (patch_size=1)
+# embeddings from fixed windows, int8 round-tripped. OlmoEarth checkpoints
+# run every window size in EMBEDDING_EVAL_WINDOW_SIZES by default (ws16 is
+# the product-parity convention; ws8/ws4/ws1 ablate the spatial context the
+# embeddings are computed from). Kept separate from EVAL_TASKS and swept by
+# embedding_eval_sweep.py (EMBEDDING_EVALS=1), which holds normalization
+# fixed to pretraining stats and sweeps only the probe LR for olmoearth /
+# aef / tessera_v2_precomputed. The precomputed baselines run these same tasks
+# with input_modalities overridden to the embedding modality and
+# quantize_embeddings=False (they are already int8 at source); they keep one
+# task per dataset, so they stay ws16-only.
+#
+# The AEF supplemental tasks are effectively pixel-wise classification, so each
+# gets a KNN twin (`_knn`). The PASTIS tasks stay LP-only: their dense labels
+# flatten to millions of train pixels, and KNN keeps every one as a reference
+# point (cost scales with train x query pixels), unlike the LP which compresses
+# them into a single weight matrix.
+#
+# The PASTIS tasks run on `pastis_rslearn`, an rslearn export that mirrors the
+# pretraining dataset (12 monthly Planetary Computer mosaics per sensor on the
+# native PASTIS patch grid; see
+# olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py) rather than the
+# imagery shipped with the PASTIS benchmark. Each 128x128 patch is tiled into
+# 16x16 windows (tile_samples). The gse/tessera layers were converted from the
+# embeddings previously fetched by pastis_processor.py --embedding_products.
+
+
+def _pastis_ps1_task(
+    input_modalities: list[str], window_size: int = 16
+) -> DownstreamTaskConfig:
+    """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    scale = _embedding_eval_batch_scale(window_size)
+    return DownstreamTaskConfig(
+        dataset="pastis_rslearn",
+        # At ws16, 64 = one full 128x128 stored sample (8x8 tiles of 16x16)
+        # per batch, so each DataLoader worker's batch maps to exactly one
+        # base-sample load with the tiled-__getitem__ cache; the (16/ws)^2
+        # scaling preserves both that mapping and the tokens per batch at
+        # smaller window sizes. Peak GPU memory at ws16 batch 32 was ~7.6GB,
+        # so 64 stays far from OOM.
+        embedding_batch_size=64 * scale,
+        probe_batch_size=8 * scale,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=input_modalities,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=window_size,
+        patch_size=1,
+        tile_samples=True,
+        quantize_embeddings=True,
+    )
+
+
+# The _pretrain_export suffix marks that the PASTIS tasks read the
+# pastis_rslearn pretraining-mirror export, distinguishing their metrics from
+# earlier pastis_ws16_ps1_* runs on the benchmark-shipped imagery. One task
+# set per window size in EMBEDDING_EVAL_WINDOW_SIZES, ws16 first.
+EMBEDDING_EVAL_TASKS = {}
+for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"pastis_ws{_ws}_ps1_sentinel2_pretrain_export": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name], window_size=_ws
+            ),
+            f"pastis_ws{_ws}_ps1_sentinel1_sentinel2_pretrain_export": (
+                _pastis_ps1_task(
+                    [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                    window_size=_ws,
+                )
+            ),
+            **{
+                f"{name}_ws{_ws}_ps1": _aef_ps1_task(
+                    name, EvalMode.LINEAR_PROBE, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+            **{
+                f"{name}_ws{_ws}_ps1_knn": _aef_ps1_task(
+                    name, EvalMode.KNN, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+        }
+    )
+
+# Year-aligned tasks, ws16 only. Both a Sentinel-2-only and a Sentinel-1 +
+# Sentinel-2 variant: the S1+S2 pair is the point of the re-export, while the
+# S2-only pair isolates the year/ordering change from the effect of
+# adding a sensor -- without it, a delta against the parent task confounds the
+# two. Same naming convention as the pastis embedding tasks.
+#
+# Each gets a linear-probe and a kNN variant, like its parent task above: the
+# AEF paper scores every dataset as best-of-{kNN-1, kNN-3, linear}, so dropping
+# kNN here would compare our linear-probe number against their best-of-three.
+_YEAR_ALIGNED_MODALITIES = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    # The Landsat pairs. Both require the landsat_moNN layers on weka
+    # (setup_extra_layers.py, layer set `landsat`); the input is optional in
+    # every model.yaml, so windows the Landsat prepare/materialize has not
+    # reached run without it rather than failing.
+    #
+    # sentinel2_landsat isolates Landsat's optical-only contribution (vs the
+    # sentinel2 pair); sentinel1_sentinel2_landsat is the everything-config
+    # and the sensor-fair match to AEF, which fuses Landsat internally.
+    # Together with the S1 pairs this completes the sensor half-lattice —
+    # every single-sensor addition to S2 is measurable in isolation and in
+    # combination.
+    "sentinel2_landsat": [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
+    "sentinel1_sentinel2_landsat": [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
+}
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
+# The Landsat-ONLY stack, closing the sensor half-lattice: `sentinel2_landsat`
+# measures what Landsat ADDS to S2, and this measures what Landsat carries on
+# its own.
+for _mode, _mode_suffix in ((EvalMode.LINEAR_PROBE, ""), (EvalMode.KNN, "_knn")):
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_landsat{_mode_suffix}": _aef_ps1_task(
+                name,
+                _mode,
+                window_size=16,
+                input_modalities=[Modality.LANDSAT.name],
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
+# Per-pixel cloud-mosaic pilot on ethiopia, the dataset where we lose hardest to
+# Tessera. `ccmos` replaces each 30-day S2 mosaic with a per-pixel selection of the
+# least-SCL-contaminated acquisition (pixel_mosaic_export.py); measured 93.3% of
+# chosen pixels clear, against the parent's scene-level `sort_by: eo:cloud_cover`.
+#
+# Its B01/B09 are ZEROS -- the fetch group it was built from carries only band sets
+# 1-2 and rslearn cannot backfill a band set onto a materialized layer -- so the
+# ccmos-vs-parent delta bundles cloud selection with zeroing those two 60 m
+# atmospheric bands. Accepted rather than controlled, because pretraining uses band
+# dropout so absent bands are in-distribution, and B01/B09 carry little vegetation
+# signal. An earlier ten-band control arm was dropped: the model tokenizes S2 as one
+# 12-band group and indexes B01/B09 at channels 10/11, so a ten-channel input breaks
+# that lookup rather than reading as a ten-band arm.
+#
+# Registered as an explicit block rather than by appending to
+# AEF_SUPPLEMENTAL_YEAR_ALIGNED: that tuple drives every other sweep's task
+# cross-product and is length-pinned by a test.
+PIXEL_MOSAIC_DATASETS = ("ethiopia_crops_ccmos_year_aligned",)
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    for _mode, _mode_suffix in (
+        (EvalMode.LINEAR_PROBE, ""),
+        (EvalMode.KNN, "_knn"),
+    ):
+        EMBEDDING_EVAL_TASKS.update(
+            {
+                f"{name}_ws16_ps1_{_suffix}{_mode_suffix}": _aef_ps1_task(
+                    name,
+                    _mode,
+                    window_size=16,
+                    input_modalities=_modalities,
+                )
+                for name in PIXEL_MOSAIC_DATASETS
+            }
+        )
+
+# pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
+# tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
+# pastis helper with its dataset name overridden.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        "pastis_year_aligned_ws16_ps1_sentinel2": replace(
+            _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        # Landsat siblings (see the _YEAR_ALIGNED_MODALITIES comment above).
+        "pastis_year_aligned_ws16_ps1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+    }
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
@@ -1525,6 +2020,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
                     if os.environ.get("FINETUNE")
+                    else EMBEDDING_EVAL_TASKS
+                    if os.environ.get("EMBEDDING_EVALS")
                     else EVAL_TASKS
                 ),
                 eval_on_startup=True,
@@ -1557,6 +2054,10 @@ if __name__ == "__main__":
         build_train_module_config = None
 
     build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

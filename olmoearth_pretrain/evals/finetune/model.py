@@ -28,6 +28,7 @@ class BackboneWithHead(nn.Module):
         pooling_type: str,
         num_classes: int,
         use_pooled_tokens: bool = False,
+        eval_on_encoder_tokens: bool = False,
         head_type: HeadType = "linear",
     ) -> None:
         """Initialize the backbone with head."""
@@ -48,6 +49,7 @@ class BackboneWithHead(nn.Module):
             pooling_type=pooling_type,
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
+            eval_on_encoder_tokens=eval_on_encoder_tokens,
         )
         self.task_type = task_type
         self.patch_size = patch_size

@@ -36,6 +36,23 @@ def _is_blank_mosaic(modality: ModalitySpec, image: npt.NDArray) -> bool:
     return modality == Modality.SENTINEL1 and np.all(image == SENTINEL1_NODATA)
 
 
+def _get_base_item_dict(layer_datas: dict | None, layer_name: str) -> dict | None:
+    """Return the base (first) serialized item for a layer, or None.
+
+    For the monthly Landsat layers this is the least-cloudy scene that seeds the
+    single-coverage mosaic, which covers essentially the whole window.
+    """
+    if not layer_datas:
+        return None
+    layer_data = layer_datas.get(layer_name)
+    if layer_data is None:
+        return None
+    groups = getattr(layer_data, "serialized_item_groups", None)
+    if not groups or not groups[0]:
+        return None
+    return groups[0][0]
+
+
 def get_adjusted_projection_and_bounds(
     modality: ModalitySpec,
     band_set: BandSet,
@@ -365,14 +382,13 @@ def convert_monthly(
             writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
             writer.writeheader()
             for image_idx, (start_time, end_time) in enumerate(time_ranges):
-                writer.writerow(
-                    dict(
-                        crs=window_metadata.crs,
-                        col=window_metadata.col,
-                        row=window_metadata.row,
-                        tile_time=window_metadata.time.isoformat(),
-                        image_idx=image_idx,
-                        start_time=start_time,
-                        end_time=end_time,
-                    )
+                row = dict(
+                    crs=window_metadata.crs,
+                    col=window_metadata.col,
+                    row=window_metadata.row,
+                    tile_time=window_metadata.time.isoformat(),
+                    image_idx=image_idx,
+                    start_time=start_time,
+                    end_time=end_time,
                 )
+                writer.writerow(row)

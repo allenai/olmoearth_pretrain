@@ -91,6 +91,7 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            tile_size=kwargs.get("tile_size"),
         )
     elif eval_dataset == "mados":
         if norm_stats_from_pretrained:
@@ -112,21 +113,22 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset.startswith("pastis"):
-        kwargs = {
+    elif eval_dataset in ("pastis", "pastis128"):
+        pastis_kwargs = {
             "split": split,
             "label_fraction": label_fraction,
             "norm_stats_from_pretrained": norm_stats_from_pretrained,
             "input_modalities": input_modalities,
             "norm_method": norm_method,
             "dir_partition": paths.PASTIS_DIR_PARTITION,
+            "window_size": kwargs.get("window_size"),
         }
         if "128" in eval_dataset:
             # "pastis128"
-            kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
         else:
-            kwargs["path_to_splits"] = paths.PASTIS_DIR
-        return PASTISRDataset(**kwargs)  # type: ignore
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR
+        return PASTISRDataset(**pastis_kwargs)  # type: ignore
     elif eval_dataset.startswith("fifty_cities"):
         # Split mode is encoded in the dataset-name suffix; "fifty_cities" alone
         # is the random split.
@@ -162,4 +164,7 @@ def get_eval_dataset(
             norm_method=norm_method,
             input_modalities_override=input_modalities if input_modalities else None,
             label_fraction=label_fraction,
+            window_size=kwargs.get("window_size"),
+            label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
+            tile_samples=kwargs.get("tile_samples", False),
         )

@@ -449,10 +449,29 @@ def build_commands(
             )
         )
 
-    if args.task_skip_names:
+    tasks_to_run = None
+    if getattr(args, "task_names", None):
+        selected = [name.strip() for name in args.task_names.split(",") if name.strip()]
+        unknown = sorted(set(selected) - set(FT_EVAL_TASKS))
+        if unknown:
+            raise ValueError(
+                f"Unknown FT eval task names: {', '.join(unknown)}. "
+                f"Known: {', '.join(FT_EVAL_TASKS)}"
+            )
+        tasks_to_run = selected
+    elif args.task_skip_names:
         skip_names = [name.strip() for name in args.task_skip_names.split(",")]
         tasks_to_run = [task for task in FT_EVAL_TASKS.keys() if task not in skip_names]
-        tasks_to_run_arg = f" --trainer.callbacks.downstream_evaluator.tasks_to_run='{json.dumps(tasks_to_run)}'"
+
+    if tasks_to_run is not None:
+        # Compact separators, matching full_eval_sweep._get_tasks_to_run_arg:
+        # json.dumps' default space after each comma survives one shell level
+        # but is word-split when the override is re-serialized into a launched
+        # Beaker command, leaving OmegaConf an unterminated flow sequence.
+        tasks_to_run_arg = (
+            " --trainer.callbacks.downstream_evaluator.tasks_to_run="
+            f"'{json.dumps(tasks_to_run, separators=(',', ':'))}'"
+        )
         commands_new = []
         for cmd in commands:
             logger.info(f"Adding tasks_to_run filter to {cmd}")
@@ -523,6 +542,16 @@ def main() -> None:
         help="Base random seed applied to every finetune task (optional).",
     )
     parser.add_argument(
+        "--load_arch_from_checkpoint",
+        action="store_true",
+        help=(
+            "Reconstruct the model architecture from the checkpoint's saved "
+            "config.json instead of the training module's defaults. Lets you eval "
+            "runs whose architecture was set via train-time CLI overrides without "
+            "re-passing those overrides here."
+        ),
+    )
+    parser.add_argument(
         "--task-skip-names",
         type=str,
         required=False,
@@ -532,11 +561,25 @@ def main() -> None:
             "with a warning."
         ),
     )
+    parser.add_argument(
+        "--task-names",
+        type=str,
+        required=False,
+        help=(
+            "Comma-separated FT eval task keys to run, to the exclusion of all "
+            "others. Unlike --task-skip-names this is declarative: a task added "
+            "to FT_EVAL_TASKS later does not silently join the run. Unknown "
+            "names are an error rather than a no-op, because a typo would "
+            "otherwise widen the sweep instead of narrowing it."
+        ),
+    )
 
     args, extra_cli = parser.parse_known_args()
 
     env = os.environ.copy()
     env["FINETUNE"] = "1"
+    if args.load_arch_from_checkpoint:
+        env["LOAD_ARCH_FROM_CHECKPOINT"] = "1"
     commands_to_run = build_commands(args, extra_cli)
     for cmd in commands_to_run:
         logger.info(cmd)

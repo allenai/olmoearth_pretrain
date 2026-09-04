@@ -57,6 +57,65 @@ GEOBENCH_L8_BAND_NAMES = [
 ]
 
 
+def _apply_band_name_corrections(
+    band_names: list[str], corrections: dict[str, str]
+) -> list[str]:
+    """Relabel mislabelled source bands with the band they actually hold.
+
+    A correction map renames channels in place: the mapping is applied to all
+    channels at once, so chains like ``06 -> 07`` alongside ``07 -> 08A`` mean
+    what they look like and do not cascade. The names need not stay within the
+    modality's band set -- a channel may turn out not to be a spectral band at
+    all -- but no two channels may end up claiming the same band, which is what
+    a typo in a config looks like. That is checked here so it fails at
+    construction with a readable message rather than silently feeding the model
+    one band twice. Whether the surviving names still cover every slot the
+    modality needs is checked separately, once ``imputes`` is known.
+    """
+    unknown = set(corrections) - set(band_names)
+    if unknown:
+        raise ValueError(
+            f"band_name_corrections refers to bands the dataset does not have: "
+            f"{sorted(unknown)}. Present: {band_names}"
+        )
+    corrected = [corrections.get(name, name) for name in band_names]
+    duplicated = {name for name in corrected if corrected.count(name) > 1}
+    if duplicated:
+        raise ValueError(
+            f"band_name_corrections made more than one channel claim to be "
+            f"{sorted(duplicated)}: {band_names} became {corrected}."
+        )
+    return corrected
+
+
+def _validate_band_coverage(
+    present: list[str],
+    imputes: list[tuple[str, str]],
+    all_bands: list[str],
+    dataset: str,
+) -> None:
+    """Check every band slot is either present or imputed before we build a sample.
+
+    Without this, a band left uncovered surfaces much later as a missing
+    normalization stat or a stack of the wrong width, neither of which points at
+    the config that caused it.
+    """
+    covered = set(present) | {target for _, target in imputes}
+    missing = [name for name in all_bands if name not in covered]
+    if missing:
+        raise ValueError(
+            f"{dataset}: after band_name_corrections these bands are neither "
+            f"present nor imputed: {missing}. Present: {present}. Add an impute "
+            f"for each, or correct the mapping."
+        )
+    unusable = [src for src, _ in imputes if src not in present]
+    if unusable:
+        raise ValueError(
+            f"{dataset}: imputes read from bands the dataset does not have "
+            f"(after corrections): {unusable}. Present: {present}."
+        )
+
+
 # Map low-label fractions to GeoBench's upstream ``partition_name`` strings.
 # ``"default"`` is the full-data partition used by GeoBench for 1.0.
 _LABEL_FRACTION_TO_PARTITION = {
@@ -86,6 +145,7 @@ class GeobenchDataset(Dataset):
         # so when using dataset stats (e.g. for MADOS) consistency is important.
         norm_method: str = "norm_no_clip_2_std",
         visualize_samples: bool = False,
+        tile_size: int | None = None,
     ):
         """Init GeoBench dataset.
 
@@ -97,6 +157,11 @@ class GeobenchDataset(Dataset):
             norm_stats_from_pretrained: Whether to use normalization stats from pretrained model
             norm_method: Normalization method to use, only when norm_stats_from_pretrained is False
             visualize_samples: Whether to visualize samples
+            tile_size: If set, split each native image into non-overlapping
+                ``tile_size x tile_size`` windows (every pixel kept, sample count
+                scaled by ``(native // tile_size) ** 2``). Must divide the dataset's
+                native ``height_width``. Used to shrink the spatial token grid the
+                model/register-read sees. None = return the native image.
         """
         if label_fraction not in _LABEL_FRACTION_TO_PARTITION:
             valid = ", ".join(
@@ -142,7 +207,31 @@ class GeobenchDataset(Dataset):
             self.dataset[0].bands[i].band_info.name
             for i in range(len(self.dataset[0].bands))
         ]
-        self.band_names = [x.name for x in task.bands_info]
+        all_bands = GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES
+        band_stats = task.band_stats
+        if config.band_name_corrections:
+            # Relabel each channel with the band it actually holds. Only the
+            # names move; the pixel data is untouched. The dataset's own norm
+            # stats are keyed by the same wrong names, so they are relabelled
+            # identically.
+            original_band_names = _apply_band_name_corrections(
+                original_band_names, config.band_name_corrections
+            )
+            band_stats = {
+                config.band_name_corrections.get(name, name): stats
+                for name, stats in band_stats.items()
+            }
+            # Keep the channels that turned out to be real bands of this
+            # modality, in the order we emit them. A correction may reveal that
+            # a channel is not a spectral band at all (GeoBench gave m-brick-kiln
+            # SWIR names for three 8-bit true-colour renders), and those drop out
+            # here because their corrected names are not in ``all_bands``.
+            # Anything genuinely missing is filled by ``imputes`` in
+            # ``_impute_bands``, exactly as for a dataset that never shipped it.
+            self.band_names = [n for n in all_bands if n in original_band_names]
+            _validate_band_coverage(self.band_names, config.imputes, all_bands, dataset)
+        else:
+            self.band_names = [x.name for x in task.bands_info]
         self.band_indices = [
             original_band_names.index(band_name) for band_name in self.band_names
         ]
@@ -158,7 +247,7 @@ class GeobenchDataset(Dataset):
             ]
 
         imputed_band_info = impute_normalization_stats(
-            task.band_stats,
+            band_stats,
             config.imputes,
             all_bands=GEOBENCH_L8_BAND_NAMES if self.is_landsat else EVAL_S2_BAND_NAMES,
         )
@@ -169,6 +258,27 @@ class GeobenchDataset(Dataset):
         self.active_indices = range(int(len(self.dataset)))
         self.norm_method = norm_method
         self.visualize_samples = visualize_samples
+
+        # Optional tiling: each native image becomes (native // tile_size)**2
+        # non-overlapping tile_size x tile_size windows.
+        self.tile_size = tile_size
+        if tile_size is not None:
+            native = config.height_width
+            if native is None:
+                raise ValueError(
+                    f"tile_size={tile_size} requires a height_width in the config "
+                    f"for dataset {dataset}, but it is None."
+                )
+            if native % tile_size != 0:
+                raise ValueError(
+                    f"tile_size={tile_size} must evenly divide the native "
+                    f"height_width={native} for dataset {dataset}."
+                )
+            self.tiles_per_dim = native // tile_size
+            self.tiles_per_image = self.tiles_per_dim**2
+        else:
+            self.tiles_per_dim = 1
+            self.tiles_per_image = 1
 
         self.multiply_by_10_000 = False
         if dataset == "m-so2sat":
@@ -230,7 +340,15 @@ class GeobenchDataset(Dataset):
 
     def __getitem__(self, idx: int) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Return a single GeoBench data instance."""
-        sample = self.dataset[idx]
+        # With tiling, idx indexes (image, tile); recover both and the window offset.
+        if self.tile_size is not None:
+            image_idx, tile_idx = divmod(idx, self.tiles_per_image)
+            tile_row, tile_col = divmod(tile_idx, self.tiles_per_dim)
+            row0, col0 = tile_row * self.tile_size, tile_col * self.tile_size
+        else:
+            image_idx, row0, col0 = idx, 0, 0
+
+        sample = self.dataset[image_idx]
         label = sample.label
 
         x_list = [sample.bands[band_idx].data for band_idx in self.band_indices]
@@ -243,6 +361,8 @@ class GeobenchDataset(Dataset):
         )
 
         x = np.stack(x_list, axis=2)  # (h, w, 13)
+        if self.tile_size is not None:
+            x = x[row0 : row0 + self.tile_size, col0 : col0 + self.tile_size]
         if self.visualize_samples:
             self.visualize_sample_bands(x, f"./visualizations/sample_{idx}")
         if self.is_landsat:
@@ -270,6 +390,11 @@ class GeobenchDataset(Dataset):
             label = label.data
             # label is a memoryview object, convert it to a list, and then to a numpy array
             label = np.array(list(label))
+            # Segmentation label is a (h, w) mask; crop it to the same tile window as x.
+            if self.tile_size is not None and getattr(label, "ndim", 0) == 2:
+                label = label[
+                    row0 : row0 + self.tile_size, col0 : col0 + self.tile_size
+                ]
 
         target = torch.tensor(label, dtype=torch.long)
 
@@ -323,8 +448,8 @@ class GeobenchDataset(Dataset):
         return masked_sample, target
 
     def __len__(self) -> int:
-        """Length of dataset."""
-        return len(self.dataset)
+        """Length of dataset (native images x tiles per image)."""
+        return len(self.dataset) * self.tiles_per_image
 
     def visualize_sample_bands(self, x: np.ndarray, output_dir: str) -> None:
         """Visualize each band from a given array, saving each plot as a PNG file in the specified output_dir.

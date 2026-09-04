@@ -335,24 +335,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             epochs=50,
             eval_mode=EvalMode.LINEAR_PROBE,
         ),
-        "canada_wildfire_sat_eval_split": DownstreamTaskConfig(
-            dataset="canada_wildfire_sat_eval_split",
-            embedding_batch_size=32,
-            probe_batch_size=16,
-            patch_size=5,  # TODO: This is changeable but we should know the valid sizes for inputs
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-            probe_lr=0.1,
-            eval_interval=Duration.steps(20000),
-            input_modalities=[Modality.SENTINEL2_L2A.name],
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            use_dice_loss=True,
-            primary_metric=EvalMetric.CLASS_F1,
-            primary_metric_class=1,
-        ),
     }
     trainer_config = (
         TrainerConfig(

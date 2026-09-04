@@ -4,6 +4,7 @@ e.g. python -m olmoearth_pretrain.internal.full_eval_sweep --cluster=ai2/saturn-
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import subprocess  # nosec
@@ -12,7 +13,9 @@ from collections.abc import Generator
 from logging import getLogger
 from typing import Any
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config, get_eval_mode
+from olmoearth_pretrain.evals.embedding_transforms import QuantizationScheme
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
@@ -117,13 +120,24 @@ olmoearth_args = " ".join(
 )
 
 
-def loop_through_params(no_norm: bool = False) -> Generator[dict[str, Any], None, None]:
-    """Yield a dict of the hps we are sweeping over."""
+def loop_through_params(
+    no_norm: bool = False, sweep_lr: bool = True
+) -> Generator[dict[str, Any], None, None]:
+    """Yield a dict of the hps we are sweeping over.
+
+    ``sweep_lr=False`` pins the probe LR to a single value. ``lr_args`` is built
+    only for tasks whose type maps to ``linear_probe``, so when none are
+    selected -- a KNN-only run, e.g. ``--task-names=m_eurosat,m_brick_kiln`` --
+    no ``probe_lr`` override is emitted at all and the eight LRs produce eight
+    identical runs of each (norm, pooling) pair. The norm and pooling sweeps are
+    untouched; only the dead axis collapses.
+    """
     if no_norm:
         normalization_modes = ["dataset"]
     else:
         normalization_modes = Normalization_MODES
-    for lr in LP_LRs:
+    learning_rates = LP_LRs if sweep_lr else LP_LRs[:1]
+    for lr in learning_rates:
         for norm_mode in normalization_modes:
             for pooling_type in pooling_types:
                 yield {
@@ -202,6 +216,71 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
             ]
         )
     return tessera_args
+
+
+def _modality_capable_tasks(modality_name: str) -> list[str]:
+    """Task names whose dataset carries the given precomputed embedding modality.
+
+    Tasks that differ only by input imagery (e.g. the _sentinel1 variants of a
+    probe) collapse into identical evals once input_modalities is overridden to
+    the embedding modality, so only the first task of each such group is kept.
+    """
+    seen: set[str] = set()
+    task_names: list[str] = []
+    for task_name, task in EVAL_TASKS.items():
+        if modality_name not in dataset_to_config(task.dataset).supported_modalities:
+            continue
+        key = repr(dataclasses.replace(task, input_modalities=[]))
+        if key in seen:
+            continue
+        seen.add(key)
+        task_names.append(task_name)
+    return task_names
+
+
+def _get_precomputed_embedding_args(modality_name: str) -> str:
+    """Get the arguments for a precomputed embedding product baseline.
+
+    Embedding products are consumed exactly as stored: no re-normalization, and
+    each capable task reads the precomputed modality instead of imagery. Tasks
+    whose dataset has no such modality baked in keep their imagery
+    input_modalities and are skipped at runtime by the modality check.
+
+    Quantization is per-product, see ``QUANTIZE_AT_EVAL_MODALITIES``.
+    """
+    capable_tasks = _modality_capable_tasks(modality_name)
+    args = dataset_args
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+        for task_name in capable_tasks
+    )
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
+        for task_name in capable_tasks
+    )
+    quantize = modality_name in QUANTIZE_AT_EVAL_MODALITIES
+    args += " " + " ".join(
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+        f".quantize_embeddings={quantize}"
+        for task_name in capable_tasks
+    )
+    if quantize:
+        scheme = QUANTIZE_SCHEME_BY_MODALITY[modality_name]
+        args += " " + " ".join(
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+            f".quantization_scheme=QuantizationScheme.{scheme.name}"
+            for task_name in capable_tasks
+        )
+    return args
+
+
+def get_aef_args(pretrained_normalizer: bool = True) -> str:
+    """Get the AlphaEarth (GSE) arguments.
+
+    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
+    accepted for interface parity with the other baseline arg functions.
+    """
+    return _get_precomputed_embedding_args(Modality.GSE.name)
 
 
 def get_panopticon_args() -> str:
@@ -454,6 +533,7 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.PRITHVI_V2: get_prithviv2_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
     }
     if model is None or model not in model_args_map:
         return ""
@@ -490,6 +570,7 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
         BaselineModelName.PRESTO: get_presto_args,
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
+        BaselineModelName.AEF: get_aef_args,
     }
 
     if model in model_map:
@@ -578,11 +659,67 @@ def _get_label_fraction_args(args: argparse.Namespace) -> str:
     )
 
 
-def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
-    """Build a downstream evaluator include-list override."""
+def _get_patch_size_args(args: argparse.Namespace) -> str:
+    """Build per-task patch_size overrides for every task.
+
+    Used e.g. to evaluate OlmoEarth at patch size 1 so its embeddings are
+    per-pixel like the precomputed embedding products (AEF/Tessera). Baseline
+    models with a fixed model-level patch_size ignore this (the evaluator
+    overrides the task value with the model attribute).
+    """
     if getattr(args, "embedding_diagnostics_only", False):
         return ""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.patch_size={patch_size}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
 
+
+def _get_patch_size_run_suffix(args: argparse.Namespace) -> str:
+    """Run-name suffix marking a patch-size override."""
+    patch_size = getattr(args, "patch_size", None)
+    if patch_size is None:
+        return ""
+    return f"_ps{patch_size}"
+
+
+def _get_window_size_args(args: argparse.Namespace) -> str:
+    """Build per-task window_size overrides for windowed-sampling tasks.
+
+    Only tasks whose config already sets window_size are overridden: for the
+    full-sample tasks window_size is unsupported and would fail evaluator
+    validation. Tiled (tile_samples) datasets require window_size to divide
+    the stored sample size (e.g. 128 for pastis_rslearn).
+    """
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    window_size = getattr(args, "window_size", None)
+    if window_size is None:
+        return ""
+    return " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.window_size={window_size}"
+            for task_name, task in EVAL_TASKS.items()
+            if task.window_size is not None
+        ]
+    )
+
+
+def _get_window_size_run_suffix(args: argparse.Namespace) -> str:
+    """Run-name suffix marking a window-size override."""
+    window_size = getattr(args, "window_size", None)
+    if window_size is None:
+        return ""
+    return f"_ws{window_size}"
+
+
+def selected_task_names(args: argparse.Namespace) -> list[str]:
+    """Resolve which eval tasks a sweep will run, after include/skip filtering."""
     selected_tasks = parse_task_names(getattr(args, "task_names", None))
     skip_tasks = parse_task_names(getattr(args, "task_skip_names", None))
 
@@ -594,6 +731,29 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     if skip_tasks:
         skip_task_set = set(skip_tasks)
         tasks_to_run = [task for task in tasks_to_run if task not in skip_task_set]
+    return tasks_to_run
+
+
+def any_linear_probe_task_selected(args: argparse.Namespace) -> bool:
+    """Whether the probe LR reaches any selected task.
+
+    ``lr_args`` is emitted per task, and only for those whose type maps to
+    ``linear_probe``. If a run selects none of them the LR axis is inert, and
+    sweeping it just repeats every (norm, pooling) run eight times.
+    """
+    return any(
+        get_eval_mode(dataset_to_config(EVAL_TASKS[name].dataset).task_type)
+        == "linear_probe"
+        for name in selected_task_names(args)
+    )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+
+    tasks_to_run = selected_task_names(args)
 
     if len(tasks_to_run) == len(EVAL_TASKS):
         return ""
@@ -629,6 +789,8 @@ def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
     prefix = f"TRAIN_SCRIPT_PATH={module_path}"
     if getattr(args, "embedding_diagnostics_only", False):
         prefix += " EMBEDDING_DIAGNOSTICS_ONLY=1"
+    if getattr(args, "load_arch_from_checkpoint", False):
+        prefix += " LOAD_ARCH_FROM_CHECKPOINT=1"
     return prefix
 
 
@@ -696,6 +858,10 @@ def _build_default_command(
     else:
         cmd_args += _get_load_checkpoints_args(args.model)
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     env_prefix = _get_env_prefix(args, module_path)
@@ -770,6 +936,10 @@ def _build_hyperparameter_command(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -926,6 +1096,10 @@ def _build_command_from_eval_settings(
         cmd_args += get_embedding_dim_args(embedding_dim)
         run_name += f"_dim{embedding_dim}"
     cmd_args += _get_label_fraction_args(args)
+    cmd_args += _get_patch_size_args(args)
+    run_name += _get_patch_size_run_suffix(args)
+    cmd_args += _get_window_size_args(args)
+    run_name += _get_window_size_run_suffix(args)
 
     launch_overrides = LAUNCH_OVERRIDES if sub_command == SubCmd.launch_evaluate else ""
     # if init_seed is set add to base run name
@@ -1122,7 +1296,8 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
                     continue
 
                 hp_params = loop_through_params(
-                    no_norm=(args.model in dataset_norm_only_models)
+                    no_norm=(args.model in dataset_norm_only_models),
+                    sweep_lr=any_linear_probe_task_selected(args),
                 )
 
                 for params in hp_params:
@@ -1159,6 +1334,81 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         commands_to_run = commands_to_run_new
 
     return commands_to_run
+
+
+# Precomputed embedding-product baselines and the (modality, materializer
+# product name) they read.
+PRECOMPUTED_MODEL_TO_MODALITY = {
+    BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    # tessera_v2 is baked by our own v2 inference run (see
+    # docs/TesseraV2Inference.md), not by the embedding materializer.
+    BaselineModelName.TESSERA_V2_PRECOMPUTED: (
+        Modality.TESSERA_V2.name,
+        "tessera_v2",
+    ),
+}
+
+
+# Precomputed modalities that must be int8 round-tripped AT EVAL TIME, because
+# unlike the others they do not already carry their product's quantization loss.
+#
+# The rule is "score every product at the precision it ships", and the
+# downloaded AEF product satisfies it for free: the GSE fetcher reads int8 COGs
+# and dequantizes to float32, so the loss is baked into the stored values and
+# re-quantizing would charge it twice.
+#
+# tessera_v2 is the exception, and it is an artifact of HOW WE MADE IT: we run
+# their pixel student ourselves (docs/TesseraV2Inference.md) and their
+# infer_v2.py defaults to float32, with `--int8` opt-in. The shipped v2 product
+# is int8 (quantization-aware training, see the TESSERA paper), so leaving this
+# unquantized scores v2 ABOVE its own release precision -- which is exactly the
+# mistake made in the 2026-08-07 and 2026-08-11 ethiopia/africa sweeps.
+#
+# Each product is quantized under ITS OWN scheme, not ours: AlphaEarth's
+# fixed-scale power scheme suits AEF's unit-L2 vectors and clips a
+# LayerNorm-geometry embedding (see QuantizationScheme), and the v2 student ends
+# in a non-affine LayerNorm, so scoring v2 under the power scheme would charge it
+# a ~5-point cosine loss its real product does not pay. TESSERA_PER_VECTOR
+# reproduces geotessera's decoder instead.
+QUANTIZE_AT_EVAL_MODALITIES = frozenset({Modality.TESSERA_V2.name})
+
+QUANTIZE_SCHEME_BY_MODALITY = {
+    Modality.TESSERA_V2.name: QuantizationScheme.TESSERA_PER_VECTOR,
+}
+
+
+def check_precomputed_embedding_tasks(
+    model: BaselineModelName | str | None,
+) -> None:
+    """Fail fast if a precomputed-embedding baseline would run zero tasks.
+
+    A task is capable when its dataset lists the product's modality in
+    supported_modalities, which in turn requires the embedding data to have
+    been baked in (embedding materializer for rslearn datasets,
+    pastis_processor --embedding_products for PASTIS, pretrain h5 stores for
+    GSE). Without this check the sweep would launch jobs that skip every task.
+    """
+    if not isinstance(model, BaselineModelName):
+        return
+    mapping = PRECOMPUTED_MODEL_TO_MODALITY.get(model)
+    if mapping is None:
+        return
+    modality, product = mapping
+    capable = _modality_capable_tasks(modality)
+    if not capable:
+        raise SystemExit(
+            f"No eval task's dataset supports the precomputed '{modality}' "
+            f"modality, so --model={model} would run zero tasks. Bake the "
+            f"embeddings into the eval datasets first, e.g.\n"
+            f"  python -m olmoearth_pretrain.evals.embedding_materializer "
+            f"--dataset_path <dataset> --products {product}\n"
+            f"and list '{modality}' in the dataset's supported_modalities "
+            f"(olmoearth_pretrain/evals/datasets/configs.py)."
+        )
+    logger.info(
+        f"--model={model}: {len(capable)} tasks support '{modality}': "
+        f"{', '.join(capable)}"
+    )
 
 
 def _parse_model_arg(value: str) -> BaselineModelName | str:
@@ -1311,8 +1561,43 @@ def main() -> None:
         default=1.0,
         help="Train-label fraction to evaluate (1.0 uses all labels).",
     )
+    parser.add_argument(
+        "--load_arch_from_checkpoint",
+        action="store_true",
+        help=(
+            "Reconstruct the model architecture from the checkpoint's saved "
+            "config.json instead of the training module's defaults. Lets you eval "
+            "runs whose architecture was set via train-time CLI overrides without "
+            "re-passing those overrides here."
+        ),
+    )
+    parser.add_argument(
+        "--patch_size",
+        type=int,
+        default=None,
+        help=(
+            "Override patch_size for every task (e.g. 1 to evaluate OlmoEarth "
+            "at per-pixel granularity like AEF/Tessera). Ignored by baselines "
+            "with a fixed model-level patch size. Consider lowering "
+            "embedding_batch_size at patch size 1: token counts grow 16x vs "
+            "the default patch size 4."
+        ),
+    )
+    parser.add_argument(
+        "--window_size",
+        type=int,
+        default=None,
+        help=(
+            "Override window_size for every windowed-sampling task (e.g. 8 "
+            "for 8x8-pixel windows). Tasks without a window_size are left "
+            "unchanged. Tiled datasets require it to divide the stored "
+            "sample size (128 for pastis_rslearn)."
+        ),
+    )
 
     args, extra_cli = parser.parse_known_args()
+
+    check_precomputed_embedding_tasks(args.model)
 
     commands_to_run = build_commands(args, extra_cli)
 
