@@ -1,10 +1,6 @@
 """Unit tests for the embedding materializer (fetchers, providers, orchestration)."""
 
-import importlib.util
 import json
-import sys
-import types
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,7 +18,6 @@ from olmoearth_pretrain.evals.embedding_materializer import materialize
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
     EmbeddingFetcher,
     SourceTile,
-    TesseraFetcher,
     mosaic_tiles_to_bounds,
     year_time_range,
 )
@@ -388,90 +383,3 @@ def test_year_time_range() -> None:
     start, end = year_time_range(2019)
     assert start == datetime(2019, 1, 1, tzinfo=UTC)
     assert end == datetime(2019, 12, 31, 23, 59, 59, tzinfo=UTC)
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("geotessera") is not None,
-    reason="geotessera is installed; the lazy-import error path does not apply",
-)
-def test_tessera_fetcher_requires_geotessera() -> None:
-    """Constructing TesseraFetcher without geotessera raises a helpful error."""
-    with pytest.raises(ImportError, match="pip install geotessera"):
-        TesseraFetcher()
-
-
-def test_tessera_fetcher_products(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Each Tessera product pins its geotessera dataset, modality, and version."""
-    captured: dict[str, str] = {}
-
-    class FakeGeoTessera:
-        def __init__(self, **kwargs: str) -> None:
-            captured.update(kwargs)
-
-    fake_module = types.ModuleType("geotessera")
-    fake_module.GeoTessera = FakeGeoTessera  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "geotessera", fake_module)
-
-    # Default product is v1.1 (the going-forward product).
-    fetcher = TesseraFetcher()
-    assert captured == {"dataset_version": "v1.1", "dataset_variant": "cambridge"}
-    assert fetcher.modality is Modality.TESSERA_V11
-    assert fetcher.product_version == "v1.1"
-
-    # "tessera" reproduces the original v1 layers (geotessera defaults at the
-    # time they were fetched).
-    captured.clear()
-    fetcher = TesseraFetcher(product_name="tessera")
-    assert captured == {"dataset_version": "v1", "dataset_variant": "vultr"}
-    assert fetcher.modality is Modality.TESSERA
-    assert fetcher.product_version == "v1"
-
-    # client_kwargs overrides the pinned defaults.
-    captured.clear()
-    TesseraFetcher(client_kwargs={"dataset_variant": "other"})
-    assert captured == {"dataset_version": "v1.1", "dataset_variant": "other"}
-
-    with pytest.raises(ValueError, match="Unknown Tessera product"):
-        TesseraFetcher(product_name="tessera_v3")
-
-
-class FakeTesseraClient:
-    """Minimal stand-in for geotessera.GeoTessera used to test TesseraFetcher."""
-
-    def __init__(self, tiles: list[tuple[np.ndarray, CRS, Affine]]) -> None:
-        """Initialize with (hwc array, crs, transform) tiles to serve."""
-        self.tiles = tiles
-        self.registry = self
-
-    def load_blocks_for_region(
-        self, bounds: tuple[float, float, float, float], year: int
-    ) -> list[int]:
-        """Return one opaque block descriptor per tile (empty list if none)."""
-        return list(range(len(self.tiles)))
-
-    def fetch_embeddings(
-        self, tiles_to_fetch: list[int]
-    ) -> Iterator[tuple[int, float, float, np.ndarray, CRS, Affine]]:
-        """Yield (year, lon, lat, hwc array, crs, transform) per tile."""
-        for idx in tiles_to_fetch:
-            hwc, crs, transform = self.tiles[idx]
-            yield (2024, 0.0, 0.0, hwc, crs, transform)
-
-
-def test_tessera_fetcher_with_fake_client() -> None:
-    """TesseraFetcher mosaics geotessera tiles onto the requested grid."""
-    num_bands = len(Modality.TESSERA.band_order)
-    hwc = np.ones((WINDOW_SIZE, WINDOW_SIZE, num_bands), dtype=np.float32)
-    client = FakeTesseraClient(
-        tiles=[(hwc, PROJECTION.crs, Affine(10, 0, 0, 0, -10, 0))]
-    )
-    fetcher = TesseraFetcher(client=client)
-    array = fetcher.fetch((0, 0, WINDOW_SIZE, WINDOW_SIZE), PROJECTION, 2024)
-    assert array is not None
-    assert array.shape == (num_bands, WINDOW_SIZE, WINDOW_SIZE)
-    np.testing.assert_array_equal(array, 1.0)
-
-    # No blocks in the region -> coverage gap.
-    empty_client = FakeTesseraClient(tiles=[])
-    fetcher = TesseraFetcher(client=empty_client)
-    assert fetcher.fetch((0, 0, WINDOW_SIZE, WINDOW_SIZE), PROJECTION, 2024) is None

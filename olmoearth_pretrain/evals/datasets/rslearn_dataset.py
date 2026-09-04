@@ -168,8 +168,6 @@ class RslearnToOlmoEarthDataset(Dataset):
         # materializer (olmoearth_pretrain/evals/embedding_materializer) or a
         # dataset export/inference script (tessera_v2).
         Modality.GSE.name,
-        Modality.TESSERA.name,
-        Modality.TESSERA_V11.name,
         Modality.TESSERA_V2.name,
     }
 

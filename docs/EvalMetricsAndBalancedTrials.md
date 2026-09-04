@@ -538,8 +538,8 @@ per-dataset caps (300, except 200 for africa and descals) from Table 1.
 published embedding product through this exact protocol, so its `_aeftrial_ridge`
 values should land near their Table 1 figures. That is the test of whether the
 implementation reproduces the protocol; run it before quoting any OlmoEarth
-number as AEF-comparable. `--model=tessera_v2_precomputed` (and `tessera`,
-`tessera_v11`) gives the same treatment to Tessera, which has no published
+number as AEF-comparable. `--model=tessera_v2_precomputed` gives the same
+treatment to Tessera, which has no published
 figures under this protocol — those numbers are ours to establish.
 
 ### Not implemented

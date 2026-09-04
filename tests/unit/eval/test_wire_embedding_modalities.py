@@ -74,19 +74,21 @@ def _inputs(text: str) -> dict:
 
 def test_insert_adds_input_without_disturbing_siblings(wire: types.ModuleType) -> None:
     """A new input lands under inputs/ and nothing else moves."""
-    result = wire.insert_model_yaml_input(MODEL_YAML, Modality.TESSERA, required=False)
+    result = wire.insert_model_yaml_input(
+        MODEL_YAML, Modality.TESSERA_V2, required=False
+    )
     assert result is not None
     assert result.startswith("# A supplemental eval dataset config.")
-    assert _inputs(result)["tessera"] == {
+    assert _inputs(result)["tessera_v2"] == {
         "data_type": "raster",
         "dtype": "FLOAT32",
-        "layers": ["tessera"],
+        "layers": ["tessera_v2"],
         "required": False,
         "use_all_bands_in_order_of_band_set_idx": 0,
         "passthrough": True,
     }
     # Siblings and later keys at other nesting levels survive the insert.
-    assert set(_inputs(result)) == {"sentinel2_l2a", "targets", "tessera"}
+    assert set(_inputs(result)) == {"sentinel2_l2a", "targets", "tessera_v2"}
     assert yaml.safe_load(result)["data"]["init_args"]["batch_size"] == 8
 
 
@@ -101,16 +103,16 @@ def test_insert_rejects_a_file_with_no_inputs_mapping(wire: types.ModuleType) ->
     """A model.yaml we do not understand is an error, not a silent no-op."""
     with pytest.raises(ValueError, match="no data.init_args.inputs"):
         wire.insert_model_yaml_input(
-            "data:\n  init_args: {}\n", Modality.TESSERA, False
+            "data:\n  init_args: {}\n", Modality.TESSERA_V2, False
         )
 
 
 def test_set_required_flips_only_the_named_input(wire: types.ModuleType) -> None:
     """Flipping one input's required field leaves the others alone."""
-    text = wire.insert_model_yaml_input(MODEL_YAML, Modality.TESSERA, required=False)
+    text = wire.insert_model_yaml_input(MODEL_YAML, Modality.TESSERA_V2, required=False)
     text = wire.insert_model_yaml_input(text, Modality.GSE, required=False)
-    flipped = wire.set_model_yaml_required(text, Modality.TESSERA, required=True)
-    assert _inputs(flipped)["tessera"]["required"] is True
+    flipped = wire.set_model_yaml_required(text, Modality.TESSERA_V2, required=True)
+    assert _inputs(flipped)["tessera_v2"]["required"] is True
     assert _inputs(flipped)["gse"]["required"] is False
     assert flipped.count("\n") == text.count("\n")
 
@@ -121,7 +123,7 @@ def test_set_required_needs_an_existing_required_line(wire: types.ModuleType) ->
         wire.set_model_yaml_required(MODEL_YAML, Modality.SENTINEL2_L2A, required=True)
 
 
-@pytest.mark.parametrize("modality_name", ["gse", "tessera", "tessera_v11"])
+@pytest.mark.parametrize("modality_name", ["gse", "tessera_v2"])
 def test_generated_layer_matches_the_committed_pastis_block(
     wire: types.ModuleType, modality_name: str
 ) -> None:
@@ -147,16 +149,14 @@ def test_product_map_covers_the_materializer_products(wire: types.ModuleType) ->
     Plus tessera_v2, which our own inference bakes (tessera_v2_export.py) in
     the materializer's manifest shape rather than via a published product.
     """
-    from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
-        TESSERA_PRODUCTS,
-    )
+    from olmoearth_pretrain.evals.embedding_materializer.__main__ import PRODUCT_NAMES
 
-    assert set(wire.PRODUCT_TO_MODALITY) == {"aef", "tessera_v2", *TESSERA_PRODUCTS}
+    assert set(wire.PRODUCT_TO_MODALITY) == {"tessera_v2", *PRODUCT_NAMES}
 
 
 def _write_manifest(wire: types.ModuleType, path: Path, **fields: int) -> None:
     """Write a materializer manifest for the tessera product under *path*."""
-    with wire.manifest_path(str(path), "tessera").open("w") as f:
+    with wire.manifest_path(str(path), "tessera_v2").open("w") as f:
         json.dump(fields, f)
 
 
@@ -164,7 +164,7 @@ def test_bake_is_complete_gates_on_the_manifest(
     wire: types.ModuleType, tmp_path: Path
 ) -> None:
     """Only a finished, failure-free, well-covered bake is allowed to go live."""
-    ready = lambda: wire.bake_is_complete(str(tmp_path), "tessera", 0.99)[0]  # noqa: E731
+    ready = lambda: wire.bake_is_complete(str(tmp_path), "tessera_v2", 0.99)[0]  # noqa: E731
 
     # No manifest at all: the materializer has not finished.
     assert ready() is False
@@ -219,10 +219,10 @@ def test_bake_is_complete_rejects_partial_coverage(
         num_coverage_gaps=2324,
         num_windows_failed=0,
     )
-    ready, reason = wire.bake_is_complete(str(tmp_path), "tessera", 0.99)
+    ready, reason = wire.bake_is_complete(str(tmp_path), "tessera_v2", 0.99)
     assert ready is False
     assert "coverage=8.1%" in reason
     assert "below --min_coverage" in reason
 
     # Explicitly lowering the bar lets it through, for a deliberate partial run.
-    assert wire.bake_is_complete(str(tmp_path), "tessera", 0.05)[0] is True
+    assert wire.bake_is_complete(str(tmp_path), "tessera_v2", 0.05)[0] is True

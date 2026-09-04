@@ -26,10 +26,18 @@ def _sample_with_gse(gse: torch.Tensor | None) -> MaskedOlmoEarthSample:
 class TestPrecomputedEmbedding:
     """Tests for the PrecomputedEmbedding baseline module."""
 
-    def test_rejects_unknown_modality(self) -> None:
-        """Unknown modality names raise at construction."""
-        with pytest.raises(ValueError, match="Unknown modality"):
-            PrecomputedEmbedding(modality="not_a_modality")
+    @pytest.mark.parametrize(
+        "modality", ["not_a_modality", Modality.SENTINEL2_L2A.name, "tessera"]
+    )
+    def test_rejects_non_embedding_modality(self, modality: str) -> None:
+        """Only the AEF (gse) and Tessera v2 products are accepted."""
+        with pytest.raises(ValueError, match="not a precomputed embedding product"):
+            PrecomputedEmbedding(modality=modality)
+
+    def test_accepts_the_two_shipped_products(self) -> None:
+        """AlphaEarth and Tessera v2 are the two products the evals compare against."""
+        for modality in (Modality.GSE.name, Modality.TESSERA_V2.name):
+            assert PrecomputedEmbedding(modality=modality).modality == modality
 
     def test_missing_modality_on_sample_raises(self) -> None:
         """A sample without the embedding modality raises a clear error."""

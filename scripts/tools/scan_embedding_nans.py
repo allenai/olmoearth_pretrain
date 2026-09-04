@@ -79,7 +79,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ds_path", required=True, help="Dataset root (weka_path).")
-    parser.add_argument("--layer", default="tessera", help="Layer name to scan.")
+    parser.add_argument("--layer", default="gse", help="Layer name to scan.")
     parser.add_argument(
         "--sample", type=int, default=0, help="Scan only the first N windows (0 = all)."
     )

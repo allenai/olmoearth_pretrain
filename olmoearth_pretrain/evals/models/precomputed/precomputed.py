@@ -15,7 +15,7 @@ from einops import reduce
 from torch import nn
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES, Modality
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -44,10 +44,11 @@ class PrecomputedEmbedding(nn.Module):
                 (e.g. "GSE" for AlphaEarth / Google Satellite Embeddings).
         """
         super().__init__()
-        valid_names = Modality.names()
-        if modality not in valid_names:
+        if modality not in EMBEDDING_PRODUCT_MODALITIES:
             raise ValueError(
-                f"Unknown modality '{modality}'. Expected one of {sorted(valid_names)}"
+                f"'{modality}' is not a precomputed embedding product; expected one "
+                f"of {sorted(EMBEDDING_PRODUCT_MODALITIES)} (AlphaEarth = "
+                f"{Modality.GSE.name!r}, Tessera v2 = {Modality.TESSERA_V2.name!r})"
             )
         self.modality = modality
         self.supported_modalities: list[str] = [modality]

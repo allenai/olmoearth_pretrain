@@ -1436,9 +1436,8 @@ AEF_SUPPLEMENTAL_DATASETS = (
 # comparisons were not input-matched. See
 # scripts/tools/reanchor_year_aligned_dataset.py.
 #
-# Registered at ws16 only, like MATCHED_SUBSET_DATASETS below and for the same
-# reason: the point is the three-way comparison against the precomputed
-# products, which are ws16-only. Add the smaller context sizes if the
+# Registered at ws16 only: the point is the three-way comparison against the
+# precomputed products, which are ws16-only. Add the smaller context sizes if the
 # spatial-context ablation is wanted here too.
 #
 # All eight AEF supplemental datasets are now re-exported and registered.
@@ -1463,25 +1462,6 @@ AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
     "glance_year_aligned",  # 34 885
     "us_trees_year_aligned",  # 45 382
 )
-
-# Matched-subset siblings: the same windows as their parent dataset, but with
-# every embedding product marked required, so rslearn resolves ONE window set
-# and OlmoEarth / AEF / Tessera are scored on exactly those windows.
-#
-# These exist for datasets where a product's coverage sits below the
-# --min_coverage gate in wire_embedding_modalities.py. Enabling the product on
-# the parent entry would drop its coverage-gap windows from every eval on that
-# dataset — silently re-baselining numbers already recorded — so the stricter
-# input set gets its own entry instead. us_trees_tessera: Tessera covers
-# 44 894/45 382 (98.92%) vs the 99% gate; see docs/PrecomputedEmbeddingCoverage.md.
-#
-# Deliberately NOT part of AEF_SUPPLEMENTAL_DATASETS: that tuple is also the
-# default --datasets for materialize_aef_supplemental_embeddings.py, and these
-# names share their parent's weka_path, so including them would re-walk the same
-# 45k windows under a second name. Registered at ws16 only — the point is the
-# three-way comparison, and the precomputed baselines are ws16-only.
-MATCHED_SUBSET_DATASETS = ("us_trees_tessera",)
-
 
 # Window sizes the embedding evals run at by default for OlmoEarth
 # checkpoints: the ws16 embedding-product convention plus smaller spatial
@@ -1607,7 +1587,7 @@ def _aef_ps1_task(
 # embeddings are computed from). Kept separate from EVAL_TASKS and swept by
 # embedding_eval_sweep.py (EMBEDDING_EVALS=1), which holds normalization
 # fixed to pretraining stats and sweeps only the probe LR for olmoearth /
-# aef / tessera_precomputed. The precomputed baselines run these same tasks
+# aef / tessera_v2_precomputed. The precomputed baselines run these same tasks
 # with input_modalities overridden to the embedding modality and
 # quantize_embeddings=False (they are already int8 at source); they keep one
 # task per dataset, so they stay ws16-only.
@@ -1687,27 +1667,6 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
                 )
                 for name in AEF_SUPPLEMENTAL_DATASETS
             },
-            # Matched-subset siblings at ws16 only (see MATCHED_SUBSET_DATASETS).
-            **(
-                {
-                    f"{name}_ws16_ps1": _aef_ps1_task(
-                        name, EvalMode.LINEAR_PROBE, window_size=16
-                    )
-                    for name in MATCHED_SUBSET_DATASETS
-                }
-                if _ws == 16
-                else {}
-            ),
-            **(
-                {
-                    f"{name}_ws16_ps1_knn": _aef_ps1_task(
-                        name, EvalMode.KNN, window_size=16
-                    )
-                    for name in MATCHED_SUBSET_DATASETS
-                }
-                if _ws == 16
-                else {}
-            ),
         }
     )
 

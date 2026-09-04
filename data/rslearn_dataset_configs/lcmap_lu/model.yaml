@@ -6,14 +6,6 @@ data:
   init_args:
     path: /weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/lcmap_lu/
     inputs:
-      tessera:
-        data_type: raster
-        dtype: FLOAT32
-        layers:
-          - tessera
-        required: true
-        use_all_bands_in_order_of_band_set_idx: 0
-        passthrough: true
       gse:
         data_type: raster
         dtype: FLOAT32

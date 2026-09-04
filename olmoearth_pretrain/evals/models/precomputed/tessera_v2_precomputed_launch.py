@@ -1,9 +1,9 @@
 """Tessera v2 precomputed-embeddings launch script for evaluation.
 
 Reads Tessera v2 student embeddings baked into eval dataset stores as the
-``tessera_v2`` modality. Unlike ``tessera``/``tessera_v11`` (published
-products fetched via geotessera), the v2 layer is produced by running the
-released v2 inference ourselves — see docs/TesseraV2Inference.md; the student
+``tessera_v2`` modality. Unlike the AEF product (a published product read from
+its COGs), the v2 layer is produced by running the released v2 inference
+ourselves — see docs/TesseraV2Inference.md; the student
 size used is recorded in the layer's provenance manifest.
 """
 

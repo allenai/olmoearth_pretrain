@@ -2623,8 +2623,7 @@
       "is_multilabel": false,
       "modalities": [
         "gse",
-        "sentinel2_l2a",
-        "tessera"
+        "sentinel2_l2a"
       ],
       "name": "lcmap_lu",
       "norm_stats": {
@@ -2744,7 +2743,6 @@
         "landsat",
         "sentinel1",
         "sentinel2_l2a",
-        "tessera",
         "tessera_v2"
       ],
       "name": "lcmap_lu_year_aligned",
@@ -3641,8 +3639,6 @@
         "gse",
         "sentinel1",
         "sentinel2_l2a",
-        "tessera",
-        "tessera_v11",
         "tessera_v2"
       ],
       "name": "pastis_rslearn",
@@ -3789,8 +3785,6 @@
         "gse",
         "sentinel1",
         "sentinel2_l2a",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -4871,157 +4865,6 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees",
       "window_size": 32
     },
-    "us_trees_tessera": {
-      "classes": [
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "8",
-        "9",
-        "10",
-        "11",
-        "12",
-        "13",
-        "14",
-        "15",
-        "16",
-        "17",
-        "18",
-        "19",
-        "20",
-        "21",
-        "22",
-        "23",
-        "24",
-        "25",
-        "26",
-        "27",
-        "28",
-        "29",
-        "30",
-        "31",
-        "32",
-        "33",
-        "34",
-        "35",
-        "36",
-        "37",
-        "38"
-      ],
-      "config_json_sha256": "e90327b731ed420526ac661f861d736e50965e498e4abab261c7b3855c068741",
-      "config_repo_dir": "data/rslearn_dataset_configs/us_trees_tessera",
-      "end_time": null,
-      "imputes": [],
-      "is_multilabel": false,
-      "modalities": [
-        "gse",
-        "sentinel2_l2a",
-        "tessera"
-      ],
-      "name": "us_trees_tessera",
-      "norm_stats": {
-        "sentinel2_l2a": {
-          "B01": {
-            "max": 0.0,
-            "mean": 0.0,
-            "min": 0.0,
-            "std": 0.0
-          },
-          "B02": {
-            "max": 21928.0,
-            "mean": 965.7743637848405,
-            "min": 0.0,
-            "std": 1653.2077909856741
-          },
-          "B03": {
-            "max": 19928.0,
-            "mean": 1144.1882659800729,
-            "min": 0.0,
-            "std": 1580.9496613407962
-          },
-          "B04": {
-            "max": 18520.0,
-            "mean": 1153.6990211684804,
-            "min": 0.0,
-            "std": 1601.230438276187
-          },
-          "B05": {
-            "max": 18503.0,
-            "mean": 1518.3372930743851,
-            "min": 0.0,
-            "std": 1539.8490209920108
-          },
-          "B06": {
-            "max": 17699.0,
-            "mean": 2284.7885689005157,
-            "min": 0.0,
-            "std": 1437.6967223698964
-          },
-          "B07": {
-            "max": 17010.0,
-            "mean": 2555.029023217474,
-            "min": 0.0,
-            "std": 1435.1197180022955
-          },
-          "B08": {
-            "max": 17432.0,
-            "mean": 2696.2454605573935,
-            "min": 0.0,
-            "std": 1507.0888528417915
-          },
-          "B09": {
-            "max": 0.0,
-            "mean": 0.0,
-            "min": 0.0,
-            "std": 0.0
-          },
-          "B11": {
-            "max": 15226.0,
-            "mean": 1979.381914595446,
-            "min": 0.0,
-            "std": 1036.8310462405298
-          },
-          "B12": {
-            "max": 15174.0,
-            "mean": 1350.7307385556653,
-            "min": 0.0,
-            "std": 934.2207798168943
-          },
-          "B8A": {
-            "max": 16589.0,
-            "mean": 2749.969763586671,
-            "min": 0.0,
-            "std": 1398.4202953115148
-          }
-        }
-      },
-      "num_classes": 39,
-      "num_timesteps": 12,
-      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/us_trees/",
-      "split_stats": {
-        "test": {
-          "count": 16841
-        },
-        "train": {
-          "count": 11700
-        },
-        "val": {
-          "count": 16841
-        }
-      },
-      "split_tag_key": "eval_split",
-      "start_time": null,
-      "task_type": "segmentation",
-      "timeseries": true,
-      "use_pretrain_norm": true,
-      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees",
-      "window_size": 32
-    },
     "us_trees_year_aligned": {
       "classes": [
         "0",
@@ -5074,7 +4917,6 @@
         "landsat",
         "sentinel1",
         "sentinel2_l2a",
-        "tessera",
         "tessera_v2"
       ],
       "name": "us_trees_year_aligned",

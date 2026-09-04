@@ -2,7 +2,7 @@
 
 The embedding materializer bakes rasters into windows and marks the layers
 completed, but it does not touch any config. Three more things must be true
-before a precomputed baseline (``--model=aef`` / ``--model=tessera_precomputed``)
+before a precomputed baseline (``--model=aef`` / ``--model=tessera_v2_precomputed``)
 can run on a dataset:
 
 1. the dataset folder's ``config.json`` declares the raster layer (rslearn
@@ -45,7 +45,7 @@ copies under data/rslearn_dataset_configs/.
 Example:
     python scripts/tools/wire_embedding_modalities.py --dry_run
     python scripts/tools/wire_embedding_modalities.py \
-        --datasets lcmap_lu --products aef,tessera --required
+        --datasets lcmap_lu --products aef --required
 """
 
 from __future__ import annotations
@@ -60,7 +60,6 @@ import yaml
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.evals.embedding_materializer.fetchers import TESSERA_PRODUCTS
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
     RSLEARN_DATASET_CONFIGS_DIR,
     find_repo_root,
@@ -78,7 +77,6 @@ logger = logging.getLogger(__name__)
 # writes a manifest in the materializer's shape so the gate below still works.
 PRODUCT_TO_MODALITY: dict[str, ModalitySpec] = {
     "aef": Modality.GSE,
-    **{name: product.modality for name, product in TESSERA_PRODUCTS.items()},
     "tessera_v2": Modality.TESSERA_V2,
 }
 
@@ -114,7 +112,7 @@ def bake_is_complete(
 
     Args:
         weka_path: the dataset folder.
-        product: materializer product name (e.g. "aef", "tessera").
+        product: materializer product name (e.g. "aef", "tessera_v2").
         min_coverage: minimum fraction of windows that must carry the layer.
 
     Returns:

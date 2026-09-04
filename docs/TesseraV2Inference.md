@@ -82,17 +82,16 @@ rslearn dataset materialize ... (same flags, --retry-backoff-seconds 60)
 python -m olmoearth_pretrain.evals.datasets.tessera_v2_export infer \
     --ds_path $DS_PATH --dataset pastis_rslearn \
     --checkpoint_path $CKPT --model_size large
-# 4. Eval (identical probes/splits/metrics as AEF / tessera / tessera_v11):
+# 4. Eval (identical probes/splits/metrics as AEF):
 python -m olmoearth_pretrain.internal.embedding_eval_sweep --cluster=... --model=tessera_v2_precomputed
 ```
 
 ### v2 is the one baseline that must be quantized at eval time
 
-**Read this before launching any v2 eval.** Every other precomputed baseline
-already carries its product's int8 loss in the stored values — the GSE fetcher
-dequantizes int8 COGs, and tessera v1/v1.1 arrive pre-dequantized from
-geotessera — so the sweeps pass them through unquantized, which scores each at
-the precision it ships. **v2 does not**, because we bake it ourselves and
+**Read this before launching any v2 eval.** The AEF baseline already carries
+its product's int8 loss in the stored values — the GSE fetcher dequantizes int8
+COGs — so the sweeps pass it through unquantized, which scores it at the
+precision it ships. **v2 does not**, because we bake it ourselves and
 `infer_v2.py` defaults to float32 (`--int8` is opt-in). The shipped v2 product
 *is* int8, via quantization-aware training, so an unquantized v2 arm is scored
 **above its own release precision** — which is what the 2026-08-07 and
@@ -143,9 +142,8 @@ first (routine) 403 and collapses effective parallelism to ~1 worker. Keep 60
 for materialize, where a retry covers a real mid-download failure.
 
 The `tessera_v2` modality/layer plumbing (constants, datatypes, model.yaml,
-registry, `tessera_v2_precomputed` baseline) is in place; `tessera_v11` got
-the same treatment so v1 (`tessera`), v1.1 (`tessera_v11`) and v2 coexist as
-separate layers of the same dataset. NOTE: the `*_all` fetch layers exist in
+registry, `tessera_v2_precomputed` baseline) is in place. NOTE: the `*_all`
+fetch layers exist in
 the shared dataset config, so any prepare/materialize of OTHER groups must
 keep using `--enabled-layers` (or the defaults per layer type) to avoid
 fetching a year of scenes for the eval windows.
@@ -163,12 +161,11 @@ can only have used MPC, so MPC is the safer bet.
 
 ## Other datasets: africa_crop_mask_year_aligned, ethiopia_crops_year_aligned
 
-Why these two: published Tessera v1 covers **59.8%** of `africa_crop_mask` and
-**8.1%** of `ethiopia_crops` (docs/PrecomputedEmbeddingCoverage.md) — the
-product is global for 2024 only, reaching back to 2017 for the US/EU — so
-neither can carry a reportable Tessera number today. Running v2 ourselves is
-the only way to get a Tessera column on non-US, non-2024 data, and it lands at
-100% coverage by construction.
+Why these two: the published Tessera products are global for 2024 only,
+reaching back to 2017 for the US/EU, so neither dataset can carry a reportable
+Tessera number from a download. Running v2 ourselves is the only way to get a
+Tessera column on non-US, non-2024 data, and it lands at 100% coverage by
+construction.
 
 Two things make this simpler than PASTIS. The `*_year_aligned` copies were
 already re-anchored to `(Jan 1 Y, Jan 1 Y+1)`

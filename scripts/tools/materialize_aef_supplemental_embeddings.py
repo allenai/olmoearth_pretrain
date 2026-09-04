@@ -1,16 +1,15 @@
-"""Materialize AEF + Tessera embedding layers for the AEF supplemental eval datasets.
+"""Materialize AEF embedding layers for the AEF supplemental eval datasets.
 
 Runs the embedding materializer over each of the AlphaEarth-supplemental
 evaluation datasets registered in studio_ingest's registry.json (paths are
 resolved from the registry, not hardcoded). For every window this bakes the
-product's embedding raster in as a layer (gse / tessera), skipping windows
+product's embedding raster in as a layer (gse), skipping windows
 whose layer already exists, so the script is resumable and safe to re-run.
 
 Coverage expectations: AEF is global for 2018-2024, so most windows should
-succeed. Tessera is global for 2024 only (US+EU back to 2017), so the African
-datasets will record coverage gaps for other label years — gaps are logged and
-listed in each dataset's embedding_materializer_manifest_<product>.json, and
-the corresponding windows simply lack the layer.
+succeed; gaps are logged and listed in each dataset's
+embedding_materializer_manifest_<product>.json, and the corresponding windows
+simply lack the layer.
 
 Materializing alone does not make a dataset evaluable: the layer also has to
 be declared in the dataset's config.json, wired as a model.yaml input, and
@@ -30,10 +29,8 @@ import argparse
 import logging
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
-    TESSERA_PRODUCTS,
     AEFFetcher,
     EmbeddingFetcher,
-    TesseraFetcher,
 )
 from olmoearth_pretrain.evals.embedding_materializer.materialize import (
     materialize_product,
@@ -46,11 +43,9 @@ logger = logging.getLogger(__name__)
 
 
 def build_fetcher(product_name: str) -> EmbeddingFetcher:
-    """Build the fetcher for a product name (aef/tessera/tessera_v11)."""
+    """Build the fetcher for a product name (aef)."""
     if product_name == "aef":
         return AEFFetcher()
-    if product_name in TESSERA_PRODUCTS:
-        return TesseraFetcher(product_name=product_name)
     raise ValueError(f"Unknown embedding product '{product_name}'")
 
 
@@ -69,8 +64,8 @@ def main() -> None:
     parser.add_argument(
         "--products",
         type=str,
-        default="aef,tessera",
-        help="Comma-separated products to materialize (aef, tessera).",
+        default="aef",
+        help="Comma-separated products to materialize (aef).",
     )
     parser.add_argument(
         "--workers", type=int, default=8, help="Concurrent fetch threads."

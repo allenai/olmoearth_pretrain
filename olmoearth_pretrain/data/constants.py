@@ -516,38 +516,6 @@ class Modality:
         ignore_when_parsing=False,
     )
 
-    # Tessera (https://github.com/ucam-eo/tessera) precomputed embeddings:
-    # 128-dim, 10 m, annual — same product shape as GSE/AlphaEarth above.
-    # Each Tessera dataset version is its own modality so different versions
-    # can be baked into the same eval dataset and compared side by side:
-    # ``tessera`` holds v1 (the geotessera default when the layers were first
-    # fetched), ``tessera_v11`` holds v1.1 (cambridge variant).
-    TESSERA = ModalitySpec(
-        name="tessera",
-        tile_resolution_factor=16,
-        band_sets=[
-            BandSet(
-                [f"T{idx:03d}" for idx in range(128)],
-                16,
-            ),
-        ],
-        is_multitemporal=False,
-        ignore_when_parsing=False,
-    )
-
-    TESSERA_V11 = ModalitySpec(
-        name="tessera_v11",
-        tile_resolution_factor=16,
-        band_sets=[
-            BandSet(
-                [f"T{idx:03d}" for idx in range(128)],
-                16,
-            ),
-        ],
-        is_multitemporal=False,
-        ignore_when_parsing=False,
-    )
-
     # Tessera v2 student embeddings (128-dim Matryoshka), produced by running
     # the released v2 inference ourselves (see docs/TesseraV2Inference.md) —
     # no precomputed v2 product is published yet. The student size used is
@@ -678,8 +646,6 @@ TIMESTAMPS = ["day", "month", "year"]
 EMBEDDING_PRODUCT_MODALITIES = frozenset(
     {
         Modality.GSE.name,
-        Modality.TESSERA.name,
-        Modality.TESSERA_V11.name,
         Modality.TESSERA_V2.name,
     }
 )

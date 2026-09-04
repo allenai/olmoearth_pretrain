@@ -283,15 +283,6 @@ def get_aef_args(pretrained_normalizer: bool = True) -> str:
     return _get_precomputed_embedding_args(Modality.GSE.name)
 
 
-def get_tessera_precomputed_args(pretrained_normalizer: bool = True) -> str:
-    """Get the precomputed-Tessera arguments.
-
-    ``pretrained_normalizer`` has no effect (there is no runnable model); it is
-    accepted for interface parity with the other baseline arg functions.
-    """
-    return _get_precomputed_embedding_args(Modality.TESSERA.name)
-
-
 def get_panopticon_args() -> str:
     """Get the panopticon arguments."""
     panopticon_args = dataset_args
@@ -543,7 +534,6 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
         BaselineModelName.AEF: get_aef_args,
-        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
     if model is None or model not in model_args_map:
         return ""
@@ -581,7 +571,6 @@ def _get_normalization_args(model: BaselineModelName | None, norm_mode: str) -> 
         BaselineModelName.TERRAMIND: get_terramind_args,
         BaselineModelName.CLAY: get_clay_args,
         BaselineModelName.AEF: get_aef_args,
-        BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
     }
 
     if model in model_map:
@@ -1351,11 +1340,6 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 # product name) they read.
 PRECOMPUTED_MODEL_TO_MODALITY = {
     BaselineModelName.AEF: (Modality.GSE.name, "aef"),
-    BaselineModelName.TESSERA_PRECOMPUTED: (Modality.TESSERA.name, "tessera"),
-    BaselineModelName.TESSERA_V11_PRECOMPUTED: (
-        Modality.TESSERA_V11.name,
-        "tessera_v11",
-    ),
     # tessera_v2 is baked by our own v2 inference run (see
     # docs/TesseraV2Inference.md), not by the embedding materializer.
     BaselineModelName.TESSERA_V2_PRECOMPUTED: (
@@ -1368,11 +1352,10 @@ PRECOMPUTED_MODEL_TO_MODALITY = {
 # Precomputed modalities that must be int8 round-tripped AT EVAL TIME, because
 # unlike the others they do not already carry their product's quantization loss.
 #
-# The rule is "score every product at the precision it ships", and the three
-# downloaded products satisfy it for free: the GSE fetcher reads int8 COGs and
-# dequantizes to float32, and Tessera v1/v1.1 arrive pre-dequantized from
-# geotessera -- in both cases the loss is baked into the stored values, so
-# re-quantizing would charge them twice.
+# The rule is "score every product at the precision it ships", and the
+# downloaded AEF product satisfies it for free: the GSE fetcher reads int8 COGs
+# and dequantizes to float32, so the loss is baked into the stored values and
+# re-quantizing would charge it twice.
 #
 # tessera_v2 is the exception, and it is an artifact of HOW WE MADE IT: we run
 # their pixel student ourselves (docs/TesseraV2Inference.md) and their

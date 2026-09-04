@@ -407,14 +407,12 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=64,
-        # gse/tessera require splits processed with
-        # pastis_processor.py --embedding_products=aef,tessera,tessera_v11
+        # gse requires splits processed with
+        # pastis_processor.py --embedding_products=aef
         supported_modalities=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.GSE.name,
-            Modality.TESSERA.name,
-            Modality.TESSERA_V11.name,
         ],
         timeseries=True,
     ),
@@ -424,14 +422,12 @@ DATASET_TO_CONFIG = {
         num_classes=19,
         is_multilabel=False,
         height_width=128,
-        # gse/tessera require splits processed with
-        # pastis_processor.py --embedding_products=aef,tessera,tessera_v11
+        # gse requires splits processed with
+        # pastis_processor.py --embedding_products=aef
         supported_modalities=[
             Modality.SENTINEL2_L2A.name,
             Modality.SENTINEL1.name,
             Modality.GSE.name,
-            Modality.TESSERA.name,
-            Modality.TESSERA_V11.name,
         ],
         timeseries=True,
     ),

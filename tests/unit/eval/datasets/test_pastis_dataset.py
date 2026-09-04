@@ -137,7 +137,7 @@ def test_pastis_dataset_missing_embeddings_raise(mock_pastis_data: Path) -> None
         PASTISRDataset(
             path_to_splits=mock_pastis_data,
             split="train",
-            input_modalities=[Modality.TESSERA.name],
+            input_modalities=[Modality.GSE.name],
         )
 
 

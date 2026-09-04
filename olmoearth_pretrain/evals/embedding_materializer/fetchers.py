@@ -17,7 +17,6 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 import numpy as np
 import rasterio.warp
@@ -26,7 +25,6 @@ from affine import Affine
 from rasterio.crs import CRS
 from rasterio.enums import Resampling
 from rslearn.config import QueryConfig, SpaceMode
-from rslearn.const import WGS84_PROJECTION
 from rslearn.data_sources.aws_google_satellite_embedding_v1 import (
     BANDS as AEF_BANDS,
 )
@@ -270,139 +268,3 @@ class AEFFetcher(EmbeddingFetcher):
         if not filled.any():
             return None
         return mosaic
-
-
-@dataclass(frozen=True)
-class TesseraProduct:
-    """A published Tessera dataset version consumable as an eval modality.
-
-    Each version is its own modality so that different versions can be baked
-    into the same eval dataset and compared side by side.
-    """
-
-    dataset_version: str
-    dataset_variant: str
-    modality: ModalitySpec
-
-
-# Product name (as used by --products / --embedding_products CLI flags and as
-# the written layer name) -> the geotessera dataset it is fetched from.
-# "tessera" is pinned to v1/vultr — the geotessera defaults in effect when the
-# existing layers were fetched — so re-running it reproduces those layers.
-TESSERA_PRODUCTS: dict[str, TesseraProduct] = {
-    "tessera": TesseraProduct("v1", "vultr", Modality.TESSERA),
-    "tessera_v11": TesseraProduct("v1.1", "cambridge", Modality.TESSERA_V11),
-}
-
-
-class TesseraFetcher(EmbeddingFetcher):
-    """Fetches Tessera embeddings via the geotessera client.
-
-    geotessera is an optional dependency; install with ``pip install
-    geotessera``. Tiles covering the requested bounds are fetched for the
-    given year (already dequantized to float32 by geotessera), then warped
-    and mosaicked onto the requested grid with rasterio.
-
-    ``product_name`` selects the Tessera dataset version (see
-    TESSERA_PRODUCTS) and thereby the modality/layer the embeddings are
-    stored under and the version recorded in provenance manifests.
-    """
-
-    def __init__(
-        self,
-        product_name: str = "tessera_v11",
-        client: Any | None = None,
-        client_kwargs: dict[str, Any] | None = None,
-    ) -> None:
-        """Initialize a TesseraFetcher.
-
-        Args:
-            product_name: which Tessera product to fetch (TESSERA_PRODUCTS
-                key); pins the geotessera dataset_version/dataset_variant and
-                the target modality.
-            client: an existing geotessera.GeoTessera client to use. If None,
-                one is constructed (requires geotessera to be installed).
-            client_kwargs: keyword arguments forwarded to the GeoTessera
-                constructor when ``client`` is None, overriding the
-                product's pinned dataset_version/dataset_variant.
-        """
-        if product_name not in TESSERA_PRODUCTS:
-            raise ValueError(
-                f"Unknown Tessera product '{product_name}'; expected one of "
-                f"{sorted(TESSERA_PRODUCTS)}"
-            )
-        self._product = TESSERA_PRODUCTS[product_name]
-        if client is None:
-            try:
-                from geotessera import GeoTessera
-            except ImportError as e:
-                raise ImportError(
-                    "geotessera is required for TesseraFetcher: pip install geotessera"
-                ) from e
-            client = GeoTessera(
-                **{
-                    "dataset_version": self._product.dataset_version,
-                    "dataset_variant": self._product.dataset_variant,
-                    **(client_kwargs or {}),
-                }
-            )
-        self._client = client
-
-    @property
-    def modality(self) -> ModalitySpec:
-        """The product's modality (128 bands T000..T127)."""
-        return self._product.modality
-
-    @property
-    def product_version(self) -> str:
-        """Tessera dataset version recorded in provenance manifests."""
-        return self._product.dataset_version
-
-    def fetch(
-        self, bounds: PixelBounds, projection: Projection, year: int
-    ) -> np.ndarray | None:
-        """Fetch Tessera embeddings for the given bounds and year.
-
-        Args:
-            bounds: pixel bounds (x0, y0, x1, y1) in the given projection.
-            projection: the target rslearn Projection.
-            year: the calendar year to fetch.
-
-        Returns:
-            float32 (128, H, W) array with NaN where the product has no data,
-            or None if no Tessera tile covers (bounds, year).
-        """
-        wgs84_geom = STGeometry(projection, shapely.box(*bounds), None).to_projection(
-            WGS84_PROJECTION
-        )
-        # (min_lon, min_lat, max_lon, max_lat)
-        bbox = wgs84_geom.shp.bounds
-        tiles_to_fetch = self._client.registry.load_blocks_for_region(
-            bounds=bbox, year=year
-        )
-        if not tiles_to_fetch:
-            return None
-
-        num_bands = len(self.modality.band_order)
-
-        def tile_iter() -> Iterable[SourceTile]:
-            """Yield fetched geotessera tiles as CHW SourceTiles."""
-            for (
-                _,
-                tile_lon,
-                tile_lat,
-                hwc,
-                crs,
-                transform,
-            ) in self._client.fetch_embeddings(tiles_to_fetch):
-                logger.debug(
-                    f"Fetched Tessera tile ({tile_lon}, {tile_lat}) "
-                    f"with shape {hwc.shape}"
-                )
-                yield SourceTile(
-                    array=np.transpose(hwc, (2, 0, 1)).astype(np.float32),
-                    crs=crs,
-                    transform=transform,
-                )
-
-        return mosaic_tiles_to_bounds(tile_iter(), projection, bounds, num_bands)

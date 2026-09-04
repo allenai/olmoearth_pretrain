@@ -79,8 +79,7 @@ def _fetch_with_retry(
     """Fetch a window's embedding raster, retrying transient IO errors.
 
     rasterio's RasterioIOError subclasses OSError, so this covers failed
-    S3/HTTP range reads under the AEF COGs as well as geotessera download
-    hiccups.
+    S3/HTTP range reads under the AEF COGs.
 
     Args:
         fetcher: the embedding product fetcher.
@@ -172,7 +171,7 @@ def materialize_product(
     Args:
         dataset_path: path to the rslearn dataset root.
         fetcher: the embedding product fetcher.
-        product_name: short product name (e.g. "aef", "tessera"), used in
+        product_name: short product name (e.g. "aef"), used in
             logs and the manifest.
         year: optional fixed year; if None, each window's time-range midpoint
             year is used.
@@ -257,7 +256,7 @@ def build_manifest(
 
     Args:
         fetcher: the embedding product fetcher used.
-        product_name: short product name (e.g. "aef", "tessera").
+        product_name: short product name (e.g. "aef").
         year: the fixed-year override, or None for per-window years.
         stats: the per-window outcome tallies.
         cli_args: the CLI arguments used.

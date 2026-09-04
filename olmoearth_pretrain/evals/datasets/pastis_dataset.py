@@ -68,14 +68,8 @@ class PASTISRDataset(Dataset):
         # Precomputed embedding products; require the splits to have been
         # processed with pastis_processor.py --embedding_products.
         Modality.GSE.name,
-        Modality.TESSERA.name,
-        Modality.TESSERA_V11.name,
     ]
-    embedding_modalities = [
-        Modality.GSE.name,
-        Modality.TESSERA.name,
-        Modality.TESSERA_V11.name,
-    ]
+    embedding_modalities = [Modality.GSE.name]
 
     def __init__(
         self,

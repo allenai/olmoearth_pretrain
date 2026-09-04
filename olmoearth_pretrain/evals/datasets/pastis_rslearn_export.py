@@ -15,7 +15,7 @@ data/rslearn_dataset_configs/config_pastis_rslearn.json:
 - a "label" raster layer written from the PASTIS annotations, storing raw
   classes 0-18 plus the void label 19 (masked to invalid by
   SegmentationTask(nodata_value=19) in the dataset's model.yaml);
-- "gse"/"tessera" raster layers converted from the embeddings previously
+- "gse" raster layers converted from the embeddings previously
   fetched into the processed .pt splits by
   pastis_processor.py --embedding_products (no re-fetch): the stored 64x64
   quadrants are stitched back to 128x128 on the identical pixel grid, after
@@ -87,12 +87,9 @@ WINDOW_TIME_RANGE = (WINDOW_START_TIME, WINDOW_START_TIME + timedelta(days=360))
 FOLD_TO_SPLIT_TAG = {"train": "train", "valid": "val", "test": "test"}
 
 # Nodata fill values the embeddings were fetched with (see
-# embedding_materializer/fetchers.py: AEF dequantizes with -1.0 fill, Tessera
-# uses NaN).
+# embedding_materializer/fetchers.py: AEF dequantizes with -1.0 fill).
 EMBEDDING_NODATA = {
     Modality.GSE.name: -1.0,
-    Modality.TESSERA.name: float("nan"),
-    Modality.TESSERA_V11.name: float("nan"),
 }
 
 
@@ -244,7 +241,7 @@ def main() -> None:
     parser.add_argument(
         "--embedding_modalities",
         type=str,
-        default="gse,tessera",
+        default="gse",
         help="Comma-separated embedding modalities to convert ('' to skip)",
     )
     parser.add_argument(

@@ -66,7 +66,7 @@ DATASETS = {
 # regenerating from the parent would silently delete them and drop the
 # baseline. Anything here that the destination already declares is carried
 # through unchanged.
-PRESERVED_INPUTS = ("gse", "tessera", "tessera_v11", "tessera_v2")
+PRESERVED_INPUTS = ("gse", "tessera_v2")
 
 MONTHLY_LAYERS = {
     "sentinel2_l2a": [f"sentinel2_l2a_mo{i:02d}" for i in range(1, 13)],

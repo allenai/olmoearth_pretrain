@@ -3,7 +3,7 @@ r"""CLI for baking precomputed embedding products into rslearn eval datasets.
 Usage:
     python -m olmoearth_pretrain.evals.embedding_materializer \\
         --dataset_path /weka/dfive-default/olmoearth/eval_datasets/<name>/ \\
-        --products aef,tessera [--year 2019] [--overwrite] [--workers 8]
+        --products aef [--year 2019] [--overwrite] [--workers 8]
 """
 
 import argparse
@@ -13,10 +13,8 @@ import sys
 from upath import UPath
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
-    TESSERA_PRODUCTS,
     AEFFetcher,
     EmbeddingFetcher,
-    TesseraFetcher,
 )
 from olmoearth_pretrain.evals.embedding_materializer.materialize import (
     materialize_product,
@@ -25,7 +23,7 @@ from olmoearth_pretrain.evals.embedding_materializer.materialize import (
 
 logger = logging.getLogger(__name__)
 
-PRODUCT_NAMES = ["aef", *TESSERA_PRODUCTS]
+PRODUCT_NAMES = ["aef"]
 
 
 def build_fetcher(product_name: str, args: argparse.Namespace) -> EmbeddingFetcher:
@@ -43,8 +41,6 @@ def build_fetcher(product_name: str, args: argparse.Namespace) -> EmbeddingFetch
     """
     if product_name == "aef":
         return AEFFetcher(metadata_cache_dir=args.aef_cache_dir)
-    if product_name in TESSERA_PRODUCTS:
-        return TesseraFetcher(product_name=product_name)
     raise ValueError(
         f"Unknown product '{product_name}'; expected one of {PRODUCT_NAMES}"
     )
@@ -60,8 +56,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         the parsed argparse Namespace.
     """
     parser = argparse.ArgumentParser(
-        description="Materialize precomputed embedding products (AlphaEarth/GSE, "
-        "Tessera) as raster layers in an rslearn eval dataset."
+        description="Materialize precomputed embedding products (AlphaEarth/GSE) "
+        "as raster layers in an rslearn eval dataset."
     )
     parser.add_argument(
         "--dataset_path",

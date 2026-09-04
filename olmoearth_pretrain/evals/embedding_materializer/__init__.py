@@ -1,14 +1,12 @@
 """Bake precomputed embedding products into rslearn eval datasets.
 
-This package materializes precomputed embedding products (AlphaEarth/GSE,
-Tessera) as raster layers in existing rslearn eval datasets, one window at a
-time. See ``__main__.py`` for the CLI entry point.
+This package materializes precomputed embedding products (AlphaEarth/GSE) as
+raster layers in existing rslearn eval datasets, one window at a time. See ``__main__.py`` for the CLI entry point.
 """
 
 from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
     AEFFetcher,
     EmbeddingFetcher,
-    TesseraFetcher,
 )
 from olmoearth_pretrain.evals.embedding_materializer.materialize import (
     materialize_product,
@@ -22,7 +20,6 @@ __all__ = [
     "AEFFetcher",
     "EmbeddingFetcher",
     "RslearnWindowProvider",
-    "TesseraFetcher",
     "materialize_product",
     "write_manifest",
 ]

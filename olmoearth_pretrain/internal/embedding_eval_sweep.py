@@ -10,7 +10,7 @@ all_evals.py) and differs from the full sweep in that:
 - only the probe LR is swept, and only for the linear-probe tasks — the KNN
   twins have no hyperparameters and run once in their own job;
 - only OlmoEarth checkpoints and the precomputed embedding products (aef,
-  tessera_precomputed) are supported.
+  tessera_v2_precomputed) are supported.
 
 e.g.
   # OlmoEarth checkpoint

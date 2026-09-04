@@ -70,20 +70,6 @@ data:
           - gse
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
-      tessera:
-        data_type: raster
-        dtype: FLOAT32
-        layers:
-          - tessera
-        use_all_bands_in_order_of_band_set_idx: 0
-        passthrough: true
-      tessera_v11:
-        data_type: raster
-        dtype: FLOAT32
-        layers:
-          - tessera_v11
-        use_all_bands_in_order_of_band_set_idx: 0
-        passthrough: true
       # Tessera v2 embeddings produced by running the released v2 students
       # ourselves (docs/TesseraV2Inference.md); no published v2 product exists.
       # required: false so windows are NOT filtered out while the layer is
