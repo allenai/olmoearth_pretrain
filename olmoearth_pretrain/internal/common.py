@@ -7,7 +7,6 @@ from olmo_core.internal.common import get_beaker_username
 from olmo_core.launch.beaker import (
     BeakerEnvSecret,
     BeakerEnvVar,
-    BeakerPriority,
     BeakerWekaBucket,
     OLMoCoreBeakerImage,
     is_running_in_beaker,
@@ -138,12 +137,19 @@ def build_launch_config(
             weka_buckets = []
 
     beaker_user = get_beaker_username()
-    # Propagate the train module path to the experiment if set
-    env_vars = [
-        BeakerEnvVar(
-            name="GOOGLE_APPLICATION_CREDENTIALS", value="/etc/gcp_credentials.json"
-        ),
-    ]
+    # Gantry writes the GCP credentials and exports GOOGLE_APPLICATION_CREDENTIALS
+    # itself (see google_credentials_secret below), so it's not set here.
+    env_vars: list[BeakerEnvVar] = []
+    if weka_buckets:
+        # Share a uv cache on Weka across jobs so wheels are downloaded (and
+        # sdists like flash-attn are compiled) only once. Gantry's entrypoint
+        # picks this up and flock-guards it against concurrent jobs.
+        env_vars.append(
+            BeakerEnvVar(
+                name="UV_CACHE_DIR",
+                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache",
+            )
+        )
     nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
     if nccl_debug_env_vars is not None:
         env_vars.extend(nccl_debug_env_vars)
@@ -198,46 +204,32 @@ def build_launch_config(
         workspace=workspace,
         clusters=clusters,
         weka_buckets=weka_buckets,
-        beaker_image=f"petew/{OLMoCoreBeakerImage.stable_cu128}",  # we can all use the same image for now trying petes to see if it works or we need a copy in our workspace
+        # torch 2.9.1 + CUDA 12.8, matching the torch pin in pyproject.toml.
+        beaker_image=OLMoCoreBeakerImage.stable_cu128,
         num_nodes=1,
         num_gpus=1,
         shared_memory="256GiB",
         shared_filesystem=True,  # We only use Weka for now
         allow_dirty=False,
-        priority=BeakerPriority.high,
+        priority="high",
         env_vars=env_vars,
         env_secrets=[
             BeakerEnvSecret(name="BEAKER_TOKEN", secret=f"{beaker_user}_BEAKER_TOKEN"),
             BeakerEnvSecret(
                 name="WANDB_API_KEY", secret=f"{beaker_user}_WANDB_API_KEY"
             ),  # nosec
-            BeakerEnvSecret(name="GITHUB_TOKEN", secret=f"{beaker_user}_GITHUB_TOKEN"),  # nosec
-            BeakerEnvSecret(name="GCP_CREDENTIALS", secret="HELIOS_GCP_CREDENTIALS"),  # nosec
         ],
-        setup_steps=[
-            # Write GCP credentials.
-            'echo "$GCP_CREDENTIALS" > $GOOGLE_APPLICATION_CREDENTIALS',
-            # Clone private repo.
-            "conda install gh --channel conda-forge",
-            # assumes that conda is installed, which is true for our beaker images.
-            "gh auth status",
-            "gh repo clone $REPO_URL .",
-            'git checkout "$GIT_REF"',
-            "git submodule update --init --recursive",
-            "pip install uv",
-            # so that we can use uv tools
-            'export PATH="/root/.local/bin:$PATH" ',
-            "uv sync --locked --all-extras",
-            # activate the uv venv
-            "venv_path=$(uv run python -c 'import sys; print(sys.executable)')",
-            'source "$(dirname "$venv_path")/activate"',
-            # explicitly install breizhcrops
-            "uv pip install breizhcrops==0.0.4.1 ",
-            # debugging - check torch version
-            "uv pip show torch",
-            # and then show the arch
-            "uv run python -c 'import torch; print(torch.__version__); print(torch.version.cuda); print(torch.cuda.get_arch_list())'",
-        ],
+        # Gantry clones the (private) repo, authenticating with this workspace
+        # secret, and writes these GCP credentials to a file, exporting
+        # GOOGLE_APPLICATION_CREDENTIALS to point at it.
+        gh_token_secret=f"{beaker_user}_GITHUB_TOKEN",
+        google_credentials_secret="HELIOS_GCP_CREDENTIALS",
+        # Gantry sets up the Python environment with uv; this replaces its
+        # default install command so the environment matches the lockfile.
+        system_python=False,
+        install="uv sync --locked --all-extras",
+        # breizhcrops is not part of the lockfile, so install it separately.
+        post_setup="uv pip install breizhcrops==0.0.4.1",
     )
 
 
