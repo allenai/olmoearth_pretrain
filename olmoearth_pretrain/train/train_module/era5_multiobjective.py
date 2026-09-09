@@ -55,6 +55,7 @@ from olmoearth_pretrain.nn.transforms.era5_corruption import (
     GROUP_RECON_MODE,
     RECON_MODE_SPEC,
     MaskPolicy,
+    SwtHaloSpanMaskPolicy,
     SwtNaiveMaskPolicy,
     corrupt_era5_swt,
 )
@@ -351,8 +352,20 @@ class ReconstructionObjectiveConfig(Config):
         name: Objective name used for metric keys.
         weight: Objective-level weight multiplied into the loss.
         decoder: Decoder config (cross-attention depth, heads, …).
-        mask_policy: SWT band-space masking policy
-            (:class:`SwtNaiveMaskPolicy` or :class:`SwtHaloSpanMaskPolicy`).
+        mask_policy: Name of the SWT band-space masking policy: ``"swt_naive"``
+            (:class:`SwtNaiveMaskPolicy`) or ``"swt_halo_span"``
+            (:class:`SwtHaloSpanMaskPolicy`). The policy dataclass is built in
+            :meth:`build_mask_policy` from the flat knobs below. (Kept flat —
+            not a union of dataclasses — because OmegaConf, which backs
+            :meth:`Config.merge`, rejects unions of containers.)
+        swt_naive_budget: ``swt_naive`` only — per-element masking probability.
+        swt_naive_raw_loss_mask_reduce: ``swt_naive`` only — ``"any"``/``"all"``
+            reduction of the band mask into the raw loss mask.
+        span_num_spans: ``swt_halo_span`` only — inclusive ``[lo, hi]`` range
+            for the number of spans per sample.
+        span_days: ``swt_halo_span`` only — inclusive ``[lo, hi]`` span length.
+        span_num_variables: ``swt_halo_span`` only — inclusive ``[lo, hi]``
+            number of variables per span.
         variable_groups: Mapping from group name to list of band indices.
         huber_delta: Delta for the raw Huber loss.
         raw_loss_on_masked_only: If True, compute raw Huber only over
@@ -372,7 +385,12 @@ class ReconstructionObjectiveConfig(Config):
     decoder: Era5TimeQueryDecoderConfig = field(
         default_factory=Era5TimeQueryDecoderConfig
     )
-    mask_policy: MaskPolicy = field(default_factory=SwtNaiveMaskPolicy)
+    mask_policy: str = "swt_naive"
+    swt_naive_budget: float = 0.5
+    swt_naive_raw_loss_mask_reduce: str = "any"
+    span_num_spans: list[int] = field(default_factory=lambda: [1, 5])
+    span_days: list[int] = field(default_factory=lambda: [7, 60])
+    span_num_variables: list[int] = field(default_factory=lambda: [1, 14])
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
@@ -385,6 +403,24 @@ class ReconstructionObjectiveConfig(Config):
     group_recon_mode: dict[str, str] = field(
         default_factory=lambda: dict(GROUP_RECON_MODE)
     )
+
+    def build_mask_policy(self) -> MaskPolicy:
+        """Construct the masking-policy dataclass from the flat config knobs."""
+        if self.mask_policy == "swt_naive":
+            return SwtNaiveMaskPolicy(
+                budget=self.swt_naive_budget,
+                raw_loss_mask_reduce=self.swt_naive_raw_loss_mask_reduce,
+            )
+        if self.mask_policy == "swt_halo_span":
+            return SwtHaloSpanMaskPolicy(
+                num_spans=_pair(self.span_num_spans, "span_num_spans"),
+                span_days=_pair(self.span_days, "span_days"),
+                num_variables=_pair(self.span_num_variables, "span_num_variables"),
+            )
+        raise ValueError(
+            f"Unknown mask_policy {self.mask_policy!r}; expected 'swt_naive' or "
+            "'swt_halo_span'"
+        )
 
     def build(self) -> ReconstructionObjective:
         """Instantiate decoder, SWT, and the objective."""
@@ -400,7 +436,7 @@ class ReconstructionObjectiveConfig(Config):
             name=self.name,
             weight=self.weight,
             module=module,
-            mask_policy=self.mask_policy,
+            mask_policy=self.build_mask_policy(),
             variable_groups=dict(self.variable_groups),
             group_recon_mode=dict(self.group_recon_mode),
             huber_delta=self.huber_delta,
@@ -410,6 +446,16 @@ class ReconstructionObjectiveConfig(Config):
             swt_levels=self.swt_levels,
             swt_buffer_days=self.swt_buffer_days,
         )
+
+
+def _pair(values: list[int], name: str) -> tuple[int, int]:
+    """Validate a 2-element ``[lo, hi]`` config list and return it as a tuple."""
+    if len(values) != 2:
+        raise ValueError(f"{name} must be a [lo, hi] pair, got {list(values)!r}")
+    lo, hi = int(values[0]), int(values[1])
+    if lo > hi:
+        raise ValueError(f"{name} must satisfy lo <= hi, got [{lo}, {hi}]")
+    return lo, hi
 
 
 def _parse_recon_mode(

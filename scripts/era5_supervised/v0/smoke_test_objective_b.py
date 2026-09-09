@@ -484,7 +484,7 @@ def test_halo_span_masking():
                 max_sequence_length=T,
                 num_output_channels=V,
             ),
-            mask_policy=SwtHaloSpanMaskPolicy(),
+            mask_policy="swt_halo_span",
             swt_levels=[0, 1],
             swt_lambda=0.1,
         ),

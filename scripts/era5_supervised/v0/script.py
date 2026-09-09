@@ -64,10 +64,6 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
-from olmoearth_pretrain.nn.transforms.era5_corruption import (
-    SwtHaloSpanMaskPolicy,
-    SwtNaiveMaskPolicy,
-)
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -349,10 +345,25 @@ def _snapshot_yaml(src: str, save_folder: str, task_name: str) -> str:
     At launch time the YAML may live inside the git repo; snapshotting it to the
     run's output directory (on Weka, outside git) ensures the running job keeps a
     frozen copy even if the working tree changes.
+
+    If ``save_folder`` is not writable (e.g. submitting to Beaker from a laptop
+    without the Weka mount), fall back to the git-tracked source path. This is
+    safe for ``launch``/``dry_run``: the Beaker job re-runs this script on the
+    node, where the snapshot is taken for real.
     """
     dst = Path(save_folder) / "configs" / f"{task_name}.yaml"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    except OSError as exc:
+        logger.warning(
+            "Could not snapshot model YAML %s → %s (%s); using the source path. "
+            "Expected when launching from a machine without the save_folder mount.",
+            src,
+            dst,
+            exc,
+        )
+        return str(src)
     logger.info("Snapshotted model YAML %s → %s", src, dst)
     return str(dst)
 
@@ -673,15 +684,11 @@ def build_model_config(
             raw_lambda=common.recon_raw_lambda,
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
-            mask_policy=(
-                SwtHaloSpanMaskPolicy(
-                    num_spans=tuple(common.recon_span_num_spans),
-                    span_days=tuple(common.recon_span_days),
-                    num_variables=tuple(common.recon_span_num_variables),
-                )
-                if common.recon_mask_policy == "swt_halo_span"
-                else SwtNaiveMaskPolicy(budget=common.recon_swt_naive_budget)
-            ),
+            mask_policy=common.recon_mask_policy,
+            swt_naive_budget=common.recon_swt_naive_budget,
+            span_num_spans=list(common.recon_span_num_spans),
+            span_days=list(common.recon_span_days),
+            span_num_variables=list(common.recon_span_num_variables),
         )
 
     if not common.enable_supervised and not common.enable_reconstruction:

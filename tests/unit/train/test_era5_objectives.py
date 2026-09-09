@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import pytest
 import torch
 import torch.nn.functional as F
+from olmo_core.config import Config
 from torch import Tensor, nn
 
 import olmoearth_pretrain.nn.era5_encoder as era5_encoder_mod
@@ -622,6 +623,90 @@ class TestMaskingInvariants:
         assert masks.raw_loss_mask.sum() < band_any.sum()
 
 
+class TestReconstructionConfigMerge:
+    """The objective config must survive ``Config.merge`` (the launch path).
+
+    ``build_config`` in ``internal/experiment.py`` calls ``config.merge(overrides)``
+    on the whole experiment config, which OmegaConf structures recursively.
+    OmegaConf rejects unions of dataclasses, so the mask policy must be exposed
+    as flat knobs on the config rather than as a ``MaskPolicy`` field.
+    """
+
+    @dataclass
+    class _FakeExperimentConfig(Config):
+        """Mirror ``OlmoEarthExperimentConfig``: ``model`` typed as base ``Config``."""
+
+        run_name: str = "test"
+        model: Config = field(default_factory=Config)
+
+    def _model_cfg(self, **recon_overrides: Any) -> Era5MultiObjectiveModelConfig:
+        return Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(), **recon_overrides
+            ),
+        )
+
+    def test_merge_with_no_overrides_on_experiment_config(self):
+        """Regression: an empty merge used to crash on the MaskPolicy union."""
+        cfg = self._FakeExperimentConfig(model=self._model_cfg())
+        merged = cfg.merge([])
+        assert isinstance(merged.model, Era5MultiObjectiveModelConfig)
+
+    def test_merge_halo_knobs_builds_halo_policy(self):
+        cfg = self._FakeExperimentConfig(model=self._model_cfg())
+        merged = cfg.merge(
+            [
+                "model.reconstruction_objective.mask_policy=swt_halo_span",
+                "model.reconstruction_objective.span_num_spans=[4,10]",
+                "model.reconstruction_objective.span_days=[30,120]",
+                "model.reconstruction_objective.span_num_variables=[9,14]",
+            ]
+        )
+        policy = merged.model.reconstruction_objective.build_mask_policy()
+        assert isinstance(policy, SwtHaloSpanMaskPolicy)
+        assert policy.num_spans == (4, 10)
+        assert policy.span_days == (30, 120)
+        assert policy.num_variables == (9, 14)
+
+    def test_merge_group_recon_mode_override(self):
+        """Per-group loss gating is overridable from the CLI without code changes."""
+        cfg = self._FakeExperimentConfig(model=self._model_cfg())
+        merged = cfg.merge(
+            [
+                "model.reconstruction_objective.group_recon_mode.pressure=raw_plus_all_swt"
+            ]
+        )
+        modes = merged.model.reconstruction_objective.group_recon_mode
+        assert modes["pressure"] == "raw_plus_all_swt"
+        # Other groups untouched.
+        assert modes["thermo"] == "raw_plus_all_swt"
+        assert modes["soil_moisture"] == "raw_plus_slow_swt"
+
+    def test_naive_policy_default_and_knobs(self):
+        policy = ReconstructionObjectiveConfig().build_mask_policy()
+        assert isinstance(policy, SwtNaiveMaskPolicy)
+        assert policy.budget == 0.5
+        policy = ReconstructionObjectiveConfig(
+            swt_naive_budget=0.7, swt_naive_raw_loss_mask_reduce="all"
+        ).build_mask_policy()
+        assert isinstance(policy, SwtNaiveMaskPolicy)
+        assert policy.budget == 0.7
+        assert policy.raw_loss_mask_reduce == "all"
+
+    def test_invalid_policy_and_pairs_raise(self):
+        with pytest.raises(ValueError, match="Unknown mask_policy"):
+            ReconstructionObjectiveConfig(mask_policy="bogus").build_mask_policy()
+        with pytest.raises(ValueError, match="span_days must be a"):
+            ReconstructionObjectiveConfig(
+                mask_policy="swt_halo_span", span_days=[7]
+            ).build_mask_policy()
+        with pytest.raises(ValueError, match="lo <= hi"):
+            ReconstructionObjectiveConfig(
+                mask_policy="swt_halo_span", span_num_spans=[5, 1]
+            ).build_mask_policy()
+
+
 class TestPerGroupLossGating:
     """group_recon_mode gates which groups contribute to raw vs SWT loss."""
 
@@ -812,7 +897,8 @@ class TestReconstructionE2EBackward:
     def test_naive_policy(self):
         torch.manual_seed(0)
         model = self._swt_model(
-            mask_policy=SwtNaiveMaskPolicy(budget=0.7),
+            mask_policy="swt_naive",
+            swt_naive_budget=0.7,
             swt_levels=[0, 1, 2],
             swt_lambda=0.1,
         )
@@ -854,7 +940,7 @@ class TestReconstructionE2EBackward:
     def test_halo_span_policy(self):
         torch.manual_seed(0)
         model = self._swt_model(
-            mask_policy=SwtHaloSpanMaskPolicy(),
+            mask_policy="swt_halo_span",
             swt_levels=[0, 1],
             swt_lambda=0.1,
         )
@@ -1000,7 +1086,8 @@ class TestSwtInputNoDataHandling:
             ),
             reconstruction_objective=ReconstructionObjectiveConfig(
                 decoder=_small_decoder_cfg(),
-                mask_policy=SwtNaiveMaskPolicy(budget=0.5),
+                mask_policy="swt_naive",
+                swt_naive_budget=0.5,
                 swt_levels=[0, 1, 2],
                 swt_lambda=1.0,
                 raw_lambda=1.0,
