@@ -381,8 +381,20 @@ def _snapshot_yaml(src: str, save_folder: str, task_name: str) -> str:
     frozen copy even if the working tree changes.
     """
     dst = Path(save_folder) / "configs" / f"{task_name}.yaml"
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(src, dst)
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+    except OSError as exc:
+        # Off-cluster launches (no /weka mount) build the config locally and
+        # only need a readable path; the Beaker job re-runs this on the node
+        # where the snapshot succeeds.
+        logger.warning(
+            "Could not snapshot model YAML %s → %s (%s); using the source path.",
+            src,
+            dst,
+            exc,
+        )
+        return str(src)
     logger.info("Snapshotted model YAML %s → %s", src, dst)
     return str(dst)
 
