@@ -176,15 +176,42 @@ class _BadSceneFilter(logging.Filter):
         )
 
 
-def _attach_bad_scene_log(rslearn_dir: str, shard_id: int) -> None:
-    """Tee bad-scene error lines to <rslearn_dir>/progress/badscenes/shard_N.log."""
-    d = UPath(rslearn_dir) / "progress" / "badscenes"
-    d.mkdir(parents=True, exist_ok=True)
-    handler = logging.FileHandler(str(d / f"shard_{shard_id:05d}.log"))
+BAD_SCENE_LOG_ENV = "ALLCAP_BADSCENE_LOG"
+
+
+def _install_bad_scene_handler() -> None:
+    """Install the bad-scene file handler if ALLCAP_BADSCENE_LOG is set.
+
+    Called at module import so that multiprocessing workers (forkserver/spawn
+    re-import this module as __mp_main__) capture rslearn's per-window errors too.
+    """
+    import os
+
+    path = os.environ.get(BAD_SCENE_LOG_ENV)
+    if not path:
+        return
+    root = logging.getLogger()
+    if any(getattr(h, "_bad_scene_handler", False) for h in root.handlers):
+        return
+    handler = logging.FileHandler(path, mode="a")
+    handler._bad_scene_handler = True  # type: ignore[attr-defined]
     handler.setLevel(logging.WARNING)
     handler.addFilter(_BadSceneFilter())
     handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    logging.getLogger().addHandler(handler)
+    root.addHandler(handler)
+
+
+def _attach_bad_scene_log(rslearn_dir: str, shard_id: int) -> None:
+    """Tee bad-scene error lines to <rslearn_dir>/progress/badscenes/shard_N.log."""
+    import os
+
+    d = UPath(rslearn_dir) / "progress" / "badscenes"
+    d.mkdir(parents=True, exist_ok=True)
+    os.environ[BAD_SCENE_LOG_ENV] = str(d / f"shard_{shard_id:05d}.log")
+    _install_bad_scene_handler()
+
+
+_install_bad_scene_handler()
 
 
 def _run_rslearn_steps(
