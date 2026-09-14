@@ -5,6 +5,7 @@ from typing import Any
 
 import torch
 from olmo_core.data.data_loader import DataLoaderBase
+from olmo_core.distributed.utils import get_rank, get_world_size
 from olmo_core.train.train_module import EvalBatchSpec, TrainModule
 
 EXIT_CONFIG_TYPES = ["zero", "half", "full", "varied"]
@@ -207,13 +208,22 @@ class MockOlmoEarthDataLoader(DataLoaderBase):
     """Minimal OlmoEarth dataloader that only satisfies the abstract interface."""
 
     def __init__(self) -> None:
-        """Initialize the mock loader with trivial single-rank defaults."""
+        """Initialize the mock loader, matching the current distributed topology.
+
+        The trainer validates that the data loader's DP world size matches the
+        process-group world size, so we read it from the distributed context rather
+        than hardcoding 1. This keeps single-process jobs working (get_world_size()
+        returns 1) while also supporting multi-GPU eval jobs -- e.g. a rank-max LR
+        sweep, which runs the eval on several ranks at once.
+        """
+        world_size = get_world_size()
         super().__init__(
             work_dir="./",
-            global_batch_size=128,
-            dp_world_size=1,
-            dp_rank=0,
-            fs_local_rank=0,
+            # Keep the global batch divisible by any world size we launch with.
+            global_batch_size=128 * world_size,
+            dp_world_size=world_size,
+            dp_rank=get_rank(),
+            fs_local_rank=get_rank(),
         )
         self._seed = 42
         self._epoch = 0
