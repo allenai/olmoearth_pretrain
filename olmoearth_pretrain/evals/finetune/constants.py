@@ -1,7 +1,7 @@
 """Constants for finetuning."""
 
 # Fraction of total epochs to keep backbone frozen before unfreezing.
-FREEZE_EPOCH_FRACTION = 0.2
+FREEZE_EPOCH_FRACTION = 0.0  # joer recipe (2026-09-04): full fine-tuning from step 0, no frozen warm-up (upstream default 0.2)
 
 # Factor to multiply learning rate by when unfreezing backbone (e.g., 0.1 = reduce LR by 10x).
 UNFREEZE_LR_FACTOR = 0.1

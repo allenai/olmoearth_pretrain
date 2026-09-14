@@ -353,6 +353,54 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # SwissCrop25 LOYO S5 (test 2025) linear-probe segmentation on S2 monthly mosaics, 64x64.
+    # Register-bottleneck checkpoints: default probes the 768-d register grid; *_proj128 probes
+    # the shipped 128-d student head; *_enc the pooled encoder tokens.
+    "swisscrop_sentinel2": DownstreamTaskConfig(
+        dataset="swisscrop",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "swisscrop_sentinel2_proj128": DownstreamTaskConfig(
+        dataset="swisscrop",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        eval_on_projected_registers=True,
+        eval_projection_dim=128,
+    ),
+    "swisscrop_sentinel2_enc": DownstreamTaskConfig(
+        dataset="swisscrop",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        eval_on_encoder_tokens=True,
+    ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # Three split modes (random / by_city / by_continent), each with an S2-only,
     # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
@@ -1743,6 +1791,31 @@ EMBED_DIAG_TASKS = {
 }
 
 FT_EVAL_TASKS = {
+    # SwissCrop25 LOYO S5 full fine-tune (joer recipe: whole net from step 0, linear head, lr set
+    # by the sweep). ft_batch_size 16 x grad_accum 2 = effective 32 to fit 40 GB GPUs.
+    "swisscrop_sentinel2": DownstreamTaskConfig(
+        dataset="swisscrop",
+        ft_batch_size=16,
+        ft_grad_accum_steps=2,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=15,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "swisscrop_sentinel2_enc": DownstreamTaskConfig(
+        dataset="swisscrop",
+        ft_batch_size=16,
+        ft_grad_accum_steps=2,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=15,
+        primary_metric=EvalMetric.MIOU,
+        eval_on_encoder_tokens=True,
+    ),
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
         ft_batch_size=64,

@@ -385,7 +385,10 @@ def build_commands(
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
 
     # LR sweep
-    lrs = [FT_LRS[0]] if args.defaults_only else FT_LRS
+    if getattr(args, "ft_lrs", None):
+        lrs = [float(x) for x in args.ft_lrs.split(",") if x.strip()]
+    else:
+        lrs = [FT_LRS[0]] if args.defaults_only else FT_LRS
 
     # Pretrained normalizer: default True for supported presets.
     normalizer_value: bool | None = None
@@ -505,6 +508,12 @@ def main() -> None:
         type=str,
         required=False,
         help="Weights & Biases project name",
+    )
+    parser.add_argument(
+        "--ft-lrs",
+        type=str,
+        default=None,
+        help="Comma-separated fine-tune learning rates to run instead of the built-in FT_LRS grid (e.g. 1e-5).",
     )
     parser.add_argument(
         "--defaults_only",

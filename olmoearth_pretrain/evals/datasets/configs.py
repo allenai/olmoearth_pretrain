@@ -340,6 +340,26 @@ DATASET_TO_CONFIG = {
         supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
         timeseries=True,
     ),
+    # SwissCrop25 (EOA-team/SwissCrop25): 12 monthly S2 mosaics per cube, 70 fine crop /
+    # land-cover classes (background -> ignore). See swisscrop_dataset.py / swisscrop_processor.py.
+    "swisscrop": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=70,
+        is_multilabel=False,
+        height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        timeseries=True,
+    ),
+    "swisscrop128": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=70,
+        is_multilabel=False,
+        height_width=128,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        timeseries=True,
+    ),
     "pastis128": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
