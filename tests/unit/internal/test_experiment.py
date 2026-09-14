@@ -1,7 +1,12 @@
 """Unit tests for launching experiments."""
 
+from typing import Any
+
 import pytest
+from gantry.api import GitRepoState
+from gantry.api import Recipe as GantryRecipe
 from olmo_core.config import DType
+from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train import TrainerConfig
 
@@ -24,18 +29,40 @@ from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModul
 MAX_PATCH_SIZE = 8  # NOTE: actual patch_size <= max_patch_size
 
 
+def stub_git_repo_state() -> GitRepoState:
+    """Return a GitRepoState stub that doesn't touch git or the GitHub API.
+
+    The launch config's ``git`` field defaults to ``GitRepoState.from_env()``,
+    which requires running from the root of a pushed git checkout, so tests
+    pass an explicit stub instead.
+    """
+    return GitRepoState(
+        repo="dummy/dummy",
+        repo_url="https://github.com/dummy/dummy",
+        ref="0" * 40,
+        _is_remote=True,
+    )
+
+
+def minimal_launch_config(**kwargs: Any) -> OlmoEarthBeakerLaunchConfig:
+    """Return a minimal OlmoEarthBeakerLaunchConfig."""
+    return OlmoEarthBeakerLaunchConfig(
+        name="test_run",
+        cmd=["dummy_cmd"],
+        clusters=["dummy_cluster"],
+        budget="dummy_budget",
+        git=stub_git_repo_state(),
+        **kwargs,
+    )
+
+
 def minimal_common_components() -> CommonComponents:
     """Return a minimal CommonComponents object."""
     return CommonComponents(
         run_name="test_run",
         save_folder="test_save_folder",
         training_modalities=["sentinel2", "sentinel1", "worldcover", "naip"],
-        launch=OlmoEarthBeakerLaunchConfig(
-            name="test_run",
-            cmd=["dummy_cmd"],
-            clusters=["dummy_cluster"],
-            budget="dummy_budget",
-        ),
+        launch=minimal_launch_config(),
     )
 
 
@@ -252,6 +279,65 @@ def test_overrides_with_common_prefix() -> None:
 
     assert isinstance(config, OlmoEarthExperimentConfig)
     assert config.dataset.training_modalities == ["sentinel2", "sentinel1"]
+
+
+@pytest.fixture
+def stub_base_recipe(monkeypatch: pytest.MonkeyPatch) -> GantryRecipe:
+    """Stub the olmo-core recipe builder so no Beaker/network access happens.
+
+    Returns the recipe object that the stubbed base ``_build_recipe`` will
+    hand back, so tests can assert on the mutations our subclass applies.
+    """
+    recipe = GantryRecipe(args=["echo", "hello"])
+
+    def fake_build_recipe(
+        self: BeakerLaunchConfig, beaker: Any, **kwargs: Any
+    ) -> tuple[GantryRecipe, dict[str, Any]]:
+        return recipe, {"show_logs": False}
+
+    monkeypatch.setattr(BeakerLaunchConfig, "_build_recipe", fake_build_recipe)
+    return recipe
+
+
+def test_min_runtime_defaults_to_8h(stub_base_recipe: GantryRecipe) -> None:
+    """The built recipe should carry an 8h min runtime by default."""
+    launch_config = minimal_launch_config()
+    recipe, _ = launch_config._build_recipe(beaker=None)
+    assert recipe is stub_base_recipe
+    assert recipe.min_runtime == "8h"
+
+
+def test_min_runtime_disabled(stub_base_recipe: GantryRecipe) -> None:
+    """Setting min_runtime=None should leave the recipe untouched."""
+    launch_config = minimal_launch_config(min_runtime=None)
+    recipe, _ = launch_config._build_recipe(beaker=None)
+    assert recipe.min_runtime is None
+
+
+def test_min_runtime_override(stub_base_recipe: GantryRecipe) -> None:
+    """A custom min_runtime value should be applied to the recipe."""
+    launch_config = minimal_launch_config(min_runtime="30m")
+    recipe, _ = launch_config._build_recipe(beaker=None)
+    assert recipe.min_runtime == "30m"
+
+
+def test_install_and_gh_token_secret_applied(stub_base_recipe: GantryRecipe) -> None:
+    """The install command and GitHub token secret should be applied when set."""
+    launch_config = minimal_launch_config(
+        install="uv sync --locked --all-extras",
+        gh_token_secret="someuser_GITHUB_TOKEN",
+    )
+    recipe, _ = launch_config._build_recipe(beaker=None)
+    assert recipe.install == "uv sync --locked --all-extras"
+    assert recipe.gh_token_secret == "someuser_GITHUB_TOKEN"
+
+
+def test_install_and_gh_token_secret_defaults(stub_base_recipe: GantryRecipe) -> None:
+    """When unset, the recipe's install/gh_token_secret defaults are kept."""
+    launch_config = minimal_launch_config()
+    recipe, _ = launch_config._build_recipe(beaker=None)
+    assert recipe.install is None
+    assert recipe.gh_token_secret == "GITHUB_TOKEN"
 
 
 def test_build_config_invalid_override_raises() -> None:
