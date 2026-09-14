@@ -165,6 +165,28 @@ def _load_window_manifest(path: str) -> list[str]:
     return names
 
 
+class _BadSceneFilter(logging.Filter):
+    """Pass only log records describing unreadable/missing provider assets."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return (
+            "not recognized as being in a supported file format" in msg
+            or "HTTP response code: 40" in msg
+        )
+
+
+def _attach_bad_scene_log(rslearn_dir: str, shard_id: int) -> None:
+    """Tee bad-scene error lines to <rslearn_dir>/progress/badscenes/shard_N.log."""
+    d = UPath(rslearn_dir) / "progress" / "badscenes"
+    d.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(str(d / f"shard_{shard_id:05d}.log"))
+    handler.setLevel(logging.WARNING)
+    handler.addFilter(_BadSceneFilter())
+    handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    logging.getLogger().addHandler(handler)
+
+
 def _run_rslearn_steps(
     *,
     rslearn_dir: str,
@@ -193,6 +215,10 @@ def _run_rslearn_steps(
     )
 
     dataset = Dataset(UPath(rslearn_dir), disabled_layers=disabled_layers or [])
+
+    # Capture bad-scene errors (corrupt/missing provider blobs) into a small file on
+    # Weka so prune_bad_scenes can read them without downloading Beaker job logs.
+    _attach_bad_scene_log(rslearn_dir, shard_id)
 
     for i, step in enumerate(steps):
         _write_progress(
