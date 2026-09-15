@@ -128,6 +128,8 @@ class Attention(nn.Module):
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         spatial_pos_encoding: str | None = None,
+        attn_dim: int | None = None,
+        kv_in_dim: int | None = None,
     ) -> None:
         """Initialize the attention module.
 
@@ -153,14 +155,24 @@ class Attention(nn.Module):
             rope_temporal_base: Optional separate frequency base for the
                 temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
+            attn_dim: Internal width the attention runs at (q/k/v projected to
+                this, output projected back to ``dim``). ``None`` (default) ties
+                it to ``dim`` -- the classic single-width attention. Decoupling
+                lets a narrow residual stream (e.g. a register bottleneck) run
+                its attention with more/wider heads than ``dim`` could fund.
+            kv_in_dim: Input width of the key/value source ``y`` when it differs
+                from ``dim`` (cross-attention over a wider stream). ``None``
+                (default) ties it to ``dim``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
             position_encoding, spatial_pos_encoding
         )
-        assert dim % num_heads == 0, "dim should be divisible by num_heads"
+        attn_dim = attn_dim if attn_dim is not None else dim
+        kv_in_dim = kv_in_dim if kv_in_dim is not None else dim
+        assert attn_dim % num_heads == 0, "attn_dim should be divisible by num_heads"
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
+        self.head_dim = attn_dim // num_heads
         if PositionEncoding.is_2d_rope(position_encoding) and self.head_dim % 4 != 0:
             raise ValueError(
                 f"2D RoPE / RoPE-Mixed require head_dim divisible by 4, "
@@ -203,14 +215,14 @@ class Attention(nn.Module):
                 )
             )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
-        self.q = nn.Linear(dim, dim, bias=qkv_bias)
-        self.k = nn.Linear(dim, dim, bias=qkv_bias)
-        self.v = nn.Linear(dim, dim, bias=qkv_bias)
+        self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
+        self.k = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
+        self.v = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
 
         self.q_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.k_norm = norm_layer(self.head_dim) if qk_norm else nn.Identity()
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(attn_dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
 
     def sdpa(
@@ -241,6 +253,7 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+
         Returns:
             Output tensor of shape (B, H, N, D)
         """
@@ -263,8 +276,16 @@ class Attention(nn.Module):
             # matching the transpose of the other attention implementations that need to be transposed back
             x = x.transpose(1, 2)
         elif self.fast_attn:
-            if attn_mask is not None:
-                attn_mask = attn_mask[:, None, None].repeat((1, self.num_heads, n, 1))
+            if attn_mask is not None and attn_mask.dim() == 2:
+                # A 1D-per-sample key mask (B, Nk): add head/query dims and let SDPA
+                # broadcast over them. We deliberately do NOT materialize a dense
+                # (B, H, N, Nk) mask -- that ~N^2 tensor forces SDPA onto the math
+                # backend (full score materialization -> O(N^2) memory + slow). The
+                # broadcastable (B, 1, 1, Nk) mask lets the fused mem-efficient kernel
+                # handle padding instead.
+                attn_mask = attn_mask[:, None, None]
+            # A precomputed (B, 1, Nq, Nk) / (B, H, Nq, Nk) mask is passed straight
+            # through and broadcast over heads.
             x = F.scaled_dot_product_attention(
                 q,
                 k,
@@ -390,7 +411,11 @@ class Attention(nn.Module):
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
         )
-        x = x.transpose(1, 2).reshape(original_shape)
+        # The attention output is at the internal attention width (== the input width
+        # unless attn_dim decouples them); proj maps it back to the input width.
+        x = x.transpose(1, 2).reshape(
+            *original_shape[:-1], self.num_heads * self.head_dim
+        )
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -569,6 +594,8 @@ class Block(nn.Module):
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         spatial_pos_encoding: str | None = None,
+        attn_dim: int | None = None,
+        kv_in_dim: int | None = None,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -595,6 +622,13 @@ class Block(nn.Module):
             rope_temporal_base: Optional separate frequency base for the
                 temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
+            attn_dim: Optional internal attention width decoupled from ``dim``
+                (see :class:`Attention`). The residual stream and MLP stay at
+                ``dim``. NOTE: the cross-attention ``y`` context is NOT normed
+                by this block, so a ``kv_in_dim`` source must be normalized by
+                the caller.
+            kv_in_dim: Optional key/value source width for cross-attention when
+                the context ``y`` is wider than ``dim`` (see :class:`Attention`).
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -616,6 +650,8 @@ class Block(nn.Module):
             rope_mixed_base=rope_mixed_base,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
+            attn_dim=attn_dim,
+            kv_in_dim=kv_in_dim,
         )
         self.ls1 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()

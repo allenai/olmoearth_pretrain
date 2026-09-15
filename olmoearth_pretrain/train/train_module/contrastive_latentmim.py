@@ -308,7 +308,16 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
+                supervision_preds,
+                projection_outputs,
             ) = self.model(batch, patch_size)
+            if supervision_preds is not None or projection_outputs is not None:
+                # Register supervision and the distilled student are trained by
+                # LatentMIMTrainModule; refuse rather than silently drop their losses.
+                raise NotImplementedError(
+                    "supervision heads and register_projection_dims are not supported "
+                    "by ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
+                )
             if extra_metrics is not None:
                 self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
