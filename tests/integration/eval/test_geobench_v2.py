@@ -356,6 +356,7 @@ def test_finetune_one_epoch(
         patch_size=4,
         pooling_type=PoolingType.MEAN,
         use_pooled_tokens=False,
+        eval_on_encoder_tokens=False,
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=None,

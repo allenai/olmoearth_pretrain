@@ -19,7 +19,7 @@ from olmo_core.distributed.parallel import (
     get_dp_mesh,
     get_dp_process_group,
 )
-from olmo_core.distributed.utils import get_world_size
+from olmo_core.distributed.utils import get_local_tensor, get_world_size
 from olmo_core.exceptions import OLMoConfigurationError
 from olmo_core.optim import OptimConfig, SkipStepOptimizer
 from olmo_core.optim.scheduler import Scheduler
@@ -418,9 +418,23 @@ class OlmoEarthTrainModule(TrainModule):
     def state_dict_to_load(
         self, metadata: Metadata, optim: bool | None = None
     ) -> dict[str, Any]:
-        """Get the state dict to load."""
+        """Get the state dict to load.
+
+        ``optim=False`` (from ``TrainerConfig.load_optim_state``) omits optimizer
+        state from the load plan. Honouring it matters when resuming with a
+        DIFFERENT optimizer param-group layout than the checkpoint was saved
+        with -- adding a group override renames the per-parameter
+        ``optim.param_groups.<fqn>.group_name`` keys, and requesting them raises
+        "Missing key in checkpoint state_dict".
+        """
         load_opts = self.state_dict_load_opts
-        return self._get_state_dict(load_opts)
+        state_dict = self._get_state_dict(load_opts)
+        if optim is False and state_dict.pop("optim", None) is not None:
+            logger.warning(
+                "load_optim_state=False: omitting optimizer state from the load "
+                "plan; the optimizer keeps its fresh state."
+            )
+        return state_dict
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
@@ -434,6 +448,10 @@ class OlmoEarthTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        if "optim" not in state_dict:
+            # load_optim_state=False omitted it; the optimizer keeps its fresh state.
+            logger.warning("No optimizer state in the load plan; not loading any.")
+            return
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
@@ -672,6 +690,50 @@ class OlmoEarthTrainModule(TrainModule):
             total_batch_reg,
             ReduceType.mean,
         )
+
+    def accumulate_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        extra_metrics: dict[str, Any],
+    ) -> None:
+        """Accumulate extra metrics across microbatches.
+
+        Extra metrics used to be logged once per microbatch, which trips
+        olmo-core's duplicate-metric warning (it keeps the first value for a
+        given step/name and warns on the rest). We instead accumulate here and
+        log once per step, like the train loss.
+
+        Flattens one level of nesting to match ``log_extra_metrics`` key naming,
+        and tracks a per-key count so metrics present in only some microbatches
+        (e.g. a supervision modality absent from a microbatch) are averaged over
+        the microbatches that actually contributed them.
+        """
+
+        def _add(name: str, value: Any) -> None:
+            if isinstance(value, torch.Tensor):
+                value = get_local_tensor(value.detach())
+            accumulator[name] = accumulator.get(name, 0) + value
+            counts[name] = counts.get(name, 0) + 1
+
+        for key, value in extra_metrics.items():
+            if isinstance(value, dict):
+                for sub_key, sub_value in value.items():
+                    _add(f"{key}/{sub_key}", sub_value)
+            else:
+                _add(key, value)
+
+    def log_accumulated_extra_metrics(
+        self,
+        accumulator: dict[str, Any],
+        counts: dict[str, int],
+        reduce_type: ReduceType | None = None,
+    ) -> None:
+        """Log metrics accumulated across microbatches, averaged per key."""
+        if not counts:
+            return
+        averaged = {name: total / counts[name] for name, total in accumulator.items()}
+        self.log_extra_metrics(averaged, reduce_type=reduce_type)
 
     def log_extra_metrics(
         self, extra_metrics: dict[str, Any], reduce_type: ReduceType | None = None
