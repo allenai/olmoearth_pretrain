@@ -94,6 +94,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         masking_strategy_b: MaskingStrategy | None = None,
         num_masked_views: int = 1,
         tokenization_config: TokenizationConfig | None = None,
+        token_budget_excluded_modalities: list[str] | None = None,
     ):
         """Initialize the OlmoEarthDataLoader.
 
@@ -123,6 +124,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
             masking_strategy_b: Optional second masking strategy for Galileo-style training.
             num_masked_views: Number of masked views to return (1=single, 2=double).
             tokenization_config: Optional tokenization config for custom band groupings.
+            token_budget_excluded_modalities: Loaded modalities that are not tokenized
+                by the model and should not consume the token budget.
         """
         super().__init__(
             work_dir=work_dir,
@@ -157,6 +160,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.masking_strategy_b = masking_strategy_b
         self.num_masked_views = num_masked_views
         self.tokenization_config = tokenization_config
+        self.token_budget_excluded_modalities = frozenset(
+            token_budget_excluded_modalities or []
+        )
 
         # Validate configuration
         if masking_strategy is None:
@@ -322,6 +328,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
             tokenization_config=self.tokenization_config,
+            token_budget_excluded_modalities=self.token_budget_excluded_modalities,
         )
         item = self.dataset[args]
         return item
@@ -663,6 +670,7 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
     tokenization_config: TokenizationConfig | None = None
+    token_budget_excluded_modalities: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -744,6 +752,7 @@ class OlmoEarthDataLoaderConfig(Config):
             masking_strategy_b=masking_strategy_b,
             num_masked_views=self.num_masked_views,
             tokenization_config=self.tokenization_config,
+            token_budget_excluded_modalities=self.token_budget_excluded_modalities,
         )
 
 

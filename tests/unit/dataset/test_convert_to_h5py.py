@@ -1,11 +1,29 @@
 """Unit tests for convert_to_h5py module."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+
+
+def test_open_set_window_is_not_split_into_subtiles(tmp_path: Path) -> None:
+    """A 128 px open-set source window produces exactly one 128 px H5 sample."""
+    converter = ConvertToH5py(
+        tile_path=UPath(tmp_path),
+        supported_modalities=[],
+        image_tile_size=128,
+        tile_size=128,
+        pixel_coord_windows=True,
+    )
+
+    assert converter.num_subtiles_per_dim == 1
+    assert converter.num_subtiles == 1
+    assert converter.image_tile_size_suffix == "_128_x_1"
+    assert converter.pixel_coord_windows
 
 
 @pytest.fixture

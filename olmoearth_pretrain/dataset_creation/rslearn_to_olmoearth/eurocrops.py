@@ -224,7 +224,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert EuroCrops from rslearn to OlmoEarth format with rasterization",
     )
-    add_common_arguments(parser)
+    add_common_arguments(parser, default_groups=None)
     args = parser.parse_args()
 
     # Load HCAT3 mapping from local JSON file.
@@ -244,7 +244,9 @@ if __name__ == "__main__":
 
     # Process all windows.
     jobs = []
-    for window in dataset.load_windows(workers=args.workers, show_progress=True):
+    for window in dataset.load_windows(
+        workers=args.workers, show_progress=True, groups=args.groups
+    ):
         jobs.append(
             dict(
                 window=window,

@@ -6,6 +6,13 @@ The modalities support can be changed in the script or by overriding the support
 
 Usage:
     python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[sentinel2_l2a,sentinel1,worldcover\]" --compression=zstd --compression_opts=3 --tile_size=128
+
+For a per-window dataset whose source GeoTIFFs are not 256x256 (e.g. the open-set
+segmentation dataset, whose 128x128 windows are centered on samples), also pass
+``--image_tile_size`` (the source window size, so no sub-tile splitting happens) and
+``--pixel_coord_windows=true`` (window col/row are absolute pixel coords, used for
+latlon):
+    python run_h5_conversion.py --tile-path=TILE_PATH --supported-modality-names="\[...\]" --compression=zstd --compression_opts=3 --tile_size=128 --image_tile_size=128 --pixel_coord_windows=true
 """
 
 import logging

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from pyproj import Transformer
 
 from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import (
@@ -21,7 +22,7 @@ from olmoearth_pretrain.dataset.parse import (
     ModalityTile,
     TimeSpan,
 )
-from olmoearth_pretrain.dataset.sample import image_tiles_to_samples
+from olmoearth_pretrain.dataset.sample import SampleInformation, image_tiles_to_samples
 from olmoearth_pretrain.nn.tokenization import (
     ModalityTokenization,
     TokenizationConfig,
@@ -149,6 +150,63 @@ def test_supporting_latlon(tmp_path: Path, create_image_tiles: Callable) -> None
     assert samples[0].modalities.keys() == {Modality.SENTINEL2}
 
 
+def test_image_tiles_to_samples_joins_by_example_id(
+    tmp_path: Path, create_image_tiles: Callable
+) -> None:
+    """Centered examples at the same pixel join modalities only by their identity."""
+    image_tiles = create_image_tiles(tmp_path)
+    for modality_tiles in image_tiles.values():
+        original = modality_tiles[TimeSpan.YEAR][0]
+        modality_tiles[TimeSpan.YEAR] = [
+            ModalityTile(
+                grid_tile=GridTile(
+                    crs=original.grid_tile.crs,
+                    resolution_factor=original.grid_tile.resolution_factor,
+                    col=original.grid_tile.col,
+                    row=original.grid_tile.row,
+                    example_id=example_id,
+                ),
+                images=original.images,
+                center_time=original.center_time,
+                band_sets=original.band_sets,
+                modality=original.modality,
+            )
+            for example_id in ("sample_a", "sample_b")
+        ]
+
+    samples = image_tiles_to_samples(image_tiles)
+
+    assert len(samples) == 2
+    assert {sample.grid_tile.example_id for sample in samples} == {
+        "sample_a",
+        "sample_b",
+    }
+    assert all(
+        sample.modalities.keys() == {Modality.SENTINEL2, Modality.SENTINEL1}
+        for sample in samples
+    )
+
+
+def test_centered_sample_latlon_uses_absolute_pixel_coordinates() -> None:
+    """Centered-window col/row are absolute pixels rather than grid-tile indices."""
+    sample = SampleInformation(
+        grid_tile=GridTile(
+            crs=CRS,
+            resolution_factor=16,
+            col=50000,
+            row=-450000,
+            example_id="sample_a",
+        ),
+        time_span=TimeSpan.YEAR,
+        modalities={},
+    )
+    latlon = sample.get_latlon(image_tile_size=128, pixel_coord_windows=True)
+    transformer = Transformer.from_crs(CRS, "EPSG:4326", always_xy=True)
+    lon, lat = transformer.transform(500005, 4499995)
+
+    assert latlon == pytest.approx([lat, lon])
+
+
 def test_default_subsetting() -> None:
     """Test subsetting works."""
     (
@@ -246,6 +304,32 @@ def test_subsetting_worldcover_too() -> None:
     # so a token budget of floor((100 - 16) / 48 = 1)
 
     assert subsetted_sample.time == 1
+
+
+def test_supervision_modalities_can_be_excluded_from_token_budget() -> None:
+    """Loaded label layers do not reduce the imagery timestep budget."""
+    h, w, t = 16, 16, 100
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        open_set=torch.ones((h, w, 1, OlmoEarthSample.num_bands("open_set"))),
+        open_set_regression=torch.ones(
+            (h, w, 1, OlmoEarthSample.num_bands("open_set_regression"))
+        ),
+        timestamps=torch.ones((t, OlmoEarthSample.num_bands("timestamps"))),
+    )
+
+    subsetted_sample = subset_sample_default(
+        sample,
+        patch_size=4,
+        max_tokens_per_instance=100,
+        sampled_hw_p=4,
+        current_length=12,
+        token_budget_excluded_modalities={"open_set", "open_set_regression"},
+    )
+
+    assert subsetted_sample.time == 2
+    assert subsetted_sample.open_set is not None
+    assert subsetted_sample.open_set_regression is not None
 
 
 def test_subsetting_with_tokenization_config() -> None:

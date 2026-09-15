@@ -51,6 +51,7 @@ def _get_max_t_within_token_budget(
     h_w_p: int,
     max_tokens_per_instance: int,
     tokenization_config: TokenizationConfig | None = None,
+    excluded_modalities: set[str] | None = None,
 ) -> int:
     """Find max t possible when subsetting.
 
@@ -64,8 +65,9 @@ def _get_max_t_within_token_budget(
 
     used_tokens = 0
     time_multiply_tokens = 0
+    excluded_modalities = excluded_modalities or set()
     for attribute in sample.as_dict().keys():
-        if attribute in ("timestamps", "latlon"):
+        if attribute in ("timestamps", "latlon") or attribute in excluded_modalities:
             continue
         modality_spec = Modality.get(attribute)
         num_band_sets = (
@@ -129,6 +131,7 @@ def subset_sample_default(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    token_budget_excluded_modalities: set[str] | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -142,6 +145,8 @@ def subset_sample_default(
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        token_budget_excluded_modalities: Loaded modalities that should not count
+            toward the model token budget.
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -152,7 +157,11 @@ def subset_sample_default(
         missing_timesteps_masks = {}
 
     max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        sample,
+        sampled_hw_p,
+        max_tokens_per_instance,
+        tokenization_config,
+        token_budget_excluded_modalities,
     )
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
@@ -202,6 +211,7 @@ def subset_sample_cutmix(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    token_budget_excluded_modalities: set[str] | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -215,6 +225,8 @@ def subset_sample_cutmix(
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        token_budget_excluded_modalities: Loaded modalities that should not count
+            toward the model token budget.
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -225,7 +237,11 @@ def subset_sample_cutmix(
         missing_timesteps_masks = {}
 
     max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        sample,
+        sampled_hw_p,
+        max_tokens_per_instance,
+        tokenization_config,
+        token_budget_excluded_modalities,
     )
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
@@ -310,6 +326,7 @@ class GetItemArgs(NamedTuple):
     sampled_hw_p: int
     token_budget: int | None = None
     tokenization_config: TokenizationConfig | None = None
+    token_budget_excluded_modalities: frozenset[str] = frozenset()
 
 
 # TODO should training modalities be str or modality_spec
@@ -853,6 +870,9 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                token_budget_excluded_modalities=set(
+                    args.token_budget_excluded_modalities
+                ),
             )
         else:
             subset_sample = subset_sample_default(
@@ -863,6 +883,9 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                token_budget_excluded_modalities=set(
+                    args.token_budget_excluded_modalities
+                ),
             )
 
         sample_dict = subset_sample.as_dict()
