@@ -1,6 +1,8 @@
-"""Post-extraction transforms for embeddings (quantization, dim reduction)."""
+"""Post-extraction transforms for embeddings (normalization, quantization, dim reduction)."""
 
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import h5py
@@ -13,6 +15,13 @@ logger = logging.getLogger(__name__)
 # Constants matching AlphaEarth's scheme
 QUANTIZE_POWER = 2.0
 QUANTIZE_SCALE = 127.5
+
+# The power scheme saturates where |x|^(1/power) * scale exceeds the int8 range:
+# |x| > (127 / scale)^power. AEF's embeddings are 64-d unit-L2 vectors, so their
+# coordinates sit far below this; anything coming off a LayerNorm (per-coordinate
+# std ~ 1) clips a large fraction of its coordinates instead. Diagnostics report
+# the clipped fraction so the mismatch is visible rather than silent.
+QUANTIZE_CLIP_THRESHOLD = (127.0 / QUANTIZE_SCALE) ** QUANTIZE_POWER
 
 
 def quantize_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
@@ -50,6 +59,56 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     # Apply square, preserve sign: x = |rescaled|^power * sign(rescaled)
     dequantized = rescaled.abs().pow(QUANTIZE_POWER) * rescaled.sign()
     return dequantized
+
+
+class QuantizationScheme(StrEnum):
+    """Which int8 scheme ``quantize_embeddings=True`` applies.
+
+    Per-product, because the point of the embedding-eval convention is to score
+    each arm at the precision it actually ships.
+    """
+
+    # AlphaEarth's published scheme (POWER/SCALE above). The default, and the
+    # right choice for AEF-geometry (unit-L2) embeddings.
+    AEF_POWER = "aef_power"
+
+
+# === Normalization ===
+
+
+class EmbeddingNormalization(StrEnum):
+    """How to normalize extracted embeddings before the int8 round-trip / probe.
+
+    Nothing in pretraining pins the geometry of an embedding head's output: the
+    register bottleneck and its distilled student both end in a LayerNorm
+    (per-token scale), but the distillation losses are invariant to any
+    invertible linear map of the student space, so the absolute magnitude is
+    free. ``quantize_embeddings`` assumes AEF's convention (coordinates well
+    inside [-1, 1]); a LayerNorm-scale embedding saturates instead (see
+    ``QUANTIZE_CLIP_THRESHOLD``), which is what L2 normalization -- the
+    deployed convention -- avoids.
+    """
+
+    # Embeddings are consumed exactly as the model emits them.
+    NONE = "none"
+    # Per-embedding L2 normalization (AEF's convention; the deployed one).
+    L2 = "l2"
+
+
+@dataclass
+class EmbeddingNormalizer:
+    """A stateless embedding normalization, applied on the last dim.
+
+    Accepts ``[N, D]`` and spatial ``[N, ..., D]`` embeddings alike.
+    """
+
+    mode: EmbeddingNormalization
+
+    def __call__(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """Apply the normalization, leaving NONE (and dtype) untouched."""
+        if self.mode == EmbeddingNormalization.NONE:
+            return embeddings
+        return torch.nn.functional.normalize(embeddings.float(), dim=-1)
 
 
 # === Percentile-based Quantization ===
