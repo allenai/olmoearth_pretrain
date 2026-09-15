@@ -271,13 +271,18 @@ def _ensure_config_json(dataset_path: str, model_config_dir: str) -> None:
     logger.info("  Wrote config.json to dataset folder")
 
 
-def _copy_model_yaml(dataset_path: str, model_config_dir: str) -> None:
+def _copy_model_yaml(
+    dataset_path: str, model_config_dir: str, overwrite: bool = False
+) -> None:
     """Copy model.yaml into the dataset folder for canonical access at eval time.
 
-    Skips if model.yaml already exists in the dataset folder.
+    Skips if model.yaml already exists in the dataset folder, unless
+    ``overwrite`` is set — without it, re-ingesting a dataset whose model.yaml
+    gained new inputs silently keeps the stale copy (which eval jobs and the
+    registry modality extraction both read).
     """
     dest = Path(dataset_path) / "model.yaml"
-    if dest.exists():
+    if dest.exists() and not overwrite:
         logger.info("  model.yaml already exists in dataset folder, skipping copy")
         return
 
@@ -1127,7 +1132,9 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
 
     # Copy model.yaml to the dataset folder so it's canonically accessible
     # at eval time without depending on the original source location
-    _copy_model_yaml(weka_path, config.olmoearth_run_config_path)
+    _copy_model_yaml(
+        weka_path, config.olmoearth_run_config_path, overwrite=config.overwrite_configs
+    )
 
     # Step 0a: Load dataset config from the dataset folder
     logger.info("[Step 0a] Loading dataset config...")
@@ -1166,6 +1173,19 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     # sentinel2_l2a_feb, _may, _aug, _nov all resolve to sentinel2_l2a).
     # We deduplicate and aggregate max_matches across temporal layers.
     logger.info("[Step 0c] Extracting modalities from dataset config...")
+    # Modalities whose model.yaml input stacks all of its layers on the time
+    # dimension (load_all_layers): distinct layers each contribute their
+    # timesteps (sum), instead of being alternatives (max).
+    load_all_layer_modalities: set[str] = set()
+    for input_cfg in model_config["data"]["init_args"].get("inputs", {}).values():
+        if input_cfg.get("is_target") or not input_cfg.get("load_all_layers"):
+            continue
+        for input_layer in input_cfg.get("layers", []):
+            try:
+                load_all_layer_modalities.add(rslearn_to_olmoearth(input_layer).name)
+            except KeyError:
+                continue
+
     modality_max_timesteps: dict[str, int] = {}
     modality_layer_names = []
     for layer_name, layer_config in dataset_config.layers.items():
@@ -1192,7 +1212,10 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         query_config = layer_config.data_source.query_config
         mod_name = olmoearth_modality.name
         prev = modality_max_timesteps.get(mod_name, 0)
-        modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
+        if mod_name in load_all_layer_modalities:
+            modality_max_timesteps[mod_name] = prev + query_config.max_matches
+        else:
+            modality_max_timesteps[mod_name] = max(prev, query_config.max_matches)
 
     modalities = list(modality_max_timesteps.keys())
     num_timesteps = (
