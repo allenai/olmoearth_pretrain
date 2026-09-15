@@ -159,15 +159,19 @@ def _model_args(
     consumed exactly as stored — no re-normalization, reading the embedding
     modality instead of imagery.
 
-    Quantization is per-product: a downloaded product is already int8 at
-    source, so it is not re-quantized; see ``QUANTIZE_AT_EVAL_MODALITIES`` in
-    full_eval_sweep for the rule.
+    Quantization is per-product rather than blanket-off, because "already int8
+    at source" is true of the downloaded products but NOT of tessera_v2, which
+    we bake ourselves in float32. See ``QUANTIZE_AT_EVAL_MODALITIES`` in
+    full_eval_sweep for the rule and its caveat.
 
     ``quantization`` overrides the OlmoEarth side of that convention, so the
     round trip itself can be measured rather than assumed: "none" scores the
-    float embeddings (the ceiling). Baselines are unaffected: they ship at a
-    fixed precision and are scored at it. None keeps AEF's power scheme, which
-    is what every existing number used.
+    float embeddings (the ceiling -- every arm to date has round-tripped, so the
+    cost of quantizing has never actually been observed), and "tessera" swaps
+    AEF's power scheme for Tessera's linear per-vector one, which is clip-free
+    by construction and isolates the companding curve from the value range.
+    Baselines are unaffected: they ship at a fixed precision and are scored at
+    it. None keeps AEF's power scheme, which is what every existing number used.
     """
     if model is None:
         quantize = (quantization or "aef_power") != "none"
@@ -175,6 +179,14 @@ def _model_args(
         for task_name in task_names:
             args.append(_task_arg(task_name, "norm_stats_from_pretrained", "True"))
             args.append(_task_arg(task_name, "quantize_embeddings", str(quantize)))
+            if quantize and quantization == "tessera":
+                args.append(
+                    _task_arg(
+                        task_name,
+                        "quantization_scheme",
+                        "QuantizationScheme.TESSERA_PER_VECTOR",
+                    )
+                )
         return " ".join(args)
     modality, _ = PRECOMPUTED_MODEL_TO_MODALITY[model]
     quantize = modality in QUANTIZE_AT_EVAL_MODALITIES
@@ -465,12 +477,14 @@ def main() -> None:
         "--quantization",
         type=str,
         default=None,
-        choices=["aef_power", "none"],
+        choices=["aef_power", "tessera", "none"],
         help=(
             "How OlmoEarth embeddings are quantized before the probe: aef_power "
-            "(default, the scheme every existing number used) or none (float32; "
-            "the ceiling). Baselines are unaffected: they are scored at the "
-            "precision they ship. Tags the run names."
+            "(default, the scheme every existing number used), tessera (linear, "
+            "per-vector scale, clip-free by construction -- isolates the "
+            "companding curve), or none (float32; the ceiling, since every arm "
+            "so far has round-tripped). Baselines are unaffected: they are "
+            "scored at the precision they ship. Tags the run names."
         ),
     )
     parser.add_argument(
