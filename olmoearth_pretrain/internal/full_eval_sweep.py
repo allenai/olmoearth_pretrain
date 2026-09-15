@@ -1340,6 +1340,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 # product name) they read.
 PRECOMPUTED_MODEL_TO_MODALITY = {
     BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    # tessera_v2 is baked by our own v2 inference run
+    # (evals/datasets/tessera_v2_export.py), not by the embedding materializer.
+    BaselineModelName.TESSERA_V2_PRECOMPUTED: (
+        Modality.TESSERA_V2.name,
+        "tessera_v2",
+    ),
 }
 
 
@@ -1352,7 +1358,7 @@ PRECOMPUTED_MODEL_TO_MODALITY = {
 # re-quantizing would charge it twice.
 #
 # tessera_v2 is the exception, and it is an artifact of HOW WE MADE IT: we run
-# their pixel student ourselves (docs/TesseraV2Inference.md) and their
+# their pixel student ourselves (evals/datasets/tessera_v2_export.py) and their
 # infer_v2.py defaults to float32, with `--int8` opt-in. The shipped v2 product
 # is int8 (quantization-aware training, see the TESSERA paper), so leaving this
 # unquantized scores v2 ABOVE its own release precision -- which is exactly the
@@ -1364,9 +1370,11 @@ PRECOMPUTED_MODEL_TO_MODALITY = {
 # in a non-affine LayerNorm, so scoring v2 under the power scheme would charge it
 # a ~5-point cosine loss its real product does not pay. TESSERA_PER_VECTOR
 # reproduces geotessera's decoder instead.
-QUANTIZE_AT_EVAL_MODALITIES: frozenset[str] = frozenset()
+QUANTIZE_AT_EVAL_MODALITIES = frozenset({Modality.TESSERA_V2.name})
 
-QUANTIZE_SCHEME_BY_MODALITY: dict[str, QuantizationScheme] = {}
+QUANTIZE_SCHEME_BY_MODALITY = {
+    Modality.TESSERA_V2.name: QuantizationScheme.TESSERA_PER_VECTOR,
+}
 
 
 def check_precomputed_embedding_tasks(
