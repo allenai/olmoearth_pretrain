@@ -1,6 +1,7 @@
 """Unit tests for embedding_transforms module."""
 
 import numpy as np
+import pytest
 import torch
 
 from olmoearth_pretrain.evals.embedding_transforms import (
@@ -8,9 +9,12 @@ from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalizer,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
+    dequantize_embeddings_tessera,
     quantize_embeddings,
     quantize_embeddings_percentile,
+    quantize_embeddings_tessera,
     reduce_embedding_dim,
+    roundtrip_embeddings_tessera,
 )
 
 
@@ -26,6 +30,57 @@ class TestQuantization:
         assert quantized.dtype == torch.int8
         assert recovered.dtype == torch.float32
         assert recovered.shape == embeddings.shape
+
+
+class TestTesseraQuantization:
+    """Tests for Tessera's int8 scheme (linear, per-vector scale)."""
+
+    def test_matches_geotessera_decoder(self) -> None:
+        """Our dequantize must be bit-identical to the shipped client's.
+
+        The whole point of the scheme is that tessera_v2 is scored under
+        Tessera's quantization and not AlphaEarth's, so if their decoder ever
+        diverges from ours the comparison silently stops being like-for-like.
+        Skips when the optional geotessera dependency is absent.
+        """
+        store = pytest.importorskip("geotessera.store")
+
+        embeddings = torch.nn.functional.layer_norm(torch.randn(256, 128), (128,))
+        quantized, scales = quantize_embeddings_tessera(embeddings)
+        ours = dequantize_embeddings_tessera(quantized, scales).numpy()
+        # Their decoder takes (B, H, W) int8 plus (H, W) scales.
+        theirs = store.TesseraAccessor.dequantise(
+            quantized.numpy().T.reshape(128, 256, 1), scales.numpy().reshape(256, 1)
+        ).reshape(256, 128)
+
+        np.testing.assert_array_equal(ours, theirs)
+
+    def test_is_clip_free_unlike_the_power_scheme(self) -> None:
+        """Per-vector scaling puts the largest coordinate exactly on the rail.
+
+        LayerNorm-geometry embeddings saturate the AEF power scheme; this one
+        cannot clip, which is why each product is quantized under its own.
+        """
+        embeddings = torch.nn.functional.layer_norm(torch.randn(256, 128), (128,))
+        quantized, _ = quantize_embeddings_tessera(embeddings)
+
+        assert quantized.dtype == torch.int8
+        assert int(quantized.abs().max()) == 127
+        tessera_cos = torch.nn.functional.cosine_similarity(
+            roundtrip_embeddings_tessera(embeddings), embeddings, dim=-1
+        ).mean()
+        power_cos = torch.nn.functional.cosine_similarity(
+            dequantize_embeddings(quantize_embeddings(embeddings)), embeddings, dim=-1
+        ).mean()
+        assert tessera_cos > 0.999
+        assert tessera_cos > power_cos
+
+    def test_zero_vector_survives(self) -> None:
+        """An all-zero embedding has no scale; it must not produce NaN."""
+        roundtripped = roundtrip_embeddings_tessera(torch.zeros(4, 16))
+
+        assert torch.isfinite(roundtripped).all()
+        assert float(roundtripped.abs().max()) == 0.0
 
 
 class TestDimReduction:
