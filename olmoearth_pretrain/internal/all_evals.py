@@ -20,6 +20,7 @@ from olmo_core.train.config import TrainerConfig
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.evals.balanced_trial import BalancedTrialConfig
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.metrics import EvalMetric
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -1328,6 +1329,30 @@ def _embedding_eval_batch_scale(window_size: int) -> int:
     return (16 // window_size) ** 2
 
 
+# AEF's per-dataset "Max Trial Size (n)" column (their Table 1, read per class),
+# used directly as our per-class draw size. Keyed by dataset-name prefix so the
+# _year_aligned re-exports inherit their parent's value.
+AEF_MAX_TRIAL_CAPS = {
+    "ethiopia_crops": 49,
+    "canada_crops_fine": 75,
+    "canada_crops_coarse": 68,
+    "africa_crop_mask": 200,
+    "descals": 200,
+    "lcmap_lu": 300,
+    "glance": 300,
+    "us_trees": 300,
+}
+DEFAULT_AEF_MAX_TRIAL_CAP = 300
+
+
+def _aef_max_trial_cap(dataset: str) -> int:
+    """AEF's per-class draw cap for a dataset (300 unless Table 1 says otherwise)."""
+    for prefix, cap in AEF_MAX_TRIAL_CAPS.items():
+        if dataset.startswith(prefix):
+            return cap
+    return DEFAULT_AEF_MAX_TRIAL_CAP
+
+
 def _aef_ps1_task(
     name: str,
     eval_mode: EvalMode,
@@ -1342,6 +1367,17 @@ def _aef_ps1_task(
     token is kept — the task runs as center-pixel classification
     (label_at_center_pixel + use_center_token). Balanced accuracy is the AEF
     paper's protocol metric.
+
+    The KNN twin additionally runs AEF's balanced-trial protocol (their S4) on
+    the embeddings it already materializes: a class-balanced draw from the
+    pooled splits, scored on the remainder, repeated over AEF's k draws. It is
+    hosted here rather than on the LP tasks because the KNN twin is the only
+    single-instance job (embedding_eval_sweep.py emits one KNN job but eight LP
+    jobs, one per swept LR), so the trials compute once instead of eight
+    redundant times, and a neighbor lookup is the cheapest job to hang
+    millisecond-scale closed-form fits off. The precomputed baselines (AEF,
+    Tessera) run these same task objects, so they inherit the trials and stay
+    directly comparable.
     """
     scale = _embedding_eval_batch_scale(window_size)
     return DownstreamTaskConfig(
@@ -1363,6 +1399,11 @@ def _aef_ps1_task(
         quantize_embeddings=True,
         use_center_token=True,
         label_at_center_pixel=True,
+        balanced_trial=(
+            BalancedTrialConfig(cap=_aef_max_trial_cap(name))
+            if eval_mode == EvalMode.KNN
+            else None
+        ),
     )
 
 
