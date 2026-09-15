@@ -1385,6 +1385,46 @@ def _aef_ps1_task(
 # point (cost scales with train x query pixels), unlike the LP which compresses
 # them into a single weight matrix.
 #
+# The PASTIS tasks run on `pastis_rslearn`, an rslearn export that mirrors the
+# pretraining dataset (12 monthly Planetary Computer mosaics per sensor on the
+# native PASTIS patch grid; see
+# olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py) rather than the
+# imagery shipped with the PASTIS benchmark. Each 128x128 patch is tiled into
+# 16x16 windows (tile_samples). The gse/tessera layers were converted from the
+# embeddings previously fetched by pastis_processor.py --embedding_products.
+
+
+def _pastis_ps1_task(
+    input_modalities: list[str], window_size: int = 16
+) -> DownstreamTaskConfig:
+    """PASTIS (rslearn export) under the per-pixel embedding-product convention."""
+    scale = _embedding_eval_batch_scale(window_size)
+    return DownstreamTaskConfig(
+        dataset="pastis_rslearn",
+        # At ws16, 64 = one full 128x128 stored sample (8x8 tiles of 16x16)
+        # per batch, so each DataLoader worker's batch maps to exactly one
+        # base-sample load with the tiled-__getitem__ cache; the (16/ws)^2
+        # scaling preserves both that mapping and the tokens per batch at
+        # smaller window sizes. Peak GPU memory at ws16 batch 32 was ~7.6GB,
+        # so 64 stays far from OOM.
+        embedding_batch_size=64 * scale,
+        probe_batch_size=8 * scale,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=input_modalities,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=window_size,
+        patch_size=1,
+        tile_samples=True,
+        quantize_embeddings=True,
+    )
+
+
 # The _pretrain_export suffix marks that the PASTIS tasks read the
 # pastis_rslearn pretraining-mirror export, distinguishing their metrics from
 # earlier pastis_ws16_ps1_* runs on the benchmark-shipped imagery. One task
@@ -1393,6 +1433,15 @@ EMBEDDING_EVAL_TASKS = {}
 for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
     EMBEDDING_EVAL_TASKS.update(
         {
+            f"pastis_ws{_ws}_ps1_sentinel2_pretrain_export": _pastis_ps1_task(
+                [Modality.SENTINEL2_L2A.name], window_size=_ws
+            ),
+            f"pastis_ws{_ws}_ps1_sentinel1_sentinel2_pretrain_export": (
+                _pastis_ps1_task(
+                    [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                    window_size=_ws,
+                )
+            ),
             **{
                 f"{name}_ws{_ws}_ps1": _aef_ps1_task(
                     name, EvalMode.LINEAR_PROBE, window_size=_ws
