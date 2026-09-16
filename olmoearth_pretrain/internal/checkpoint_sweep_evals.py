@@ -30,10 +30,10 @@ import sys
 import time
 from functools import partial
 from types import ModuleType
-from typing import cast
+from typing import Any, cast
 
 import torch
-from beaker import Experiment
+from beaker.types import BeakerWorkload
 from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train import prepare_training_environment, teardown_training_environment
@@ -310,7 +310,7 @@ def get_train_run_eval_tasks(
 
 
 def add_experiment_to_loop_eval_group(
-    config: OlmoEarthEvaluateConfig, experiment: Experiment
+    config: OlmoEarthEvaluateConfig, workload: BeakerWorkload
 ) -> None:
     """Add a just-launched in-loop eval experiment to its per-run Beaker group.
 
@@ -324,22 +324,46 @@ def add_experiment_to_loop_eval_group(
     if not group_name:
         return
     try:
-        from beaker import Beaker, GroupConflict, GroupNotFound
+        from beaker import Beaker
+        from beaker.exceptions import BeakerError
 
-        beaker = Beaker.from_env()
         workspace = config.launch.workspace if config.launch is not None else None
-        try:
-            group = beaker.group.get(group_name)
-        except GroupNotFound:
-            # First eval job for this run creates the group; concurrent launches
-            # may race, so treat a conflict as "already created" and re-fetch.
-            try:
-                group = beaker.group.create(group_name, workspace=workspace)
-            except GroupConflict:
-                group = beaker.group.get(group_name)
-        beaker.group.add_experiments(group, experiment)
+        experiment_id = workload.experiment.id
+        with Beaker.from_env() as beaker:
+            # beaker-py 2.x can only look groups up by ID, so resolve the name
+            # via a (substring-filtered) listing with an exact-match check.
+            def get_group_by_name() -> Any | None:
+                for candidate in beaker.group.list(
+                    workspace=workspace, name_or_description=group_name
+                ):
+                    if candidate.name == group_name:
+                        return candidate
+                return None
+
+            group = get_group_by_name()
+            if group is None:
+                # First eval job for this run creates the group; concurrent
+                # launches may race, so treat a create failure as "already
+                # created" and re-fetch.
+                try:
+                    beaker.group.create(
+                        group_name,
+                        workspace=workspace,
+                        experiment_ids=[experiment_id],
+                    )
+                    logger.info(
+                        "Added eval experiment %s to new Beaker group %r",
+                        experiment_id,
+                        group_name,
+                    )
+                    return
+                except BeakerError:
+                    group = get_group_by_name()
+                    if group is None:
+                        raise
+            beaker.group.update(group, add_experiment_ids=[experiment_id])
         logger.info(
-            "Added eval experiment %s to Beaker group %r", experiment.id, group_name
+            "Added eval experiment %s to Beaker group %r", experiment_id, group_name
         )
     except Exception as e:  # noqa: BLE001 - best-effort, never block the eval launch
         logger.warning(
@@ -423,8 +447,8 @@ if __name__ == "__main__":
 
     if cmd == SubCmd.launch_evaluate:
         prepare_cli_environment()
-        experiment = launch(config)
-        add_experiment_to_loop_eval_group(config, experiment)
+        workload = launch(config)
+        add_experiment_to_loop_eval_group(config, workload)
     elif cmd == SubCmd.evaluate:
         prepare_training_environment()
         try:

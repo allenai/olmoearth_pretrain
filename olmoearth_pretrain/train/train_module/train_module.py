@@ -354,6 +354,24 @@ class OlmoEarthTrainModule(TrainModule):
         """Get the local rank."""
         return self.trainer.data_loader.dp_rank
 
+    def num_flops_per_token(self, seq_len: int) -> int | None:
+        """Per-token FLOP count is not tracked for OlmoEarth models.
+
+        Required by olmo-core >= 2.5 (abstract on :class:`TrainModule`); only
+        used for speed-monitor FLOP/MFU metrics, which returning ``None``
+        disables.
+        """
+        return None
+
+    def global_num_flops_in_batch(self, batch: dict[str, Any]) -> int | None:
+        """Per-batch FLOP count is not tracked for OlmoEarth models.
+
+        Required by olmo-core >= 2.5 (abstract on :class:`TrainModule`); only
+        used for speed-monitor FLOP/MFU metrics, which returning ``None``
+        disables.
+        """
+        return None
+
     @property
     def logits_dtype(self) -> torch.dtype:
         """Get the logits dtype."""

@@ -345,7 +345,6 @@ def _format_launch_command(
             [
                 "--launch.priority=high",
                 "--launch.num_gpus=1",
-                "--launch.preemptible=True",
                 "--launch.task_name=eval",
             ]
         )

@@ -7,13 +7,15 @@ authors = [
 ]
 readme = "README.md"
 license = {file = "LICENSE"}
-requires-python = ">=3.11, <3.14" # For torch  2.7.1 compatibility
+requires-python = ">=3.11, <3.14"
 dependencies = [
     # Minimal inference dependencies
     "einops>=0.7.0",
     "huggingface_hub",
     "numpy>=1.26.4",
-    "torch>=2.7,<2.8",
+    # olmo-core 2.6 requires torch APIs added in 2.8+; 2.9.x matches the
+    # olmo-core 2.6 stable Beaker images.
+    "torch>=2.9,<2.10",
     "universal-pathlib>=0.2.5",
 ]
 
@@ -68,7 +70,7 @@ explicit = true
 
 [project.optional-dependencies]
 training = [
-    "ai2-olmo-core==2.3.0",
+    "ai2-olmo-core==2.6.0",
     "albumentations>=1.4.10",
     "cartopy>=0.25.0",
     "class-registry>=2.1.2",
@@ -84,13 +86,13 @@ training = [
     "wandb>=0.19.0",
 ]
 beaker = [
-    "beaker-py==1.34.1",
-    "docker>=5.0,<8.0",
+    "beaker-py>=2.5.4,<3.0",
+    "beaker-gantry>=3.4.3,<4.0",
+    "gitpython>=3.0,<4.0",
     "packaging>=24.2",
-    "pydantic>=1.8.2,<3.0",
+    "pydantic>=2,<3.0",
     "pyyaml>=6.0.3",
     "requests>=2.32.5",
-    "rich>=12.3,<14.0",
     "google-cloud-compute",
 ]
 "dataset-creation" = [
@@ -106,7 +108,7 @@ beaker = [
     "rasterio>=1.4.3",
     "rioxarray>=0.19.0",
     "rslearn>=0.1.4",
-    "torch>=2.7,<2.8",
+    "torch>=2.9,<2.10",
     "universal-pathlib>=0.2.5",
     "wandb>=0.19.0",
 ]
