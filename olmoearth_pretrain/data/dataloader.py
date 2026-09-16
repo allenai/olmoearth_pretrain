@@ -81,7 +81,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
         min_tokens_per_instance: int = 0,
         max_timesteps: int = 12,
         tile_size: int = 128,
-        exclude_only_decode_from_budget: bool = False,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -104,6 +103,26 @@ class OlmoEarthDataLoader(DataLoaderBase):
     ):
         """Initialize the OlmoEarthDataLoader.
 
+        The dataloader is also responsible for subsetting our 128x128 24-timestep
+        tiles. For a sampled patch size, we subset a spatial grid so that
+        the number of tokens is <= token_budget and >= min_tokens_per_instance. Given
+        this constraint, we use the following subsetting logic per microbatch:
+
+        1. Define all possible grid sizes (hw, t) combinations that fit within the budget.
+            Given the patch size we restrict hw so that hw * p is <= than the
+            total 128x128 chip). We also restrict t to be <= max_timesteps
+        2. with probability time_priority_prob, decide whether to sample timesteps or
+            grid size.
+            If sampling timesteps:
+                i.  Sample some timestep t (from our possible timesteps, defined in step 1)
+                ii. Sample some grid size hw which fits within this token budget and
+                    yields at least min_tokens_per_instance
+            If sampling grid size:
+                i. Sample some grid size hw where there are timesteps that fit the min / max budgets
+                ii. Sample a timestep t that respects the min / max budget
+            In both the grid size and timestep sampling, we prefer more timesteps with a bias
+            defined by temporal_bias.
+
         Args:
             dataset: The dataset to load from.
             work_dir: The working directory for storing indices.
@@ -112,26 +131,19 @@ class OlmoEarthDataLoader(DataLoaderBase):
             max_patch_size: Maximum patch size for training.
             sampled_hw_p_list: List of possible height/width in patches to sample.
             token_budget: Optional token budget per instance.
-            time_priority_prob: Probability that a batch samples its number of
-                timesteps first (biased toward the full sequence) and then a spatial
-                grid that fits, rather than sampling the grid first. 0.0 reproduces
-                the historical space-first behaviour; >0 decorrelates grid size from
-                sequence length so that large-grid x full-year shapes occur.
+            time_priority_prob: Given a token burdget, we can either sample the a grid size
+                and then find timesteps that fit this budget , or vice versa.
+                time_priority_prob defines how often we sample a number of timesteps and
+                find grid sizes that fit this budget. 1 - time_priority_prob is how often
+                we start by sampling the grid size.
             temporal_bias: Skews the timestep draw toward the maximum of its feasible
                 window; timesteps are sampled with weight ``t ** temporal_bias``. 0.0
-                is uniform (the historical behaviour); larger values favour fuller
-                sequences, restoring full-season exposure that uniform sampling
-                dilutes.
+                larger values favour fuller sequences
             min_tokens_per_instance: Minimum token count a sampled shape must cost.
-                Shapes below the floor are excluded, so tiny grids are forced to pair
-                with long sequences (and vice versa) instead of collapsing to the
-                ``hw=1, t=1`` corner. 0 disables the floor.
+                Shapes below the floor are excluded. 0 disables the floor.
             max_timesteps: Maximum number of timesteps a sample can contribute.
             tile_size: Spatial extent (in base-resolution pixels) of a training tile.
                 Used to bound the sampled grid so ``sampled_hw_p * patch_size`` fits.
-            exclude_only_decode_from_budget: If True, modalities the masking strategy
-                marks decode-only are not counted against the token budget (they are
-                never encoded), freeing budget for more timesteps.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -202,11 +214,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
         # Modalities kept out of the encoder token budget (decode-only targets are
         # never encoded, so they should not consume budget meant for the encoder).
-        self.budget_exclude_modalities: frozenset[str] = frozenset()
-        if exclude_only_decode_from_budget:
-            self.budget_exclude_modalities = frozenset(
-                getattr(self.masking_strategy, "only_decode_modalities", []) or []
-            )
+        self.budget_exclude_modalities: frozenset[str] = frozenset(
+            getattr(self.masking_strategy, "only_decode_modalities", []) or []
+        )
 
         # Precompute per-instance band-set token rates so the shape sampler can
         # invert the budget without a concrete sample in hand. Uses the full
@@ -702,18 +712,6 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 return max_t_data + 1  # unsatisfiable -> grid dropped below
             return int(max(1, -(-(min_tokens - fixed) // per_t)))  # ceil division
 
-        def max_hw_for(t: int, grid_cap: int) -> int:
-            """Largest grid side whose (grid, t) shape fits the budget."""
-            if budget is None:
-                return grid_cap
-            denom = so_bs + st_bs * t
-            if denom <= 0:  # no spatial modalities
-                return grid_cap
-            remaining = budget - static_bs - time_bs * t
-            if remaining < denom:
-                return 0
-            return max(1, min(grid_cap, int(math.isqrt(remaining // denom))))
-
         def sample_t(lo: int, hi: int) -> int:
             """Sample a timestep in [lo, hi], biased toward hi by temporal_bias."""
             if hi <= lo:
@@ -850,7 +848,6 @@ class OlmoEarthDataLoaderConfig(Config):
     min_tokens_per_instance: int = 0
     max_timesteps: int = 12
     tile_size: int = 128
-    exclude_only_decode_from_budget: bool = False
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -943,7 +940,6 @@ class OlmoEarthDataLoaderConfig(Config):
             min_tokens_per_instance=self.min_tokens_per_instance,
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
-            exclude_only_decode_from_budget=self.exclude_only_decode_from_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
