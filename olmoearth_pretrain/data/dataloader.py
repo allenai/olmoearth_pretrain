@@ -103,8 +103,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
     ):
         """Initialize the OlmoEarthDataLoader.
 
-        The dataloader is also responsible for subsetting our 128x128 24-timestep
-        tiles. For a sampled patch size, we subset a spatial grid so that
+        The dataloader is responsible for subsetting our 128x128 24-timestep tiles.
+        For a sampled patch size, we subset a spatiotemporal grid so that
         the number of tokens is <= token_budget and >= min_tokens_per_instance. Given
         this constraint, we use the following subsetting logic per microbatch:
 
@@ -650,27 +650,25 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         The shape ``(patch_size, sampled_hw_p, target_t)`` is resampled every
         ``rank_batch_size`` instances.
 
-        Historically ``target_t`` was derived downstream as the maximum number of
-        timesteps that fit the token budget for the sampled grid, which perfectly
-        anti-correlates grid size and sequence length. Here ``target_t`` is sampled
-        as an independent axis so that large-grid x full-year shapes occur:
+        For a sampled patch_size, we subset a spatiotemporal grid (sampled_hw_p, target_t)
+        so that the number of tokens is <= token_budget and >= min_tokens_per_instance. Given
+        this constraint, we use the following subsetting logic per microbatch:
 
-        - With probability ``time_priority_prob`` the number of timesteps is sampled
-          first (biased toward the full sequence via ``temporal_bias``) and then a
-          grid that fits it.
-        - Otherwise a grid is sampled first (uniformly over the feasible sizes,
-          which may exceed the old <=12 range) and then ``target_t`` over what its
-          budget allows, again biased by ``temporal_bias``.
-
-        Two floors keep degenerate shapes out. ``min_tokens_per_instance`` requires
-        every shape to cost at least that many tokens, so tiny grids are forced to
-        pair with long sequences (and vice versa) rather than collapsing to the
-        ``hw=1, t=1`` corner. ``temporal_bias`` skews the timestep draw toward the
-        maximum (0 = uniform; larger = fuller sequences), restoring the full-season
-        exposure that pure uniform sampling dilutes.
-
-        The budget remains a hard cap: ``subset_sample_*`` clamps to the per-sample
-        budget, so the sampler's conservative estimate can never overshoot.
+        1. Define all possible grid sizes (sampled_hw_p, t) combinations that fit within the
+            budget. Given the patch size we restrict sampled_hw_p so that sampled_hw_p * p
+            is <= than the total 128x128 chip). We also restrict target_t to be <= max_timesteps
+        2. with probability time_priority_prob, decide whether to sample timesteps or
+            grid size.
+            If sampling timesteps:
+                i.  Sample some timestep target_t (from our possible timesteps, defined in step 1)
+                ii. Sample some grid size sampled_hw_p which fits within this token budget and
+                    yields at least min_tokens_per_instance
+            If sampling grid size:
+                i. Sample some grid size sampled_hw_p where there are timesteps that fit the
+                    min / max budgets
+                ii. Sample a timestep target_t that respects the min / max budget
+            In both the grid size and timestep sampling, we prefer more timesteps with a bias
+            defined by temporal_bias.
         """
         dl = self.data_loader
         patch_size_array = np.array(patch_size_list)
