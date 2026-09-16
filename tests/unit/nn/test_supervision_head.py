@@ -14,8 +14,10 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionTaskType,
     _build_valid_mask,
     _day_of_year_encoding,
+    _flatten_time,
     _latlon_regression_loss,
     _latlon_unit_xyz_target,
+    _reduce_time_mean,
     compute_supervision_loss,
 )
 
@@ -659,3 +661,182 @@ class TestTimeConditionedSupervision:
                 class_values=[0.0, 1.0],
                 time_conditioned=True,
             )
+
+
+# era5_10 is the non-spatial multitemporal target these paths exist for:
+# a per-scene [B, T=12, C=6] weather trajectory pooled to a single [B, C'] vector.
+ERA5_T, ERA5_C = 12, 6
+ERA5_SIGNATURE_DIM = ERA5_T * ERA5_C  # 72 (12 months x 6 vars)
+
+
+class TestTemporalReduction:
+    """temporal_reduction for non-spatial multitemporal regression (era5_10)."""
+
+    def test_flatten_shape_and_time_major_order(self) -> None:
+        """Flatten maps [B, T, C] -> [B, T*C], bands contiguous within each month."""
+        tgt = torch.arange(B * ERA5_T * ERA5_C, dtype=torch.float32).reshape(
+            B, ERA5_T, ERA5_C
+        )
+        flat = _flatten_time(tgt)
+        assert flat.shape == (B, ERA5_SIGNATURE_DIM)
+        # First C entries are month 0's bands, next C are month 1's bands (time-major).
+        torch.testing.assert_close(flat[0, :ERA5_C], tgt[0, 0])
+        torch.testing.assert_close(flat[0, ERA5_C : 2 * ERA5_C], tgt[0, 1])
+
+    def test_flatten_passthrough_non_3d(self) -> None:
+        """A target that is not [B, T, C] is returned unchanged."""
+        already_flat = torch.randn(B, ERA5_SIGNATURE_DIM)
+        assert _flatten_time(already_flat) is already_flat
+
+    def test_flatten_missing_month_drops_sample(self) -> None:
+        """A sample with any fully-missing month is dropped by _build_valid_mask."""
+        tgt = torch.randn(B, ERA5_T, ERA5_C)
+        tgt[1, 3, :] = MISSING_VALUE  # sample 1, month 3 missing
+        valid = _build_valid_mask(_flatten_time(tgt))  # mirrors the loss path
+        assert valid.shape == (B,)
+        assert valid[0] and not valid[1]
+
+    def test_mean_shape_and_missing_awareness(self) -> None:
+        """Mean maps [B, T, C] -> [B, C], averaging only over valid timesteps."""
+        tgt = torch.ones(B, ERA5_T, ERA5_C)
+        tgt[0, :6] = 3.0  # 6 months at 3, 6 months at 1 -> mean 2 for sample 0
+        tgt[0, 6:] = 1.0
+        tgt[1, 2, :] = MISSING_VALUE  # one missing month for sample 1
+        reduced = _reduce_time_mean(tgt)
+        assert reduced.shape == (B, ERA5_C)
+        torch.testing.assert_close(reduced[0], torch.full((ERA5_C,), 2.0))
+        # Sample 1: missing month excluded, remaining 11 months are all 1.0.
+        torch.testing.assert_close(reduced[1], torch.ones(ERA5_C))
+
+    def test_mean_all_missing_sample_is_dropped(self) -> None:
+        """A sample with no valid timestep collapses to MISSING (dropped downstream)."""
+        tgt = torch.ones(B, ERA5_T, ERA5_C)
+        tgt[0] = MISSING_VALUE
+        reduced = _reduce_time_mean(tgt)
+        valid = _build_valid_mask(reduced)
+        assert not valid[0] and valid[1]
+
+    def test_config_accepts_mean_and_flatten(self) -> None:
+        """Both reduction modes validate for regression."""
+        for mode, n_out in (("mean", ERA5_C), ("flatten", ERA5_SIGNATURE_DIM)):
+            cfg = SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=n_out,
+                temporal_reduction=mode,
+            )
+            assert cfg.temporal_reduction == mode
+
+    def test_config_rejects_bad_reduction(self) -> None:
+        """An unknown temporal_reduction value is rejected."""
+        with pytest.raises(ValueError, match="temporal_reduction"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=ERA5_C,
+                temporal_reduction="sum",
+            )
+
+    def test_config_reduction_requires_regression(self) -> None:
+        """temporal_reduction on a classification task is rejected."""
+        with pytest.raises(ValueError, match="regression"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.CLASSIFICATION,
+                num_output_channels=2,
+                class_values=[0.0, 1.0],
+                temporal_reduction="mean",
+            )
+
+    def test_config_reduction_mutually_exclusive_with_time_conditioned(self) -> None:
+        """Collapsing time and predicting per-timestep cannot both be set."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=ERA5_C,
+                temporal_reduction="mean",
+                time_conditioned=True,
+            )
+
+    def test_non_spatial_head_output_width_matches_signature(self) -> None:
+        """The pooled era5_10 head emits num_output_channels (72 for flatten)."""
+        head = SupervisionHead(
+            {
+                "era5_10": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=ERA5_SIGNATURE_DIM,
+                    temporal_reduction="flatten",
+                )
+            },
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+            register_supervision=True,
+        )
+        assert "era5_10" in head._non_spatial_modalities
+        assert head.heads["era5_10"].out_features == ERA5_SIGNATURE_DIM
+
+    def _run_pooled_era5(
+        self, temporal_reduction: str, num_output_channels: int
+    ) -> None:
+        """End-to-end: pooled register grid -> [B, C'] era5 pred, loss backprops."""
+        head = SupervisionHead(
+            {
+                "era5_10": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=num_output_channels,
+                    weight=0.1,
+                    regression_loss_type="l1",
+                    temporal_reduction=temporal_reduction,
+                )
+            },
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+            register_supervision=True,
+        )
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        era5_target = torch.rand(B, ERA5_T, ERA5_C)
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(timestamps=timestamps, era5_10=era5_target)
+
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        assert preds["era5_10"].shape == (B, num_output_channels)
+
+        total_loss, per_mod = compute_supervision_loss(preds, batch, head)
+        assert total_loss.ndim == 0
+        assert torch.isfinite(total_loss) and total_loss > 0
+        assert "era5_10" in per_mod
+        total_loss.backward()
+        assert register_grid.grad is not None
+        assert torch.isfinite(register_grid.grad).all()
+        assert register_grid.grad.abs().sum() > 0
+
+    def test_end_to_end_flatten(self) -> None:
+        """The climate arm's path: predict the full 72-dim monthly signature."""
+        self._run_pooled_era5("flatten", ERA5_SIGNATURE_DIM)
+
+    def test_end_to_end_mean(self) -> None:
+        """The alternative: predict the 6-dim annual level."""
+        self._run_pooled_era5("mean", ERA5_C)
+
+    def test_end_to_end_flatten_drops_missing_month_sample(self) -> None:
+        """A sample with a missing month is excluded but the batch loss still flows."""
+        head = SupervisionHead(
+            {
+                "era5_10": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=ERA5_SIGNATURE_DIM,
+                    regression_loss_type="l1",
+                    temporal_reduction="flatten",
+                )
+            },
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+            register_supervision=True,
+        )
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        era5_target = torch.rand(B, ERA5_T, ERA5_C)
+        era5_target[0, 5, :] = MISSING_VALUE  # sample 0 has a missing month
+        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+        batch = MaskedOlmoEarthSample(timestamps=timestamps, era5_10=era5_target)
+        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
+        total_loss, _ = compute_supervision_loss(preds, batch, head)
+        assert torch.isfinite(total_loss) and total_loss > 0
+        total_loss.backward()
+        assert register_grid.grad.abs().sum() > 0

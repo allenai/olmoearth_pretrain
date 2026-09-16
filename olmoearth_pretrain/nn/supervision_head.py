@@ -134,6 +134,26 @@ class SupervisionModalityConfig(Config):
             ``num_output_channels`` must equal ``len(target_band_indices)``.
             Mutually exclusive with ``target_band_index``. ``None`` (default)
             leaves band selection to ``target_band_index`` / all bands.
+        temporal_reduction: Regression only, for a NON-SPATIAL MULTITEMPORAL
+            target (e.g. ``era5_10``: a per-scene ``[B, T, C]`` weather
+            trajectory with no spatial extent). Selects how the time axis is
+            mapped onto the non-spatial head's flat ``[B, num_output_channels]``
+            output (the head reads the mean-pooled register grid):
+              * ``"mean"``: average the target over the timesteps whose bands
+                are all valid (missing-aware), giving a per-scene annual LEVEL
+                (``num_output_channels = C``).
+              * ``"flatten"``: keep the full intra-year TRAJECTORY, flattening
+                ``[B, T, C] -> [B, T*C]`` time-major so the head must predict the
+                monthly PATTERN / seasonality, not just the annual level
+                (``num_output_channels = T*C``, e.g. era5's 12*6=72). This is the
+                climate-normal signature; a sample with any missing timestep is
+                dropped downstream (stored ERA5 is complete).
+            Both are deliberately gentle: the gradient reaches every register
+            cell only through the pool, so it nudges the AGGREGATE representation
+            toward climate without forcing each cell to be individually
+            climate-predictive. ``None`` (default) leaves the target untouched.
+            Requires the modality to be non-spatial; spatial targets keep their
+            grid.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -148,6 +168,7 @@ class SupervisionModalityConfig(Config):
     time_mlp_hidden_dim: int = 64
     target_band_index: int | None = None
     target_band_indices: list[int] | None = None
+    temporal_reduction: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -198,6 +219,21 @@ class SupervisionModalityConfig(Config):
                 raise ValueError(
                     "num_output_channels must equal len(target_band_indices), got "
                     f"{self.num_output_channels} vs {len(self.target_band_indices)}"
+                )
+        if self.temporal_reduction is not None:
+            if self.temporal_reduction not in ("mean", "flatten"):
+                raise ValueError(
+                    f"temporal_reduction must be 'mean', 'flatten', or None, got "
+                    f"{self.temporal_reduction!r}"
+                )
+            if self.task_type != SupervisionTaskType.REGRESSION:
+                raise ValueError(
+                    f"temporal_reduction only supports regression, got {self.task_type}"
+                )
+            if self.time_conditioned:
+                raise ValueError(
+                    "temporal_reduction (collapse the time axis) and "
+                    "time_conditioned (predict per timestep) are mutually exclusive"
                 )
 
 
@@ -518,6 +554,15 @@ def _compute_per_modality_losses(
             )
             continue
 
+        # Non-spatial multitemporal target (e.g. era5_10): the pooled head emits a
+        # single [B, C'] vector, so map the [B, T, C] target's time axis to match --
+        # "mean" collapses to the annual level [B, C]; "flatten" keeps the monthly
+        # pattern [B, T*C] (the climate-normal signature the head must reproduce).
+        if cfg.temporal_reduction == "mean":
+            raw_target = _reduce_time_mean(raw_target)
+        elif cfg.temporal_reduction == "flatten":
+            raw_target = _flatten_time(raw_target)
+
         # Single-band supervision of a multi-band target (e.g. glo30 elevation):
         # slice the chosen band so the valid mask and loss run at 1 channel,
         # matching the head's num_output_channels=1.
@@ -594,6 +639,41 @@ def compute_supervision_loss(
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
+
+
+def _reduce_time_mean(raw_target: Tensor) -> Tensor:
+    """Collapse a ``[B, T, C]`` non-spatial target to ``[B, C]`` over valid timesteps.
+
+    A timestep counts as valid only when all of its bands are non-missing; the
+    mean is taken over those timesteps. A sample with no valid timestep is set
+    to ``MISSING_VALUE`` so ``_build_valid_mask`` drops it (rather than emitting a
+    spurious all-zero target). Non-``[B, T, C]`` targets are returned unchanged.
+    """
+    if raw_target.dim() != 3:
+        return raw_target
+    valid = (raw_target != MISSING_VALUE).all(dim=-1, keepdim=True)  # [B, T, 1]
+    counts = valid.sum(dim=1)  # [B, 1]
+    summed = raw_target.masked_fill(~valid, 0.0).sum(dim=1)  # [B, C]
+    reduced = summed / counts.clamp(min=1)
+    reduced = reduced.masked_fill(counts == 0, MISSING_VALUE)
+    return reduced
+
+
+def _flatten_time(raw_target: Tensor) -> Tensor:
+    """Flatten a ``[B, T, C]`` non-spatial target to ``[B, T*C]`` (time-major).
+
+    Unlike ``_reduce_time_mean`` (which averages seasonality away), this keeps the
+    full intra-year trajectory as a flat per-scene signature, so the head must
+    predict the temporal PATTERN (e.g. ERA5's 12-month climate normal) rather than
+    just the annual level. Bands are contiguous within each timestep
+    (``[t0_c0, t0_c1, ..., t1_c0, ...]``); the head's ``num_output_channels`` must
+    equal ``T*C``. A sample with any missing band in any timestep is dropped by
+    ``_build_valid_mask`` downstream (stored ERA5 is a complete 12-month stack, so
+    this is rare). Non-``[B, T, C]`` targets are returned unchanged.
+    """
+    if raw_target.dim() != 3:
+        return raw_target
+    return rearrange(raw_target, "b t c -> b (t c)")
 
 
 def _latlon_unit_xyz_target(raw_latlon: Tensor) -> Tensor:
