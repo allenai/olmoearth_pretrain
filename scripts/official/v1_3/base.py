@@ -314,7 +314,6 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     # One masked view: the plain LatentMIM train module runs one forward pass per batch.
     config.num_masked_views = 1
     config.token_budget = TOKEN_BUDGET
-    config.exclude_only_decode_from_budget = True
     config.min_tokens_per_instance = MIN_TOKENS_PER_INSTANCE
     config.temporal_bias = TEMPORAL_BIAS
     config.time_priority_prob = TIME_PRIORITY_PROB
