@@ -226,8 +226,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         training_modalities = getattr(self.dataset, "training_modalities", None)
         if training_modalities is not None:
             (
-                self._st_bandsets,
-                self._so_bandsets,
+                self._space_time_bandsets,
+                self._space_only_bandsets,
                 self._static_bandsets,
                 self._time_bandsets,
             ) = compute_bandset_rates(
@@ -238,7 +238,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         else:
             # No modality metadata (e.g. mock datasets): the sampler falls back to
             # budget-unaware timestep sampling (max_t = max_timesteps).
-            self._st_bandsets = self._so_bandsets = 0
+            self._space_time_bandsets = self._space_only_bandsets = 0
             self._static_bandsets = self._time_bandsets = 0
 
     @property
@@ -648,29 +648,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
     ) -> Iterator[tuple[int, int, int, int]]:
         """Yield ``(idx, patch_size, sampled_hw_p, target_t)`` per instance.
 
-        The shape ``(patch_size, sampled_hw_p, target_t)`` is resampled every
-        ``rank_batch_size`` instances.
-
-        For a sampled patch_size, we subset a spatiotemporal grid (sampled_hw_p, target_t)
-        so that the number of tokens is <= token_budget and >= min_tokens_per_instance. Given
-        this constraint, we use the following subsetting logic per microbatch:
-
-        1. Define all possible grid sizes (sampled_hw_p, t) combinations that fit within the
-            budget. Given the patch size we restrict sampled_hw_p so that sampled_hw_p * p
-            is <= than the total 128x128 chip). We also restrict target_t to be <= max_timesteps
-        2. with probability time_priority_prob, decide whether to sample timesteps or
-            grid size.
-            If sampling timesteps:
-                i.  Sample some timestep target_t (from our possible timesteps, defined in step 1)
-                ii. Sample some grid size sampled_hw_p which fits within this token budget and
-                    yields at least min_tokens_per_instance
-            If sampling grid size:
-                i. Sample some grid size sampled_hw_p where there are timesteps that fit the
-                    min / max budgets
-                ii. Sample a timestep target_t that respects the min / max budget
-            In both the grid size and timestep sampling, we prefer more timesteps with a bias
-            defined by temporal_bias.
-        Decode only modalities are excluded from the token budget calculations.
+        See the OlmoEarthDataLoader.__init__ docstring for a description
+        of the subsetting behaviour.
         """
         dl = self.data_loader
         patch_size_array = np.array(patch_size_list)
@@ -679,8 +658,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         budget = dl.token_budget
         max_t_data = dl.max_timesteps
-        st_bs = dl._st_bandsets
-        so_bs = dl._so_bandsets
+        space_time_bandsets = dl._space_time_bandsets
+        space_only_bandsets = dl._space_only_bandsets
         static_bs = dl._static_bandsets
         time_bs = dl._time_bandsets
         time_priority_prob = dl.time_priority_prob
@@ -691,8 +670,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             """Largest number of timesteps that fits the budget for this grid."""
             if budget is None:
                 return max_t_data
-            fixed = so_bs * hw * hw + static_bs
-            per_t = st_bs * hw * hw + time_bs
+            fixed = space_only_bandsets * hw * hw + static_bs
+            per_t = space_time_bandsets * hw * hw + time_bs
             if per_t <= 0:  # no time-varying modalities
                 return max_t_data if fixed <= budget else 0
             remaining = budget - fixed
@@ -704,8 +683,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             """Fewest timesteps whose (grid, t) shape clears the token floor."""
             if min_tokens <= 0:
                 return 1
-            fixed = so_bs * hw * hw + static_bs
-            per_t = st_bs * hw * hw + time_bs
+            fixed = space_only_bandsets * hw * hw + static_bs
+            per_t = space_time_bandsets * hw * hw + time_bs
             if fixed >= min_tokens:  # floor already met by the fixed spatial tokens
                 return 1
             if per_t <= 0:  # no time-varying modalities and floor unmet
