@@ -18,7 +18,11 @@ from olmoearth_pretrain.data.dataloader import (
     OlmoEarthDataLoaderConfig,
     _IterableDatasetWrapper,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthSample
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthSample,
+    compute_bandset_rates,
+)
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskingConfig
 
@@ -126,7 +130,6 @@ def _build_shape_sampling_dataloader(
     token_budget: int,
     sampled_hw_p_list: list[int],
     time_priority_prob: float,
-    exclude_only_decode_from_budget: bool,
     temporal_bias: float = 0.0,
     min_tokens_per_instance: int = 0,
     min_patch_size: int = 1,
@@ -179,7 +182,6 @@ def _build_shape_sampling_dataloader(
         min_tokens_per_instance=min_tokens_per_instance,
         max_timesteps=12,
         tile_size=tile_size,
-        exclude_only_decode_from_budget=exclude_only_decode_from_budget,
         masking_strategy=masking_strategy,
         num_masked_views=1,
     )
@@ -195,7 +197,6 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         token_budget=4096,
         sampled_hw_p_list=[4, 8, 16, 24],
         time_priority_prob=0.5,
-        exclude_only_decode_from_budget=True,
     )
     dl.reshuffle()
     dw = _IterableDatasetWrapper(dl)
@@ -243,7 +244,6 @@ def test_min_tokens_floor_and_temporal_bias(
         token_budget=8192,
         sampled_hw_p_list=[1, 2, 4, 8, 12],
         time_priority_prob=0.5,
-        exclude_only_decode_from_budget=True,
         temporal_bias=3.0,
         min_tokens_per_instance=36,
     )
@@ -270,28 +270,22 @@ def test_min_tokens_floor_and_temporal_bias(
 
 
 def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) -> None:
-    """Excluding decode-only maps from the budget lowers the space-only rate."""
-    with_maps = _build_shape_sampling_dataloader(
-        tmp_path / "a",
+    """Decode-only maps are kept out of the budget, lowering the space-only rate."""
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
         setup_h5py_dir,
         token_budget=4096,
         sampled_hw_p_list=[8, 16],
         time_priority_prob=0.0,
-        exclude_only_decode_from_budget=False,
     )
-    without_maps = _build_shape_sampling_dataloader(
-        tmp_path / "b",
-        setup_h5py_dir,
-        token_budget=4096,
-        sampled_hw_p_list=[8, 16],
-        time_priority_prob=0.0,
-        exclude_only_decode_from_budget=True,
-    )
-    assert without_maps.budget_exclude_modalities == frozenset(
+    assert dl.budget_exclude_modalities == frozenset(
         [Modality.WORLDCOVER.name, Modality.OPENSTREETMAP_RASTER.name]
     )
-    # Space-only band-set rate drops once the maps stop counting against budget.
-    assert without_maps._so_bandsets < with_maps._so_bandsets
+    # Space-only band-set rate is lower than it would be with the maps counted.
+    _st, so_with_maps, _static, _time = compute_bandset_rates(
+        dl.dataset.training_modalities, dl.tokenization_config
+    )
+    assert dl._so_bandsets < so_with_maps
 
 
 def _create_test_dataloader(
