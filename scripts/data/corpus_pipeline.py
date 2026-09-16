@@ -169,10 +169,14 @@ class _BadSceneFilter(logging.Filter):
     """Pass only log records describing unreadable/missing provider assets."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        msg = record.getMessage()
+        text = record.getMessage()
+        if record.exc_info:
+            # "Error materializing window ..." carries the asset URL only in the
+            # attached traceback, so include the formatted exception text.
+            text += "\n" + logging.Formatter().formatException(record.exc_info)
         return (
-            "not recognized as being in a supported file format" in msg
-            or "HTTP response code: 40" in msg
+            "not recognized as being in a supported file format" in text
+            or "HTTP response code: 40" in text
         )
 
 
