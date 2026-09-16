@@ -122,6 +122,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 ii. Sample a timestep t that respects the min / max budget
             In both the grid size and timestep sampling, we prefer more timesteps with a bias
             defined by temporal_bias.
+        Decode only modalities are excluded from the token budget calculations.
 
         Args:
             dataset: The dataset to load from.
@@ -669,6 +670,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 ii. Sample a timestep target_t that respects the min / max budget
             In both the grid size and timestep sampling, we prefer more timesteps with a bias
             defined by temporal_bias.
+        Decode only modalities are excluded from the token budget calculations.
         """
         dl = self.data_loader
         patch_size_array = np.array(patch_size_list)
