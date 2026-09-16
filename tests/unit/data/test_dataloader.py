@@ -201,7 +201,7 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
     dl.reshuffle()
     dw = _IterableDatasetWrapper(dl)
 
-    st, so = dl._st_bandsets, dl._so_bandsets
+    st, so = dl._space_time_bandsets, dl._space_only_bandsets
     static, tbs = dl._static_bandsets, dl._time_bandsets
     assert dl.token_budget is not None
     budget = cast(int, dl.token_budget)
@@ -250,7 +250,7 @@ def test_min_tokens_floor_and_temporal_bias(
     dl.reshuffle()
     dw = _IterableDatasetWrapper(dl)
 
-    st = dl._st_bandsets  # spacetime band-sets (maps excluded)
+    st = dl._space_time_bandsets  # spacetime band-sets (maps excluded)
     items = list(
         dw._get_batch_item_params_iterator(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
@@ -285,7 +285,7 @@ def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) 
     _st, so_with_maps, _static, _time = compute_bandset_rates(
         dl.dataset.training_modalities, dl.tokenization_config
     )
-    assert dl._so_bandsets < so_with_maps
+    assert dl._space_only_bandsets < so_with_maps
 
 
 def _create_test_dataloader(
