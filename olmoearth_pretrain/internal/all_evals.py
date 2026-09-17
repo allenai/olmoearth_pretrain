@@ -3046,6 +3046,35 @@ FT_EVAL_TASKS = {
         dataset="pastis2_drom_bg8void_s1s2ls",
         patch_size=4,
     ),
+    # ---- window size 64 at patch size 4 ----
+    # The configuration the fine-tune guidance calls for: PASTIS-style windows at
+    # ps4/ws64. This yields 256 tokens per tile, the same as the published ws16/ps1
+    # runs, but over 16x the area per forward pass -- so cost is comparable while
+    # spatial context is much larger. ws16/ps4 above gives only 16 tokens per tile.
+    "pastis2_drom_bg8void_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_s2",
+        window_size=64, patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws64_ps4_sentinel1": _pastis_ft_task(
+        [Modality.SENTINEL1.name], dataset="pastis2_drom_bg8void_s1",
+        window_size=64, patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws64_ps4_sentinel1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_s1s2", window_size=64, patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws64_ps4_sentinel2_landsat": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset="pastis2_drom_bg8void_s2ls", window_size=64, patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws64_ps4_sentinel1_sentinel2_landsat": _pastis_ft_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset="pastis2_drom_bg8void_s1s2ls", window_size=64, patch_size=4,
+    ),
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
         dataset="pastis2_drom_bg8_s1s2",
@@ -3458,6 +3487,21 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         patch_size=4,
     )
 
+    # ws64/ps4 LOIO siblings (the fine-tune guidance configuration).
+    for _m64, _ds64, _mods64 in (
+        ("sentinel2", _void_ds, [Modality.SENTINEL2_L2A.name]),
+        ("sentinel1", f"{_void_ds}_s1", [Modality.SENTINEL1.name]),
+        ("sentinel1_sentinel2", f"{_void_ds}_s1s2",
+         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]),
+        ("sentinel2_landsat", f"{_void_ds}_s2ls",
+         [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]),
+        ("sentinel1_sentinel2_landsat", f"{_void_ds}_s1s2ls",
+         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name]),
+    ):
+        FT_EVAL_TASKS[
+            f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws64_ps4_{_m64}"
+        ] = _pastis_ft_task(_mods64, dataset=_ds64, window_size=64, patch_size=4)
+
 # Patch-size-4 siblings of the PLANTEUR few-shot / label-budget-arm fine-tunes.
 # Generated from the ps1 entries rather than written out: every one is S2-only on a
 # dataset named after the task, so a loop cannot drift from the ps1 set the way 20
@@ -3472,6 +3516,12 @@ for _fs_ds in (
     FT_EVAL_TASKS[f"pastis_planteur_{_fs_ds}_ft_ws16_ps4_sentinel2"] = _pastis_ft_task(
         [Modality.SENTINEL2_L2A.name],
         dataset=f"pastis_planteur_{_fs_ds}",
+        patch_size=4,
+    )
+    FT_EVAL_TASKS[f"pastis_planteur_{_fs_ds}_ft_ws64_ps4_sentinel2"] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset=f"pastis_planteur_{_fs_ds}",
+        window_size=64,
         patch_size=4,
     )
 
