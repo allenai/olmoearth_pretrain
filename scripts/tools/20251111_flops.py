@@ -127,7 +127,6 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
         register_latent_depth=4,
         register_interleave=True,
         register_per_depth_read_proj=True,
-        register_latent_self_attn=True,
         register_attn_dim=768,
         register_projection_dims=[128, 64] if with_projection else None,
     )

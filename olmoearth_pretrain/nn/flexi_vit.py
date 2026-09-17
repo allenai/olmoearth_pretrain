@@ -244,8 +244,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                 and acts as stronger augmentation. Default: False (fixed rate).
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
-                Modalities absent from this mapping fall back to per-band dropout.
-                Default: None (all per-band).
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial
                 FlexiPatchEmbed. If None or empty, the projection is a single nn.Linear
@@ -1111,7 +1109,7 @@ class FlexiVitBase(nn.Module):
         Under 3D RoPE the temporal coordinate is days-since-2000 derived from
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
-        keep ``t=0``.
+        keep ``t=0`` (no temporal anchor).
         """
         if not PositionEncoding.is_rope(self.position_encoding):
             return None
@@ -1470,17 +1468,15 @@ class SpatialRegisterBottleneck(nn.Module):
     this grid, and frozen evals probe it. Register coordinates are placed in the same
     GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful.
 
-    The read/process schedule is set by ``interleave``: legacy (all reads, then all
-    self-attention) or interleaved (``[read -> self-attend]`` per layer, so the latents
-    re-query the input after each refinement -- the Perceiver/DETR/Flamingo pattern).
+    Reads and self-attention are interleaved, ``[read -> self-attend]`` per layer, so
+    the latents re-query the input after each refinement (the Perceiver/DETR/Flamingo
+    pattern).
 
     A *single* learned latent is cloned across a grid that matches the input patch grid
     at forward time. RS imagery is translation-invariant, so every spatial query starts
     from the same content; spatial identity comes entirely from 2D RoPE on the per-cell
     positions. This enforces a translation-invariant prior and removes the grid size as
-    a baked hyperparameter (it follows the input). Precedents: Perceiver IO dense-output
-    queries (shared vector + per-position encoding), the MAE mask token, and Slot
-    Attention's shared slot distribution.
+    a baked hyperparameter (it follows the input).
     """
 
     def __init__(
@@ -1489,14 +1485,11 @@ class SpatialRegisterBottleneck(nn.Module):
         register_dim: int,
         num_heads: int,
         mlp_ratio: float,
-        read_depth: int,
         latent_transformer_depth: int,
         use_2d_rope: bool,
         rope_base: float = 10000.0,
         qk_norm: bool = False,
-        interleave: bool = False,
         per_depth_read_proj: bool = False,
-        latent_self_attn: bool = True,
         attn_dim: int | None = None,
     ) -> None:
         """Initialize the spatial register bottleneck.
@@ -1506,35 +1499,21 @@ class SpatialRegisterBottleneck(nn.Module):
             register_dim: Dimension of the register grid (the bottleneck width, typically < encoder dim).
             num_heads: Number of attention heads for the read + latent transformer blocks.
             mlp_ratio: MLP ratio for the blocks.
-            read_depth: Number of cross-attention read blocks (legacy mode only; ignored
-                when ``interleave=True``).
-            latent_transformer_depth: Number of self-attention blocks over the register grid.
-                In ``interleave`` mode this also sets the number of (read -> self-attend)
-                layers (one read paired with each self-attention block).
+            latent_transformer_depth: Number of ``[read -> self-attend]`` layers: one
+                cross-attention read paired with each self-attention block over the
+                register grid.
             use_2d_rope: Whether to apply 2D RoPE (requires per-token positions at call time).
             rope_base: RoPE frequency base.
             qk_norm: Whether to apply QK normalization in attention.
-            interleave: If True, interleave cross-attention reads with latent self-attention
-                (Perceiver/DETR/Flamingo style: ``[read -> self] x latent_transformer_depth``)
-                so the latents re-query the input after each refinement, instead of reading
-                once up front. If False (default, backwards compatible), do all ``read_depth``
-                reads first, then all ``latent_transformer_depth`` self-attention blocks.
             per_depth_read_proj: If True, give each read block its own ``input_norm``
                 LayerNorm *and* ``kv_proj`` down-projection instead of a single shared
                 pair. Successive reads then get their own lens on the source instead of
                 being forced through one shared projection.
-                In interleaved single-source mode every read re-queries the same final
-                layer, so per-block projections instead let successive reads extract
+                Every read re-queries the same final encoder layer, so per-block
+                projections instead let successive reads extract
                 different views through their own lens. Requires more than one read block
                 (ignored otherwise). False (default) keeps the shared norm + projection
                 (backwards compatible).
-            latent_self_attn: If True (default), self-attention "latent" blocks run over
-                the register grid -- interleaved after each read, or after all reads in the
-                legacy schedule. If False, those blocks are dropped entirely: the registers
-                are produced by the cross-attention read(s) alone, with no
-                register-to-register mixing. The read blocks (and their count) are
-                unchanged, so this cleanly isolates the latent self-attention's
-                contribution. Backwards compatible (default True).
             attn_dim: If set, DECOUPLE the attention width from ``register_dim``: the
                 read and latent blocks run their attention internally at ``attn_dim``
                 (typically the encoder width, giving encoder-shaped heads, e.g. 12x64)
@@ -1547,14 +1526,12 @@ class SpatialRegisterBottleneck(nn.Module):
                 content. Rationale: ``register_dim`` alone cannot fund both routing
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
-                head_dim <64. ``None`` (default) keeps the classic tied-width blocks
-                (backwards compatible).
+                head_dim <64. ``None`` (default) keeps the classic tied-width blocks.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
-        self.interleave = interleave
         if not use_2d_rope:
             # With a single cloned latent the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
@@ -1562,38 +1539,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 "SpatialRegisterBottleneck requires use_2d_rope=True to differentiate "
                 "grid cells."
             )
-        # A single learned latent, cloned across every grid cell (see class docstring).
-        # Grid count + positions are resolved per-forward from the patch grid; the shape
-        # reaches consumers on the returned tensor, not via module state.
         self.register = nn.Parameter(torch.empty(1, register_dim))
         nn.init.trunc_normal_(self.register, std=0.02)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
-        # attention mask, so they use the SDPA path (use_flash_attn=False) regardless of
-        # the encoder's flash setting.
-        # Interleave: one read per self-attention block, so the read count matches
-        # latent_transformer_depth.
-        # Legacy: read_depth reads up front, then latent_transformer_depth self-attentions.
-        num_read_blocks = latent_transformer_depth if self.interleave else read_depth
-        num_latent_blocks = latent_transformer_depth
-        # Optionally drop the latent self-attention entirely (cross-attention reads only).
-        # The read count is unchanged; only the register-to-register self-attention blocks
-        # are removed, isolating the latent transformer's contribution.
-        self.latent_self_attn = latent_self_attn
-        if not latent_self_attn:
-            num_latent_blocks = 0
-        # Per-depth read front-end: give every read block its own input norm + K/V
-        # down-projection instead of a single shared pair. Only meaningful with >1 read
-        # block: each block re-queries the SAME final-layer tokens through its own
-        # projection, so successive reads can extract different views instead of being
-        # forced through one shared lens.
+        num_read_blocks = latent_transformer_depth
         self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
-        # Down-project the patch K/V source to the (smaller) register dim. The existing
-        # Attention ties q/k/v to a single dim, so the read happens entirely at register_dim.
         if self.per_depth_read_proj:
-            # One norm + projection per read block. With a decoupled attn_dim the K/V
-            # source stays at encoder width (the read blocks' internal K/V projections
-            # consume it directly), so the down-projection becomes an Identity and only
-            # the per-depth norms remain.
+            # One norm + projection per read block.
             self.input_norms = nn.ModuleList(
                 [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
             )
@@ -1632,8 +1584,6 @@ class SpatialRegisterBottleneck(nn.Module):
                     position_encoding=read_position_encoding,
                     rope_base=rope_base,
                     attn_dim=attn_dim,
-                    # Decoupled mode consumes the K/V source at full encoder width
-                    # (input_norm already normalizes it; Block does not norm ``y``).
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
                     ),
@@ -1659,7 +1609,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     rope_base=rope_base,
                     attn_dim=attn_dim,
                 )
-                for _ in range(num_latent_blocks)
+                for _ in range(latent_transformer_depth)
             ]
         )
         self.norm = nn.LayerNorm(register_dim)
@@ -1694,7 +1644,7 @@ class SpatialRegisterBottleneck(nn.Module):
         patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
-        spatial_grid: tuple[int, int] | None = None,
+        spatial_grid: tuple[int, int],
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1714,11 +1664,7 @@ class SpatialRegisterBottleneck(nn.Module):
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
                 ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
         """
-        # Down-project the patch K/V source to register_dim. With per_depth_read_proj each
-        # read block has its own norm + projection; otherwise they share one pair.
         if self.per_depth_read_proj:
-            # Each read block re-projects the same final-layer source through its own
-            # norm + projection (interleaved single-source reads).
             kv_per_read = [
                 proj(norm(patch_tokens))
                 for norm, proj in zip(self.input_norms, self.kv_projs)
@@ -1728,10 +1674,6 @@ class SpatialRegisterBottleneck(nn.Module):
             kv_per_read = [kv] * len(self.read_blocks)
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        if spatial_grid is None:
-            raise ValueError(
-                "the register bottleneck requires a spatial_grid (the patch grid)"
-            )
         register_grid = spatial_grid
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
@@ -1765,29 +1707,12 @@ class SpatialRegisterBottleneck(nn.Module):
             )
             return out
 
-        if self.interleave:
-            # [read -> self-attend] per layer: the latents re-query the input after each
-            # refinement (Perceiver/DETR/Flamingo style). In multi-depth mode each read
-            # draws its K/V from a successively deeper encoder layer; otherwise every read
-            # re-queries the same (final-layer) source.
-            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
-                registers = read(registers, i, read_blk, kv)
-                # latent_blocks is empty when latent self-attention is disabled;
-                # otherwise one latent block follows each read (1:1).
-                if self.latent_blocks:
-                    registers = self.latent_blocks[i](
-                        x=registers,
-                        rope_positions=register_positions,
-                    )
-        else:
-            # Legacy: all reads first, then the latent transformer.
-            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
-                registers = read(registers, i, read_blk, kv)
-            for latent_blk in self.latent_blocks:
-                registers = latent_blk(
-                    x=registers,
-                    rope_positions=register_positions,
-                )
+        for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
+            registers = read(registers, i, read_blk, kv)
+            registers = self.latent_blocks[i](
+                x=registers,
+                rope_positions=register_positions,
+            )
         out = self.norm(registers)
         out = rearrange(
             out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
@@ -1838,12 +1763,9 @@ class Encoder(FlexiVitBase):
         spatial_pos_encoding: str | None = None,
         use_register_bottleneck: bool = False,
         register_dim: int | None = None,
-        register_read_depth: int = 1,
         register_latent_depth: int = 2,
         register_num_heads: int | None = None,
-        register_interleave: bool = False,
         register_per_depth_read_proj: bool = False,
-        register_latent_self_attn: bool = True,
         register_attn_dim: int | None = None,
         register_projection_dims: list[int] | None = None,
         register_projection_output_norm: bool = False,
@@ -1913,9 +1835,9 @@ class Encoder(FlexiVitBase):
             register_dim: Width of the register grid (the bottleneck dim). Required
                 when ``use_register_bottleneck`` is True; the decoder cross-attends
                 this same width, so it is stated rather than defaulted.
-            register_read_depth: Number of cross-attention read blocks.
-            register_latent_depth: Number of latent-transformer self-attention blocks
-                over the register grid.
+            register_latent_depth: Number of ``[read -> self-attend]`` layers in the
+                bottleneck: one cross-attention read paired with each latent
+                self-attention block over the register grid.
             register_num_heads: Number of attention heads in the bottleneck blocks.
                 Defaults to ``num_heads`` when None.
             register_attn_dim: If set, the bottleneck's read + latent attention runs
@@ -1923,19 +1845,11 @@ class Encoder(FlexiVitBase):
                 heads) while the register stream stays at ``register_dim``; the read
                 K/V source is consumed at full encoder width (no down-projection).
                 See :class:`SpatialRegisterBottleneck`. Defaults to None (tied widths).
-            register_interleave: If True, interleave the cross-attention reads with the
-                latent self-attention (``[read -> self] x register_latent_depth``) so the
-                registers re-query the input after each refinement, instead of reading once
-                up front. Defaults to False (legacy schedule, backwards compatible).
             register_per_depth_read_proj: If True, give each read block its own input
                 LayerNorm and K/V down-projection instead of one shared pair, so each
-                interleaved read gets its own lens on the final layer. Requires more than
+                read gets its own lens on the final layer. Requires more than
                 one read block. Defaults to False (shared norm +
                 projection, backwards compatible).
-            register_latent_self_attn: If False, drop the bottleneck's latent
-                self-attention blocks entirely (cross-attention reads only, no
-                register-to-register mixing); the read count is unchanged. Defaults to True
-                (keep the latent transformer, backwards compatible).
             register_projection_dims: If set, add a DETACHED low-dim "student" readout
                 of the register grid, exported alongside the registers as
                 ``projected_registers`` at width ``max(register_projection_dims)``.
@@ -2113,7 +2027,6 @@ class Encoder(FlexiVitBase):
                 register_dim=resolved_register_dim,
                 num_heads=resolved_register_heads,
                 mlp_ratio=mlp_ratio,
-                read_depth=register_read_depth,
                 latent_transformer_depth=register_latent_depth,
                 # The register grid is a purely spatial (row, col) summary with no
                 # temporal axis, so the bottleneck reads/mixes with 2D RoPE -- even
@@ -2122,9 +2035,7 @@ class Encoder(FlexiVitBase):
                 use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
                 rope_base=rope_base,
                 qk_norm=qk_norm,
-                interleave=register_interleave,
                 per_depth_read_proj=register_per_depth_read_proj,
-                latent_self_attn=register_latent_self_attn,
                 attn_dim=register_attn_dim,
             )
             # Detached low-dim "student" readout (see the __init__ docstring). It
@@ -3318,20 +3229,13 @@ class EncoderConfig(Config):
     # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
     register_dim: int | None = None
-    register_read_depth: int = 1
+    # Number of [read -> self-attend] layers in the bottleneck.
     register_latent_depth: int = 2
     register_num_heads: int | None = None
-    # Interleave reads with latent self-attention ([read -> self] x register_latent_depth)
-    # instead of reading once up front. False -> legacy schedule (backwards compatible).
-    register_interleave: bool = False
     # Give each read block its own input norm + K/V down-projection instead of sharing one
-    # pair, so each interleaved re-read gets a distinct lens. Needs >1 read block.
+    # pair, so each re-read gets a distinct lens. Needs >1 read block.
     # False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
-    # If False, drop the register bottleneck's latent self-attention blocks entirely
-    # (cross-attention reads only, no register-to-register mixing). The read count is
-    # unchanged. Default True keeps the latent transformer (backwards compatible).
-    register_latent_self_attn: bool = True
     # If set, decouple the bottleneck's attention width from register_dim: the read +
     # latent blocks run attention internally at this width (typically embedding_size,
     # giving encoder-shaped heads, e.g. 12x64) while the register residual stream stays
