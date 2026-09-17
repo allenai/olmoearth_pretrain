@@ -95,12 +95,13 @@ _ACTIVE_HEAD_VALUES: dict[str, object] = {"register_supervision": False}
 
 
 def _active_supervision_value(name: str) -> object:
-    """A value for ``name`` that would have turned its removed head feature ON."""
-    return {
-        "time_conditioned": True,
-        "time_harmonics": 6,
-        "time_mlp_hidden_dim": 128,
-    }[name]
+    """A value for ``name`` that would have turned its removed head feature ON.
+
+    The registry is currently empty (the time-conditioned heads were restored), so
+    this only needs an entry when a modality field is removed again.
+    """
+    active_values: dict[str, object] = {}
+    return active_values[name]
 
 
 # Every removed field must be exercised by the tests below; a new removal that is not
@@ -263,3 +264,35 @@ def test_legacy_supervised_config_deserializes_and_builds() -> None:
     for name in REMOVED_SUPERVISION_MODALITY_FIELDS:
         assert not hasattr(modality, name), f"{name} should no longer be a field"
     assert config.build(embedding_dim=8, max_patch_size=4) is not None
+
+
+def test_time_conditioned_supervision_fields_load() -> None:
+    """The time-conditioned head fields are live again: they pass through untouched.
+
+    They were once in the removed-field registry; a checkpoint that used them (the
+    pixel-register reconstruction runs) must load and rebuild the MLP head.
+    """
+    from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
+
+    config_dict = _supervised_config_dict()
+    config_dict["model"]["supervision_head_config"]["modality_configs"] = {
+        "sentinel1": {
+            "task_type": "regression",
+            "num_output_channels": 2,
+            "weight": 0.05,
+            "time_conditioned": True,
+            "time_harmonics": 6,
+            "time_mlp_hidden_dim": 32,
+        }
+    }
+    head_dict = patch_legacy_encoder_config(config_dict)["model"][
+        "supervision_head_config"
+    ]
+    config = SupervisionHeadConfig.from_dict(head_dict)
+    modality = config.modality_configs["sentinel1"]
+    assert modality.time_conditioned is True
+    assert modality.time_harmonics == 6
+    assert modality.time_mlp_hidden_dim == 32
+    head = config.build(embedding_dim=8, max_patch_size=4)
+    # Two-layer MLP over [cell (8) ; phi (2 * 6)] -> 32 -> 2.
+    assert head.heads["sentinel1"][0].in_features == 8 + 2 * 6

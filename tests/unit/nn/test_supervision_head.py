@@ -11,6 +11,7 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionModalityConfig,
     SupervisionTaskType,
     _build_valid_mask,
+    _day_of_year_encoding,
     compute_supervision_loss,
 )
 
@@ -340,4 +341,198 @@ class TestSupervisionHeadConfig:
             SupervisionModalityConfig(
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
+            )
+
+    def test_spatial_unfold_overrides_max_patch_size(self) -> None:
+        """spatial_unfold=1 gives one prediction per register cell (pixel registers)."""
+        config = SupervisionHeadConfig(
+            modality_configs={
+                "srtm": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=1,
+                ),
+            },
+            spatial_unfold=1,
+        )
+        head = config.build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        assert head.max_patch_size == 1
+        assert head.heads["srtm"].out_features == 1
+        # A grid already at target resolution predicts it directly (no resize).
+        register_grid = torch.randn(B, H_PIX, W_PIX, D)
+        preds = head(register_grid, _make_batch_with_srtm())
+        assert preds["srtm"].shape == (B, H_PIX, W_PIX, 1, 1)
+
+    def test_spatial_unfold_must_be_positive(self) -> None:
+        """spatial_unfold below 1 is rejected."""
+        with pytest.raises(ValueError, match="spatial_unfold"):
+            SupervisionHeadConfig(modality_configs={}, spatial_unfold=0)
+
+
+def _s2_time_conditioned_config(
+    num_bands: int = 12,
+) -> dict[str, SupervisionModalityConfig]:
+    """The pixrecon head: time-conditioned MSE on the raw S2 L2A bands."""
+    return {
+        "sentinel2_l2a": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=num_bands,
+            weight=0.05,
+            regression_loss_type="mse",
+            time_conditioned=True,
+            time_harmonics=4,
+            time_mlp_hidden_dim=16,
+        ),
+    }
+
+
+class TestTimeConditionedSupervision:
+    """Time-conditioned (register grid x day-of-year MLP) supervision heads."""
+
+    T = 3
+    NUM_BANDS = 12
+
+    def _make_timestamps(self) -> torch.Tensor:
+        # (day, month0, year): Jan 1, Apr 15, Jul 1 of 2023.
+        return torch.tensor(
+            [[[1, 0, 2023], [15, 3, 2023], [1, 6, 2023]]], dtype=torch.long
+        ).expand(B, -1, -1)
+
+    def _make_head(self) -> SupervisionHead:
+        return SupervisionHead(
+            _s2_time_conditioned_config(self.NUM_BANDS),
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+        )
+
+    def test_head_is_a_small_mlp_over_cell_and_time(self) -> None:
+        """Linear(D + 2K, hidden) -> GELU -> Linear(hidden, C); no sub-cell unfold."""
+        head = self._make_head()
+        mlp = head.heads["sentinel2_l2a"]
+        assert mlp[0].in_features == D + 2 * 4
+        assert mlp[0].out_features == 16
+        assert mlp[2].out_features == self.NUM_BANDS
+        assert "sentinel2_l2a" in head._time_conditioned_modalities
+
+    def test_forward_shape_time_dependence_and_locality(self) -> None:
+        """Per-(cell, timestep) predictions from the time-free register grid.
+
+        With a grid-resolution target (no interpolation): predictions vary across
+        timesteps (the time conditioning is live), and cell (i, j)'s prediction
+        depends ONLY on register_grid[:, i, j] (the per-cell forcing that makes the
+        fitted trajectory readable by a frozen per-cell probe).
+        """
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        target = torch.randn(B, P_H, P_W, self.T, self.NUM_BANDS)
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), sentinel2_l2a=target
+        )
+        preds = head(register_grid, batch)
+        out = preds["sentinel2_l2a"]
+        assert out.shape == (B, P_H, P_W, self.T, self.NUM_BANDS)
+        # Same cell, different timesteps -> different predictions.
+        assert not torch.allclose(out[:, :, :, 0], out[:, :, :, 1])
+        # Perturbing one cell leaves every other cell's predictions unchanged.
+        perturbed = register_grid.clone()
+        perturbed[:, 0, 0] += 1.0
+        out_perturbed = head(perturbed, batch)["sentinel2_l2a"]
+        assert not torch.allclose(out_perturbed[:, 0, 0], out[:, 0, 0])
+        torch.testing.assert_close(out_perturbed[:, 1:], out[:, 1:])
+
+    def test_forward_interpolates_to_pixel_target(self) -> None:
+        """A pixel-resolution target triggers bilinear upsampling of the grid preds."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        target = torch.randn(B, H_PIX, W_PIX, self.T, self.NUM_BANDS)
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), sentinel2_l2a=target
+        )
+        preds = head(register_grid, batch)
+        assert preds["sentinel2_l2a"].shape == (
+            B,
+            H_PIX,
+            W_PIX,
+            self.T,
+            self.NUM_BANDS,
+        )
+
+    def test_loss_masks_missing_and_reaches_registers(self) -> None:
+        """Masked MSE over (pixel, timestep) holes; the loss reaches the grid."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        target = torch.randn(B, H_PIX, W_PIX, self.T, self.NUM_BANDS)
+        # A cloud hole (all bands missing at one pixel/timestep block) and a fully
+        # missing timestep, both excluded by the valid mask.
+        target[:, :4, :4, 0] = MISSING_VALUE
+        target[:, :, :, 2] = MISSING_VALUE
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(), sentinel2_l2a=target
+        )
+        preds = head(register_grid, batch)
+        total_loss, per_mod = compute_supervision_loss(preds, batch, head)
+        assert total_loss.ndim == 0
+        assert torch.isfinite(total_loss)
+        assert "sentinel2_l2a" in per_mod
+        total_loss.backward()
+        assert register_grid.grad is not None
+        assert torch.isfinite(register_grid.grad).all()
+        assert register_grid.grad.abs().sum() > 0
+        # A fully missing modality contributes a zero loss, not an error.
+        valid = _build_valid_mask(target)
+        assert valid.shape == (B, H_PIX, W_PIX, self.T)
+        assert not valid[:, :, :, 2].any()
+
+    def test_requires_timestamps(self) -> None:
+        """No timestamps -> no day-of-year basis -> a clear error."""
+        head = self._make_head()
+        batch = MaskedOlmoEarthSample(
+            timestamps=None,  # type: ignore[arg-type]
+            sentinel2_l2a=torch.randn(B, P_H, P_W, self.T, self.NUM_BANDS),
+        )
+        with pytest.raises(ValueError, match="timestamps"):
+            head(torch.randn(B, P_H, P_W, D), batch)
+
+    def test_day_of_year_encoding(self) -> None:
+        """Jan 1 encodes as (sin 0, cos 1) x K, and the encoding is year-invariant."""
+        jan1_2023 = torch.tensor([[[1, 0, 2023]]], dtype=torch.long)
+        phi = _day_of_year_encoding(jan1_2023, num_harmonics=4)  # [1, 1, 8]
+        torch.testing.assert_close(phi[0, 0, :4], torch.zeros(4))
+        torch.testing.assert_close(phi[0, 0, 4:], torch.ones(4))
+        jul15_2019 = torch.tensor([[[15, 6, 2019]]], dtype=torch.long)
+        jul15_2024 = torch.tensor([[[15, 6, 2024]]], dtype=torch.long)
+        torch.testing.assert_close(
+            _day_of_year_encoding(jul15_2019, num_harmonics=4),
+            _day_of_year_encoding(jul15_2024, num_harmonics=4),
+        )
+
+    def test_requires_multitemporal_modality(self) -> None:
+        """time_conditioned on a static modality (srtm) raises."""
+        cfg = {
+            "srtm": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                time_conditioned=True,
+            ),
+        }
+        with pytest.raises(ValueError, match="multitemporal"):
+            SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+
+    def test_requires_regression(self) -> None:
+        """time_conditioned classification is rejected at config time."""
+        with pytest.raises(ValueError, match="regression"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.CLASSIFICATION,
+                num_output_channels=2,
+                class_values=[0.0, 1.0],
+                time_conditioned=True,
+            )
+
+    def test_requires_positive_harmonics(self) -> None:
+        """time_harmonics < 1 is rejected at config time."""
+        with pytest.raises(ValueError, match="time_harmonics"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                time_conditioned=True,
+                time_harmonics=0,
             )

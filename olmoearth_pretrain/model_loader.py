@@ -338,26 +338,11 @@ REMOVED_SUPERVISION_HEAD_FIELDS: dict[str, _RemovedField] = {
 
 #: ``SupervisionModalityConfig`` fields removed from this version, keyed by name. Same
 #: contract as :data:`REMOVED_ENCODER_FIELDS`, applied to every entry of
-#: ``model.supervision_head_config.modality_configs``.
-REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, _RemovedField] = {
-    "time_conditioned": _RemovedField(
-        inert=(False,),
-        feature="time-conditioned (day-of-year MLP) supervision heads",
-        note="the MLP over [register_cell ; phi(day_of_year)] no longer exists",
-    ),
-    # The two below are int-defaulted, so they are always PRESENT in a config from that
-    # window; their defaults are the inert values (unused unless time_conditioned).
-    "time_harmonics": _RemovedField(
-        inert=(4,),
-        feature="the day-of-year harmonic count",
-        note="only meaningful with time_conditioned, which was removed",
-    ),
-    "time_mlp_hidden_dim": _RemovedField(
-        inert=(64,),
-        feature="the time-conditioned head's hidden width",
-        note="only meaningful with time_conditioned, which was removed",
-    ),
-}
+#: ``model.supervision_head_config.modality_configs``. Currently empty: the
+#: time-conditioned (day-of-year MLP) heads (``time_conditioned``, ``time_harmonics``,
+#: ``time_mlp_hidden_dim``) were removed once and have since been restored for the
+#: pixel-register reconstruction runs, so configs carrying them load as-is.
+REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, _RemovedField] = {}
 
 
 def _removed_fields_to_strip(

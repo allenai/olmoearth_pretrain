@@ -1,5 +1,6 @@
 """Model code for the OlmoEarth Pretrain model."""
 
+import functools
 import logging
 import math
 import warnings
@@ -1491,6 +1492,10 @@ class SpatialRegisterBottleneck(nn.Module):
         qk_norm: bool = False,
         per_depth_read_proj: bool = False,
         attn_dim: int | None = None,
+        pixel_grid: bool = False,
+        latent_attn_dim: int | None = None,
+        latent_num_heads: int | None = None,
+        norm_affine: bool = True,
     ) -> None:
         """Initialize the spatial register bottleneck.
 
@@ -1527,11 +1532,37 @@ class SpatialRegisterBottleneck(nn.Module):
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks.
+            pixel_grid: If True, the register grid is laid at PIXEL resolution instead
+                of matching the patch grid: the single latent is cloned onto
+                ``(n_h * patch_size, n_w * patch_size)`` cells whose RoPE coordinates
+                are the pixel centers within the patch frame (so at ``patch_size=1``
+                this is identical to the patch-matched grid). The caller must pass
+                ``patch_size`` and ``patch_coordinate_scale`` to ``forward``. The
+                reads still consume the patch tokens at the configured patch size --
+                only the query grid is finer.
+            latent_attn_dim: If set, decouple the LATENT self-attention width from the
+                read width: the latent blocks run attention internally at this width
+                while the reads keep ``attn_dim``. Motivated by pixel-resolution grids,
+                where latent self-attention is quadratic in the (large) register count
+                and cannot afford the wideread ``attn_dim=encoder`` width. Passing the
+                ``register_dim`` itself yields the classic tied-width latent blocks.
+                None (default) keeps the latent blocks at ``attn_dim``.
+            latent_num_heads: Head count for the latent self-attention blocks when
+                their width is decoupled via ``latent_attn_dim`` (e.g. 2 x 64-dim heads
+                at width 128, following the width-sweep convention of fixing head_dim
+                at 64). None (default) keeps ``num_heads``.
+            norm_affine: If False, the read/latent blocks' LayerNorms drop their
+                learned affine (gamma/beta). At pixel-resolution register counts the
+                affine gradient reduction over all register rows is a measured
+                bottleneck, and the affine is redundant before the blocks' own linear
+                projections. The K/V ``input_norm``(s) and the final output norm keep
+                their affine. True (default) keeps the standard affine norms.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
+        self.pixel_grid = pixel_grid
         if not use_2d_rope:
             # With a single cloned latent the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
@@ -1571,6 +1602,28 @@ class SpatialRegisterBottleneck(nn.Module):
         read_position_encoding = (
             PositionEncoding.AXIAL_2D_ROPE if use_2d_rope else PositionEncoding.ABSOLUTE
         )
+        # Optionally drop the learned LayerNorm affine inside the read/latent blocks:
+        # at pixel-resolution register counts the gamma/beta gradient reduction over
+        # every register row is a measured bottleneck, and the affine is redundant
+        # immediately before the blocks' own linear projections. The K/V input_norm(s)
+        # and the final output norm are unaffected.
+        block_norm_layer: Any = (
+            nn.LayerNorm
+            if norm_affine
+            else functools.partial(nn.LayerNorm, elementwise_affine=False)
+        )
+        # Latent self-attention width/heads, decoupled from the reads when requested.
+        # Passing latent_attn_dim == register_dim means "tied width": build the classic
+        # Block (attn_dim=None) instead of a redundantly-projected decoupled one.
+        if latent_attn_dim is not None:
+            resolved_latent_attn_dim = (
+                None if latent_attn_dim == register_dim else latent_attn_dim
+            )
+        else:
+            resolved_latent_attn_dim = attn_dim
+        resolved_latent_num_heads = (
+            latent_num_heads if latent_num_heads is not None else num_heads
+        )
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1579,6 +1632,7 @@ class SpatialRegisterBottleneck(nn.Module):
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
+                    norm_layer=block_norm_layer,
                     cross_attn=True,
                     use_flash_attn=False,
                     position_encoding=read_position_encoding,
@@ -1595,10 +1649,11 @@ class SpatialRegisterBottleneck(nn.Module):
             [
                 Block(
                     register_dim,
-                    num_heads,
+                    resolved_latent_num_heads,
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
+                    norm_layer=block_norm_layer,
                     cross_attn=False,
                     use_flash_attn=False,
                     position_encoding=(
@@ -1607,7 +1662,7 @@ class SpatialRegisterBottleneck(nn.Module):
                         else PositionEncoding.ABSOLUTE
                     ),
                     rope_base=rope_base,
-                    attn_dim=attn_dim,
+                    attn_dim=resolved_latent_attn_dim,
                 )
                 for _ in range(latent_transformer_depth)
             ]
@@ -1639,12 +1694,53 @@ class SpatialRegisterBottleneck(nn.Module):
         )  # [n_reg, 2] in [0, 1]
         return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
 
+    def build_pixel_register_positions(
+        self,
+        batch_size: int,
+        register_grid: tuple[int, int],
+        patch_size: int,
+        patch_coordinate_scale: float,
+        device: torch.device,
+    ) -> Tensor:
+        """Pixel-center register coordinates in the patch RoPE frame.
+
+        Patch ``i`` sits at ``i * patch_coordinate_scale`` (see
+        ``_spatial_grid``), so pixel ``p`` of the flattened pixel axis -- the
+        ``(p % patch_size)``-th pixel of patch ``p // patch_size`` -- has its
+        center at ``((p + 0.5) / patch_size - 0.5) * patch_coordinate_scale``.
+        At ``patch_size=1`` this reduces to the patch coordinates exactly, so a
+        pixel-grid model at ps=1 sees the same register frame as the
+        patch-matched grid.
+
+        Args:
+            batch_size: Batch size to expand the shared grid to.
+            register_grid: ``(n_h, n_w)`` PIXEL grid (patch grid * patch_size).
+            patch_size: Patch size of this forward pass.
+            patch_coordinate_scale: Spacing of the patch RoPE coordinates (the
+                GSD ratio times the encoder's rope_coordinate_scale).
+            device: Device to build the coordinates on.
+
+        Returns:
+            ``[B, n_h * n_w, 2]`` pixel-center register coordinates.
+        """
+        n_h, n_w = register_grid
+
+        def _axis(n: int) -> Tensor:
+            pix = torch.arange(n, device=device, dtype=torch.float32)
+            return ((pix + 0.5) / patch_size - 0.5) * patch_coordinate_scale
+
+        grid_h, grid_w = torch.meshgrid(_axis(n_h), _axis(n_w), indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+        return grid.unsqueeze(0).expand(batch_size, -1, -1)
+
     def forward(
         self,
         patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
+        patch_size: int | None = None,
+        patch_coordinate_scale: float | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1654,7 +1750,13 @@ class SpatialRegisterBottleneck(nn.Module):
                 using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
-            spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
+            spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to
+                (times ``patch_size`` per axis in pixel-grid mode).
+            patch_size: Patch size of this forward pass; required in pixel-grid mode
+                to size the pixel register grid, ignored otherwise.
+            patch_coordinate_scale: Spacing of the patch RoPE coordinates (GSD ratio x
+                rope_coordinate_scale); required in pixel-grid mode to place the
+                pixel-center register coordinates, ignored otherwise.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
@@ -1674,7 +1776,20 @@ class SpatialRegisterBottleneck(nn.Module):
             kv_per_read = [kv] * len(self.read_blocks)
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        register_grid = spatial_grid
+        if self.pixel_grid:
+            if patch_size is None or patch_coordinate_scale is None:
+                raise ValueError(
+                    "pixel-grid register bottleneck requires patch_size and "
+                    "patch_coordinate_scale at forward time"
+                )
+            # Registers at PIXEL resolution: one cell per pixel of the (finest)
+            # spatial modality, whatever the patch size the reads run at.
+            register_grid = (
+                spatial_grid[0] * patch_size,
+                spatial_grid[1] * patch_size,
+            )
+        else:
+            register_grid = spatial_grid
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.
@@ -1689,9 +1804,19 @@ class SpatialRegisterBottleneck(nn.Module):
                 raise ValueError(
                     "patch_positions are required for the RoPE register bottleneck"
                 )
-            register_positions = self.build_register_positions(
-                patch_positions, register_grid
-            )
+            if self.pixel_grid:
+                assert patch_size is not None and patch_coordinate_scale is not None
+                register_positions = self.build_pixel_register_positions(
+                    batch_size,
+                    register_grid,
+                    patch_size,
+                    patch_coordinate_scale,
+                    device=reference_tokens.device,
+                )
+            else:
+                register_positions = self.build_register_positions(
+                    patch_positions, register_grid
+                )
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
@@ -1767,6 +1892,10 @@ class Encoder(FlexiVitBase):
         register_num_heads: int | None = None,
         register_per_depth_read_proj: bool = False,
         register_attn_dim: int | None = None,
+        register_pixel_grid: bool = False,
+        register_latent_attn_dim: int | None = None,
+        register_latent_num_heads: int | None = None,
+        register_norm_affine: bool = True,
         register_projection_dims: list[int] | None = None,
         register_projection_output_norm: bool = False,
         register_back_projection_hidden: int | None = None,
@@ -1849,6 +1978,26 @@ class Encoder(FlexiVitBase):
                 LayerNorm and K/V down-projection instead of one shared pair, so each
                 read gets its own lens on the final layer. Requires more than
                 one read block. Defaults to False (shared norm + projection)
+            register_pixel_grid: If True, lay the register grid at PIXEL
+                resolution instead of matching the patch grid: one register per pixel
+                regardless of the trunk's patch size, placed at pixel-center RoPE
+                coordinates in the patch frame. At ps=1 this equals the patch-matched
+                grid. The register count grows as ``patch_size**2`` and the latent
+                self-attention is quadratic in it -- pair with
+                ``register_latent_attn_dim`` to keep it affordable. Defaults to False.
+            register_latent_attn_dim: If set, the latent self-attention blocks run
+                their attention at this width instead of ``register_attn_dim``; passing
+                ``register_dim`` gives tied-width latent blocks. Decouples the
+                (pixel-count-quadratic) LSA cost from the wideread read shape.
+                Defaults to None (latent blocks follow ``register_attn_dim``).
+            register_latent_num_heads: Head count for the latent self-attention
+                blocks when ``register_latent_attn_dim`` is set. ``None`` inherits
+                the read head count.
+            register_norm_affine: If False, the bottleneck's per-block LayerNorms
+                are affine-free (``elementwise_affine=False``); at pixel-resolution
+                register counts the affine gradient reduction is a measured cost and
+                the affine is redundant before the blocks' own projections. Defaults
+                to True.
             register_projection_dims: If set, add a DETACHED low-dim "student" readout
                 of the register grid, exported alongside the registers as
                 ``projected_registers`` at width ``max(register_projection_dims)``.
@@ -1976,6 +2125,10 @@ class Encoder(FlexiVitBase):
                 qk_norm=qk_norm,
                 per_depth_read_proj=register_per_depth_read_proj,
                 attn_dim=register_attn_dim,
+                pixel_grid=register_pixel_grid,
+                latent_attn_dim=register_latent_attn_dim,
+                latent_num_heads=register_latent_num_heads,
+                norm_affine=register_norm_affine,
             )
             if self.register_projection_dims is not None:
                 if any(d <= 0 for d in self.register_projection_dims):
@@ -2451,11 +2604,20 @@ class Encoder(FlexiVitBase):
         register_output = None
         if self.register_bottleneck is not None:
             spatial_grid = self._patch_grid_hw(tokens_only_dict)
+            # In pixel-grid mode the bottleneck needs the patch size (to size the
+            # pixel grid) and the patch coordinate spacing (to place pixel-center
+            # RoPE coordinates in the same frame the patch positions use).
+            register_patch_coordinate_scale = (
+                CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+                * self.rope_coordinate_scale
+            )
             registers, register_positions = self.register_bottleneck(
                 patch_tokens=tokens,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
+                patch_size=patch_size,
+                patch_coordinate_scale=register_patch_coordinate_scale,
             )
             register_output = {
                 "registers": registers,
@@ -3145,6 +3307,21 @@ class EncoderConfig(Config):
     register_num_heads: int | None = None
     register_per_depth_read_proj: bool = False
     register_attn_dim: int | None = None
+    # Pixel-resolution register grid: one register per pixel of the finest spatial
+    # modality (patch grid x patch_size per axis), at pixel-center RoPE coordinates.
+    # The register count grows as patch_size**2 and the latent self-attention is
+    # quadratic in it -- pair with register_latent_attn_dim (and cap the sampled
+    # patch sizes / grids) to keep it affordable.
+    register_pixel_grid: bool = False
+    # Decoupled LATENT self-attention width (the reads keep register_attn_dim). Set
+    # to register_dim for tied-width latent blocks. None follows register_attn_dim.
+    register_latent_attn_dim: int | None = None
+    # Head count for the latent self-attention blocks when register_latent_attn_dim
+    # is set (e.g. 2 x 64-dim heads at width 128). None inherits the read heads.
+    register_latent_num_heads: int | None = None
+    # Affine-free LayerNorms inside the bottleneck's read/latent blocks (the K/V
+    # input norms and the final output norm keep their affine).
+    register_norm_affine: bool = True
     register_projection_dims: list[int] | None = None
     register_projection_output_norm: bool = False
     register_back_projection_hidden: int | None = None
@@ -3226,6 +3403,35 @@ class EncoderConfig(Config):
                     "2D RoPE requires register head_dim divisible by 4, got "
                     f"{attn_width // register_heads}"
                 )
+            # The latent self-attention blocks may run at their own width/heads.
+            latent_attn_width = (
+                self.register_latent_attn_dim
+                if self.register_latent_attn_dim is not None
+                else attn_width
+            )
+            latent_heads = (
+                self.register_latent_num_heads
+                if self.register_latent_num_heads is not None
+                else register_heads
+            )
+            if latent_attn_width <= 0 or latent_heads <= 0:
+                raise ValueError(
+                    "register_latent_attn_dim and register_latent_num_heads must be "
+                    f"positive, got {latent_attn_width} and {latent_heads}"
+                )
+            if latent_attn_width % latent_heads != 0:
+                raise ValueError(
+                    f"register latent attention width ({latent_attn_width}) must be "
+                    f"divisible by register_latent_num_heads ({latent_heads})"
+                )
+            if (
+                PositionEncoding.is_rope(self.position_encoding)
+                and (latent_attn_width // latent_heads) % 4 != 0
+            ):
+                raise ValueError(
+                    "2D RoPE requires register latent head_dim divisible by 4, got "
+                    f"{latent_attn_width // latent_heads}"
+                )
             if self.register_projection_dims is not None:
                 if len(self.register_projection_dims) == 0 or any(
                     d <= 0 for d in self.register_projection_dims
@@ -3245,6 +3451,10 @@ class EncoderConfig(Config):
         elif self.register_projection_dims is not None:
             raise ValueError(
                 "register_projection_dims requires use_register_bottleneck=True"
+            )
+        elif self.register_pixel_grid:
+            raise ValueError(
+                "register_pixel_grid requires use_register_bottleneck=True"
             )
         if self.rope_mixed_base <= 0:
             raise ValueError(

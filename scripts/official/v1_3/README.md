@@ -17,6 +17,26 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `base.py` | the release recipe: model, sampler, train module, in-loop evals |
 | `ablations/no_supervision.py` | `base.py` with `supervision_head_config = None` |
 | `ablations/query_token_compaction.py` | native d128 registers with supervision, no student |
+| `experiments/pixreg_pixrecon.py` | pixel-resolution d128 registers + per-pixel raw-band reconstruction (see below) |
+
+## Experiments
+
+`experiments/` holds post-release arms that build on `base.py` but are not part of the
+v1.3 report.
+
+- **`pixreg_pixrecon.py`** -- the `query_token_compaction` shape (native d128
+  registers, no student) with the register grid laid at **pixel** resolution
+  (`register_pixel_grid`: one register per pixel, whatever patch size the trunk runs
+  at, at pixel-center RoPE coordinates), the latent self-attention narrowed to the
+  register width (`register_latent_attn_dim=128`, 2 x 64 heads, affine-free block
+  norms) while the reads keep the wideread shape, patch sizes restricted to 1..4 and
+  grids to hw_p <= 24 (worst case 96 x 96 = 9k registers), map supervision at one
+  value per cell (`spatial_unfold=1`, base weight 0.1), and two **time-conditioned**
+  reconstruction heads (an MLP on `[register_cell ; phi(day_of_year)]`) that regress
+  the normalized S2 L2A and S1 inputs per (pixel, timestep) at weight 0.05 each.
+  Re-bases `regbtl_v1_2_..._ps14_pixreg_pixrecon` (W&B `2026_08_19_pixel_branch`)
+  onto the v1.3 stack, without that run's temporally anchored read or NDVI head.
+  Evals score the register grid at 40k-step intervals.
 
 ## Conventions
 
