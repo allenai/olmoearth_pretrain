@@ -75,7 +75,6 @@ def test_latentmim_register_bottleneck(
         spatial_pos_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_read_depth=1,
         register_latent_depth=2,
     )
     decoder_config = PredictorConfig(
@@ -190,7 +189,6 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
         position_encoding="rope_3d_mixed",  # 3D encoder self-attention
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_interleave=True,
         register_per_depth_read_proj=True,
     )
     decoder_config = PredictorConfig(
@@ -274,7 +272,6 @@ def test_eval_wrapper_probes_register_grid(
         spatial_pos_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_read_depth=1,
         register_latent_depth=2,
     )
     encoder.eval()
