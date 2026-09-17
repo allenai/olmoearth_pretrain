@@ -46,17 +46,61 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+def compute_bandset_rates(
+    modalities: list[str],
+    tokenization_config: TokenizationConfig | None = None,
+    exclude_modalities: frozenset[str] = frozenset(),
+) -> tuple[int, int, int, int]:
+    """Per-instance token rates for a fixed modality list (no concrete sample).
+
+    Returns ``(spacetime_bandsets, space_only_bandsets, static_bandsets,
+    time_only_bandsets)``. The token count for a shape ``(h_w_p, t)`` is::
+
+        space_only_bandsets * h_w_p**2 + static_bandsets                  # fixed
+        + t * (spacetime_bandsets * h_w_p**2 + time_only_bandsets)        # per-t
+
+    Mirrors the accounting in :func:`_get_max_t_within_token_budget` but over a
+    modality list, so the dataloader can invert the budget (max_t given hw_p and
+    max_hw_p given t) before a sample is in hand. ``exclude_modalities`` are
+    dropped from the accounting (e.g. decode-only map targets never encoded).
+    """
+    st_bs = so_bs = static_bs = time_bs = 0
+    for attribute in modalities:
+        if attribute in ("timestamps", "latlon") or attribute in exclude_modalities:
+            continue
+        modality_spec = Modality.get(attribute)
+        num_band_sets = (
+            tokenization_config.get_num_bandsets(attribute)
+            if tokenization_config is not None
+            else modality_spec.num_band_sets
+        )
+        if modality_spec.is_spacetime_varying:
+            st_bs += num_band_sets
+        elif modality_spec.is_space_only_varying:
+            so_bs += num_band_sets
+        elif modality_spec.is_time_only_varying:
+            time_bs += num_band_sets
+        elif modality_spec.is_static_in_space_and_time:
+            static_bs += num_band_sets
+    return st_bs, so_bs, static_bs, time_bs
+
+
 def _get_max_t_within_token_budget(
     sample: OlmoEarthSample,
     h_w_p: int,
     max_tokens_per_instance: int,
     tokenization_config: TokenizationConfig | None = None,
+    exclude_modalities: frozenset[str] = frozenset(),
 ) -> int:
     """Find max t possible when subsetting.
 
     Given a sampled h_w_p (the number of tokens along the h and w dimensions)
     return the maximum t allowed within the max_tokens budget so that the
     patchified OlmoEarthSample will have fewer than max_tokens tokens.
+
+    ``exclude_modalities`` are not counted against the budget. This is used to
+    keep decode-only map modalities (which are never encoded) from consuming the
+    encoder token budget.
 
     This function assumes we apply (H, W, T=1 patchifying)
     """
@@ -66,6 +110,8 @@ def _get_max_t_within_token_budget(
     time_multiply_tokens = 0
     for attribute in sample.as_dict().keys():
         if attribute in ("timestamps", "latlon"):
+            continue
+        if attribute in exclude_modalities:
             continue
         modality_spec = Modality.get(attribute)
         num_band_sets = (
@@ -129,6 +175,8 @@ def subset_sample_default(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    target_t: int | None = None,
+    budget_exclude_modalities: frozenset[str] = frozenset(),
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -142,6 +190,12 @@ def subset_sample_default(
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        target_t: Optional requested number of timesteps. The number of timesteps
+            used is ``min(target_t, budget_max_t)`` so the budget is always a hard
+            cap even when the caller requests more. If None, the budget max is used
+            (the historical behaviour).
+        budget_exclude_modalities: Modalities not counted against the token budget
+            (e.g. decode-only maps that are never encoded).
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -152,8 +206,14 @@ def subset_sample_default(
         missing_timesteps_masks = {}
 
     max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        sample,
+        sampled_hw_p,
+        max_tokens_per_instance,
+        tokenization_config,
+        exclude_modalities=budget_exclude_modalities,
     )
+    if target_t is not None:
+        max_t = min(max_t, target_t)
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
     new_data_dict: dict[str, ArrayTensor] = {}
@@ -202,6 +262,8 @@ def subset_sample_cutmix(
     current_length: int,
     missing_timesteps_masks: dict[str, Any] | None = None,
     tokenization_config: TokenizationConfig | None = None,
+    target_t: int | None = None,
+    budget_exclude_modalities: frozenset[str] = frozenset(),
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -215,6 +277,11 @@ def subset_sample_cutmix(
         current_length: The current maximum sequence length of the sample.
         missing_timesteps_masks: A dictionary of missing timesteps masks.
         tokenization_config: Optional tokenization config for custom band groupings.
+        target_t: Optional requested number of timesteps. The number used is
+            ``min(target_t, budget_max_t)`` so the budget is always a hard cap. If
+            None, the budget max is used (the historical behaviour).
+        budget_exclude_modalities: Modalities not counted against the token budget
+            (e.g. decode-only maps that are never encoded).
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -225,8 +292,14 @@ def subset_sample_cutmix(
         missing_timesteps_masks = {}
 
     max_t = _get_max_t_within_token_budget(
-        sample, sampled_hw_p, max_tokens_per_instance, tokenization_config
+        sample,
+        sampled_hw_p,
+        max_tokens_per_instance,
+        tokenization_config,
+        exclude_modalities=budget_exclude_modalities,
     )
+    if target_t is not None:
+        max_t = min(max_t, target_t)
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
     start_t = np.random.choice(valid_start_ts)
     new_data_dict: dict[str, ArrayTensor] = {}
@@ -310,6 +383,8 @@ class GetItemArgs(NamedTuple):
     sampled_hw_p: int
     token_budget: int | None = None
     tokenization_config: TokenizationConfig | None = None
+    target_t: int | None = None
+    budget_exclude_modalities: frozenset[str] = frozenset()
 
 
 # TODO should training modalities be str or modality_spec
@@ -853,6 +928,8 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                target_t=args.target_t,
+                budget_exclude_modalities=args.budget_exclude_modalities,
             )
         else:
             subset_sample = subset_sample_default(
@@ -863,6 +940,8 @@ class OlmoEarthDataset(Dataset):
                 current_length=current_length,
                 missing_timesteps_masks=missing_timesteps_masks,
                 tokenization_config=args.tokenization_config,
+                target_t=args.target_t,
+                budget_exclude_modalities=args.budget_exclude_modalities,
             )
 
         sample_dict = subset_sample.as_dict()
