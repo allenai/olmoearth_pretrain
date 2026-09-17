@@ -166,8 +166,6 @@ def test_compute_projection_distill_loss_prefixes() -> None:
         teacher=teacher,
         student=student,
         back_projections=back_projections,
-        cosine_weight=1.0,
-        gram_weight=1.0,
         gram_max_tokens=8,
     )
     assert torch.isfinite(total)
