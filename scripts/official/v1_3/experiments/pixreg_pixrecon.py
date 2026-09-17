@@ -21,7 +21,7 @@ register grid IS the served embedding. On top of that:
   whose quadratic latent self-attention is not affordable. The model's
   ``max_patch_size`` drops to 4 with the sampler (the train module requires them to
   match), which also shrinks the patch embed's per-token pixel block from 8x8 to
-  4x4 -- a ~4x cheaper initial projection and reconstruction.
+  4x4 -- a ~4x cheaper initial projection.
 * **Map supervision at one value per cell** (``spatial_unfold=1``): the cells already
   sit at pixel resolution, so the default ``max_patch_size**2`` sub-cell unfold would
   predict a 64x-oversized map and immediately downsample it back. Base weight 0.1
@@ -118,8 +118,8 @@ PIXEL_RECON_TIME_HARMONICS = 4
 # np.arange(min, max + 1)). The MODEL's max_patch_size moves with it (the train module
 # requires the two to match): FlexiPatchEmbed resamples every patch to a
 # max_patch_size x max_patch_size block before projecting, so a base of 4 also makes
-# the patch embed / reconstruction ~4x cheaper than the v1.2 base of 8 and never
-# upsamples an input more than 4x. This run is not weight-compatible with v1.3.
+# the patch embed ~4x cheaper than the v1.2 base of 8 and never upsamples an input
+# more than 4x. This run is not weight-compatible with v1.3.
 MAX_PATCH_SIZE = 4
 # v1.3's grid list minus 28 and 32: caps the pixel register grid at 24 * 4 = 96 x 96.
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24]
@@ -179,10 +179,9 @@ def apply_pixel_reconstruction(config: LatentMIMConfig) -> LatentMIMConfig:
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """d128 pixel registers + map supervision (w0.1) + S2 L2A / S1 reconstruction."""
     config = build_register_bottleneck_model_config(common, register_dim=REGISTER_DIM)
-    # Base patch size 4 on both the patch embed and the reconstruction (see
-    # MAX_PATCH_SIZE); must match the dataloader's max_patch_size.
+    # Base patch size 4 for the patch embed (see MAX_PATCH_SIZE); must match the
+    # dataloader's max_patch_size. The decoder has no patch embed of its own.
     config.encoder_config.max_patch_size = MAX_PATCH_SIZE
-    config.decoder_config.max_patch_size = MAX_PATCH_SIZE
     config.supervision_head_config = build_supervision_head_config(
         base_weight=SUPERVISION_BASE_WEIGHT
     )
