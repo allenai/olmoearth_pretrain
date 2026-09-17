@@ -2877,8 +2877,16 @@ def _pastis_ft_task(
     input_modalities: list[str],
     dataset: str = "pastis2_drom_bg8",
     window_size: int = 16,
+    patch_size: int = 1,
 ) -> DownstreamTaskConfig:
-    """PASTIS2-DROM fine-tune task (encoder unfrozen, trained end-to-end)."""
+    """PASTIS2-DROM fine-tune task (encoder unfrozen, trained end-to-end).
+
+    ``patch_size`` defaults to 1, the per-pixel convention every PASTIS-family task
+    uses and the one all published PLANTEUR numbers were produced with. The encoder
+    is pretrained over a range of patch sizes (the "psuniform" recipe), so coarser
+    settings are native to it; ps4 yields ~16x fewer tokens and a 1/4-resolution
+    output grid, so its numbers are NOT comparable with the ps1 rows.
+    """
     return DownstreamTaskConfig(
         dataset=dataset,
         ft_batch_size=8,
@@ -2889,7 +2897,7 @@ def _pastis_ft_task(
         input_modalities=input_modalities,
         primary_metric=EvalMetric.MIOU,
         window_size=window_size,
-        patch_size=1,
+        patch_size=patch_size,
         tile_samples=True,
     )
 
@@ -3007,6 +3015,36 @@ FT_EVAL_TASKS = {
             Modality.LANDSAT.name,
         ],
         dataset="pastis2_drom_bg8void_s1s2ls",
+    ),
+    # ---- patch size 4 variants of the five bg8void fine-tunes ----
+    # Separate task names so the ps1 results above stay untouched; dumps land in
+    # *_patchsize4 directories. ps4 tokenises 4x4 blocks instead of single pixels,
+    # so the output grid is 1/4 resolution and these are a separate experiment
+    # rather than a correction to the ps1 numbers.
+    "pastis2_drom_bg8void_ft_ws16_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_s2", patch_size=4
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps4_sentinel1_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_s1s2",
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps4_sentinel1": _pastis_ft_task(
+        [Modality.SENTINEL1.name], dataset="pastis2_drom_bg8void_s1", patch_size=4
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps4_sentinel2_landsat": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset="pastis2_drom_bg8void_s2ls",
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_ft_ws16_ps4_sentinel1_sentinel2_landsat": _pastis_ft_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset="pastis2_drom_bg8void_s1s2ls",
+        patch_size=4,
     ),
     "pastis2_drom_bg8_ft_ws16_ps1_sentinel1_sentinel2": _pastis_ft_task(
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
