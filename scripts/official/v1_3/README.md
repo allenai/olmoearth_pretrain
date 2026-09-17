@@ -29,8 +29,10 @@ v1.3 report.
   (`register_pixel_grid`: one register per pixel, whatever patch size the trunk runs
   at, at pixel-center RoPE coordinates), the latent self-attention narrowed to the
   register width (`register_latent_attn_dim=128`, 2 x 64 heads, affine-free block
-  norms) while the reads keep the wideread shape, patch sizes restricted to 1..4 and
-  grids to hw_p <= 24 (worst case 96 x 96 = 9k registers), map supervision at one
+  norms) while the reads keep the wideread shape, patch sizes restricted to 1..4 (the
+  model's `max_patch_size` is 4 too, so the patch embed works on 4x4 pixel blocks and
+  the run is not weight-compatible with v1.3) and grids to hw_p <= 24 (worst case
+  96 x 96 = 9k registers), map supervision at one
   value per cell (`spatial_unfold=1`, base weight 0.1), and two **time-conditioned**
   reconstruction heads (an MLP on `[register_cell ; phi(day_of_year)]`) that regress
   the normalized S2 L2A and S1 inputs per (pixel, timestep) at weight 0.05 each.

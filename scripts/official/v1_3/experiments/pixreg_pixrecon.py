@@ -18,7 +18,10 @@ register grid IS the served embedding. On top of that:
 * **Patch sizes 1..4 and grids up to hw_p=24**: at the 3072 token budget the
   worst-case pixel-register count is ``24 * 4 = 96 x 96 = 9,216``. The v1.3 sampler
   goes to ps=8 and hw_p=32 (``128 x 128 = 16k`` registers at ps=4, 65k at ps=8),
-  whose quadratic latent self-attention is not affordable.
+  whose quadratic latent self-attention is not affordable. The model's
+  ``max_patch_size`` drops to 4 with the sampler (the train module requires them to
+  match), which also shrinks the patch embed's per-token pixel block from 8x8 to
+  4x4 -- a ~4x cheaper initial projection and reconstruction.
 * **Map supervision at one value per cell** (``spatial_unfold=1``): the cells already
   sit at pixel resolution, so the default ``max_patch_size**2`` sub-cell unfold would
   predict a 64x-oversized map and immediately downsample it back. Base weight 0.1
@@ -111,9 +114,13 @@ PIXEL_RECON_WEIGHT = 0.05
 PIXEL_RECON_TIME_HARMONICS = 4
 
 # --- shape sampler -----------------------------------------------------------------------
-# Patch sizes sampled uniformly over 1..MAX_SAMPLED_PATCH_SIZE (the dataloader draws
-# np.arange(min, max + 1)); the MODEL keeps max_patch_size=8 from the v1.2 base.
-MAX_SAMPLED_PATCH_SIZE = 4
+# Patch sizes sampled uniformly over 1..MAX_PATCH_SIZE (the dataloader draws
+# np.arange(min, max + 1)). The MODEL's max_patch_size moves with it (the train module
+# requires the two to match): FlexiPatchEmbed resamples every patch to a
+# max_patch_size x max_patch_size block before projecting, so a base of 4 also makes
+# the patch embed / reconstruction ~4x cheaper than the v1.2 base of 8 and never
+# upsamples an input more than 4x. This run is not weight-compatible with v1.3.
+MAX_PATCH_SIZE = 4
 # v1.3's grid list minus 28 and 32: caps the pixel register grid at 24 * 4 = 96 x 96.
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24]
 # Halved from the v1.3 64: the pixel register grid multiplies the bottleneck/decoder
@@ -172,6 +179,10 @@ def apply_pixel_reconstruction(config: LatentMIMConfig) -> LatentMIMConfig:
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """d128 pixel registers + map supervision (w0.1) + S2 L2A / S1 reconstruction."""
     config = build_register_bottleneck_model_config(common, register_dim=REGISTER_DIM)
+    # Base patch size 4 on both the patch embed and the reconstruction (see
+    # MAX_PATCH_SIZE); must match the dataloader's max_patch_size.
+    config.encoder_config.max_patch_size = MAX_PATCH_SIZE
+    config.decoder_config.max_patch_size = MAX_PATCH_SIZE
     config.supervision_head_config = build_supervision_head_config(
         base_weight=SUPERVISION_BASE_WEIGHT
     )
@@ -181,7 +192,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """v1.3 sampler with patch sizes 1..4 and grids capped at hw_p=24."""
     config = _base_build_dataloader_config(common)
-    config.max_patch_size = MAX_SAMPLED_PATCH_SIZE
+    config.max_patch_size = MAX_PATCH_SIZE
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     return config
 
