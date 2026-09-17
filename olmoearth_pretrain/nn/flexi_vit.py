@@ -1848,8 +1848,7 @@ class Encoder(FlexiVitBase):
             register_per_depth_read_proj: If True, give each read block its own input
                 LayerNorm and K/V down-projection instead of one shared pair, so each
                 read gets its own lens on the final layer. Requires more than
-                one read block. Defaults to False (shared norm +
-                projection, backwards compatible).
+                one read block. Defaults to False (shared norm + projection)
             register_projection_dims: If set, add a DETACHED low-dim "student" readout
                 of the register grid, exported alongside the registers as
                 ``projected_registers`` at width ``max(register_projection_dims)``.
@@ -1859,14 +1858,7 @@ class Encoder(FlexiVitBase):
                 without the student, and the student is trained online against the
                 improving teacher (post-hoc distillation amortized into the
                 pretraining run). Additional (smaller) entries are trained as
-                MATRYOSHKA PREFIXES of the student output (Tessera-v2 style): each
-                dim ``d`` gets its own back-projection (cosine distillation of
-                ``student[..., :d]`` onto the teacher) and its own Gram term, so the
-                first ``d`` dims form a self-sufficient embedding and deployment can
-                truncate for free. The student is a per-cell
-                ``Linear(register_dim, max(register_projection_dims))`` on the detached
-                registers. Requires ``use_register_bottleneck``. Defaults to None (no
-                student).
+                MATRYOSHKA PREFIXES of the student output
             register_projection_output_norm: Put a ``LayerNorm`` on the student's
                 output. The primary bottleneck ends in one, which makes the bare
                 ``Linear`` the only served representation with no norm at its own width
@@ -1880,55 +1872,6 @@ class Encoder(FlexiVitBase):
                 back-projection heads. ``None`` (default) keeps the shipped single
                 ``Linear(d, register_dim)``; an int makes each head a 2-layer MLP
                 ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
-                The heads are TRAINING-ONLY scaffolding -- they are discarded at
-                inference, so this costs nothing at serving time and does not
-                change the shipped embedding's architecture.
-
-                WHY AN MLP. A single Linear demands the student be a *linear*
-                image of the teacher, which is close to demanding PCA of a 768->128
-                compression. SimReg (BMVC'21) ablates exactly this head: their
-                "Linear" row is this module, and it lost 3.7 pts 1-NN / 10.2 pts
-                linear-probe to a deeper head, with ~94% of that recovered by the
-                first hidden layer alone.
-
-                THE COUNTER-EVIDENCE, STATED HONESTLY. Chen et al. 2023
-                (2310.17183) Table 4, CIFAR-100, finds ONE layer optimal and every
-                extra layer harmful. Columns are Student / w/o Proj / 1-Proj / 2L
-                / 3L / 4L / Teacher:
-                  VGG13-VGG8       70.74  73.76  **73.84**  73.31  73.02  72.73
-                  ResNet32x4-8x4   72.93  73.66  **75.14**  75.12  74.56  74.30
-                So 2L costs -0.53 (VGG) and -0.02 (ResNet) against their best. Do
-                NOT cite this paper as endorsing two layers; it does not.
-
-                WHY WE USE TWO ANYWAY. Their winning 1-Proj is ``g(s) =
-                sigma(Ws)`` -- Linear plus ReLU ON THE OUTPUT -- and that config
-                is NOT AVAILABLE to us: their target is a post-ReLU CNN feature
-                map (non-negative), ours is a LayerNorm'd register grid with
-                negative entries, so an output ReLU would cap the cosine (see the
-                final-layer note below). Among heads this loss admits -- nothing
-                squashing the output -- two layers is the SHALLOWEST with any
-                nonlinearity at all. And our bare affine head appears in neither
-                paper's table (their "w/o Proj" is no map at all; their 1-Proj has
-                the ReLU), except as SimReg's losing row.
-
-                So the case rests on SimReg, not on both: bare-Linear -> 2L is
-                worth 10.2 pts linear-probe there, against Chen et al.'s <=0.53 pt
-                penalty for 2L over a config we cannot run. That asymmetry is the
-                bet, and it is what the mlpgram* arms measure.
-
-                H IS FIXED ACROSS PREFIXES, NOT SCALED WITH ``d``. SimReg's
-                ``(m, 2m, d)`` has m as a fixed backbone width, not a swept one; a
-                literal reading would give the 16-dim prefix a 32-unit hidden layer
-                and confound "narrower code" with "weaker decoder" in exactly the
-                Matryoshka comparison the narrow prefixes exist to make. Since the
-                head is thrown away there is no reason to shrink it, so every
-                prefix decodes through the same width and ``d`` is the only
-                variable.
-
-                NO NORM OR ACTIVATION AFTER THE FINAL LAYER: the output is
-                regressed against the teacher's register grid, which comes out of a
-                LayerNorm and therefore has negative entries. A ReLU'd output is
-                non-negative and would cap the cosine against it.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2028,20 +1971,12 @@ class Encoder(FlexiVitBase):
                 num_heads=resolved_register_heads,
                 mlp_ratio=mlp_ratio,
                 latent_transformer_depth=register_latent_depth,
-                # The register grid is a purely spatial (row, col) summary with no
-                # temporal axis, so the bottleneck reads/mixes with 2D RoPE -- even
-                # when the encoder self-attention uses 3D RoPE. The caller feeds it 2D
-                # positions (the temporal coordinate is sliced off in apply_attn).
                 use_2d_rope=PositionEncoding.is_rope(self.position_encoding),
                 rope_base=rope_base,
                 qk_norm=qk_norm,
                 per_depth_read_proj=register_per_depth_read_proj,
                 attn_dim=register_attn_dim,
             )
-            # Detached low-dim "student" readout (see the __init__ docstring). It
-            # consumes DETACHED inputs, so the student is invisible to the encoder's
-            # training; the per-prefix back-projections fund the cosine distillation
-            # terms (student prefix -> teacher width) in the train module.
             if self.register_projection_dims is not None:
                 if any(d <= 0 for d in self.register_projection_dims):
                     raise ValueError(
@@ -2049,19 +1984,14 @@ class Encoder(FlexiVitBase):
                         f"{register_projection_dims}"
                     )
                 student_dim = self.register_projection_dims[0]
-                # Per-cell linear map on the detached register grid.
                 self.register_projection = nn.Linear(resolved_register_dim, student_dim)
-                # Optional output norm at the full student width (see the constructor
-                # docstring for why the student is the only head without one).
                 self.register_projection_norm = (
                     nn.LayerNorm(student_dim)
                     if register_projection_output_norm
                     else None
                 )
                 # One back-projection per Matryoshka prefix: dim d reconstructs the
-                # teacher from student[..., :d], forcing the first d dims to be
-                # self-sufficient (Tessera-v2 per-prefix heads). Training-only --
-                # discarded at inference, so head capacity is free at serving time.
+                # teacher from student[..., :d]
                 if (
                     register_back_projection_hidden is not None
                     and register_back_projection_hidden <= 0
@@ -2113,13 +2043,7 @@ class Encoder(FlexiVitBase):
     def _build_back_projection(
         prefix_dim: int, register_dim: int, hidden: int | None
     ) -> nn.Module:
-        """One per-prefix distillation head: ``prefix_dim -> register_dim``.
-
-        ``hidden=None`` is the shipped bare ``Linear``; an int gives a 2-layer MLP
-        at that hidden width. Nothing follows the final layer -- see
-        ``register_back_projection_hidden`` in the constructor docstring for why the
-        output must stay unnormalized and unactivated.
-        """
+        """One per-prefix distillation head: ``prefix_dim -> register_dim``."""
         if hidden is None:
             return nn.Linear(prefix_dim, register_dim)
         return nn.Sequential(
@@ -2524,9 +2448,6 @@ class Encoder(FlexiVitBase):
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
-        # Perceiver-style read: the register grid (one latent cloned to the patch grid)
-        # reads the encoded visible patch tokens (bool_mask restricts the read to
-        # ONLINE_ENCODER keys), followed by the latent transformer inside the bottleneck.
         register_output = None
         if self.register_bottleneck is not None:
             spatial_grid = self._patch_grid_hw(tokens_only_dict)
@@ -2540,9 +2461,7 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
-            # Detached student readout: re-projects the registers just computed. It
-            # consumes a DETACHED tensor, so no student gradient reaches the encoder
-            # or the primary bottleneck.
+            # Detached student readout: re-projects the registers just computed.
             if self.register_projection is not None:
                 projected = self.register_projection(registers.detach())
                 if self.register_projection_norm is not None:
