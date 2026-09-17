@@ -156,10 +156,8 @@ class Attention(nn.Module):
                 temporal axis in axial 3D RoPE. ``None`` reuses ``rope_base``.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
             attn_dim: Internal width the attention runs at (q/k/v projected to
-                this, output projected back to ``dim``). ``None`` (default) ties
-                it to ``dim`` -- the classic single-width attention. Decoupling
-                lets a narrow residual stream (e.g. a register bottleneck) run
-                its attention with more/wider heads than ``dim`` could fund.
+                this, output projected back to ``dim``). If ``None`` (default)
+                attn_dim is set to ``dim``
             kv_in_dim: Input width of the key/value source ``y`` when it differs
                 from ``dim`` (cross-attention over a wider stream). ``None``
                 (default) ties it to ``dim``.

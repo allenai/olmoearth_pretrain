@@ -199,6 +199,30 @@ REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
         feature="the perceiver-type distillation student",
         note="the student is always a per-cell linear map now; a second-bottleneck student cannot be rebuilt",
     ),
+    "register_read_depth": _RemovedField(
+        inert=(1, None),
+        feature="a read count decoupled from the latent depth (the legacy schedule)",
+        note=(
+            "the bottleneck now pairs exactly one read with each latent block, so the "
+            "read count is register_latent_depth; other read counts cannot be rebuilt"
+        ),
+    ),
+    "register_interleave": _RemovedField(
+        inert=(True, None),
+        feature="the legacy read schedule (all reads, then all self-attention)",
+        note=(
+            "the bottleneck now always interleaves one read with each latent block; a "
+            "checkpoint trained with register_interleave=False cannot be rebuilt"
+        ),
+    ),
+    "register_latent_self_attn": _RemovedField(
+        inert=(True, None),
+        feature="a bottleneck without latent self-attention (nolsa)",
+        note=(
+            "every read is now followed by a latent self-attention block; a checkpoint "
+            "trained with register_latent_self_attn=False has no such blocks to load"
+        ),
+    ),
     "register_read_layers": _RemovedField(
         inert=(None, []),
         feature="multi-depth register reads (mdr)",

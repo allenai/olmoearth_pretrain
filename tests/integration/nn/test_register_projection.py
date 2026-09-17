@@ -39,7 +39,6 @@ def _encoder_config(with_student: bool) -> EncoderConfig:
         spatial_pos_encoding="rope",
         use_register_bottleneck=True,
         register_dim=REGISTER_DIM,
-        register_read_depth=1,
         register_latent_depth=2,
     )
     if with_student:
@@ -167,8 +166,6 @@ def test_compute_projection_distill_loss_prefixes() -> None:
         teacher=teacher,
         student=student,
         back_projections=back_projections,
-        cosine_weight=1.0,
-        gram_weight=1.0,
         gram_max_tokens=8,
     )
     assert torch.isfinite(total)
