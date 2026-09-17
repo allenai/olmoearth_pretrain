@@ -3126,14 +3126,8 @@ class EncoderConfig(Config):
     band_dropout_rate: float = 0.0
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
-    # Optional modality -> list of band-name groups. When set for a modality, band
-    # dropout for it becomes grouped (drop one whole group per sample w.p.
-    # band_dropout_rate) instead of per-band; modalities not listed fall back to
-    # per-band dropout. See MultiModalPatchEmbeddings for details.
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
-    # Add a per-pixel ReLU-free linear skip parallel to the patch-embed MLP
-    # (pixel_features = MLP(x) + Linear(x)). Requires patch_embed_hidden_sizes.
     position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
@@ -3145,49 +3139,15 @@ class EncoderConfig(Config):
     # so old checkpoint configs deserialized via Config.from_dict still carry it
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
-    # Perceiver-style spatial register bottleneck (sweepable).
     use_register_bottleneck: bool = False
     register_dim: int | None = None
-    # Number of [read -> self-attend] layers in the bottleneck.
     register_latent_depth: int = 2
     register_num_heads: int | None = None
-    # Give each read block its own input norm + K/V down-projection instead of sharing one
-    # pair, so each re-read gets a distinct lens. Needs >1 read block.
-    # False -> shared (backwards compatible).
     register_per_depth_read_proj: bool = False
-    # If set, decouple the bottleneck's attention width from register_dim: the read +
-    # latent blocks run attention internally at this width (typically embedding_size,
-    # giving encoder-shaped heads, e.g. 12x64) while the register residual stream stays
-    # at register_dim, and reads consume the K/V source at full encoder width. Fixes the
-    # narrow-register corner where register_dim cannot fund both >=8 heads (throughput)
-    # and >=64-dim heads (RoPE anchoring). None (default) keeps tied widths.
     register_attn_dim: int | None = None
-    # If set, add a DETACHED low-dim "student" readout of the register grid, exported
-    # as ``projected_registers`` (at width max(dims)) alongside the registers. The
-    # student's inputs are detached, so its training signal (distillation to the
-    # registers + optional supervision, wired in the train module) never reaches the
-    # encoder: the encoder trains exactly as it would without the student. Smaller
-    # entries are trained as MATRYOSHKA PREFIXES of the student output (each dim gets
-    # its own back-projection / Gram term), so e.g. [128, 64] yields one 128d artifact
-    # whose first 64 dims are a self-sufficient 64d embedding. The student is a per-cell
-    # Linear(register_dim, max(dims)) on the detached registers. Requires
-    # use_register_bottleneck. None (default) -> no student.
     register_projection_dims: list[int] | None = None
-    # LayerNorm on the student's output. The primary bottleneck ends in one; the bare
-    # Linear does not, and the cosine distillation term is taken after a learned
-    # back-projection, so nothing pins its scale. Applied at the full student width --
-    # a Matryoshka prefix is then a slice of a normalized vector, which is what a
-    # truncating deployment reads. Ignored without register_projection_dims.
     register_projection_output_norm: bool = False
-    # Hidden width of the per-prefix back-projection ("distillation head") that
-    # reconstructs the teacher from student[..., :d]. None = the shipped single
-    # Linear(d, register_dim); an int makes each head a 2-layer MLP
-    # Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim). The heads are
-    # discarded at inference, so this is free at serving time and leaves the shipped
-    # embedding's architecture untouched. Fixed across prefixes on purpose -- see
-    # Encoder.__init__'s docstring. Ignored without register_projection_dims.
     register_back_projection_hidden: int | None = None
-    # Put the register grid on a sphere: L2-normalize the bottleneck's output so the
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
