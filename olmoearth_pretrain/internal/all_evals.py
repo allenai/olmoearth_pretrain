@@ -3420,6 +3420,62 @@ for _loio_terr in ("reunion", "guadeloupe", "martinique", "guyane", "mayotte"):
         dataset=f"{_void_ds}_s1s2ls",
     )
 
+    # patch-size-4 siblings of the five bg8void LOIO fine-tunes above. Same datasets
+    # and splits; only the tokenisation differs, so ps1 results are untouched.
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps4_sentinel2"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset=_void_ds, patch_size=4
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps4_sentinel1"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL1.name], dataset=f"{_void_ds}_s1", patch_size=4
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps4_sentinel1_sentinel2"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset=f"{_void_ds}_s1s2",
+        patch_size=4,
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps4_sentinel2_landsat"
+    ] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
+        dataset=f"{_void_ds}_s2ls",
+        patch_size=4,
+    )
+    FT_EVAL_TASKS[
+        f"pastis2_drom_bg8void_loio_{_loio_terr}_ft_ws16_ps4_sentinel1_sentinel2_landsat"
+    ] = _pastis_ft_task(
+        [
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+            Modality.LANDSAT.name,
+        ],
+        dataset=f"{_void_ds}_s1s2ls",
+        patch_size=4,
+    )
+
+# Patch-size-4 siblings of the PLANTEUR few-shot / label-budget-arm fine-tunes.
+# Generated from the ps1 entries rather than written out: every one is S2-only on a
+# dataset named after the task, so a loop cannot drift from the ps1 set the way 20
+# hand-copied blocks would. ps1 entries are untouched.
+for _fs_ds in (
+    "pxi10", "pxi25", "pxi100", "pxi1000",      # all-PASTIS arm
+    "bal10", "bal25", "bal100", "bal1000",      # balanced arm
+    "plo10", "plo25", "plo100", "plo1000",      # PLANTEUR-only arm
+    "px10", "px25", "px100", "px1000",          # legacy px family
+    "x10", "x25", "x50", "x100",                # legacy x family
+):
+    FT_EVAL_TASKS[f"pastis_planteur_{_fs_ds}_ft_ws16_ps4_sentinel2"] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset=f"pastis_planteur_{_fs_ds}",
+        patch_size=4,
+    )
+
+
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
