@@ -223,10 +223,8 @@ def build_register_bottleneck_model_config(
 
     # Interleave reads with the latent transformer ([read -> self] per layer), each read
     # block with its own input norm + K/V projection.
-    encoder_config.register_interleave = True
     encoder_config.register_per_depth_read_proj = True
     encoder_config.register_latent_depth = REGISTER_LATENT_DEPTH
-    encoder_config.register_latent_self_attn = True
     # Bottleneck attention at encoder width: register_dim is purely the storage width.
     encoder_config.register_attn_dim = encoder_config.embedding_size
 
