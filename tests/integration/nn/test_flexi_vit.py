@@ -1083,7 +1083,6 @@ def test_encoder_register_bottleneck_dynamic_grid(
         position_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_read_depth=1,
         register_latent_depth=2,
     )
     # Single shared latent, not a per-cell grid of parameters.
@@ -1148,7 +1147,6 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
         position_encoding="rope_3d_mixed",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_read_depth=1,
         register_latent_depth=2,
     )
     assert encoder.register_bottleneck is not None
@@ -1187,7 +1185,7 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
 def test_encoder_register_bottleneck_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """register_interleave pairs one read with each latent self-attention block."""
+    """The bottleneck pairs one read with each latent self-attention block."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
@@ -1205,14 +1203,11 @@ def test_encoder_register_bottleneck_interleave(
         position_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_read_depth=1,
         register_latent_depth=latent_depth,
-        register_interleave=True,
     )
     bottleneck = encoder.register_bottleneck
     assert bottleneck is not None
-    assert bottleneck.interleave
-    # One read per latent self-attention block (read_depth is ignored when interleaving).
+    # One read per latent self-attention block.
     assert len(bottleneck.read_blocks) == latent_depth
     assert len(bottleneck.latent_blocks) == latent_depth
 
@@ -1261,7 +1256,6 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         position_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_interleave=True,
         register_latent_depth=latent_depth,
         register_per_depth_read_proj=True,
     )
@@ -1324,7 +1318,6 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
         position_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_interleave=True,
         register_latent_depth=latent_depth,
         register_per_depth_read_proj=True,
         register_attn_dim=embedding_size,
@@ -1391,7 +1384,6 @@ def test_encoder_register_bottleneck_attn_dim_default_unchanged(
         position_encoding="rope",
         use_register_bottleneck=True,
         register_dim=register_dim,
-        register_interleave=True,
         register_latent_depth=4,
         register_per_depth_read_proj=True,
     )

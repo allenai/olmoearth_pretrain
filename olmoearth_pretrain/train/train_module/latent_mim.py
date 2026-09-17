@@ -35,8 +35,6 @@ def compute_projection_distill_loss(
     teacher: torch.Tensor,
     student: torch.Tensor,
     back_projections: dict[str, torch.nn.Module],
-    cosine_weight: float,
-    gram_weight: float,
     gram_max_tokens: int,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Distill the (detached) teacher register grid into the low-dim student.
@@ -44,8 +42,10 @@ def compute_projection_distill_loss(
     Each entry of ``back_projections`` is a Matryoshka prefix width ``d`` (as a
     string key): the first ``d`` dims of the student are distilled onto the full
     teacher through their own back-projection (cosine) and their own relational
-    Gram term, so every listed prefix is trained to be self-sufficient
-    (Tessera-v2 per-prefix heads). Terms are summed unweighted across prefixes.
+    Gram term, so every listed prefix is trained to be self-sufficient. Per prefix
+    the loss is ``1 - cos(back_projection_d(student[..., :d]), teacher)`` plus the
+    MSE between the prefix's and the teacher's token-token cosine-similarity
+    matrices (relational/RKD term). All terms are summed unweighted.
 
     Args:
         teacher: Register grid ``[B, N, D]``; detached here, so this loss never
@@ -53,10 +53,6 @@ def compute_projection_distill_loss(
         student: Projected register grid ``[B, N, max_d]`` (the detached-input
             student; gradients flow into the projection + back-projections only).
         back_projections: Per-prefix learned ``d -> D`` maps, keyed by ``str(d)``.
-        cosine_weight: Weight of ``1 - cos(back_projection_d(student[..., :d]),
-            teacher)`` (each prefix).
-        gram_weight: Weight of the MSE between each student prefix's and the
-            teacher's token-token cosine-similarity matrices (relational/RKD term).
         gram_max_tokens: Max register cells entering the Gram terms (one random
             subsample shared across prefixes; bounds the O(n^2) matrices).
 
@@ -68,33 +64,25 @@ def compute_projection_distill_loss(
     student = student.float()
     metrics: dict[str, torch.Tensor] = {}
     total = torch.zeros([], device=student.device, dtype=student.dtype)
-    flat_teacher: torch.Tensor | None = None
-    teacher_gram: torch.Tensor | None = None
     idx: torch.Tensor | None = None
-    if gram_weight > 0:
-        flat_teacher = F.normalize(teacher.reshape(-1, teacher.shape[-1]), dim=-1)
-        num_tokens = flat_teacher.shape[0]
-        if num_tokens > gram_max_tokens:
-            idx = torch.randperm(num_tokens, device=flat_teacher.device)[
-                :gram_max_tokens
-            ]
-            flat_teacher = flat_teacher[idx]
-        teacher_gram = flat_teacher @ flat_teacher.T
+    flat_teacher = F.normalize(teacher.reshape(-1, teacher.shape[-1]), dim=-1)
+    num_tokens = flat_teacher.shape[0]
+    if num_tokens > gram_max_tokens:
+        idx = torch.randperm(num_tokens, device=flat_teacher.device)[:gram_max_tokens]
+        flat_teacher = flat_teacher[idx]
+    teacher_gram = flat_teacher @ flat_teacher.T
     for dim_str, back_projection in back_projections.items():
         prefix = student[..., : int(dim_str)]
-        if cosine_weight > 0:
-            back = back_projection(prefix)
-            cosine = (1.0 - F.cosine_similarity(back, teacher, dim=-1)).mean()
-            total = total + cosine_weight * cosine
-            metrics[f"projection/distill_cosine_d{dim_str}"] = cosine.detach()
-        if gram_weight > 0:
-            assert teacher_gram is not None
-            flat_prefix = F.normalize(prefix.reshape(-1, prefix.shape[-1]), dim=-1)
-            if idx is not None:
-                flat_prefix = flat_prefix[idx]
-            gram = F.mse_loss(flat_prefix @ flat_prefix.T, teacher_gram)
-            total = total + gram_weight * gram
-            metrics[f"projection/distill_gram_d{dim_str}"] = gram.detach()
+        back = back_projection(prefix)
+        cosine = (1.0 - F.cosine_similarity(back, teacher, dim=-1)).mean()
+        total = total + cosine
+        metrics[f"projection/distill_cosine_d{dim_str}"] = cosine.detach()
+        flat_prefix = F.normalize(prefix.reshape(-1, prefix.shape[-1]), dim=-1)
+        if idx is not None:
+            flat_prefix = flat_prefix[idx]
+        gram = F.mse_loss(flat_prefix @ flat_prefix.T, teacher_gram)
+        total = total + gram
+        metrics[f"projection/distill_gram_d{dim_str}"] = gram.detach()
     return total, metrics
 
 
@@ -120,17 +108,6 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
-    # Distillation losses for the encoder's detached register projection (the low-dim
-    # "student"; see EncoderConfig.register_projection_dim). Only used when the model
-    # produces projection outputs. Cosine: 1 - cos(back_projection(student), teacher)
-    # per register cell (Tessera-v2 style, via the encoder's learned back-projection).
-    # Gram: MSE between the student's and teacher's token-token cosine-similarity
-    # matrices over a random subsample of register cells (relational/RKD term --
-    # preserves the teacher's geometry, the property dense probes use).
-    projection_distill_cosine_weight: float = 1.0
-    projection_distill_gram_weight: float = 1.0
-    # Max register cells (across the microbatch) entering the Gram term; bounds the
-    # O(n^2) similarity matrices.
     projection_distill_gram_max_tokens: int = 2048
 
     def build(
@@ -200,8 +177,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
-        projection_distill_cosine_weight: float = 1.0,
-        projection_distill_gram_weight: float = 1.0,
         projection_distill_gram_max_tokens: int = 2048,
     ):
         """Initialize the training module.
@@ -228,10 +203,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
-            projection_distill_cosine_weight: Weight of the cosine distillation term
-                for the detached register projection (see the config docstring).
-            projection_distill_gram_weight: Weight of the Gram (relational)
-                distillation term for the detached register projection.
             projection_distill_gram_max_tokens: Max register cells entering the Gram
                 term per microbatch (bounds the O(n^2) similarity matrices).
         """
@@ -274,8 +245,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             )
             self.total_loss_name = f"{self.total_loss_name}+supervision"
 
-        self.projection_distill_cosine_weight = projection_distill_cosine_weight
-        self.projection_distill_gram_weight = projection_distill_gram_weight
         self.projection_distill_gram_max_tokens = projection_distill_gram_max_tokens
         if getattr(self.model.encoder, "register_projection_dims", None) is not None:
             self.total_loss_name = f"{self.total_loss_name}+projection"
@@ -445,8 +414,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         back_projections=dict(
                             self.model.encoder.register_back_projections
                         ),
-                        cosine_weight=self.projection_distill_cosine_weight,
-                        gram_weight=self.projection_distill_gram_weight,
                         gram_max_tokens=self.projection_distill_gram_max_tokens,
                     )
                     loss = loss + distill_loss

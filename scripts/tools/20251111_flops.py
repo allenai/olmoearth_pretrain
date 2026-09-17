@@ -123,11 +123,8 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
         rope_temporal_coordinate_scale=1.0 / 30.0,
         use_register_bottleneck=True,
         register_dim=768,
-        register_read_depth=1,
         register_latent_depth=4,
-        register_interleave=True,
         register_per_depth_read_proj=True,
-        register_latent_self_attn=True,
         register_attn_dim=768,
         register_projection_dims=[128, 64] if with_projection else None,
     )
