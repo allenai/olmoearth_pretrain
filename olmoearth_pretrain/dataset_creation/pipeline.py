@@ -118,7 +118,9 @@ def step_convert(
     print("[convert] Done.")
 
 
-def step_metadata(olmoearth_path: str, allcap: bool = False) -> None:
+def step_metadata(
+    olmoearth_path: str, allcap: bool = False, workers: int = 1
+) -> None:
     """Step 2: Consolidate per-window temp metadata CSVs into one CSV per modality."""
     from olmoearth_pretrain.dataset_creation.make_meta_summary import make_meta_summary
 
@@ -127,7 +129,7 @@ def step_metadata(olmoearth_path: str, allcap: bool = False) -> None:
     for modality, time_span in modality_time_spans:
         print(f"[metadata] Consolidating {modality.name} ({time_span.value})...")
         try:
-            make_meta_summary(olmo_path, modality, time_span)
+            make_meta_summary(olmo_path, modality, time_span, workers=workers)
         except (ValueError, FileNotFoundError) as e:
             print(f"[metadata]   skipped: {e}")
     print("[metadata] Done.")
@@ -306,7 +308,7 @@ def main() -> None:
         )
 
     if "metadata" in steps_to_run:
-        step_metadata(args.olmoearth_path, args.allcap)
+        step_metadata(args.olmoearth_path, args.allcap, args.workers)
 
     if "rasterize_osm" in steps_to_run:
         step_rasterize_osm(args.olmoearth_path, args.workers)
