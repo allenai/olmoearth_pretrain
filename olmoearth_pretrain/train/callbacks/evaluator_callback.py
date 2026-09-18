@@ -322,6 +322,9 @@ class DownstreamTaskConfig:
     primary_metric_class: int | None = None
     # For pretrain_subset dataset: path to training h5py data
     h5py_dir: str | None = None
+    # For the era5_climate_zone dataset: path to the offline npz mapping h5 sample
+    # ``indices`` -> KMeans climate ``zones`` (from era5_climate_zone_eval build-zones).
+    climate_zone_npz_path: str | None = None
     # For pretrain_subset: max samples to load
     pretrain_max_samples: int = 512
     # For pretrain subset auxiliary probes: target modality to predict.
@@ -511,6 +514,7 @@ class DownstreamEvaluator:
         self.primary_metric_class = task.primary_metric_class
         self.balanced_trial = task.balanced_trial
         self.h5py_dir = task.h5py_dir
+        self.climate_zone_npz_path = task.climate_zone_npz_path
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
         self.pretrain_target_band_index = task.pretrain_target_band_index
@@ -696,6 +700,15 @@ class DownstreamEvaluator:
                 extra_kwargs["landsat_reflectance"] = True
             if self.computed_norm_config != "computed.json":
                 extra_kwargs["computed_norm_config"] = self.computed_norm_config
+        if self.dataset.startswith("era5_climate_zone") and self.h5py_dir is not None:
+            extra_kwargs["h5py_dir"] = self.h5py_dir
+            extra_kwargs["training_modalities"] = self.input_modalities
+            extra_kwargs["zones_npz_path"] = self.climate_zone_npz_path
+            extra_kwargs["pretrain_split"] = split
+            extra_kwargs["pretrain_label_seed"] = self.pretrain_label_seed
+            extra_kwargs["pretrain_train_samples"] = self.pretrain_train_samples
+            extra_kwargs["pretrain_valid_samples"] = self.pretrain_valid_samples
+            extra_kwargs["pretrain_test_samples"] = self.pretrain_test_samples
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
@@ -2070,6 +2083,16 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
                     f"by scripts/tools/20260611_snapshot_pretrain_eval_subset.py "
                     f"and must match the path constants in "
                     f"olmoearth_pretrain/internal/all_evals.py."
+                )
+
+            if (
+                task.climate_zone_npz_path is not None
+                and not UPath(task.climate_zone_npz_path).exists()
+            ):
+                raise FileNotFoundError(
+                    f"climate_zone_npz_path for eval task '{evaluation_name}' does "
+                    f"not exist: {task.climate_zone_npz_path}. Build it with "
+                    f"scripts/tools/era5_climate_zone_eval.py build-zones."
                 )
 
             config = dataset_to_config(task.dataset)

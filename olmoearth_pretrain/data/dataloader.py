@@ -6,7 +6,7 @@ import math
 import multiprocessing as mp
 import signal
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +83,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_timesteps: int = 12,
         tile_size: int = 128,
         exclude_only_decode_from_budget: bool = False,
+        extra_budget_exclude_modalities: list[str] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -137,6 +138,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
             exclude_only_decode_from_budget: If True, modalities the masking strategy
                 marks decode-only are not counted against the token budget (they are
                 never encoded), freeing budget for more timesteps.
+            extra_budget_exclude_modalities: Additional modalities to exclude from the
+                token budget AND from temporal subsetting, on top of the decode-only
+                set. Use this for supervision-only / load-only targets (e.g. an ERA5
+                climate signature) that are loaded and supervised but never encoded or
+                decoded: they must keep their full timestep stack for the supervision
+                target, and they should not consume encoder budget.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -220,9 +227,14 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
         # Modalities kept out of the encoder token budget (decode-only targets are
         # never encoded, so they should not consume budget meant for the encoder).
-        self.budget_exclude_modalities: frozenset[str] = frozenset()
+        # These modalities are ALSO exempt from temporal subsetting downstream (see
+        # ``subset_sample_default``), so supervision-only targets keep their full
+        # timestep stack even when the sampler shortens the encoded sequence.
+        self.budget_exclude_modalities: frozenset[str] = frozenset(
+            extra_budget_exclude_modalities or []
+        )
         if exclude_only_decode_from_budget:
-            self.budget_exclude_modalities = frozenset(
+            self.budget_exclude_modalities = self.budget_exclude_modalities | frozenset(
                 getattr(self.masking_strategy, "only_decode_modalities", []) or []
             )
 
@@ -901,6 +913,11 @@ class OlmoEarthDataLoaderConfig(Config):
     max_timesteps: int = 12
     tile_size: int = 128
     exclude_only_decode_from_budget: bool = False
+    # Additional modalities excluded from the token budget AND from temporal
+    # subsetting (on top of the decode-only set). For supervision-only / load-only
+    # targets (e.g. an ERA5 climate signature) that are loaded and supervised but
+    # never encoded/decoded, so they must keep their full timestep stack.
+    extra_budget_exclude_modalities: list[str] = field(default_factory=list)
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -995,6 +1012,7 @@ class OlmoEarthDataLoaderConfig(Config):
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
             exclude_only_decode_from_budget=self.exclude_only_decode_from_budget,
+            extra_budget_exclude_modalities=self.extra_budget_exclude_modalities,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

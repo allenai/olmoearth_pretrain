@@ -126,6 +126,20 @@ DATASET_TO_CONFIG = {
             Modality.GSE.name,
         ],
     ),
+    # Pooled linear-probe classification of KMeans ERA5 climate zones from imagery
+    # embeddings (labels precomputed offline by era5_climate_zone_eval build-zones).
+    # num_classes MUST match the KMeans K used to build the zone npz (K=16).
+    "era5_climate_zone": EvalDatasetConfig(
+        task_type=TaskType.CLASSIFICATION,
+        imputes=[],
+        num_classes=16,
+        is_multilabel=False,
+        supported_modalities=[
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+            Modality.LANDSAT.name,
+        ],
+    ),
     "pretrain_subset_worldcover": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],

@@ -47,6 +47,7 @@ import logging
 import os
 
 import h5py
+import hdf5plugin  # noqa: F401  # registers the zstd HDF5 filter used by the datasets
 import numpy as np
 
 logger = logging.getLogger(__name__)

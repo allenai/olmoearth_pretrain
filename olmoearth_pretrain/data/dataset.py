@@ -196,7 +196,10 @@ def subset_sample_default(
             cap even when the caller requests more. If None, the budget max is used
             (the historical behaviour).
         budget_exclude_modalities: Modalities not counted against the token budget
-            (e.g. decode-only maps that are never encoded).
+            (e.g. decode-only maps that are never encoded). These modalities also
+            SKIP temporal subsetting: a time-only-varying target here keeps its full
+            timestep stack (used for supervision-only targets like an ERA5 12-month
+            climate signature whose flatten head needs all T=12 months).
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -257,7 +260,14 @@ def subset_sample_default(
                 * modality_spec.image_tile_size_factor,
             ]
         elif modality_spec.is_time_only_varying:
-            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            if attribute in budget_exclude_modalities:
+                # Supervision-only / load-only target (never encoded): keep the full
+                # timestep stack so its supervision target is complete even when the
+                # sampler shortens the encoded sequence (e.g. an ERA5 12-month
+                # climate signature whose flatten head needs all T=12 months).
+                new_data_dict[attribute] = modality
+            else:
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
         elif modality_spec.is_static_in_space_and_time:
             new_data_dict[attribute] = modality
 
@@ -291,7 +301,10 @@ def subset_sample_cutmix(
             ``min(target_t, budget_max_t)`` so the budget is always a hard cap. If
             None, the budget max is used (the historical behaviour).
         budget_exclude_modalities: Modalities not counted against the token budget
-            (e.g. decode-only maps that are never encoded).
+            (e.g. decode-only maps that are never encoded). These modalities also
+            SKIP temporal subsetting: a time-only-varying target here keeps its full
+            timestep stack (used for supervision-only targets like an ERA5 12-month
+            climate signature whose flatten head needs all T=12 months).
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -350,7 +363,14 @@ def subset_sample_cutmix(
                 ww * modality_spec.image_tile_size_factor,
             ]
         elif modality_spec.is_time_only_varying:
-            new_data_dict[attribute] = modality[start_t : start_t + max_t]
+            if attribute in budget_exclude_modalities:
+                # Supervision-only / load-only target (never encoded): keep the full
+                # timestep stack so its supervision target is complete even when the
+                # sampler shortens the encoded sequence (e.g. an ERA5 12-month
+                # climate signature whose flatten head needs all T=12 months).
+                new_data_dict[attribute] = modality
+            else:
+                new_data_dict[attribute] = modality[start_t : start_t + max_t]
         elif modality_spec.is_static_in_space_and_time:
             new_data_dict[attribute] = modality
 

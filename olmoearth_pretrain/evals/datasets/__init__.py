@@ -9,6 +9,7 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
+from .climate_zone import ClimateZoneEvalDataset
 from .fifty_cities_dataset import FiftyCitiesDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
@@ -55,6 +56,21 @@ def get_eval_dataset(
     Returns:
         A PyTorch dataset that yields eval samples and labels.
     """
+    if eval_dataset.startswith("era5_climate_zone"):
+        return ClimateZoneEvalDataset(
+            h5py_dir=kwargs["h5py_dir"],
+            training_modalities=kwargs.get("training_modalities", input_modalities),
+            zones_npz_path=kwargs["zones_npz_path"],
+            patch_size=kwargs.get("pretrain_patch_size", 4),
+            hw_p=kwargs.get("pretrain_hw_p", 8),
+            split=kwargs.get("pretrain_split", split),
+            label_seed=kwargs.get("pretrain_label_seed", 42),
+            train_samples=scale_train_samples(
+                kwargs.get("pretrain_train_samples", 4096), label_fraction
+            ),
+            valid_samples=kwargs.get("pretrain_valid_samples", 1024),
+            test_samples=kwargs.get("pretrain_test_samples", 1024),
+        )
     if eval_dataset.startswith("pretrain_subset"):
         return PretrainSubsetDataset(
             h5py_dir=kwargs["h5py_dir"],
