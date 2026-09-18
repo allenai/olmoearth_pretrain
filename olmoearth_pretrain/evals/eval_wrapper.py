@@ -225,6 +225,11 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                 # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
                 batch_embeddings = self._pool_registers(encoder_output)
             else:
+                if self.eval_on_projected_registers:
+                    raise ValueError(
+                        "eval_on_projected_registers set to True but the model has set "
+                        "use_perceiver=False or doesn't have registers in the encoder output"
+                    )
                 tokens_and_masks: TokensAndMasks = encoder_output[
                     "tokens_and_masks"
                 ]  # (bsz, dim)
