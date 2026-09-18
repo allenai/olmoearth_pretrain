@@ -603,6 +603,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 max_tokens_per_instance=1500,
                 sampled_hw_p=6,
                 current_length=12,
+                # Mirror the real getitem path: budget-excluded modalities (e.g. a
+                # supervision-only ERA5) must keep their full timestep stack here too,
+                # or the dry-run mock batch shortens them and the fixed-width
+                # supervision head (T=12 -> 72) mismatches the shortened target.
+                budget_exclude_modalities=self.budget_exclude_modalities,
             )
             for _ in range(batch_size)
         ]
