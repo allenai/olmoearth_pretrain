@@ -171,8 +171,6 @@ class _RemovedField:
     note: str
 
 
-#: EncoderConfig fields removed from this version, keyed by name.
-#:
 #: Old checkpoints still carry these keys, and neither deserializer copes on its own:
 #: with olmo-core, ``Config.from_dict`` goes through omegaconf and RAISES on any unknown
 #: key, so even an inert leftover blocks the load; without olmo-core, the standalone
@@ -181,11 +179,6 @@ class _RemovedField:
 #: :func:`patch_legacy_encoder_config` handles both: inert keys are stripped, active
 #: ones raise.
 REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
-    "attn_window_size": _RemovedField(
-        inert=(None,),
-        feature="windowed (local) spatial attention",
-        note="no run ever set it; re-add the window mask to load this checkpoint",
-    ),
     "register_grid_size": _RemovedField(
         inert=(0, None),
         feature="fixed register grid (register_grid_size > 0)",
@@ -228,89 +221,10 @@ REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
             "trained with register_latent_self_attn=False has no such blocks to load"
         ),
     ),
-    "register_read_layers": _RemovedField(
-        inert=(None, []),
-        feature="multi-depth register reads (mdr)",
-        note=(
-            "the bottleneck now always re-reads the final encoder layer; this "
-            "checkpoint read from several depths and cannot be rebuilt"
-        ),
-    ),
-    "register_shared_read_kv": _RemovedField(
-        inert=(False,),
-        feature="shared K/V across the register reads",
-        note="the reads own their key/value projections again, so the parameter set differs",
-    ),
-    "register_fused_read": _RemovedField(
-        inert=(None,),
-        feature="fused multi-depth read source",
-        note="requires multi-depth reads, which were removed with it",
-    ),
     "register_learned_read_weighting": _RemovedField(
         inert=(False,),
         feature="learned per-read residual gates",
         note="the read_gates parameter no longer exists",
-    ),
-    "register_latent_every_n": _RemovedField(
-        inert=(1, None),
-        feature="thinned latent self-attention (one LSA per N reads)",
-        note="the schedule is now 1:1, so the block count differs",
-    ),
-    "register_output_dim": _RemovedField(
-        inert=(None,),
-        feature="the bottleneck's output projection",
-        note="the grid now ships at register_dim; the output_proj weights have no home",
-    ),
-    "register_unit_norm": _RemovedField(
-        inert=(False,),
-        feature="unit-sphere (L2-normalized) registers",
-        note="the served grid is no longer projected onto a sphere",
-    ),
-    # Inert whenever the sphere itself is off, which the entry above enforces.
-    "register_unit_norm_scale": _RemovedField(
-        inert=(),
-        feature="the unit-sphere radius",
-        note="only meaningful with register_unit_norm, which was removed",
-    ),
-    "band_dropout_groups": _RemovedField(
-        inert=(None, {}),
-        feature="grouped (resolution-group) band dropout",
-        note="band dropout is per-band again; this changes the input distribution, not the weights",
-    ),
-    "patch_embed_linear_skip": _RemovedField(
-        inert=(False,),
-        feature="the patch-embed linear skip",
-        note="the pixel_skip Linear no longer exists",
-    ),
-    "merge_bandsets": _RemovedField(
-        inert=(False,),
-        feature="bandset merging (multi-bandset tokens merged into one)",
-        note="the merge step and the token count it produced are both gone",
-    ),
-    # Unused whenever merging is off, which the entry above enforces. Unlike
-    # register_unit_norm_scale this field is int-defaulted, so it is always PRESENT in a
-    # config from that window rather than dropped -- hence a real inert value, not ().
-    "merge_after_layer": _RemovedField(
-        inert=(-1,),
-        feature="the bandset-merge depth",
-        note="only meaningful with merge_bandsets, which was removed",
-    ),
-    "register_students": _RemovedField(
-        inert=(None, []),
-        feature="multi-student distillation from one backbone",
-        note=(
-            "the per-student projection heads were replaced by the three scalar knobs; "
-            "this checkpoint's student weights have no home"
-        ),
-    ),
-    "register_temporal_anchor": _RemovedField(
-        inert=(None,),
-        feature="the temporally-anchored register read (tanchor)",
-        note=(
-            "the read blocks rotate over (row, col) again; the anchored 3D read has the "
-            "same parameters but computes a different read, so the weights would load "
-            "into a model that is not the one trained"
-        ),
     ),
 }
 
@@ -321,11 +235,6 @@ REMOVED_MODEL_FIELDS: dict[str, _RemovedField] = {
         inert=("registers", None),
         feature="supervision heads on the distillation student",
         note="heads attach to the register grid only; the student heads' weights have no home",
-    ),
-    "projection_supervision_weight_scale": _RemovedField(
-        inert=(None,),
-        feature="a separate weight for the student supervision heads",
-        note="only meaningful with supervision_source != registers, which was removed",
     ),
 }
 
@@ -343,7 +252,8 @@ REMOVED_SUPERVISION_HEAD_FIELDS: dict[str, _RemovedField] = {
 
 #: ``SupervisionModalityConfig`` fields removed from this version, keyed by name. Same
 #: contract as :data:`REMOVED_ENCODER_FIELDS`, applied to every entry of
-#: ``model.supervision_head_config.modality_configs``.
+#: ``model.supervision_head_config.modality_configs``. The shipped checkpoints carry all
+#: three at their inert values.
 REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, _RemovedField] = {
     "time_conditioned": _RemovedField(
         inert=(False,),

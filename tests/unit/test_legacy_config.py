@@ -2,7 +2,7 @@
 
 Neither deserializer copes with a stale key on its own. With olmo-core installed,
 ``Config.from_dict`` runs through omegaconf and RAISES on any unknown key, so an old
-checkpoint carrying e.g. ``attn_window_size: null`` fails to load at all. Without
+checkpoint carrying e.g. ``register_grid_size: 0`` fails to load at all. Without
 olmo-core, the standalone path silently DROPS unknown keys, so a checkpoint that
 genuinely used a removed feature loads as though it had been off -- quietly building a
 different model than the one trained. These tests pin the three behaviours that make
@@ -67,37 +67,17 @@ def _supervised_config_dict(**modality_overrides: object) -> dict:
 def _active_value(name: str) -> object:
     """A value for ``name`` that would have turned its removed feature ON."""
     return {
-        "attn_window_size": 8,
         "register_grid_size": 3,
         "register_contrastive_source": "encoder_tokens",
         "register_projection_type": "perceiver",
         "register_read_depth": 2,
         "register_interleave": False,
         "register_latent_self_attn": False,
-        "register_read_layers": [3, 6, 9, 12],
-        "register_shared_read_kv": True,
-        "register_fused_read": "uniform",
         "register_learned_read_weighting": True,
-        "register_latent_every_n": 2,
-        "register_output_dim": 128,
-        "register_unit_norm": True,
-        "register_unit_norm_scale": 4.0,
-        "band_dropout_groups": {"sentinel2_l2a": [["B02"], ["B11"]]},
-        "patch_embed_linear_skip": True,
-        "merge_bandsets": True,
-        "merge_after_layer": 3,
-        "register_students": [
-            {"name": "lin128", "projection_type": "linear", "dims": [128, 64]}
-        ],
-        "register_temporal_anchor": "year_start",
     }[name]
 
 
-_ACTIVE_MODEL_VALUES: dict[str, object] = {
-    "supervision_source": "both",
-    "projection_supervision_weight_scale": 0.1,
-}
-_ACTIVE_HEAD_VALUES: dict[str, object] = {"register_supervision": False}
+_ACTIVE_MODEL_VALUES: dict[str, object] = {"supervision_source": "both"}
 
 
 def _active_supervision_value(name: str) -> object:
@@ -107,6 +87,9 @@ def _active_supervision_value(name: str) -> object:
         "time_harmonics": 6,
         "time_mlp_hidden_dim": 128,
     }[name]
+
+
+_ACTIVE_HEAD_VALUES: dict[str, object] = {"register_supervision": False}
 
 
 # Every removed field must be exercised by the tests below; a new removal that is not
@@ -174,14 +157,14 @@ def test_active_removed_field_raises(name: str) -> None:
 def test_error_names_every_active_feature() -> None:
     """The error lists each offending field, not just the first."""
     config_dict = _config_dict(
-        register_read_layers=[3, 6], register_unit_norm=True, attn_window_size=8
+        register_grid_size=3, register_interleave=False, register_read_depth=2
     )
     with pytest.raises(ValueError) as excinfo:
         patch_legacy_encoder_config(config_dict)
     message = str(excinfo.value)
-    for name in ("register_read_layers", "register_unit_norm", "attn_window_size"):
+    for name in ("register_grid_size", "register_interleave", "register_read_depth"):
         assert name in message
-    assert "multi-depth register reads (mdr)" in message
+    assert "fixed register grid" in message
 
 
 def test_config_without_legacy_fields_is_untouched() -> None:
