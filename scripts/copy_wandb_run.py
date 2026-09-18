@@ -17,10 +17,12 @@ import argparse
 import json
 import os
 from collections import defaultdict
+from typing import Any
 
 import requests
-import wandb
 from tqdm import tqdm
+
+import wandb
 
 API_TIMEOUT = 120
 GRAPHQL_URL = "https://api.wandb.ai/graphql"
@@ -31,11 +33,13 @@ query RunSampledHistory($project: String!, $entity: String!, $name: String!, $sp
   }
 }
 """
-METRIC_BATCH_SIZE = 5
+# sampledHistory only returns rows in which *every* requested key is present, so
+# batching metrics that are logged on disjoint steps silently yields no rows.
+METRIC_BATCH_SIZE = 1
 DEFAULT_SAMPLES = 10_000
 
 
-def _discover_metrics(run) -> list[str]:
+def _discover_metrics(run: Any) -> list[str]:
     """Get all logged numeric metric keys from a run's summary."""
     skip = {"graph_0"}
     return sorted(
@@ -52,15 +56,14 @@ def _fetch_history(
     run_id: str,
     metrics: list[str],
     samples: int = DEFAULT_SAMPLES,
+    batch_size: int = METRIC_BATCH_SIZE,
 ) -> dict[int, dict[str, float]]:
     """Fetch metrics via sampledHistory GraphQL query in batches."""
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     step_data: dict[int, dict[str, float]] = defaultdict(dict)
 
-    for i in tqdm(
-        range(0, len(metrics), METRIC_BATCH_SIZE), desc="Fetching metric batches"
-    ):
-        batch = metrics[i : i + METRIC_BATCH_SIZE]
+    for i in tqdm(range(0, len(metrics), batch_size), desc="Fetching metric batches"):
+        batch = metrics[i : i + batch_size]
         spec = json.dumps({"keys": batch + ["_step"], "samples": samples})
         resp = requests.post(
             GRAPHQL_URL,
@@ -104,8 +107,9 @@ def copy_run(
     run_name: str | None = None,
     metrics: list[str] | None = None,
     samples: int = DEFAULT_SAMPLES,
+    batch_size: int = METRIC_BATCH_SIZE,
     dry_run: bool = False,
-):
+) -> None:
     """Copy metrics from a source run to a new run in a destination project."""
     api_key = os.environ.get("WANDB_API_KEY") or wandb.Api().api_key
     api = wandb.Api(timeout=API_TIMEOUT)
@@ -130,7 +134,7 @@ def copy_run(
     print(f"Metrics: {metrics}\n")
 
     step_data = _fetch_history(
-        api_key, src_entity, src_project, run_id, metrics, samples
+        api_key, src_entity, src_project, run_id, metrics, samples, batch_size
     )
 
     total_points = sum(len(d) for d in step_data.values())
@@ -164,7 +168,7 @@ def copy_run(
     print(f"\nDone! Run created in {dest_entity}/{dest_project}")
 
 
-def main():
+def main() -> None:
     """Run the script."""
     parser = argparse.ArgumentParser(
         description="Copy metrics from one wandb run to another project"
@@ -191,6 +195,15 @@ def main():
         help=f"Max samples per metric (default: {DEFAULT_SAMPLES})",
     )
     parser.add_argument(
+        "--metric-batch-size",
+        type=int,
+        default=METRIC_BATCH_SIZE,
+        help=(
+            "Metrics per GraphQL query (default: %(default)s). Values above 1 are "
+            "faster but only return steps where every metric in the batch was logged."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Fetch and display data without creating a new run",
@@ -207,6 +220,7 @@ def main():
         run_name=args.run_name,
         metrics=args.metrics,
         samples=args.samples,
+        batch_size=args.metric_batch_size,
         dry_run=args.dry_run,
     )
 
