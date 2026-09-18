@@ -1,5 +1,6 @@
 """Downstream evaluator callback."""
 
+import dataclasses
 import gc
 import logging
 import os
@@ -17,13 +18,14 @@ from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, IterableDataset, Subset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
+    DATASET_TO_CONFIG,
     EvalDatasetConfig,
     TaskType,
     dataset_to_config,
@@ -36,6 +38,9 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_spatial_embedding_diagnostics,
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
+    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
@@ -45,12 +50,22 @@ from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
 from olmoearth_pretrain.evals.knn import run_knn
-from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
+from olmoearth_pretrain.evals.linear_probe import (
+    ProbeType,
+    train_and_eval_probe,
+)
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
+
+# Beaker rejects experiment names longer than this many characters.
+_BEAKER_MAX_NAME_LEN = 128
+# common.build_launch_config forms the experiment name as
+# ``{run_name}-{cmd}-{8-char-uuid}``; for in-loop evals ``cmd`` is ``evaluate``,
+# so the suffix appended after the eval run name is ``-evaluate-`` + 8 chars.
+_BEAKER_LAUNCH_NAME_SUFFIX_LEN = len("-evaluate-") + 8
 
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
@@ -116,18 +131,33 @@ class DownstreamTaskConfig:
     # With eval_on_projected_registers: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_projection_dim: int | None = None
-    # For geobench segmentation tasks: split each native image into
-    # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
-    # (keeps every pixel, shrinks the token grid the model/register-read sees).
-    # Used to test whether the large-grid read dilution drives the register
-    # regressions on the 256px tasks (sa_crop_type, cashew_plant). None = native size.
-    tile_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
+    # Fix the spatial context every embedding is computed from to
+    # window_size x window_size at load time. None keeps the dataset's native
+    # sample size. For pastis datasets each sample (and its labels) is tiled
+    # into non-overlapping windows (e.g. 16 -> each 64x64 sample becomes
+    # sixteen 16x16 windows); for registry (rslearn) datasets each sample is
+    # center-cropped to a single window instead, since those carry one labeled
+    # pixel — unless tile_samples is set. Not supported for other dataset
+    # families.
+    window_size: int | None = None
+    # For registry (rslearn) datasets with dense labels (e.g. pastis_rslearn):
+    # tile every stored sample into non-overlapping window_size x window_size
+    # windows (the pastis convention above) instead of center-cropping one
+    # window per sample. Mutually exclusive with label_at_center_pixel.
+    tile_samples: bool = False
+    # For registry (rslearn) segmentation datasets with a single labeled pixel
+    # per sample (the AEF supplemental sets): emit the labeled pixel's class as
+    # a scalar label and run the task as classification, so only the token that
+    # actually carries a label is kept. The window_size crop is centered on the
+    # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
+    # probe reads exactly that token.
+    label_at_center_pixel: bool = False
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -146,6 +176,17 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
+    # Which int8 scheme quantize_embeddings applies (see QuantizationScheme).
+    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
+    # Normalize the extracted embeddings before the int8 round-trip and the
+    # probe. Nothing in pretraining pins an embedding head's output geometry
+    # (see EmbeddingNormalization), and three consumers care: the int8 power
+    # scheme (assumes AEF's value range), KNN (uncentered cosine), and the
+    # segmentation probe (no BatchNorm in front). NONE = today's behavior.
+    embedding_normalization: EmbeddingNormalization = EmbeddingNormalization.NONE
+    # Log embedding geometry, int8 clipping, and round-trip-damage diagnostics
+    # alongside the task's score (bounded row subsample; no effect on scores).
+    embedding_pipeline_diagnostics: bool = True
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -199,6 +240,53 @@ class DownstreamEvaluator:
         """
         self.evaluation_name = evaluation_name
         self.config = dataset_to_config(task.dataset)
+        # Registry-backed datasets are the ones dataset_to_config resolves via
+        # the dynamic registry rather than the hardcoded config table.
+        self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
+        self.window_size = task.window_size
+        self.label_at_center_pixel = task.label_at_center_pixel
+        self.tile_samples = task.tile_samples
+        if self.tile_samples:
+            if not self._is_registry_dataset:
+                raise ValueError(
+                    f"tile_samples is only supported for registry datasets, "
+                    f"got dataset '{task.dataset}'"
+                )
+            if self.window_size is None:
+                raise ValueError("tile_samples requires window_size to be set")
+            if self.label_at_center_pixel:
+                raise ValueError(
+                    "tile_samples and label_at_center_pixel are mutually exclusive"
+                )
+        if self.window_size is not None:
+            if not (
+                task.dataset in ("pastis", "pastis128") or self._is_registry_dataset
+            ):
+                raise ValueError(
+                    f"window_size is only supported for pastis and registry "
+                    f"datasets, got dataset '{task.dataset}'"
+                )
+            # The probe's spatial geometry must follow the tiled/cropped
+            # sample size.
+            self.config = dataclasses.replace(
+                self.config, height_width=self.window_size
+            )
+        if self.label_at_center_pixel:
+            if not self._is_registry_dataset:
+                raise ValueError(
+                    f"label_at_center_pixel is only supported for registry "
+                    f"datasets, got dataset '{task.dataset}'"
+                )
+            if self.config.task_type != TaskType.SEGMENTATION:
+                raise ValueError(
+                    "label_at_center_pixel requires a segmentation dataset, "
+                    f"got task type '{self.config.task_type.value}'"
+                )
+            # The dataset emits one scalar label per sample, so downstream the
+            # task is a classification task over per-sample embeddings.
+            self.config = dataclasses.replace(
+                self.config, task_type=TaskType.CLASSIFICATION, height_width=None
+            )
         self.trainer = trainer
         self.device = device
         # Add all task attributes to self
@@ -233,12 +321,15 @@ class DownstreamEvaluator:
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
+        self.quantization_scheme = task.quantization_scheme
         self.quantile_config_path = task.quantile_config_path
         # Load quantile config if path is provided
         self.quantile_config: dict | None = None
         if self.quantile_config_path is not None:
             logger.info(f"Loading quantile config from {self.quantile_config_path}")
             self.quantile_config = load_quantile_config(self.quantile_config_path)
+        self.embedding_normalization = task.embedding_normalization
+        self.embedding_pipeline_diagnostics = task.embedding_pipeline_diagnostics
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -324,9 +415,26 @@ class DownstreamEvaluator:
         )
 
     def _get_data_loader(
-        self, split: str, batch_size: int, seed: int | None = None
+        self,
+        split: str,
+        batch_size: int,
+        seed: int | None = None,
+        shuffle: bool = False,
+        max_samples: int | None = None,
     ) -> DataLoader:
-        """Get the data loader for the given split."""
+        """Get the data loader for the given split.
+
+        shuffle is only needed when the loader is trained on directly
+        (finetuning). Embedding extraction should keep the default: order is
+        irrelevant downstream (the probe re-shuffles its own DataLoader every
+        epoch), and sequential access lets tiled datasets reuse the loaded
+        base sample across its windows instead of re-reading it per tile.
+
+        max_samples restricts the loader to a fixed random subset, for
+        diagnostics that re-embed a split many times. The subset is drawn with
+        max_train_samples_seed and kept in dataset order, so it is identical at
+        every checkpoint and still reads sequentially.
+        """
         logger.info(
             f"Getting data loader for {self.dataset} with norm method {self.norm_method} and norm stats from pretrained {self.norm_stats_from_pretrained}"
         )
@@ -341,6 +449,15 @@ class DownstreamEvaluator:
             worker_init_fn = partial(_seed_worker, base_seed=split_seed)
 
         extra_kwargs: dict[str, Any] = {}
+        if self.dataset in ("pastis", "pastis128") and self.window_size is not None:
+            extra_kwargs["window_size"] = self.window_size
+        if self._is_registry_dataset:
+            if self.window_size is not None:
+                extra_kwargs["window_size"] = self.window_size
+            if self.label_at_center_pixel:
+                extra_kwargs["label_at_center_pixel"] = True
+            if self.tile_samples:
+                extra_kwargs["tile_samples"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities
@@ -365,6 +482,13 @@ class DownstreamEvaluator:
             **extra_kwargs,
         )
         is_iterable = isinstance(eval_ds, IterableDataset)
+        if max_samples is not None and not is_iterable and len(eval_ds) > max_samples:
+            generator_for_subset = torch.Generator()
+            generator_for_subset.manual_seed(self.max_train_samples_seed)
+            indices = torch.randperm(len(eval_ds), generator=generator_for_subset)[
+                :max_samples
+            ]
+            eval_ds = Subset(eval_ds, sorted(indices.tolist()))
         return DataLoader(
             eval_ds,
             collate_fn=eval_collate_fn_variable_time,
@@ -372,13 +496,29 @@ class DownstreamEvaluator:
             num_workers=self.num_workers,
             generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
-            shuffle=False if is_iterable else (split == "train"),
+            shuffle=False if is_iterable else shuffle,
         )
 
+    def _resolve_normalizer(self) -> EmbeddingNormalizer | None:
+        """The configured (stateless) embedding normalization, or None for NONE."""
+        mode = self.embedding_normalization
+        if mode == EmbeddingNormalization.NONE:
+            return None
+        return EmbeddingNormalizer(mode=mode)
+
     def _get_embeddings(
-        self, data_loader: DataLoader, is_train: bool
+        self,
+        data_loader: DataLoader,
+        is_train: bool,
+        sample_transform: Any | None = None,
+        normalizer: EmbeddingNormalizer | None = None,
+        quantize: bool | None = None,
+        diagnostics_out: dict[str, float] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Get the embeddings for the given data loader."""
+        """Get the embeddings for the given data loader.
+
+        ``quantize=None`` defers to the task's ``quantize_embeddings``.
+        """
         print(
             f"Getting embeddings for {self.dataset} with norm method {self.norm_method}"
         )
@@ -415,9 +555,13 @@ class DownstreamEvaluator:
             data_loader=data_loader,
             model=model,
             is_train=is_train,
-            quantize=self.quantize_embeddings,
+            quantize=(self.quantize_embeddings if quantize is None else quantize),
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
+            sample_transform=sample_transform,
+            quantization_scheme=self.quantization_scheme,
+            normalizer=normalizer,
+            diagnostics_out=diagnostics_out,
         )
 
     def _val_embed_probe(self) -> EvalTaskResult:
@@ -428,10 +572,18 @@ class DownstreamEvaluator:
         logger.info(f"Getting val loader for {self.dataset}...")
         val_loader = self._get_data_loader("valid", self.embedding_batch_size)
 
+        normalizer = self._resolve_normalizer()
+        diagnostics: dict[str, float] | None = (
+            {} if self.embedding_pipeline_diagnostics else None
+        )
+
         start_time = time.time()
         logger.info(f"Getting train embeddings for {self.dataset}...")
         train_embeddings, train_labels = self._get_embeddings(
-            train_loader, is_train=True
+            train_loader,
+            is_train=True,
+            normalizer=normalizer,
+            diagnostics_out=diagnostics,
         )
         logger.info(f"Train embeddings shape: {train_embeddings.shape}")
         logger.info(
@@ -455,7 +607,9 @@ class DownstreamEvaluator:
             train_labels = train_labels[indices]
 
         logger.info(f"Getting val embeddings for {self.dataset}...")
-        val_embeddings, val_labels = self._get_embeddings(val_loader, is_train=False)
+        val_embeddings, val_labels = self._get_embeddings(
+            val_loader, is_train=False, normalizer=normalizer
+        )
         logger.info(f"Val embeddings shape: {val_embeddings.shape}")
         logger.info(f"Val label counts: {torch.unique(val_labels, return_counts=True)}")
         if self.run_on_test:
@@ -463,7 +617,7 @@ class DownstreamEvaluator:
             test_loader = self._get_data_loader("test", self.embedding_batch_size)
             logger.info(f"Getting test embeddings for {self.dataset}...")
             test_embeddings, test_labels = self._get_embeddings(
-                test_loader, is_train=False
+                test_loader, is_train=False, normalizer=normalizer
             )
             logger.info(f"Test embeddings shape: {test_embeddings.shape}")
             logger.info(
@@ -541,6 +695,19 @@ class DownstreamEvaluator:
         }
         result = self.eval_function(**kwargs)  # type: ignore
 
+        if diagnostics:
+            # Measured on the train split's pipeline: raw_* is what the model
+            # emitted, norm_* what normalization made of it, roundtrip_* what
+            # the int8 round-trip cost. Logged next to the score so a
+            # geometry/quantization problem is visible on the same run.
+            logger.info(
+                f"Embedding pipeline diagnostics for {self.dataset}: {diagnostics}"
+            )
+            result.embedding_diagnostics = diagnostics
+
+        # After the assignment above, which would otherwise drop these.
+        result.embedding_diagnostics.update(self._geometry_diagnostics(val_embeddings))
+
         # Free memory aggressively between evals
         del train_embeddings, train_labels, test_embeddings, test_labels
         del val_embeddings, val_labels
@@ -548,6 +715,36 @@ class DownstreamEvaluator:
         gc.collect()
 
         return result
+
+    def _geometry_diagnostics(self, val_embeddings: torch.Tensor) -> dict[str, float]:
+        """Geometry of the embeddings the probe just scored, as ``geom_*`` metrics.
+
+        Logged alongside every KNN / linear-probe task so an accuracy trend can be
+        read against the shape of the space that produced it: a task can regress
+        either because the encoder lost information or because the surviving
+        information moved into a direction the probe cannot use, and only the
+        second shows up as rising ``geom_common_mode_frac`` / falling
+        ``geom_centered_effective_rank``.
+
+        Spatial tasks are mean-pooled to one vector per sample first, matching how
+        image-level probes consume them. Diagnostics never fail an eval.
+        """
+        try:
+            embeddings = val_embeddings.detach()
+            if embeddings.ndim > 2:
+                embeddings = embeddings.reshape(
+                    embeddings.shape[0], -1, embeddings.shape[-1]
+                ).mean(dim=1)
+            return {
+                f"geom_{k}": v
+                for k, v in compute_embedding_diagnostics(embeddings).items()
+            }
+        except Exception:
+            logger.warning(
+                f"Embedding geometry diagnostics failed for {self.dataset}",
+                exc_info=True,
+            )
+            return {}
 
     def _get_best_checkpoint_path(self) -> str:
         """Get the best checkpoint path."""
@@ -574,7 +771,7 @@ class DownstreamEvaluator:
         logger.info(f"Validating {self.dataset} with finetune")
 
         train_loader = self._get_data_loader(
-            "train", self.ft_batch_size, seed=self.finetune_seed
+            "train", self.ft_batch_size, seed=self.finetune_seed, shuffle=True
         )
         val_loader = self._get_data_loader("valid", self.ft_batch_size)
 
@@ -661,13 +858,21 @@ class DownstreamEvaluator:
         """Compute embedding diagnostics only (no downstream task)."""
         logger.info(f"Computing embedding diagnostics for {self.dataset}")
         data_loader = self._get_data_loader("train", self.embedding_batch_size)
-        embeddings, _ = self._get_embeddings(data_loader, is_train=False)
+        normalizer = self._resolve_normalizer()
+        pipeline: dict[str, float] = {}
+        embeddings, _ = self._get_embeddings(
+            data_loader,
+            is_train=False,
+            normalizer=normalizer,
+            diagnostics_out=pipeline,
+        )
         logger.info(f"Embeddings shape for {self.dataset}: {embeddings.shape}")
 
         if embeddings.ndim >= 3:
             diagnostics = compute_spatial_embedding_diagnostics(embeddings)
         else:
             diagnostics = compute_embedding_diagnostics(embeddings)
+        diagnostics.update(pipeline)
         logger.info(f"Embedding diagnostics for {self.dataset}: {diagnostics}")
 
         result = EvalTaskResult(val_result=None, test_result=None)
@@ -893,8 +1098,10 @@ class DownstreamEvaluatorCallback(Callback):
                 )
                 wandb_callback.wandb.log({f"{evaluator.evaluation_name}_step": 0})
 
-        # Log test results and bootstrap stats independently of val validity
-        test_valid = test_result is not None and test_result.primary >= 0
+        # Log test results and bootstrap stats independently of val validity.
+        # Don't gate on `test_result.primary >= 0` — for regression tasks with
+        # neg-RMSE primary, valid test values are always negative.
+        test_valid = test_result is not None
         if wandb_callback.enabled and test_valid:
             if bootstrap_stats:
                 wandb_callback.wandb.log(
@@ -1115,12 +1322,31 @@ class DownstreamEvaluatorCallback(Callback):
             else os.path.basename(save_folder.rstrip("/"))
         )
 
+        # Beaker rejects experiment names longer than 128 chars. The launcher
+        # (common.build_launch_config) turns ``run_name`` into the experiment name
+        # ``{run_name}-evaluate-{8-char-uuid}`` (18 chars of suffix), so cap the eval
+        # run name accordingly. The ``_eval_step{step}`` suffix is kept intact (each
+        # step must map to a distinct job); only the train-run-name prefix is
+        # truncated, and the trailing uuid still guarantees uniqueness.
+        step_suffix = f"_eval_step{step}"
+        max_run_name_len = _BEAKER_MAX_NAME_LEN - _BEAKER_LAUNCH_NAME_SUFFIX_LEN
+        max_prefix_len = max_run_name_len - len(step_suffix)
+        eval_run_name = f"{train_run_name[:max_prefix_len]}{step_suffix}"
+        if len(eval_run_name) < len(train_run_name) + len(step_suffix):
+            logger.warning(
+                "Truncated in-loop eval experiment name to fit Beaker's %d-char "
+                "limit (train run name %r is too long); using %r.",
+                _BEAKER_MAX_NAME_LEN,
+                train_run_name,
+                eval_run_name,
+            )
+
         launch_checkpoint_eval_job(
             module_path=module_path,
             checkpoint_dir=save_folder,
             step=step,
             cluster=clusters[0],
-            run_name=f"{train_run_name}_eval_step{step}",
+            run_name=eval_run_name,
             priority=priority,
             tasks_to_run=task_names,
             wandb_project=(
