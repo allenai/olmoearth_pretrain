@@ -2389,6 +2389,152 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
       "window_size": 128
     },
+    "pastis_rslearn": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "config_json_sha256": "c00291bba30406a946dc01b3eeb72883dbf6087676a6e4fb788d6d0d557834d5",
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_rslearn",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "gse",
+        "sentinel1",
+        "sentinel2_l2a",
+        "tessera_v2"
+      ],
+      "name": "pastis_rslearn",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 19.68572425842285,
+            "mean": -16.361109214593032,
+            "min": -100.0,
+            "std": 3.0656779240164145
+          },
+          "vv": {
+            "max": 35.75605773925781,
+            "mean": -9.9867434725577,
+            "min": -100.0,
+            "std": 3.150031488685353
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21157.0,
+            "mean": 647.691312898808,
+            "min": 0.0,
+            "std": 1262.330341490884
+          },
+          "B02": {
+            "max": 19968.0,
+            "mean": 751.2715023876773,
+            "min": 0.0,
+            "std": 1222.9657243488316
+          },
+          "B03": {
+            "max": 19648.0,
+            "mean": 992.5020089614897,
+            "min": 0.0,
+            "std": 1129.2111017671414
+          },
+          "B04": {
+            "max": 18272.0,
+            "mean": 1010.9958015006331,
+            "min": 0.0,
+            "std": 1163.766157318768
+          },
+          "B05": {
+            "max": 17561.0,
+            "mean": 1459.1256845379403,
+            "min": 0.0,
+            "std": 1131.1022976049078
+          },
+          "B06": {
+            "max": 17187.0,
+            "mean": 2456.6356387761857,
+            "min": 0.0,
+            "std": 1138.367109706842
+          },
+          "B07": {
+            "max": 16975.0,
+            "mean": 2812.586430277394,
+            "min": 0.0,
+            "std": 1232.2394396131242
+          },
+          "B08": {
+            "max": 16752.0,
+            "mean": 3003.699059136884,
+            "min": 0.0,
+            "std": 1294.6202200514176
+          },
+          "B09": {
+            "max": 16524.0,
+            "mean": 3173.910584282919,
+            "min": 0.0,
+            "std": 1546.4394862265563
+          },
+          "B11": {
+            "max": 15440.0,
+            "mean": 2320.7043786373806,
+            "min": 0.0,
+            "std": 1002.6818882235024
+          },
+          "B12": {
+            "max": 15229.0,
+            "mean": 1586.7242845285882,
+            "min": 0.0,
+            "std": 967.4802844044757
+          },
+          "B8A": {
+            "max": 16661.0,
+            "mean": 3040.3085061875936,
+            "min": 0.0,
+            "std": 1234.176028357105
+          }
+        }
+      },
+      "num_classes": 19,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/pastis_rslearn",
+      "split_stats": {
+        "test": {
+          "count": 496
+        },
+        "train": {
+          "count": 1455
+        },
+        "val": {
+          "count": 482
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_rslearn",
+      "window_size": 128
+    },
     "small_landsat_vessel_length": {
       "classes": [
         "0"
