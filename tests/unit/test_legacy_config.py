@@ -217,8 +217,8 @@ def test_flat_register_fields_are_nested() -> None:
         "latent_depth": 4,
         "per_depth_read_proj": True,
         "attn_dim": 16,
-        "projection_dims": [4, 2],
-        "projection_output_norm": True,
+        "student_dims": [4, 2],
+        "student_output_norm": True,
     }
     # The student was always distilled by the old code, so it gets a head config
     # carrying the old back_projection_hidden.

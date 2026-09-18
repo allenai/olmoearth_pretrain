@@ -14,7 +14,7 @@ class RegisterDistillationHeadConfig(Config):
     """Configuration for :class:`RegisterDistillationHead`.
 
     Attaching this to ``LatentMIMConfig`` turns distillation on for the encoder's
-    detached student (``perceiver_config.projection_dims``); without it the student
+    detached student (``perceiver_config.student_dims``); without it the student
     is trained by supervision alone, if at all.
 
     Args:
@@ -41,19 +41,19 @@ class RegisterDistillationHeadConfig(Config):
             )
 
     def build(
-        self, register_dim: int, projection_dims: list[int]
+        self, register_dim: int, student_dims: list[int]
     ) -> "RegisterDistillationHead":
         """Build the head.
 
         Args:
             register_dim: Width of the teacher register grid (the Perceiver's
                 ``register_dim``, resolved by LatentMIMConfig).
-            projection_dims: The student's Matryoshka prefix widths, descending.
+            student_dims: The student's Matryoshka prefix widths, descending.
         """
         self.validate()
         return RegisterDistillationHead(
             register_dim=register_dim,
-            projection_dims=projection_dims,
+            student_dims=student_dims,
             back_projection_hidden=self.back_projection_hidden,
             gram_max_tokens=self.gram_max_tokens,
         )
@@ -73,13 +73,13 @@ class RegisterDistillationHead(nn.Module):
     def __init__(
         self,
         register_dim: int,
-        projection_dims: list[int],
+        student_dims: list[int],
         back_projection_hidden: int | None = None,
         gram_max_tokens: int = 2048,
     ) -> None:
         """Initialize the head."""
         super().__init__()
-        self.projection_dims = list(projection_dims)
+        self.student_dims = list(student_dims)
         self.gram_max_tokens = gram_max_tokens
 
         def head(prefix_dim: int) -> nn.Module:
@@ -93,11 +93,11 @@ class RegisterDistillationHead(nn.Module):
             )
 
         self.back_projections = nn.ModuleDict(
-            {str(d): head(d) for d in self.projection_dims}
+            {str(d): head(d) for d in self.student_dims}
         )
 
     def forward(
-        self, registers: Tensor, projected_registers: Tensor
+        self, registers: Tensor, student_registers: Tensor
     ) -> tuple[Tensor, dict[str, Tensor]]:
         """Distill the (detached) teacher register grid into the low-dim student.
 
@@ -110,7 +110,7 @@ class RegisterDistillationHead(nn.Module):
         Args:
             registers: Teacher register grid ``[B, N, D]``; detached here, so the loss
                 never reaches the encoder.
-            projected_registers: Student grid ``[B, N, max_d]`` (its input was already
+            student_registers: Student grid ``[B, N, max_d]`` (its input was already
                 detached inside the encoder, so gradients flow into the projection and
                 these heads only).
 
@@ -119,7 +119,7 @@ class RegisterDistillationHead(nn.Module):
             metrics: Detached per-term, per-prefix values for logging.
         """
         teacher = registers.detach().float()
-        student = projected_registers.float()
+        student = student_registers.float()
         metrics: dict[str, Tensor] = {}
         total = torch.zeros([], device=student.device, dtype=student.dtype)
         idx: Tensor | None = None
@@ -136,11 +136,11 @@ class RegisterDistillationHead(nn.Module):
             back = back_projection(prefix)
             cosine = (1.0 - F.cosine_similarity(back, teacher, dim=-1)).mean()
             total = total + cosine
-            metrics[f"projection/distill_cosine_d{dim_str}"] = cosine.detach()
+            metrics[f"student/distill_cosine_d{dim_str}"] = cosine.detach()
             flat_prefix = F.normalize(prefix.reshape(-1, prefix.shape[-1]), dim=-1)
             if idx is not None:
                 flat_prefix = flat_prefix[idx]
             gram = F.mse_loss(flat_prefix @ flat_prefix.T, teacher_gram)
             total = total + gram
-            metrics[f"projection/distill_gram_d{dim_str}"] = gram.detach()
+            metrics[f"student/distill_gram_d{dim_str}"] = gram.detach()
         return total, metrics

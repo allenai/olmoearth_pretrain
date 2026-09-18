@@ -186,7 +186,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.total_loss_name = f"{self.total_loss_name}+supervision"
 
         if self.model.register_distillation_head is not None:
-            self.total_loss_name = f"{self.total_loss_name}+projection"
+            self.total_loss_name = f"{self.total_loss_name}+student"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -304,7 +304,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
-                projection_outputs,
+                student_outputs,
             ) = self.model(batch, patch_size)
 
             with torch.no_grad():
@@ -342,16 +342,16 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
                 if (
                     self.model.register_distillation_head is not None
-                    and projection_outputs is not None
-                    and projection_outputs["projected_registers"] is not None
+                    and student_outputs is not None
+                    and student_outputs["student_registers"] is not None
                 ):
                     # Detached-student loss: the head detaches the teacher registers and
                     # the student's inputs were detached inside the encoder, so none of
                     # this reaches the encoder or the Perceiver.
                     distill_loss, distill_metrics = (
                         self.model.register_distillation_head(
-                            projection_outputs["registers"],
-                            projection_outputs["projected_registers"],
+                            student_outputs["registers"],
+                            student_outputs["student_registers"],
                         )
                     )
                     loss = loss + distill_loss

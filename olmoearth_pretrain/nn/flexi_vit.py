@@ -1740,15 +1740,15 @@ class PerceiverConfig(Config):
             register stream stays at ``register_dim``; the read K/V source is then
             consumed at full encoder width with no down-projection. None ties the
             attention width to ``register_dim``.
-        projection_dims: If set, add a DETACHED low-dim "student" readout of the
-            register grid, exported alongside the registers as ``projected_registers``
-            at width ``max(projection_dims)``. The student's input is detached, so its
+        student_dims: If set, add a DETACHED low-dim "student" readout of the
+            register grid, exported alongside the registers as ``student_registers``
+            at width ``max(student_dims)``. The student's input is detached, so its
             gradients (the train module's distillation and supervision losses) never
             reach the encoder or the primary bottleneck: the encoder trains exactly as
             it would without the student, which is trained online against the improving
             teacher. Additional (smaller) entries are trained as MATRYOSHKA PREFIXES of
             the student output.
-        projection_output_norm: Put a ``LayerNorm`` on the student's output. The
+        student_output_norm: Put a ``LayerNorm`` on the student's output. The
             primary bottleneck ends in one, which otherwise makes the bare ``Linear``
             the only served representation with no norm at its own width; nothing in
             the distillation loss pins its scale either, since the cosine term is taken
@@ -1765,19 +1765,19 @@ class PerceiverConfig(Config):
     num_heads: int | None = None
     per_depth_read_proj: bool = False
     attn_dim: int | None = None
-    projection_dims: list[int] | None = None
-    projection_output_norm: bool = False
+    student_dims: list[int] | None = None
+    student_output_norm: bool = False
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
         return self.num_heads if self.num_heads is not None else encoder_num_heads
 
     @property
-    def sorted_projection_dims(self) -> list[int] | None:
+    def sorted_student_dims(self) -> list[int] | None:
         """Student dims descending: ``[0]`` is the student width, the rest prefixes."""
-        if not self.projection_dims:
+        if not self.student_dims:
             return None
-        return sorted(set(self.projection_dims), reverse=True)
+        return sorted(set(self.student_dims), reverse=True)
 
     def validate(self, *, encoder_num_heads: int, position_encoding: str) -> None:
         """Check the bottleneck against the encoder it will attach to."""
@@ -1802,13 +1802,11 @@ class PerceiverConfig(Config):
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
-        if self.projection_dims is not None:
-            if len(self.projection_dims) == 0 or any(
-                d <= 0 for d in self.projection_dims
-            ):
+        if self.student_dims is not None:
+            if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
-                    "projection_dims must be a non-empty list of positive ints, got "
-                    f"{self.projection_dims}"
+                    "student_dims must be a non-empty list of positive ints, got "
+                    f"{self.student_dims}"
                 )
 
     def build(
@@ -1839,6 +1837,10 @@ class PerceiverConfig(Config):
 #: Attribute the Perceiver was stored under before the rename; still the state-dict
 #: prefix of every checkpoint trained before it (``encoder.register_bottleneck.*``).
 LEGACY_PERCEIVER_ATTR = "register_bottleneck"
+#: The student used to be a bare ``Linear`` under this name with its optional output
+#: LayerNorm beside it; both now live in the ``register_student`` Sequential.
+LEGACY_STUDENT_ATTR = "register_projection"
+LEGACY_STUDENT_NORM_ATTR = "register_projection_norm"
 #: The student's back-projection heads used to live on the encoder under this name
 #: (``encoder.register_back_projections.*``); they are now
 #: ``LatentMIM.register_distillation_head.back_projections``.
@@ -2029,9 +2031,8 @@ class Encoder(FlexiVitBase):
         # Detached low-dim student readout of the register grid (see
         # PerceiverConfig). Dims are stored descending; the student runs at
         # dims[0] and the smaller entries are Matryoshka prefixes of its output.
-        self.register_projection_dims: list[int] | None = None
-        self.register_projection: nn.Linear | None = None
-        self.register_projection_norm: nn.LayerNorm | None = None
+        self.register_student_dims: list[int] | None = None
+        self.register_student: nn.Sequential | None = None
         if perceiver_config is not None:
             perceiver_config.validate(
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
@@ -2045,17 +2046,13 @@ class Encoder(FlexiVitBase):
                 rope_base=rope_base,
                 qk_norm=qk_norm,
             )
-            self.register_projection_dims = perceiver_config.sorted_projection_dims
-            if self.register_projection_dims is not None:
-                student_dim = self.register_projection_dims[0]
-                self.register_projection = nn.Linear(self.register_dim, student_dim)
-                self.register_projection_norm = (
-                    nn.LayerNorm(student_dim)
-                    if perceiver_config.projection_output_norm
-                    else None
-                )
-                # The per-prefix back-projection heads that train the student live on
-                # LatentMIM (training-only, like the supervision head), not here.
+            self.register_student_dims = perceiver_config.sorted_student_dims
+            if self.register_student_dims is not None:
+                student_dim = self.register_student_dims[0]
+                student_layers = [nn.Linear(self.register_dim, student_dim)]
+                if perceiver_config.student_output_norm:
+                    student_layers.append(nn.LayerNorm(student_dim))
+                self.register_student = nn.Sequential(*student_layers)
 
         # With a bottleneck the contrastive head projects from the register latents;
         # otherwise from the encoder patch-token output.
@@ -2086,18 +2083,24 @@ class Encoder(FlexiVitBase):
     def _legacy_state_dict_hook(
         state_dict: dict, prefix: str, *args: object, **kwargs: object
     ) -> None:
-        """Rename ``register_bottleneck.*`` to ``perceiver.*``; drop stale training heads.
+        """Bring an old checkpoint's encoder keys up to the current layout.
 
-        ``register_back_projections.*`` under the encoder prefix are the student's
-        back-projection heads from checkpoints written before they moved to
+        Three moves: ``register_bottleneck.*`` became ``perceiver.*``; the student's
+        ``register_projection.*`` + ``register_projection_norm.*`` became the
+        ``register_student`` Sequential (``.0`` Linear, ``.1`` LayerNorm); and the
+        student's back-projection heads (``register_back_projections.*``) moved to
         :class:`~olmoearth_pretrain.nn.latent_mim.LatentMIM`. When a whole LatentMIM
-        is loaded its own hook has already moved them; anything still here belongs to
-        an encoder-only load, where the training heads have no home and are dropped.
+        is loaded its own hook has already moved the heads; anything still here belongs
+        to an encoder-only load, where the training heads have no home and are dropped.
         """
-        old = prefix + LEGACY_PERCEIVER_ATTR + "."
-        new = prefix + "perceiver."
-        for key in [k for k in state_dict if k.startswith(old)]:
-            state_dict[new + key[len(old) :]] = state_dict.pop(key)
+        renames = {
+            prefix + LEGACY_PERCEIVER_ATTR + ".": prefix + "perceiver.",
+            prefix + LEGACY_STUDENT_NORM_ATTR + ".": prefix + "register_student.1.",
+            prefix + LEGACY_STUDENT_ATTR + ".": prefix + "register_student.0.",
+        }
+        for old, new in renames.items():
+            for key in [k for k in state_dict if k.startswith(old)]:
+                state_dict[new + key[len(old) :]] = state_dict.pop(key)
         stale = prefix + LEGACY_BACK_PROJECTIONS_ATTR + "."
         for key in [k for k in state_dict if k.startswith(stale)]:
             del state_dict[key]
@@ -2510,12 +2513,11 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
-            # Detached student readout: re-projects the registers just computed.
-            if self.register_projection is not None:
-                projected = self.register_projection(registers.detach())
-                if self.register_projection_norm is not None:
-                    projected = self.register_projection_norm(projected)
-                register_output["projected_registers"] = projected
+            # Detached student readout of the registers just computed.
+            if self.register_student is not None:
+                register_output["student_registers"] = self.register_student(
+                    registers.detach()
+                )
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -2581,10 +2583,8 @@ class Encoder(FlexiVitBase):
         if register_output is not None:
             output_dict["registers"] = register_output["registers"]
             output_dict["register_positions"] = register_output["register_positions"]
-            if "projected_registers" in register_output:
-                output_dict["projected_registers"] = register_output[
-                    "projected_registers"
-                ]
+            if "student_registers" in register_output:
+                output_dict["student_registers"] = register_output["student_registers"]
 
         if not fast_pass:
             if self.contrastive_from_registers:

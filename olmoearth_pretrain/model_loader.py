@@ -21,6 +21,7 @@ which is required for any config.json that still carries since-removed fields):
 import copy
 import json
 import logging
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from os import PathLike
@@ -429,8 +430,8 @@ LEGACY_FLAT_REGISTER_FIELDS: dict[str, str] = {
     "register_num_heads": "num_heads",
     "register_per_depth_read_proj": "per_depth_read_proj",
     "register_attn_dim": "attn_dim",
-    "register_projection_dims": "projection_dims",
-    "register_projection_output_norm": "projection_output_norm",
+    "register_projection_dims": "student_dims",
+    "register_projection_output_norm": "student_output_norm",
 }
 #: The old encoder field that configured the student's back-projection heads; it now
 #: lives on ``LatentMIMConfig.register_distillation_head_config``.
@@ -447,20 +448,30 @@ LEGACY_DECODER_PERCEIVER_FLAG = "use_register_bottleneck"
 def legacy_key_for_current(key: str) -> str:
     """Where an old checkpoint stores the parameter now called ``key``.
 
-    Two moves are undone: the Perceiver was stored under ``register_bottleneck``, and
-    the student's back-projection heads lived on the encoder
+    Three moves are undone: the Perceiver was stored under ``register_bottleneck``; the
+    student was a bare ``register_projection`` Linear with a separate
+    ``register_projection_norm`` before both became the ``register_student``
+    Sequential; and the student's back-projection heads lived on the encoder
     (``encoder.register_back_projections``) before they moved into
-    ``LatentMIM.register_distillation_head``. Keys untouched by either come back
-    unchanged.
+    ``LatentMIM.register_distillation_head``. Keys untouched come back unchanged.
     """
     from olmoearth_pretrain.nn.flexi_vit import (
         LEGACY_BACK_PROJECTIONS_ATTR,
         LEGACY_PERCEIVER_ATTR,
+        LEGACY_STUDENT_ATTR,
+        LEGACY_STUDENT_NORM_ATTR,
     )
 
     heads = "register_distillation_head.back_projections."
     if key.startswith(heads):
         key = "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "." + key[len(heads) :]
+    # The student Sequential: .0 is the old bare Linear, .1 its old separate norm.
+    key = re.sub(
+        r"(^|\.)register_student\.0\.", rf"\g<1>{LEGACY_STUDENT_ATTR}.", key, 1
+    )
+    key = re.sub(
+        r"(^|\.)register_student\.1\.", rf"\g<1>{LEGACY_STUDENT_NORM_ATTR}.", key, 1
+    )
     if key.startswith("perceiver."):
         key = LEGACY_PERCEIVER_ATTR + key[len("perceiver") :]
     elif ".perceiver." in key:
@@ -473,11 +484,17 @@ def current_key_for_legacy(key: str) -> str:
     from olmoearth_pretrain.nn.flexi_vit import (
         LEGACY_BACK_PROJECTIONS_ATTR,
         LEGACY_PERCEIVER_ATTR,
+        LEGACY_STUDENT_ATTR,
+        LEGACY_STUDENT_NORM_ATTR,
     )
 
     old_heads = "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "."
     if key.startswith(old_heads):
         key = "register_distillation_head.back_projections." + key[len(old_heads) :]
+    key = re.sub(
+        rf"(^|\.){LEGACY_STUDENT_NORM_ATTR}\.", r"\g<1>register_student.1.", key, 1
+    )
+    key = re.sub(rf"(^|\.){LEGACY_STUDENT_ATTR}\.", r"\g<1>register_student.0.", key, 1)
     if key.startswith(LEGACY_PERCEIVER_ATTR + "."):
         key = "perceiver" + key[len(LEGACY_PERCEIVER_ATTR) :]
     elif f".{LEGACY_PERCEIVER_ATTR}." in key:
@@ -546,7 +563,7 @@ def _nest_legacy_perceiver_fields(model: dict, enc: dict) -> None:
         "nested legacy Perceiver fields into perceiver_config: %s",
         sorted(flat),
     )
-    if nested.get("projection_dims"):
+    if nested.get("student_dims"):
         head: dict[str, Any] = {"_CLASS_": _DISTILLATION_HEAD_CONFIG_CLASS}
         if hidden is not None:
             head["back_projection_hidden"] = hidden

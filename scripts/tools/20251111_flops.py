@@ -85,12 +85,12 @@ SINGLE_BANDSET_CONFIG = TokenizationConfig(
 )
 
 
-def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
+def build_v1_3_rc_encoder(with_student: bool) -> Encoder:
     """The v1.3 distillation release candidate's encoder.
 
     Field values mirror ``encoder_config`` in
     regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
-    ``with_projection=True`` includes the shipped d128/d64 linear projection
+    ``with_student=True`` includes the shipped d128/d64 linear projection
     (the distillation student); ``False`` measures the Perceiver alone.
     """
     config = EncoderConfig(
@@ -130,7 +130,7 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
             latent_depth=4,
             per_depth_read_proj=True,
             attn_dim=768,
-            projection_dims=[128, 64] if with_projection else None,
+            student_dims=[128, 64] if with_student else None,
         ),
     )
     # The student's back-projection heads are training-only and live on LatentMIM,

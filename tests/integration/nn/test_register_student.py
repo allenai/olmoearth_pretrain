@@ -50,7 +50,7 @@ def _encoder_config(with_student: bool) -> EncoderConfig:
     )
     if with_student:
         assert config.perceiver_config is not None
-        config.perceiver_config.projection_dims = list(PROJECTION_DIMS)
+        config.perceiver_config.student_dims = list(PROJECTION_DIMS)
     return config
 
 
@@ -98,14 +98,14 @@ def _assert_student_isolated(model_or_encoder: torch.nn.Module) -> None:
     """No encoder-block or primary-Perceiver parameter may carry gradient."""
     encoder = getattr(model_or_encoder, "encoder", model_or_encoder)
     for name, param in encoder.named_parameters():
-        if name.startswith("register_projection"):
+        if name.startswith("register_student"):
             continue
         assert param.grad is None or torch.all(param.grad == 0), (
             f"student gradient leaked into encoder parameter {name}"
         )
 
 
-def test_encoder_register_projection_detached(
+def test_encoder_register_student_detached(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
     """The student outputs a max(dims)-wide grid and never grads the encoder."""
@@ -116,9 +116,9 @@ def test_encoder_register_projection_detached(
 
     output_dict = encoder.forward(x, patch_size=4, input_res=10)
     assert output_dict["registers"].shape == (B, *grid, REGISTER_DIM)
-    projected = output_dict["projected_registers"]
+    projected = output_dict["student_registers"]
     assert projected.shape == (B, *grid, max(PROJECTION_DIMS))
-    assert encoder.register_projection is not None
+    assert encoder.register_student is not None
     # The training-only back-projection heads are not part of the encoder.
     assert not any(
         n.startswith("register_back_projections") for n, _ in encoder.named_parameters()
@@ -127,7 +127,7 @@ def test_encoder_register_projection_detached(
     encoder.zero_grad()
     projected.sum().backward()
     _assert_student_isolated(encoder)
-    assert encoder.register_projection.weight.grad is not None
+    assert encoder.register_student[0].weight.grad is not None
 
 
 def test_encoder_registers_grad_without_student_interference(
@@ -141,8 +141,8 @@ def test_encoder_registers_grad_without_student_interference(
     output_dict["registers"].sum().backward()
     assert encoder.perceiver is not None
     assert encoder.perceiver.register.grad is not None
-    assert encoder.register_projection is not None
-    assert encoder.register_projection.weight.grad is None
+    assert encoder.register_student is not None
+    assert encoder.register_student[0].weight.grad is None
 
 
 def test_latentmim_supervision_reads_the_registers(
@@ -153,13 +153,11 @@ def test_latentmim_supervision_reads_the_registers(
     assert model.supervision_head is not None
 
     x = MaskedOlmoEarthSample(**masked_sample_dict)
-    (_, _, _, _, _, supervision_preds, projection_outputs) = model.forward(
-        x, patch_size=4
-    )
+    (_, _, _, _, _, supervision_preds, student_outputs) = model.forward(x, patch_size=4)
     assert supervision_preds is not None and "worldcover" in supervision_preds
-    assert projection_outputs is not None
-    assert projection_outputs["projected_registers"].shape[-1] == max(PROJECTION_DIMS)
-    assert projection_outputs["registers"].shape[-1] == REGISTER_DIM
+    assert student_outputs is not None
+    assert student_outputs["student_registers"].shape[-1] == max(PROJECTION_DIMS)
+    assert student_outputs["registers"].shape[-1] == REGISTER_DIM
 
 
 def test_latent_mim_owns_the_distillation_head() -> None:
@@ -205,13 +203,13 @@ def test_distillation_head_loss_prefixes() -> None:
     student_source = torch.randn(B, N, max(PROJECTION_DIMS), requires_grad=True)
     student = student_source * 1.0
     head = RegisterDistillationHead(
-        register_dim=D, projection_dims=PROJECTION_DIMS, gram_max_tokens=8
+        register_dim=D, student_dims=PROJECTION_DIMS, gram_max_tokens=8
     )
     total, metrics = head(teacher, student)
     assert torch.isfinite(total)
     for d in PROJECTION_DIMS:
-        assert f"projection/distill_cosine_d{d}" in metrics
-        assert f"projection/distill_gram_d{d}" in metrics
+        assert f"student/distill_cosine_d{d}" in metrics
+        assert f"student/distill_gram_d{d}" in metrics
     total.backward()
     assert student_source.grad is not None
     # The teacher is detached inside the head, so no gradient flows back to it.
@@ -220,10 +218,10 @@ def test_distillation_head_loss_prefixes() -> None:
         assert back_projection.weight.grad is not None
 
 
-def test_perceiver_config_rejects_empty_projection_dims() -> None:
+def test_perceiver_config_rejects_empty_student_dims() -> None:
     """An empty student dim list is a config error, not a silent no-student."""
     config = _encoder_config(True)
     assert config.perceiver_config is not None
-    config.perceiver_config.projection_dims = []
-    with pytest.raises(ValueError, match="projection_dims"):
+    config.perceiver_config.student_dims = []
+    with pytest.raises(ValueError, match="student_dims"):
         config.validate()

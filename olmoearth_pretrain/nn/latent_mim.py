@@ -154,9 +154,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
             extra_metrics: additional metrics to log
             supervision_preds: per-modality supervision predictions (or None)
-            projection_outputs: register-grid outputs when the encoder has a
+            student_outputs: register-grid outputs when the encoder has a
                 Perceiver (else None): the teacher ``registers`` and, with a
-                student, the ``projected_registers``. Consumed by the train module's
+                student, the ``student_registers``. Consumed by the train module's
                 distillation losses. The two grids are FLATTENED to ``[B, N, D]``
                 here: every consumer (Gram, cosine) is relational over cells and
                 takes a token sequence.
@@ -169,7 +169,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
         # The decoder reads only the registers; the student projection is for the
         # train module's losses (and evals), never a decoder input.
-        projected_registers = decoder_kwargs.pop("projected_registers", None)
+        student_registers = decoder_kwargs.pop("student_registers", None)
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
@@ -189,18 +189,18 @@ class LatentMIM(nn.Module, DistributedMixins):
                 raise ValueError("the supervision head requires a Perceiver")
             supervision_preds = self.supervision_head(registers, x)
 
-        projection_outputs: dict | None = None
+        student_outputs: dict | None = None
         if registers is not None:
-            projection_outputs = {
+            student_outputs = {
                 "registers": rearrange(registers, "b h w d -> b (h w) d"),
-                "projected_registers": None,
+                "student_registers": None,
             }
-        if projected_registers is not None:
-            assert projection_outputs is not None, (
+        if student_registers is not None:
+            assert student_outputs is not None, (
                 "a projection student cannot exist without a Perceiver"
             )
-            projection_outputs["projected_registers"] = rearrange(
-                projected_registers, "b h w d -> b (h w) d"
+            student_outputs["student_registers"] = rearrange(
+                student_registers, "b h w d -> b (h w) d"
             )
 
         return (
@@ -210,7 +210,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed,
             extra_metrics,
             supervision_preds,
-            projection_outputs,
+            student_outputs,
         )
 
     def apply_fsdp(
@@ -316,13 +316,10 @@ class LatentMIMConfig(Config):
             )
         if self.register_distillation_head_config is not None:
             perceiver_config = self.encoder_config.perceiver_config
-            if (
-                perceiver_config is None
-                or perceiver_config.sorted_projection_dims is None
-            ):
+            if perceiver_config is None or perceiver_config.sorted_student_dims is None:
                 raise ValueError(
                     "register_distillation_head_config requires a Perceiver with a "
-                    "student (perceiver_config.projection_dims)"
+                    "student (perceiver_config.student_dims)"
                 )
 
     def build(self) -> "LatentMIM":
@@ -348,10 +345,10 @@ class LatentMIMConfig(Config):
         if self.register_distillation_head_config is not None:
             perceiver_config = self.encoder_config.perceiver_config
             assert perceiver_config is not None
-            assert perceiver_config.sorted_projection_dims is not None
+            assert perceiver_config.sorted_student_dims is not None
             register_distillation_head = self.register_distillation_head_config.build(
                 register_dim=perceiver_config.register_dim,
-                projection_dims=perceiver_config.sorted_projection_dims,
+                student_dims=perceiver_config.sorted_student_dims,
             )
         return LatentMIM(
             encoder=encoder,

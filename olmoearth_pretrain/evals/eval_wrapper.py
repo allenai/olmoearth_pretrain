@@ -49,8 +49,8 @@ class EvalWrapper:
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
-        eval_on_projected_registers: bool = False,
-        eval_projection_dim: int | None = None,
+        eval_on_student_registers: bool = False,
+        eval_student_dim: int | None = None,
         use_center_token: bool = False,
     ):
         """Initialize the eval wrapper.
@@ -66,13 +66,13 @@ class EvalWrapper:
                 probe the pooled encoder patch tokens instead of the register latents.
                 No effect when the model has no Perceiver (encoder tokens are
                 always used in that case).
-            eval_on_projected_registers: If True and the model has a detached register
-                projection (``register_projection_dims``), probe the low-dim
-                ``projected_registers`` instead of the register grid -- the same run
+            eval_on_student_registers: If True and the model has a detached register
+                projection (``register_student_dims``), probe the low-dim
+                ``student_registers`` instead of the register grid -- the same run
                 can then be evaluated at both widths. Mutually exclusive with
                 eval_on_encoder_tokens.
-            eval_projection_dim: With ``eval_on_projected_registers``, probe only the
-                first ``eval_projection_dim`` dims of the student (a Matryoshka
+            eval_student_dim: With ``eval_on_student_registers``, probe only the
+                first ``eval_student_dim`` dims of the student (a Matryoshka
                 prefix, e.g. 64 of a [128, 64] student). None (default) probes the
                 full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
@@ -93,26 +93,21 @@ class EvalWrapper:
         )
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
-        self.eval_on_projected_registers = eval_on_projected_registers
-        self.eval_projection_dim = eval_projection_dim
+        self.eval_on_student_registers = eval_on_student_registers
+        self.eval_student_dim = eval_student_dim
         self.use_center_token = use_center_token
-        if self.eval_on_projected_registers and self.eval_on_encoder_tokens:
+        if self.eval_on_student_registers and self.eval_on_encoder_tokens:
             raise ValueError(
-                "eval_on_projected_registers and eval_on_encoder_tokens are mutually "
+                "eval_on_student_registers and eval_on_encoder_tokens are mutually "
                 "exclusive (projected registers only exist under the bottleneck)"
             )
-        if (
-            self.eval_projection_dim is not None
-            and not self.eval_on_projected_registers
-        ):
-            raise ValueError(
-                "eval_projection_dim requires eval_on_projected_registers=True"
-            )
-        if self.eval_on_projected_registers and not getattr(
+        if self.eval_student_dim is not None and not self.eval_on_student_registers:
+            raise ValueError("eval_student_dim requires eval_on_student_registers=True")
+        if self.eval_on_student_registers and not getattr(
             self.model, "use_perceiver", False
         ):
             raise ValueError(
-                "eval_on_projected_registers set to True but the model has no perceiver"
+                "eval_on_student_registers set to True but the model has no perceiver"
             )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
@@ -186,21 +181,21 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         averaging the whole window would mix in unlabeled context. Otherwise the
         registers are pooled across the grid to ``[B, D]``.
 
-        With ``eval_on_projected_registers`` the low-dim detached student
-        (``projected_registers``) is probed instead of the register grid; it shares
+        With ``eval_on_student_registers`` the low-dim detached student
+        (``student_registers``) is probed instead of the register grid; it shares
         the registers' grid layout, so the pooling is identical.
-        ``eval_projection_dim`` keeps only the first d dims (a Matryoshka prefix).
+        ``eval_student_dim`` keeps only the first d dims (a Matryoshka prefix).
         """
-        if self.eval_on_projected_registers:
-            if "projected_registers" not in encoder_output:
+        if self.eval_on_student_registers:
+            if "student_registers" not in encoder_output:
                 raise ValueError(
-                    "eval_on_projected_registers requires a model with "
-                    "register_projection_dims (no projected_registers in the encoder "
+                    "eval_on_student_registers requires a model with "
+                    "register_student_dims (no student_registers in the encoder "
                     "output)"
                 )
-            grid = encoder_output["projected_registers"]  # [B, n_h, n_w, d]
-            if self.eval_projection_dim is not None:
-                grid = grid[..., : self.eval_projection_dim]
+            grid = encoder_output["student_registers"]  # [B, n_h, n_w, d]
+            if self.eval_student_dim is not None:
+                grid = grid[..., : self.eval_student_dim]
         else:
             grid = encoder_output["registers"]  # [B, n_h, n_w, D]
         if self.spatial_pool:
@@ -231,9 +226,9 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                 # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
                 batch_embeddings = self._pool_registers(encoder_output)
             else:
-                if self.eval_on_projected_registers:
+                if self.eval_on_student_registers:
                     raise ValueError(
-                        "eval_on_projected_registers set to True but the model has set "
+                        "eval_on_student_registers set to True but the model has set "
                         "use_perceiver=False or doesn't have registers in the encoder output"
                     )
                 tokens_and_masks: TokensAndMasks = encoder_output[

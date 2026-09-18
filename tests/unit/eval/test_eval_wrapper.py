@@ -90,7 +90,7 @@ class TestPoolRegisters:
             self._wrapper(TaskType.SEGMENTATION, use_center_token=True)
 
 
-class TestPoolProjectedRegisters:
+class TestPoolStudentRegisters:
     """Tests for probing the detached low-dim register projection."""
 
     GRID = (4, 4)
@@ -100,47 +100,47 @@ class TestPoolProjectedRegisters:
     def _wrapper(
         self,
         task_type: TaskType = TaskType.SEGMENTATION,
-        eval_projection_dim: int | None = None,
-        eval_on_projected_registers: bool = True,
+        eval_student_dim: int | None = None,
+        eval_on_student_registers: bool = True,
         eval_on_encoder_tokens: bool = False,
     ) -> OlmoEarthEvalWrapper:
         return OlmoEarthEvalWrapper(
             # A Perceiver model with a student, which the constructor now checks for.
-            model=SimpleNamespace(use_perceiver=True, register_projection_dims=[8, 4]),  # type: ignore[arg-type]
+            model=SimpleNamespace(use_perceiver=True, register_student_dims=[8, 4]),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
-            eval_on_projected_registers=eval_on_projected_registers,
+            eval_on_student_registers=eval_on_student_registers,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
-            eval_projection_dim=eval_projection_dim,
+            eval_student_dim=eval_student_dim,
         )
 
     def _encoder_output(self, batch: int = 2) -> dict[str, torch.Tensor]:
         n_h, n_w = self.GRID
         return {
             "registers": torch.randn(batch, n_h, n_w, self.DIM),
-            "projected_registers": torch.randn(batch, n_h, n_w, self.PROJ_DIM),
+            "student_registers": torch.randn(batch, n_h, n_w, self.PROJ_DIM),
         }
 
     def test_projected_grid_for_segmentation(self) -> None:
-        """Dense tasks get the projected grid at the student width."""
+        """Dense tasks get the student grid at the student width."""
         wrapper = self._wrapper()
         out = wrapper._pool_registers(self._encoder_output())
         assert out.shape == (2, *self.GRID, self.PROJ_DIM)
 
     def test_projection_dim_takes_matryoshka_prefix(self) -> None:
-        """eval_projection_dim slices the first d dims of the student."""
-        wrapper = self._wrapper(eval_projection_dim=4)
+        """eval_student_dim slices the first d dims of the student."""
+        wrapper = self._wrapper(eval_student_dim=4)
         encoder_output = self._encoder_output()
         out = wrapper._pool_registers(encoder_output)
         assert out.shape == (2, *self.GRID, 4)
-        expected = encoder_output["projected_registers"][..., :4]
+        expected = encoder_output["student_registers"][..., :4]
         assert torch.equal(out, expected)
 
     def test_missing_projection_raises(self) -> None:
         """A model without the student cannot be probed on it."""
         wrapper = self._wrapper()
-        with pytest.raises(ValueError, match="register_projection_dims"):
+        with pytest.raises(ValueError, match="register_student_dims"):
             wrapper._pool_registers({"registers": torch.randn(2, 16, self.DIM)})
 
     def test_projected_and_encoder_tokens_mutually_exclusive(self) -> None:
@@ -150,5 +150,5 @@ class TestPoolProjectedRegisters:
 
     def test_projection_dim_requires_projected_flag(self) -> None:
         """A prefix width without the projected-registers flag is rejected."""
-        with pytest.raises(ValueError, match="eval_on_projected_registers"):
-            self._wrapper(eval_projection_dim=4, eval_on_projected_registers=False)
+        with pytest.raises(ValueError, match="eval_on_student_registers"):
+            self._wrapper(eval_student_dim=4, eval_on_student_registers=False)
