@@ -105,6 +105,23 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # If the model has a Perceiver, probe the pooled encoder patch tokens
+    # instead of the register latents. No effect without a Perceiver.
+    eval_on_encoder_tokens: bool = False
+    # If the model has a detached register projection (register_projection_dims),
+    # probe the low-dim projected_registers instead of the register grid -- the same
+    # checkpoint can then be evaluated at both widths by registering the task twice.
+    # Mutually exclusive with eval_on_encoder_tokens.
+    eval_on_projected_registers: bool = False
+    # With eval_on_projected_registers: probe only the first N dims of the student (a
+    # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
+    eval_projection_dim: int | None = None
+    # For geobench segmentation tasks: split each native image into
+    # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
+    # (keeps every pixel, shrinks the token grid the model/register-read sees).
+    # Used to test whether the large-grid read dilution drives the register
+    # regressions on the 256px tasks (sa_crop_type, cashew_plant). None = native size.
+    tile_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
@@ -209,6 +226,9 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
+        self.eval_on_projected_registers = task.eval_on_projected_registers
+        self.eval_projection_dim = task.eval_projection_dim
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -385,6 +405,9 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
+            "eval_on_projected_registers": self.eval_on_projected_registers,
+            "eval_projection_dim": self.eval_projection_dim,
             "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
@@ -611,6 +634,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
+            eval_on_encoder_tokens=self.eval_on_encoder_tokens,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
