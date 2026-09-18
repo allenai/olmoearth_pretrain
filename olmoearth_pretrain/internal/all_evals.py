@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
@@ -1314,6 +1315,24 @@ AEF_SUPPLEMENTAL_DATASETS = (
     "us_trees",
 )
 
+# Year-aligned re-exports (2026-08-04): the same labels and windows, but the
+# imagery is twelve ASCENDING 30-day Sentinel-1 + Sentinel-2 layers spanning the
+# calendar year of the label, matching what AEF and Tessera are built over. The
+# parents feed OlmoEarth a trailing year from the observation date (canada,
+# ethiopia, us_trees) or a fixed Sep-Aug year (pastis), so the published
+# comparisons were not input-matched. See
+# scripts/tools/reanchor_year_aligned_dataset.py.
+AEF_SUPPLEMENTAL_YEAR_ALIGNED = (
+    "ethiopia_crops_year_aligned",  # 2 530 windows
+    "africa_crop_mask_year_aligned",  # 2 556
+    "canada_crops_fine_year_aligned",  # 14 566
+    "canada_crops_coarse_year_aligned",  # 16 079
+    "descals_year_aligned",  # 17 477
+    "lcmap_lu_year_aligned",  # 26 513
+    "glance_year_aligned",  # 34 885
+    "us_trees_year_aligned",  # 45 382
+)
+
 # Window size the embedding evals run at: the ws16 embedding-product convention
 # (a 16x16 window around the labeled pixel), shared with the precomputed baselines.
 EMBEDDING_EVAL_WINDOW_SIZES = (16,)
@@ -1498,6 +1517,63 @@ for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
             },
         }
     )
+
+# Year-aligned tasks, ws16 only, on the full Sentinel-1 + Sentinel-2 + Landsat
+# input (the sensor-fair match to AEF, which fuses Landsat internally). Same
+# naming convention as the pastis embedding tasks.
+#
+# Each gets a linear-probe and a kNN variant, like its parent task above: the
+# AEF paper scores every dataset as best-of-{kNN-1, kNN-3, linear}, so dropping
+# kNN here would compare our linear-probe number against their best-of-three.
+_YEAR_ALIGNED_MODALITIES = {
+    "sentinel1_sentinel2_landsat": [
+        Modality.SENTINEL1.name,
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT.name,
+    ],
+}
+for _suffix, _modalities in _YEAR_ALIGNED_MODALITIES.items():
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}": _aef_ps1_task(
+                name,
+                EvalMode.LINEAR_PROBE,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"{name}_ws16_ps1_{_suffix}_knn": _aef_ps1_task(
+                name,
+                EvalMode.KNN,
+                window_size=16,
+                input_modalities=_modalities,
+            )
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        }
+    )
+
+# pastis_year_aligned keeps the pastis conventions (128x128 stored samples,
+# tile_samples, mIoU) rather than the AEF center-pixel ones, so it reuses the
+# pastis helper with its dataset name overridden.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat": replace(
+            _pastis_ps1_task(
+                [
+                    Modality.SENTINEL1.name,
+                    Modality.SENTINEL2_L2A.name,
+                    Modality.LANDSAT.name,
+                ],
+                window_size=16,
+            ),
+            dataset="pastis_year_aligned",
+        ),
+    }
+)
 
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
