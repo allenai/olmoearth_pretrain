@@ -132,7 +132,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             extra_metrics: additional metrics to log
             supervision_preds: per-modality supervision predictions (or None)
             projection_outputs: register-grid outputs when the encoder has a
-                register bottleneck (else None): the teacher ``registers`` and, with a
+                Perceiver (else None): the teacher ``registers`` and, with a
                 student, the ``projected_registers``. Consumed by the train module's
                 distillation losses. The two grids are FLATTENED to ``[B, N, D]``
                 here: every consumer (Gram, cosine) is relational over cells and
@@ -163,7 +163,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_preds = None
         if self.supervision_head is not None:
             if registers is None:
-                raise ValueError("the supervision head requires a register bottleneck")
+                raise ValueError("the supervision head requires a Perceiver")
             supervision_preds = self.supervision_head(registers, x)
 
         projection_outputs: dict | None = None
@@ -174,7 +174,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             }
         if projected_registers is not None:
             assert projection_outputs is not None, (
-                "a projection student cannot exist without a register bottleneck"
+                "a projection student cannot exist without a Perceiver"
             )
             projection_outputs["projected_registers"] = rearrange(
                 projected_registers, "b h w d -> b (h w) d"
@@ -241,7 +241,7 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
-    # Register-grid supervision heads (read the encoder's register bottleneck).
+    # Register-grid supervision heads (read the encoder's Perceiver).
     supervision_head_config: SupervisionHeadConfig | None = None
     projection_only_target: bool = False
 
@@ -265,20 +265,17 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
-        encoder_uses_registers = getattr(
-            self.encoder_config, "use_register_bottleneck", False
-        )
-        decoder_uses_registers = getattr(
-            self.decoder_config, "use_register_bottleneck", False
-        )
+        encoder_uses_registers = self.encoder_config.perceiver_config is not None
+        decoder_uses_registers = getattr(self.decoder_config, "use_perceiver", False)
         if encoder_uses_registers != decoder_uses_registers:
             raise ValueError(
-                "use_register_bottleneck must match between encoder and decoder"
+                "the decoder's use_perceiver must match whether the encoder "
+                "has a perceiver_config"
             )
-        if encoder_uses_registers:
+        if self.encoder_config.perceiver_config is not None:
             # The decoder cross-attends the grid the encoder ships, so its width must
-            # match the bottleneck's register_dim (required whenever the bottleneck is on).
-            encoder_register_dim = self.encoder_config.register_dim
+            # match the bottleneck's register_dim.
+            encoder_register_dim = self.encoder_config.perceiver_config.register_dim
             if self.decoder_config.register_dim != encoder_register_dim:
                 raise ValueError(
                     "decoder_config.register_dim "
@@ -288,7 +285,7 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None and not encoder_uses_registers:
             raise ValueError(
                 "the supervision heads read the register grid, so "
-                "supervision_head_config requires the encoder register bottleneck"
+                "supervision_head_config requires the encoder Perceiver"
             )
 
     def build(self) -> "LatentMIM":
@@ -305,8 +302,9 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None:
             # Heads read the register grid, so embedding_dim is the width that grid is
             # shipped at: the bottleneck's register_dim.
+            assert self.encoder_config.perceiver_config is not None
             supervision_head = self.supervision_head_config.build(
-                embedding_dim=self.encoder_config.register_dim,
+                embedding_dim=self.encoder_config.perceiver_config.register_dim,
                 max_patch_size=self.encoder_config.max_patch_size,
             )
         return LatentMIM(

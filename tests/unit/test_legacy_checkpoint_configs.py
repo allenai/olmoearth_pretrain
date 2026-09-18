@@ -83,7 +83,13 @@ def test_legacy_checkpoint_config_rebuilds_identical_model(config_path: Path) ->
     patched = patch_legacy_encoder_config(copy.deepcopy(config_dict))
     manifest = _build_manifest(patched["model"])
 
-    expected = golden["shapes"]
+    # The manifests were recorded when the Perceiver lived under
+    # ``register_bottleneck``; that prefix is what the checkpoints hold and what the
+    # loader maps (legacy_state_dict_key_mapping), so compare under the current name.
+    expected = {
+        k.replace(".register_bottleneck.", ".perceiver.", 1): v
+        for k, v in golden["shapes"].items()
+    }
     missing = sorted(set(expected) - set(manifest))
     added = sorted(set(manifest) - set(expected))
     changed = {

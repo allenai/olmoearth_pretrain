@@ -18,16 +18,22 @@ import copy
 import pytest
 
 from olmoearth_pretrain.model_loader import (
+    LEGACY_FLAT_REGISTER_FIELDS,
     REMOVED_ENCODER_FIELDS,
     REMOVED_MODEL_FIELDS,
     REMOVED_SUPERVISION_HEAD_FIELDS,
     REMOVED_SUPERVISION_MODALITY_FIELDS,
+    legacy_state_dict_key_mapping,
     patch_legacy_encoder_config,
 )
 
 
 def _config_dict(**encoder_overrides: object) -> dict:
-    """A minimal checkpoint-shaped config dict with a register bottleneck."""
+    """A minimal OLD checkpoint-shaped config dict with a register bottleneck.
+
+    The bottleneck settings are the flat ``use_register_bottleneck`` / ``register_*``
+    fields real checkpoints carry; the patcher nests them (see the tests below).
+    """
     encoder = {
         "supported_modality_names": ["sentinel2_l2a", "latlon"],
         "embedding_size": 16,
@@ -181,8 +187,78 @@ def test_error_names_every_active_feature() -> None:
 def test_config_without_legacy_fields_is_untouched() -> None:
     """A current config passes through unchanged."""
     config_dict = _config_dict()
+    enc = config_dict["model"]["encoder_config"]
+    del enc["use_register_bottleneck"]
+    enc["perceiver_config"] = {"register_dim": enc.pop("register_dim")}
     before = copy.deepcopy(config_dict)
     assert patch_legacy_encoder_config(config_dict) == before
+
+
+def test_flat_register_fields_are_nested() -> None:
+    """Old flat register_* fields move into perceiver_config, renamed."""
+    config_dict = _config_dict(
+        register_latent_depth=4,
+        register_per_depth_read_proj=True,
+        register_attn_dim=16,
+        register_projection_dims=[4, 2],
+        register_projection_output_norm=True,
+        register_back_projection_hidden=8,
+    )
+    enc = patch_legacy_encoder_config(config_dict)["model"]["encoder_config"]
+    for name in LEGACY_FLAT_REGISTER_FIELDS:
+        assert name not in enc, name
+    assert "use_register_bottleneck" not in enc
+    nested = enc["perceiver_config"]
+    assert nested.pop("_CLASS_").endswith("PerceiverConfig")
+    assert nested == {
+        "register_dim": 8,
+        "latent_depth": 4,
+        "per_depth_read_proj": True,
+        "attn_dim": 16,
+        "projection_dims": [4, 2],
+        "projection_output_norm": True,
+        "back_projection_hidden": 8,
+    }
+    # The caller's dict is never mutated in place.
+    assert config_dict["model"]["encoder_config"]["use_register_bottleneck"] is True
+
+
+def test_legacy_decoder_flag_renamed() -> None:
+    """The decoder's use_register_bottleneck becomes use_perceiver."""
+    config_dict = _config_dict()
+    config_dict["model"]["decoder_config"] = {
+        "use_register_bottleneck": True,
+        "register_dim": 8,
+    }
+    dec = patch_legacy_encoder_config(config_dict)["model"]["decoder_config"]
+    assert dec == {"use_perceiver": True, "register_dim": 8}
+
+
+def test_legacy_perceiver_state_dict_keys_load() -> None:
+    """Weights saved under encoder.register_bottleneck.* load into encoder.perceiver.*."""
+    from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+
+    enc = patch_legacy_encoder_config(_config_dict())["model"]["encoder_config"]
+    encoder = EncoderConfig.from_dict(enc).build()
+    mapping = legacy_state_dict_key_mapping(encoder)
+    assert mapping and all(
+        new.startswith("perceiver.") and old.startswith("register_bottleneck.")
+        for new, old in mapping.items()
+    )
+    legacy_state = {mapping.get(k, k): v for k, v in encoder.state_dict().items()}
+    assert any(k.startswith("register_bottleneck.") for k in legacy_state)
+    # Strict load succeeds because the pre-hook renames the legacy prefix.
+    encoder.load_state_dict(legacy_state, strict=True)
+
+
+def test_flat_register_fields_dropped_when_bottleneck_off() -> None:
+    """Leftover register_* fields on a bottleneck-free config never built anything."""
+    config_dict = _config_dict()
+    enc = config_dict["model"]["encoder_config"]
+    enc["use_register_bottleneck"] = False
+    patched = patch_legacy_encoder_config(config_dict)["model"]["encoder_config"]
+    assert "perceiver_config" not in patched
+    assert "register_dim" not in patched and "use_register_bottleneck" not in patched
 
 
 def test_legacy_config_deserializes_and_builds() -> None:
@@ -203,6 +279,8 @@ def test_legacy_config_deserializes_and_builds() -> None:
     config = EncoderConfig.from_dict(enc)
     for name in REMOVED_ENCODER_FIELDS:
         assert not hasattr(config, name), f"{name} should no longer be a field"
+    assert config.perceiver_config is not None
+    assert config.perceiver_config.register_dim == 8
     assert config.build() is not None
 
 
@@ -211,7 +289,8 @@ def test_missing_register_dim_restored_for_legacy_bottleneck() -> None:
     config_dict = _config_dict()
     del config_dict["model"]["encoder_config"]["register_dim"]
     patched = patch_legacy_encoder_config(config_dict)
-    assert patched["model"]["encoder_config"]["register_dim"] == 8
+    nested = patched["model"]["encoder_config"]["perceiver_config"]
+    assert nested["register_dim"] == 8
 
 
 @pytest.mark.parametrize(

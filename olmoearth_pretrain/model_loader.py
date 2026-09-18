@@ -124,7 +124,11 @@ def load_pretrain_checkpoint(
     if train_module_dir.exists():
         from olmo_core.distributed.checkpoint import load_model_and_optim_state
 
-        load_model_and_optim_state(str(train_module_dir), model)
+        load_model_and_optim_state(
+            str(train_module_dir),
+            model,
+            key_mapping=legacy_state_dict_key_mapping(model),
+        )
     elif weights_path.exists():
         model.load_state_dict(torch.load(weights_path, map_location="cpu"))
     else:
@@ -416,6 +420,88 @@ def _supervision_modality_sections(model_config: dict) -> dict[str, dict]:
     }
 
 
+#: Flat ``register_*`` encoder fields written by checkpoints from before the Perceiver
+#: settings moved into the nested ``perceiver_config``, mapped to the field they
+#: became there.
+LEGACY_FLAT_REGISTER_FIELDS: dict[str, str] = {
+    "register_dim": "register_dim",
+    "register_latent_depth": "latent_depth",
+    "register_num_heads": "num_heads",
+    "register_per_depth_read_proj": "per_depth_read_proj",
+    "register_attn_dim": "attn_dim",
+    "register_projection_dims": "projection_dims",
+    "register_projection_output_norm": "projection_output_norm",
+    "register_back_projection_hidden": "back_projection_hidden",
+}
+_PERCEIVER_CONFIG_CLASS = "olmoearth_pretrain.nn.flexi_vit.PerceiverConfig"
+
+
+LEGACY_DECODER_PERCEIVER_FLAG = "use_register_bottleneck"
+
+
+def legacy_state_dict_key_mapping(model: torch.nn.Module) -> dict[str, str]:
+    """``{current key: key in an old checkpoint}`` for the Perceiver's parameters.
+
+    The module used to be stored under ``register_bottleneck``, so every checkpoint
+    trained before the rename holds its weights under that prefix. Pass the result as
+    ``key_mapping`` to olmo-core's :func:`load_model_and_optim_state` (or
+    :func:`swap_param_keys`); with checkpoint metadata available it is a no-op for
+    checkpoints written after the rename.
+    """
+    from olmoearth_pretrain.nn.flexi_vit import LEGACY_PERCEIVER_ATTR
+
+    mapping: dict[str, str] = {}
+    for key in model.state_dict():
+        if key.startswith("perceiver."):
+            mapping[key] = LEGACY_PERCEIVER_ATTR + key[len("perceiver") :]
+        elif ".perceiver." in key:
+            mapping[key] = key.replace(".perceiver.", f".{LEGACY_PERCEIVER_ATTR}.", 1)
+    return mapping
+
+
+def _has_flat_register_fields(enc: dict) -> bool:
+    return "use_register_bottleneck" in enc or any(
+        name in enc for name in LEGACY_FLAT_REGISTER_FIELDS
+    )
+
+
+def _nest_legacy_perceiver_fields(enc: dict) -> None:
+    """Nest an old config's flat register fields into ``perceiver_config``.
+
+    In place. With the bottleneck off the flat leftovers are simply dropped: they
+    never built anything.
+    """
+    enabled = bool(enc.pop("use_register_bottleneck", False))
+    flat = {name: enc.pop(name) for name in LEGACY_FLAT_REGISTER_FIELDS if name in enc}
+    if not enabled:
+        if flat:
+            logger.info(
+                "dropping register_* fields of a legacy config whose bottleneck is "
+                "off: %s",
+                sorted(flat),
+            )
+        return
+    nested: dict[str, Any] = {"_CLASS_": _PERCEIVER_CONFIG_CLASS}
+    nested.update(
+        {LEGACY_FLAT_REGISTER_FIELDS[name]: value for name, value in flat.items()}
+    )
+    if nested.get("register_dim") is None and enc.get("embedding_size") is not None:
+        # register_dim used to default to embedding_size // 2 and is now required, so
+        # a checkpoint that relied on the default (and saved no key, since
+        # as_config_dict drops None) must get the width the old code built.
+        nested["register_dim"] = enc["embedding_size"] // 2
+        logger.info(
+            "legacy checkpoint has no register_dim; restoring the old default "
+            "embedding_size // 2 = %d",
+            nested["register_dim"],
+        )
+    enc["perceiver_config"] = nested
+    logger.info(
+        "nested legacy Perceiver fields into perceiver_config: %s",
+        sorted(flat),
+    )
+
+
 def patch_legacy_encoder_config(config_dict: dict) -> dict:
     """Patch checkpoint config dicts saved by older code.
 
@@ -432,10 +518,12 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     1. ``use_linear_patch_embed``: old checkpoints used Conv2d for patch projection and
        have no such key. Without this patch they would incorrectly default to True
        (Linear) and fail to load.
-    2. ``register_dim``: it used to default to ``embedding_size // 2`` and is now
-       required, so a bottleneck checkpoint that relied on the default (and therefore
-       saved no key, since ``as_config_dict`` drops None) would now fail validation.
-       Restore the width the old code would have built.
+    2. ``use_register_bottleneck`` / ``register_*``: the Perceiver settings used to be
+       flat encoder fields and now live in the nested ``perceiver_config``; move them
+       there (see :data:`LEGACY_FLAT_REGISTER_FIELDS`). ``register_dim`` also used to
+       default to ``embedding_size // 2`` and is now required, so a checkpoint that
+       saved no key gets the width the old code would have built. The decoder's
+       ``use_register_bottleneck`` becomes ``use_perceiver``.
 
     Raises:
         ValueError: If the config uses a model feature this version has removed.
@@ -467,18 +555,16 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
             )
         )
     }
-    bottleneck_dim_missing = (
-        enc.get("use_register_bottleneck")
-        and enc.get("register_dim") is None
-        and enc.get("embedding_size") is not None
-    )
+    dec = model.get("decoder_config")
+    decoder_flag_legacy = isinstance(dec, dict) and LEGACY_DECODER_PERCEIVER_FLAG in dec
     needs_patch = (
         bool(strip)
         or bool(strip_model)
         or bool(strip_head)
         or bool(strip_supervision)
         or "use_linear_patch_embed" not in enc
-        or bottleneck_dim_missing
+        or _has_flat_register_fields(enc)
+        or decoder_flag_legacy
     )
     if not needs_patch:
         return config_dict
@@ -514,12 +600,13 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
             )
     if "use_linear_patch_embed" not in enc:
         enc["use_linear_patch_embed"] = False
-    if bottleneck_dim_missing:
-        enc["register_dim"] = enc["embedding_size"] // 2
+    if _has_flat_register_fields(enc):
+        _nest_legacy_perceiver_fields(enc)
+    if decoder_flag_legacy:
+        dec = model["decoder_config"]
+        dec["use_perceiver"] = dec.pop(LEGACY_DECODER_PERCEIVER_FLAG)
         logger.info(
-            "legacy checkpoint has no register_dim; restoring the old default "
-            "embedding_size // 2 = %d",
-            enc["register_dim"],
+            "renamed legacy decoder field use_register_bottleneck -> use_perceiver"
         )
     return config_dict
 

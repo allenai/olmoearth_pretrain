@@ -65,6 +65,7 @@ from olmoearth_pretrain.internal.utils import (
     MockLatentMIMTrainModule,
     MockOlmoEarthDataLoader,
 )
+from olmoearth_pretrain.model_loader import legacy_state_dict_key_mapping
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
     OlmoEarthWandBCallback,
@@ -154,7 +155,9 @@ def evaluate_checkpoints(
 
         # Load model weights from the distributed checkpoint
         train_module_dir = os.path.join(step_path, "model_and_optim")
-        load_model_and_optim_state(train_module_dir, model)
+        load_model_and_optim_state(
+            train_module_dir, model, key_mapping=legacy_state_dict_key_mapping(model)
+        )
         model.to(device)
 
         for evaluator in eval_callback.evaluators:

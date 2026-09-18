@@ -43,7 +43,11 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
-from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    Encoder,
+    EncoderConfig,
+    PerceiverConfig,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -87,7 +91,7 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
     Field values mirror ``encoder_config`` in
     regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
     ``with_projection=True`` includes the shipped d128/d64 linear projection
-    (the distillation student); ``False`` measures the register bottleneck alone.
+    (the distillation student); ``False`` measures the Perceiver alone.
     """
     config = EncoderConfig(
         supported_modality_names=[
@@ -121,12 +125,13 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
         rope_mixed_base=10000.0,
         temporal_rope_dim_frac=0.25,
         rope_temporal_coordinate_scale=1.0 / 30.0,
-        use_register_bottleneck=True,
-        register_dim=768,
-        register_latent_depth=4,
-        register_per_depth_read_proj=True,
-        register_attn_dim=768,
-        register_projection_dims=[128, 64] if with_projection else None,
+        perceiver_config=PerceiverConfig(
+            register_dim=768,
+            latent_depth=4,
+            per_depth_read_proj=True,
+            attn_dim=768,
+            projection_dims=[128, 64] if with_projection else None,
+        ),
     )
     encoder = config.build()
     if with_projection:

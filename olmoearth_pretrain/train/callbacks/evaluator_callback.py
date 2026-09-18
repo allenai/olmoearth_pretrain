@@ -105,8 +105,8 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
-    # If the model has a register bottleneck, probe the pooled encoder patch tokens
-    # instead of the register latents. No effect without a register bottleneck.
+    # If the model has a Perceiver, probe the pooled encoder patch tokens
+    # instead of the register latents. No effect without a Perceiver.
     eval_on_encoder_tokens: bool = False
     # If the model has a detached register projection (register_projection_dims),
     # probe the low-dim projected_registers instead of the register grid -- the same

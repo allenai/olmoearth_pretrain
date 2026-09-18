@@ -6,7 +6,11 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    EncoderConfig,
+    PerceiverConfig,
+    PredictorConfig,
+)
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHeadConfig,
@@ -37,12 +41,14 @@ def _encoder_config(with_student: bool) -> EncoderConfig:
         max_sequence_length=12,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=REGISTER_DIM,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=REGISTER_DIM,
+            latent_depth=2,
+        ),
     )
     if with_student:
-        config.register_projection_dims = list(PROJECTION_DIMS)
+        assert config.perceiver_config is not None
+        config.perceiver_config.projection_dims = list(PROJECTION_DIMS)
     return config
 
 
@@ -60,7 +66,7 @@ def _latent_mim_config(
         max_sequence_length=12,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        use_register_bottleneck=True,
+        use_perceiver=True,
         register_dim=REGISTER_DIM,
     )
     supervision_config = None
@@ -129,8 +135,8 @@ def test_encoder_registers_grad_without_student_interference(
     output_dict = encoder.forward(x, patch_size=4, input_res=10)
     encoder.zero_grad()
     output_dict["registers"].sum().backward()
-    assert encoder.register_bottleneck is not None
-    assert encoder.register_bottleneck.register.grad is not None
+    assert encoder.perceiver is not None
+    assert encoder.perceiver.register.grad is not None
     assert encoder.register_projection is not None
     assert encoder.register_projection.weight.grad is None
 
@@ -180,9 +186,10 @@ def test_compute_projection_distill_loss_prefixes() -> None:
         assert back_projection.weight.grad is not None
 
 
-def test_encoder_config_projection_requires_bottleneck() -> None:
-    """register_projection_dims without the bottleneck is rejected."""
+def test_perceiver_config_rejects_empty_projection_dims() -> None:
+    """An empty student dim list is a config error, not a silent no-student."""
     config = _encoder_config(True)
-    config.use_register_bottleneck = False
-    with pytest.raises(ValueError, match="use_register_bottleneck"):
+    assert config.perceiver_config is not None
+    config.perceiver_config.projection_dims = []
+    with pytest.raises(ValueError, match="projection_dims"):
         config.validate()
