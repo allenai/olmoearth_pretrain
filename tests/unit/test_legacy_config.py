@@ -1,16 +1,13 @@
 """Legacy-checkpoint handling: configs written before features were removed.
 
-Neither deserializer copes with a stale key on its own. With olmo-core installed,
-``Config.from_dict`` runs through omegaconf and RAISES on any unknown key, so an old
-checkpoint carrying e.g. ``register_grid_size: 0`` fails to load at all. Without
-olmo-core, the standalone path silently DROPS unknown keys, so a checkpoint that
-genuinely used a removed feature loads as though it had been off -- quietly building a
-different model than the one trained. These tests pin the three behaviours that make
-old checkpoints safe:
+Both deserializers are strict (olmo-core's via omegaconf, the standalone one by
+design), so a stale key raises and an old checkpoint fails to load at all. These tests
+pin the three behaviours that make old checkpoints safe:
 
 1. a removed field left at its feature-off value is stripped (inert),
 2. such a config then loads and builds cleanly, and
-3. a removed field that was actually USED raises instead of loading.
+3. a removed field that was actually USED survives the patch untouched, so the strict
+   deserializer rejects it instead of quietly building a different model.
 """
 
 import copy
@@ -106,35 +103,40 @@ def test_every_removed_field_has_an_active_example() -> None:
 
 @pytest.mark.parametrize("name", sorted(REMOVED_MODEL_FIELDS))
 def test_model_level_removed_field(name: str) -> None:
-    """Inert model-level leftovers are stripped; active ones refuse to load."""
-    removed = REMOVED_MODEL_FIELDS[name]
+    """Inert model-level leftovers are stripped; active ones are left to be rejected."""
     config_dict = _config_dict()
-    config_dict["model"][name] = removed.inert[0]
+    config_dict["model"][name] = REMOVED_MODEL_FIELDS[name][0]
     assert name not in patch_legacy_encoder_config(config_dict)["model"]
     config_dict["model"][name] = _ACTIVE_MODEL_VALUES[name]
-    with pytest.raises(ValueError, match="since been removed"):
-        patch_legacy_encoder_config(config_dict)
+    patched = patch_legacy_encoder_config(config_dict)["model"]
+    assert patched[name] == _ACTIVE_MODEL_VALUES[name]
 
 
 @pytest.mark.parametrize("name", sorted(REMOVED_SUPERVISION_HEAD_FIELDS))
 def test_head_level_removed_field(name: str) -> None:
-    """Inert supervision-head leftovers are stripped; active ones refuse to load."""
-    removed = REMOVED_SUPERVISION_HEAD_FIELDS[name]
+    """Inert head leftovers are stripped; active ones survive to be rejected."""
+    from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
+
     config_dict = _supervised_config_dict()
-    config_dict["model"]["supervision_head_config"][name] = removed.inert[0]
+    head = config_dict["model"]["supervision_head_config"]
+    head[name] = REMOVED_SUPERVISION_HEAD_FIELDS[name][0]
     patched = patch_legacy_encoder_config(config_dict)
     assert name not in patched["model"]["supervision_head_config"]
-    config_dict["model"]["supervision_head_config"][name] = _ACTIVE_HEAD_VALUES[name]
-    with pytest.raises(ValueError, match="since been removed"):
-        patch_legacy_encoder_config(config_dict)
+    head[name] = _ACTIVE_HEAD_VALUES[name]
+    patched_head = patch_legacy_encoder_config(config_dict)["model"][
+        "supervision_head_config"
+    ]
+    assert patched_head[name] == _ACTIVE_HEAD_VALUES[name]
+    with pytest.raises(Exception, match=name):
+        SupervisionHeadConfig.from_dict(patched_head)
 
 
 @pytest.mark.parametrize(
     "name,inert",
     [
         (name, inert)
-        for name, removed in REMOVED_ENCODER_FIELDS.items()
-        for inert in removed.inert
+        for name, inert_values in REMOVED_ENCODER_FIELDS.items()
+        for inert in inert_values
     ],
 )
 def test_inert_removed_field_is_stripped(name: str, inert: object) -> None:
@@ -147,24 +149,31 @@ def test_inert_removed_field_is_stripped(name: str, inert: object) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(REMOVED_ENCODER_FIELDS))
-def test_active_removed_field_raises(name: str) -> None:
-    """(iii) A removed field that was actually USED refuses to load."""
-    config_dict = _config_dict(**{name: _active_value(name)})
-    with pytest.raises(ValueError, match="since been removed"):
-        patch_legacy_encoder_config(config_dict)
+def test_active_removed_field_survives_and_is_rejected(name: str) -> None:
+    """(iii) A USED removed field is kept, so the strict deserializer refuses it.
+
+    The rejection names the field.
+    """
+    from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+
+    active = _active_value(name)
+    enc = patch_legacy_encoder_config(_config_dict(**{name: active}))["model"][
+        "encoder_config"
+    ]
+    assert enc[name] == active
+    with pytest.raises(Exception, match=name):
+        EncoderConfig.from_dict(enc)
 
 
-def test_error_names_every_active_feature() -> None:
-    """The error lists each offending field, not just the first."""
-    config_dict = _config_dict(
-        register_grid_size=3, register_interleave=False, register_read_depth=2
-    )
-    with pytest.raises(ValueError) as excinfo:
-        patch_legacy_encoder_config(config_dict)
-    message = str(excinfo.value)
-    for name in ("register_grid_size", "register_interleave", "register_read_depth"):
-        assert name in message
-    assert "fixed register grid" in message
+def test_every_active_field_survives_together() -> None:
+    """Several active fields are all kept, none masked by the others."""
+    active = {
+        "register_grid_size": 3,
+        "register_interleave": False,
+        "register_read_depth": 2,
+    }
+    enc = patch_legacy_encoder_config(_config_dict(**active))["model"]["encoder_config"]
+    assert {k: enc[k] for k in active} == active
 
 
 def test_config_without_legacy_fields_is_untouched() -> None:
@@ -258,11 +267,7 @@ def test_legacy_config_deserializes_and_builds() -> None:
     """
     from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
 
-    inert_values = {
-        name: removed.inert[0]
-        for name, removed in REMOVED_ENCODER_FIELDS.items()
-        if removed.inert
-    }
+    inert_values = {name: values[0] for name, values in REMOVED_ENCODER_FIELDS.items()}
     config_dict = _config_dict(**inert_values)
     enc = patch_legacy_encoder_config(config_dict)["model"]["encoder_config"]
     config = EncoderConfig.from_dict(enc)
@@ -286,8 +291,8 @@ def test_missing_register_dim_restored_for_legacy_bottleneck() -> None:
     "name,inert",
     [
         (name, inert)
-        for name, removed in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
-        for inert in removed.inert
+        for name, inert_values in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
+        for inert in inert_values
     ],
 )
 def test_inert_removed_supervision_field_is_stripped(name: str, inert: object) -> None:
@@ -302,12 +307,20 @@ def test_inert_removed_supervision_field_is_stripped(name: str, inert: object) -
 
 
 @pytest.mark.parametrize("name", sorted(REMOVED_SUPERVISION_MODALITY_FIELDS))
-def test_active_removed_supervision_field_raises(name: str) -> None:
-    """(iii) for the supervision head: a USED removed field refuses to load."""
-    config_dict = _supervised_config_dict(**{name: _active_supervision_value(name)})
-    with pytest.raises(ValueError, match="since been removed") as excinfo:
-        patch_legacy_encoder_config(config_dict)
-    assert f"modality_configs.srtm.{name}" in str(excinfo.value)
+def test_active_removed_supervision_field_survives_and_is_rejected(name: str) -> None:
+    """(iii) for the supervision head: a USED removed field is kept, then refused.
+
+    The rejection names the field.
+    """
+    from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
+
+    active = _active_supervision_value(name)
+    head = patch_legacy_encoder_config(_supervised_config_dict(**{name: active}))[
+        "model"
+    ]["supervision_head_config"]
+    assert head["modality_configs"]["srtm"][name] == active
+    with pytest.raises(Exception, match=name):
+        SupervisionHeadConfig.from_dict(head)
 
 
 def test_legacy_supervised_config_deserializes_and_builds() -> None:
@@ -319,8 +332,7 @@ def test_legacy_supervised_config_deserializes_and_builds() -> None:
     from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
 
     inert_values = {
-        name: removed.inert[0]
-        for name, removed in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
+        name: values[0] for name, values in REMOVED_SUPERVISION_MODALITY_FIELDS.items()
     }
     config_dict = _supervised_config_dict(**inert_values)
     head_dict = patch_legacy_encoder_config(config_dict)["model"][

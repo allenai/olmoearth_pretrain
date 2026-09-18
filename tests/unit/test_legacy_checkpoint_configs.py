@@ -22,8 +22,8 @@ Each fixture is a pair:
 
 So a fixture fails loudly in either direction: HEAD can no longer build the config at
 all, or HEAD builds something structurally different from what was trained. The second
-is the dangerous one, because without olmo-core the standalone deserializer drops
-unknown keys silently and would load such a checkpoint as though the feature was off.
+is the dangerous one: it means the current code builds a different model from the
+same config, which no deserializer can notice.
 
 To add a run: drop its ``model`` subtree in as ``<name>.json``, then generate
 ``<name>.shapes.json`` from a checkout where it loads unpatched (see

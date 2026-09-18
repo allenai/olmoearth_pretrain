@@ -22,7 +22,6 @@ import copy
 import json
 import logging
 import re
-from dataclasses import dataclass
 from enum import StrEnum
 from os import PathLike
 from typing import Any
@@ -155,166 +154,89 @@ def _resolve_artifact_path(
     return base / filename
 
 
-@dataclass(frozen=True)
-class _RemovedField:
-    """A config field this version no longer supports.
-
-    Args:
-        inert: Values the field took when its feature was OFF. A checkpoint carrying
-            one of these rebuilds identically without the field, so it loads cleanly.
-        feature: Human name of the removed feature, for the error message.
-        note: What the user can do about it.
-    """
-
-    inert: tuple[Any, ...]
-    feature: str
-    note: str
-
-
-#: Old checkpoints still carry these keys, and neither deserializer copes on its own:
-#: with olmo-core, ``Config.from_dict`` goes through omegaconf and RAISES on any unknown
-#: key, so even an inert leftover blocks the load; without olmo-core, the standalone
-#: path silently DROPS unknown keys, so a checkpoint that genuinely used one would load
-#: as though the feature had been off and quietly build a different model.
-#: :func:`patch_legacy_encoder_config` handles both: inert keys are stripped, active
-#: ones raise.
-REMOVED_ENCODER_FIELDS: dict[str, _RemovedField] = {
-    "register_grid_size": _RemovedField(
-        inert=(0, None),
-        feature="fixed register grid (register_grid_size > 0)",
-        note=(
-            "the bottleneck now always clones one latent across the patch grid; a "
-            "checkpoint with distinct per-cell registers cannot be rebuilt"
-        ),
-    ),
-    "register_contrastive_source": _RemovedField(
-        inert=("registers", None),
-        feature="a contrastive head reading the encoder tokens under the bottleneck",
-        note="the contrastive head now always reads the register latents when the bottleneck is on",
-    ),
-    "register_projection_type": _RemovedField(
-        inert=("linear", None),
-        feature="the perceiver-type distillation student",
-        note="the student is always a per-cell linear map now; a second-bottleneck student cannot be rebuilt",
-    ),
-    "register_read_depth": _RemovedField(
-        inert=(1, None),
-        feature="a read count decoupled from the latent depth (the legacy schedule)",
-        note=(
-            "the bottleneck now pairs exactly one read with each latent block, so the "
-            "read count is register_latent_depth; other read counts cannot be rebuilt"
-        ),
-    ),
-    "register_interleave": _RemovedField(
-        inert=(True, None),
-        feature="the legacy read schedule (all reads, then all self-attention)",
-        note=(
-            "the bottleneck now always interleaves one read with each latent block; a "
-            "checkpoint trained with register_interleave=False cannot be rebuilt"
-        ),
-    ),
-    "register_latent_self_attn": _RemovedField(
-        inert=(True, None),
-        feature="a bottleneck without latent self-attention (nolsa)",
-        note=(
-            "every read is now followed by a latent self-attention block; a checkpoint "
-            "trained with register_latent_self_attn=False has no such blocks to load"
-        ),
-    ),
-    "register_learned_read_weighting": _RemovedField(
-        inert=(False,),
-        feature="learned per-read residual gates",
-        note="the read_gates parameter no longer exists",
-    ),
+#: Removed config fields that the SHIPPED checkpoints (the v1.3 release and its two
+#: ablations) still carry, mapped to the values the field took when its feature was OFF.
+#:
+#: Both deserializers are strict, so any key the current dataclasses lack raises. Old
+#: checkpoints carry these keys at their feature-off values, where dropping the key
+#: rebuilds the identical model, so :func:`patch_legacy_encoder_config` strips them
+#: first. A key carrying any OTHER value is left in place on purpose: the code behind it
+#: is gone, and the deserializer's unknown-field error is the refusal. Fields from
+#: abandoned experiments that no shipped checkpoint has are deliberately not listed;
+#: those checkpoints fail to deserialize the same way.
+REMOVED_ENCODER_FIELDS: dict[str, tuple[Any, ...]] = {
+    # fixed register grid; the Perceiver now always clones one latent to the patch grid
+    "register_grid_size": (0, None),
+    # contrastive head reading encoder tokens under the Perceiver
+    "register_contrastive_source": ("registers", None),
+    # perceiver-type (second bottleneck) student; the student is a per-cell linear map
+    "register_projection_type": ("linear", None),
+    # read count decoupled from the latent depth (the legacy read schedule)
+    "register_read_depth": (1, None),
+    # legacy schedule: all reads, then all self-attention
+    "register_interleave": (True, None),
+    # Perceiver without latent self-attention (nolsa)
+    "register_latent_self_attn": (True, None),
+    # learned per-read residual gates
+    "register_learned_read_weighting": (False,),
 }
-
 
 #: ``LatentMIMConfig`` fields removed from this version (the ``model`` section itself).
-REMOVED_MODEL_FIELDS: dict[str, _RemovedField] = {
-    "supervision_source": _RemovedField(
-        inert=("registers", None),
-        feature="supervision heads on the distillation student",
-        note="heads attach to the register grid only; the student heads' weights have no home",
-    ),
+REMOVED_MODEL_FIELDS: dict[str, tuple[Any, ...]] = {
+    # supervision heads on the distillation student instead of the register grid
+    "supervision_source": ("registers", None),
 }
-
 
 #: ``SupervisionHeadConfig`` fields removed from this version, applied to
 #: ``model.supervision_head_config``.
-REMOVED_SUPERVISION_HEAD_FIELDS: dict[str, _RemovedField] = {
-    "register_supervision": _RemovedField(
-        inert=(True,),
-        feature="supervision heads on the decoder tokens (register_supervision=False)",
-        note="the heads now always read the register grid; decoder-token heads have a different input width",
-    ),
+REMOVED_SUPERVISION_HEAD_FIELDS: dict[str, tuple[Any, ...]] = {
+    # supervision heads on the decoder tokens (register_supervision=False)
+    "register_supervision": (True,),
 }
 
-
-#: ``SupervisionModalityConfig`` fields removed from this version, keyed by name. Same
-#: contract as :data:`REMOVED_ENCODER_FIELDS`, applied to every entry of
-#: ``model.supervision_head_config.modality_configs``. The shipped checkpoints carry all
-#: three at their inert values.
-REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, _RemovedField] = {
-    "time_conditioned": _RemovedField(
-        inert=(False,),
-        feature="time-conditioned (day-of-year MLP) supervision heads",
-        note="the MLP over [register_cell ; phi(day_of_year)] no longer exists",
-    ),
-    # The two below are int-defaulted, so they are always PRESENT in a config from that
-    # window; their defaults are the inert values (unused unless time_conditioned).
-    "time_harmonics": _RemovedField(
-        inert=(4,),
-        feature="the day-of-year harmonic count",
-        note="only meaningful with time_conditioned, which was removed",
-    ),
-    "time_mlp_hidden_dim": _RemovedField(
-        inert=(64,),
-        feature="the time-conditioned head's hidden width",
-        note="only meaningful with time_conditioned, which was removed",
-    ),
+#: ``SupervisionModalityConfig`` fields removed from this version, applied to every
+#: entry of ``model.supervision_head_config.modality_configs``. The shipped checkpoints
+#: carry all three at their inert values (the two ints are int-defaulted, so always
+#: present; unused unless ``time_conditioned``).
+REMOVED_SUPERVISION_MODALITY_FIELDS: dict[str, tuple[Any, ...]] = {
+    "time_conditioned": (False,),
+    "time_harmonics": (4,),
+    "time_mlp_hidden_dim": (64,),
 }
 
 
 def _removed_fields_to_strip(
-    section: dict, registry: dict[str, _RemovedField], where: str
+    section: dict, registry: dict[str, tuple[Any, ...]], where: str
 ) -> list[str]:
-    """Find removed fields in one config section, refusing any that were USED.
+    """Removed fields in one config section that are safe to drop.
 
-    A removed field left at its feature-off value is inert: dropping it rebuilds the
-    identical model, so it is reported for stripping. A field that was ACTIVE cannot be
-    honoured -- the code implementing it is gone -- so loading would give a different
-    model than the one trained, and that raises instead.
+    A removed field left at a feature-off value is inert: dropping it rebuilds the
+    identical model. A field carrying any other value was USED, and the code behind it
+    is gone, so it is left in the dict for the strict deserializer to reject.
 
     Args:
         section: The config sub-dict to inspect (e.g. ``model.encoder_config``).
         registry: The removed-field registry that applies to this section.
-        where: Dotted path of ``section``, for the error message.
+        where: Dotted path of ``section``, for logging.
 
     Returns:
         Names of inert removed fields, to delete before deserialization.
-
-    Raises:
-        ValueError: If any removed feature is active in this section.
     """
     inert_present: list[str] = []
-    active: list[str] = []
-    for name, removed in registry.items():
+    for name, inert_values in registry.items():
         if name not in section:
             continue
         value = section[name]
-        if any(value == inert for inert in removed.inert):
+        if any(value == inert for inert in inert_values):
             inert_present.append(name)
         else:
-            active.append(
-                f"  {where}.{name}={value!r} -- {removed.feature}: {removed.note}"
+            logger.warning(
+                "%s.%s=%r uses a removed feature; leaving it for the deserializer to "
+                "reject (this checkpoint cannot be rebuilt by this version)",
+                where,
+                name,
+                value,
             )
-    if active:
-        raise ValueError(
-            "this checkpoint uses model features that have since been removed, so it "
-            "cannot be rebuilt by this version:\n"
-            + "\n".join(active)
-            + "\n\nCheck out a commit that still has them to load it."
-        )
     return inert_present
 
 
@@ -488,15 +410,16 @@ def _nest_legacy_perceiver_fields(model: dict, enc: dict) -> None:
 def patch_legacy_encoder_config(config_dict: dict) -> dict:
     """Patch checkpoint config dicts saved by older code.
 
-    Applied before passing the dict to ``Config.from_dict``. First it REFUSES configs
-    that use a since-removed feature, and STRIPS the removed keys that were merely left
-    at their feature-off values (see :func:`_removed_fields_to_strip`; the registries
+    Applied before passing the dict to ``Config.from_dict``. First it STRIPS the
+    removed keys that were merely left at their feature-off values (see
+    :func:`_removed_fields_to_strip`; a key at any other value is left in place so the
+    strict deserializer rejects the config; the registries
     are :data:`REMOVED_MODEL_FIELDS` for ``model``, :data:`REMOVED_ENCODER_FIELDS` for
     ``model.encoder_config``, :data:`REMOVED_SUPERVISION_HEAD_FIELDS` for
     ``model.supervision_head_config`` and :data:`REMOVED_SUPERVISION_MODALITY_FIELDS`
     for each supervision modality) --
-    olmo-core's deserializer rejects any unknown key, so those leftovers would otherwise
-    block the load outright. Then three fixups for configs that CAN still be rebuilt:
+    both deserializers reject any unknown key, so those leftovers would otherwise block
+    the load outright. Then the fixups for configs that CAN still be rebuilt:
 
     1. ``use_linear_patch_embed``: old checkpoints used Conv2d for patch projection and
        have no such key. Without this patch they would incorrectly default to True
@@ -510,8 +433,6 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
        ``register_back_projection_hidden`` becomes the model-level
        ``register_distillation_head_config``.
 
-    Raises:
-        ValueError: If the config uses a model feature this version has removed.
     """
     model = config_dict.get("model", {})
     enc = model.get("encoder_config", {}) if isinstance(model, dict) else {}
