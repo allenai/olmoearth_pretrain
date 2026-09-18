@@ -6,7 +6,10 @@ import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.model_loader import legacy_key_for_current
+from olmoearth_pretrain.model_loader import (
+    legacy_key_for_current,
+    patch_legacy_state_dict,
+)
 from olmoearth_pretrain.nn.flexi_vit import (
     EncoderConfig,
     PerceiverConfig,
@@ -191,8 +194,8 @@ def test_legacy_checkpoint_layout_loads_into_latent_mim() -> None:
     assert any(k.startswith("encoder.register_bottleneck.") for k in legacy)
     assert any(k.startswith("encoder.register_back_projections.") for k in legacy)
     assert not any(k.startswith("register_distillation_head.") for k in legacy)
-    # Strict load succeeds because the pre-hooks move both groups of keys.
-    model.load_state_dict(legacy, strict=True)
+    # The loader's state-dict patcher moves every legacy key to its current name.
+    model.load_state_dict(patch_legacy_state_dict(legacy), strict=True)
 
 
 def test_distillation_head_loss_prefixes() -> None:

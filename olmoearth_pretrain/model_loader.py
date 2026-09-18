@@ -77,7 +77,7 @@ def load_model_from_id(model_id: ModelID, load_weights: bool = True) -> torch.nn
 
     state_dict_fpath = _resolve_artifact_path(model_id, WEIGHTS_FILENAME)
     state_dict = _load_state_dict(state_dict_fpath)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(patch_legacy_state_dict(state_dict))
     return model
 
 
@@ -99,7 +99,7 @@ def load_model_from_path(
 
     state_dict_fpath = _resolve_artifact_path(model_path, WEIGHTS_FILENAME)
     state_dict = _load_state_dict(state_dict_fpath)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(patch_legacy_state_dict(state_dict))
     return model
 
 
@@ -130,7 +130,9 @@ def load_pretrain_checkpoint(
             key_mapping=legacy_state_dict_key_mapping(model),
         )
     elif weights_path.exists():
-        model.load_state_dict(torch.load(weights_path, map_location="cpu"))
+        model.load_state_dict(
+            patch_legacy_state_dict(torch.load(weights_path, map_location="cpu"))
+        )
     else:
         raise FileNotFoundError(
             f"Neither {train_module_dir} nor {weights_path} found in {ckpt_path}"
@@ -253,6 +255,18 @@ def _supervision_modality_sections(model_config: dict) -> dict[str, dict]:
     }
 
 
+#: Where the Perceiver was stored before the rename: the state-dict prefix of every
+#: checkpoint trained before it (``encoder.register_bottleneck.*``).
+LEGACY_PERCEIVER_ATTR = "register_bottleneck"
+#: The student used to be a bare ``Linear`` under this name with its optional output
+#: LayerNorm beside it; both now live in the encoder's ``register_student`` Sequential.
+LEGACY_STUDENT_ATTR = "register_projection"
+LEGACY_STUDENT_NORM_ATTR = "register_projection_norm"
+#: The student's back-projection heads used to live on the encoder under this name
+#: (``encoder.register_back_projections.*``); they are now
+#: ``LatentMIM.register_distillation_head.back_projections``.
+LEGACY_BACK_PROJECTIONS_ATTR = "register_back_projections"
+
 #: Flat ``register_*`` encoder fields written by checkpoints from before the Perceiver
 #: settings moved into the nested ``perceiver_config``, mapped to the field they
 #: became there.
@@ -287,13 +301,6 @@ def legacy_key_for_current(key: str) -> str:
     (``encoder.register_back_projections``) before they moved into
     ``LatentMIM.register_distillation_head``. Keys untouched come back unchanged.
     """
-    from olmoearth_pretrain.nn.flexi_vit import (
-        LEGACY_BACK_PROJECTIONS_ATTR,
-        LEGACY_PERCEIVER_ATTR,
-        LEGACY_STUDENT_ATTR,
-        LEGACY_STUDENT_NORM_ATTR,
-    )
-
     heads = "register_distillation_head.back_projections."
     if key.startswith(heads):
         key = "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "." + key[len(heads) :]
@@ -313,13 +320,6 @@ def legacy_key_for_current(key: str) -> str:
 
 def current_key_for_legacy(key: str) -> str:
     """Inverse of :func:`legacy_key_for_current`: the current name of an old key."""
-    from olmoearth_pretrain.nn.flexi_vit import (
-        LEGACY_BACK_PROJECTIONS_ATTR,
-        LEGACY_PERCEIVER_ATTR,
-        LEGACY_STUDENT_ATTR,
-        LEGACY_STUDENT_NORM_ATTR,
-    )
-
     old_heads = "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "."
     if key.startswith(old_heads):
         key = "register_distillation_head.back_projections." + key[len(old_heads) :]
@@ -332,6 +332,34 @@ def current_key_for_legacy(key: str) -> str:
     elif f".{LEGACY_PERCEIVER_ATTR}." in key:
         key = key.replace(f".{LEGACY_PERCEIVER_ATTR}.", ".perceiver.", 1)
     return key
+
+
+def patch_legacy_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
+    """Rename an old checkpoint's weights to the current parameter names.
+
+    The state-dict counterpart of :func:`patch_legacy_encoder_config`, for plain
+    ``torch.load`` weights (distributed checkpoints go through
+    :func:`legacy_state_dict_key_mapping` instead). Applies
+    :func:`current_key_for_legacy` to every key. An encoder-only state dict from before
+    the back-projection heads moved to ``LatentMIM`` still carries them under
+    ``register_back_projections.*``; they have no home in an encoder and are dropped.
+    Current checkpoints pass through unchanged.
+    """
+    stale = LEGACY_BACK_PROJECTIONS_ATTR + "."
+    patched: dict[str, Any] = {}
+    dropped = 0
+    for key, value in state_dict.items():
+        if key.startswith(stale):
+            dropped += 1
+            continue
+        patched[current_key_for_legacy(key)] = value
+    if dropped:
+        logger.info(
+            "dropped %d training-only back-projection tensors from an encoder-only "
+            "legacy state dict",
+            dropped,
+        )
+    return patched
 
 
 def legacy_state_dict_key_mapping(model: torch.nn.Module) -> dict[str, str]:

@@ -13,6 +13,7 @@ pin the three behaviours that make old checkpoints safe:
 import copy
 
 import pytest
+import torch
 
 from olmoearth_pretrain.model_loader import (
     LEGACY_FLAT_REGISTER_FIELDS,
@@ -22,6 +23,7 @@ from olmoearth_pretrain.model_loader import (
     REMOVED_SUPERVISION_MODALITY_FIELDS,
     legacy_state_dict_key_mapping,
     patch_legacy_encoder_config,
+    patch_legacy_state_dict,
 )
 
 
@@ -245,8 +247,11 @@ def test_legacy_perceiver_state_dict_keys_load() -> None:
     )
     legacy_state = {mapping.get(k, k): v for k, v in encoder.state_dict().items()}
     assert any(k.startswith("register_bottleneck.") for k in legacy_state)
-    # Strict load succeeds because the pre-hook renames the legacy prefix.
-    encoder.load_state_dict(legacy_state, strict=True)
+    # An encoder-only dump from before the heads moved off the encoder carries them too.
+    legacy_state["register_back_projections.8.weight"] = torch.zeros(8, 8)
+    patched = patch_legacy_state_dict(legacy_state)
+    assert not any(k.startswith("register_back_projections.") for k in patched)
+    encoder.load_state_dict(patched, strict=True)
 
 
 def test_flat_register_fields_dropped_when_bottleneck_off() -> None:

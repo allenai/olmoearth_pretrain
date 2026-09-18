@@ -1834,19 +1834,6 @@ class PerceiverConfig(Config):
         )
 
 
-#: Attribute the Perceiver was stored under before the rename; still the state-dict
-#: prefix of every checkpoint trained before it (``encoder.register_bottleneck.*``).
-LEGACY_PERCEIVER_ATTR = "register_bottleneck"
-#: The student used to be a bare ``Linear`` under this name with its optional output
-#: LayerNorm beside it; both now live in the ``register_student`` Sequential.
-LEGACY_STUDENT_ATTR = "register_projection"
-LEGACY_STUDENT_NORM_ATTR = "register_projection_norm"
-#: The student's back-projection heads used to live on the encoder under this name
-#: (``encoder.register_back_projections.*``); they are now
-#: ``LatentMIM.register_distillation_head.back_projections``.
-LEGACY_BACK_PROJECTIONS_ATTR = "register_back_projections"
-
-
 class Encoder(FlexiVitBase):
     """Encoder module that processes masked input samples into token representations."""
 
@@ -2022,10 +2009,6 @@ class Encoder(FlexiVitBase):
 
         self.perceiver_config = perceiver_config
         self.use_perceiver = perceiver_config is not None
-        # Old checkpoints store the Perceiver under ``register_bottleneck`` and the
-        # student's back-projection heads on the encoder; fix both on plain state-dict
-        # loads (distributed-checkpoint loaders use legacy_state_dict_key_mapping).
-        self._register_load_state_dict_pre_hook(self._legacy_state_dict_hook)
         self.perceiver: Perceiver | None = None
         self.register_dim: int | None = None
         # Detached low-dim student readout of the register grid (see
@@ -2078,32 +2061,6 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
-
-    @staticmethod
-    def _legacy_state_dict_hook(
-        state_dict: dict, prefix: str, *args: object, **kwargs: object
-    ) -> None:
-        """Bring an old checkpoint's encoder keys up to the current layout.
-
-        Three moves: ``register_bottleneck.*`` became ``perceiver.*``; the student's
-        ``register_projection.*`` + ``register_projection_norm.*`` became the
-        ``register_student`` Sequential (``.0`` Linear, ``.1`` LayerNorm); and the
-        student's back-projection heads (``register_back_projections.*``) moved to
-        :class:`~olmoearth_pretrain.nn.latent_mim.LatentMIM`. When a whole LatentMIM
-        is loaded its own hook has already moved the heads; anything still here belongs
-        to an encoder-only load, where the training heads have no home and are dropped.
-        """
-        renames = {
-            prefix + LEGACY_PERCEIVER_ATTR + ".": prefix + "perceiver.",
-            prefix + LEGACY_STUDENT_NORM_ATTR + ".": prefix + "register_student.1.",
-            prefix + LEGACY_STUDENT_ATTR + ".": prefix + "register_student.0.",
-        }
-        for old, new in renames.items():
-            for key in [k for k in state_dict if k.startswith(old)]:
-                state_dict[new + key[len(old) :]] = state_dict.pop(key)
-        stale = prefix + LEGACY_BACK_PROJECTIONS_ATTR + "."
-        for key in [k for k in state_dict if k.startswith(stale)]:
-            del state_dict[key]
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.

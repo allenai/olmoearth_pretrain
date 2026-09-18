@@ -17,7 +17,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import LEGACY_BACK_PROJECTIONS_ATTR, TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.register_distillation_head import (
     RegisterDistillationHead,
     RegisterDistillationHeadConfig,
@@ -114,25 +114,12 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
         self.register_distillation_head = register_distillation_head
-        # Checkpoints from before the heads moved off the encoder store them under
-        # ``encoder.register_back_projections``; bring them home on plain loads.
-        self._register_load_state_dict_pre_hook(self._move_legacy_back_projections_hook)
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
             self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
-
-    @staticmethod
-    def _move_legacy_back_projections_hook(
-        state_dict: dict, prefix: str, *args: object, **kwargs: object
-    ) -> None:
-        """Move legacy ``encoder.register_back_projections.*`` keys onto the distillation head."""
-        old = prefix + "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "."
-        new = prefix + "register_distillation_head.back_projections."
-        for key in [k for k in state_dict if k.startswith(old)]:
-            state_dict[new + key[len(old) :]] = state_dict.pop(key)
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
