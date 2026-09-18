@@ -204,9 +204,11 @@ def test_flat_register_fields_are_nested() -> None:
         register_projection_output_norm=True,
         register_back_projection_hidden=8,
     )
-    enc = patch_legacy_encoder_config(config_dict)["model"]["encoder_config"]
+    patched_model = patch_legacy_encoder_config(config_dict)["model"]
+    enc = patched_model["encoder_config"]
     for name in LEGACY_FLAT_REGISTER_FIELDS:
         assert name not in enc, name
+    assert "register_back_projection_hidden" not in enc
     assert "use_register_bottleneck" not in enc
     nested = enc["perceiver_config"]
     assert nested.pop("_CLASS_").endswith("PerceiverConfig")
@@ -217,8 +219,12 @@ def test_flat_register_fields_are_nested() -> None:
         "attn_dim": 16,
         "projection_dims": [4, 2],
         "projection_output_norm": True,
-        "back_projection_hidden": 8,
     }
+    # The student was always distilled by the old code, so it gets a head config
+    # carrying the old back_projection_hidden.
+    head = patched_model["register_distillation_head_config"]
+    assert head.pop("_CLASS_").endswith("RegisterDistillationHeadConfig")
+    assert head == {"back_projection_hidden": 8}
     # The caller's dict is never mutated in place.
     assert config_dict["model"]["encoder_config"]["use_register_bottleneck"] is True
 

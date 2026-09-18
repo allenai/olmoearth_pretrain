@@ -108,6 +108,12 @@ class EvalWrapper:
             raise ValueError(
                 "eval_projection_dim requires eval_on_projected_registers=True"
             )
+        if self.eval_on_projected_registers and not getattr(
+            self.model, "use_perceiver", False
+        ):
+            raise ValueError(
+                "eval_on_projected_registers set to True but the model has no perceiver"
+            )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
                 "use_center_token is only supported for classification tasks, "

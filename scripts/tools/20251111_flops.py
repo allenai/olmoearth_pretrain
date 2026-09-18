@@ -133,12 +133,9 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
             projection_dims=[128, 64] if with_projection else None,
         ),
     )
-    encoder = config.build()
-    if with_projection:
-        # The per-prefix back-projections are training-only (never run in forward,
-        # discarded at inference); drop them so the param count is what ships.
-        encoder.register_back_projections = None
-    return encoder
+    # The student's back-projection heads are training-only and live on LatentMIM,
+    # so the encoder's parameter count is already what ships.
+    return config.build()
 
 
 def _sdpa_cpu_flop(q_shape, k_shape, v_shape, *args, out_shape=None, **kwargs):

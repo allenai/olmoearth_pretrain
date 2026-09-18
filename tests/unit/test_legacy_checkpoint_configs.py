@@ -37,7 +37,10 @@ from pathlib import Path
 import pytest
 import torch
 
-from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
+from olmoearth_pretrain.model_loader import (
+    current_key_for_legacy,
+    patch_legacy_encoder_config,
+)
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "legacy_configs"
 
@@ -83,13 +86,10 @@ def test_legacy_checkpoint_config_rebuilds_identical_model(config_path: Path) ->
     patched = patch_legacy_encoder_config(copy.deepcopy(config_dict))
     manifest = _build_manifest(patched["model"])
 
-    # The manifests were recorded when the Perceiver lived under
-    # ``register_bottleneck``; that prefix is what the checkpoints hold and what the
-    # loader maps (legacy_state_dict_key_mapping), so compare under the current name.
-    expected = {
-        k.replace(".register_bottleneck.", ".perceiver.", 1): v
-        for k, v in golden["shapes"].items()
-    }
+    # The manifests were recorded before parameters were moved (Perceiver renamed,
+    # back-projection heads off the encoder); those are the keys the checkpoints
+    # hold and what the loader maps, so compare under the current names.
+    expected = {current_key_for_legacy(k): v for k, v in golden["shapes"].items()}
     missing = sorted(set(expected) - set(manifest))
     added = sorted(set(manifest) - set(expected))
     changed = {

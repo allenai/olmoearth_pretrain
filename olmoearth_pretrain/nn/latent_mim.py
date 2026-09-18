@@ -17,7 +17,11 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import LEGACY_BACK_PROJECTIONS_ATTR, TokensAndMasks
+from olmoearth_pretrain.nn.register_distillation_head import (
+    RegisterDistillationHead,
+    RegisterDistillationHeadConfig,
+)
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
@@ -83,6 +87,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         supervision_head: SupervisionHead | None = None,
+        register_distillation_head: RegisterDistillationHead | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the Latent MIM Style.
@@ -93,6 +98,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision of
                 decode-only modalities from the encoder's register grid.
+            register_distillation_head: Optional head that distils the register grid
+                into the encoder's detached student (owns the per-prefix
+                back-projections and computes the loss). Training-only, like the
+                supervision head.
             projection_only_target: If True, the target encoder is only the frozen
                 initial projection (patch embeddings + optional embedding projector)
                 instead of a full copy of the encoder. Only valid when all token
@@ -104,12 +113,26 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
+        self.register_distillation_head = register_distillation_head
+        # Checkpoints from before the heads moved off the encoder store them under
+        # ``encoder.register_back_projections``; bring them home on plain loads.
+        self._register_load_state_dict_pre_hook(self._move_legacy_back_projections_hook)
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
             self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+
+    @staticmethod
+    def _move_legacy_back_projections_hook(
+        state_dict: dict, prefix: str, *args: object, **kwargs: object
+    ) -> None:
+        """Move legacy ``encoder.register_back_projections.*`` keys onto the distillation head."""
+        old = prefix + "encoder." + LEGACY_BACK_PROJECTIONS_ATTR + "."
+        new = prefix + "register_distillation_head.back_projections."
+        for key in [k for k in state_dict if k.startswith(old)]:
+            state_dict[new + key[len(old) :]] = state_dict.pop(key)
 
     def forward(
         self, x: MaskedOlmoEarthSample, patch_size: int
@@ -215,6 +238,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
+        if self.register_distillation_head is not None:
+            fully_shard(self.register_distillation_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -243,6 +268,8 @@ class LatentMIMConfig(Config):
     reconstructor_config: Config | None = None
     # Register-grid supervision heads (read the encoder's Perceiver).
     supervision_head_config: SupervisionHeadConfig | None = None
+    # Distillation of the register grid into the Perceiver's detached student.
+    register_distillation_head_config: RegisterDistillationHeadConfig | None = None
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -287,6 +314,16 @@ class LatentMIMConfig(Config):
                 "the supervision heads read the register grid, so "
                 "supervision_head_config requires the encoder Perceiver"
             )
+        if self.register_distillation_head_config is not None:
+            perceiver_config = self.encoder_config.perceiver_config
+            if (
+                perceiver_config is None
+                or perceiver_config.sorted_projection_dims is None
+            ):
+                raise ValueError(
+                    "register_distillation_head_config requires a Perceiver with a "
+                    "student (perceiver_config.projection_dims)"
+                )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -307,10 +344,20 @@ class LatentMIMConfig(Config):
                 embedding_dim=self.encoder_config.perceiver_config.register_dim,
                 max_patch_size=self.encoder_config.max_patch_size,
             )
+        register_distillation_head = None
+        if self.register_distillation_head_config is not None:
+            perceiver_config = self.encoder_config.perceiver_config
+            assert perceiver_config is not None
+            assert perceiver_config.sorted_projection_dims is not None
+            register_distillation_head = self.register_distillation_head_config.build(
+                register_dim=perceiver_config.register_dim,
+                projection_dims=perceiver_config.sorted_projection_dims,
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             supervision_head=supervision_head,
+            register_distillation_head=register_distillation_head,
             projection_only_target=self.projection_only_target,
         )

@@ -1756,9 +1756,8 @@ class PerceiverConfig(Config):
             FULL student width, so a Matryoshka prefix is a slice of a normalized vector
             rather than a normalized slice; a truncating deployment reads exactly that
             slice.
-        back_projection_hidden: Hidden width of the per-prefix back-projection heads.
-            None keeps a single ``Linear(d, register_dim)``; an int makes each head a
-            2-layer MLP ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
+            The heads that distil the teacher into the student are configured
+            separately (``LatentMIMConfig.register_distillation_head_config``).
     """
 
     register_dim: int
@@ -1768,7 +1767,6 @@ class PerceiverConfig(Config):
     attn_dim: int | None = None
     projection_dims: list[int] | None = None
     projection_output_norm: bool = False
-    back_projection_hidden: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -1812,14 +1810,6 @@ class PerceiverConfig(Config):
                     "projection_dims must be a non-empty list of positive ints, got "
                     f"{self.projection_dims}"
                 )
-            if (
-                self.back_projection_hidden is not None
-                and self.back_projection_hidden <= 0
-            ):
-                raise ValueError(
-                    "back_projection_hidden must be positive, got "
-                    f"{self.back_projection_hidden}"
-                )
 
     def build(
         self,
@@ -1849,6 +1839,10 @@ class PerceiverConfig(Config):
 #: Attribute the Perceiver was stored under before the rename; still the state-dict
 #: prefix of every checkpoint trained before it (``encoder.register_bottleneck.*``).
 LEGACY_PERCEIVER_ATTR = "register_bottleneck"
+#: The student's back-projection heads used to live on the encoder under this name
+#: (``encoder.register_back_projections.*``); they are now
+#: ``LatentMIM.register_distillation_head.back_projections``.
+LEGACY_BACK_PROJECTIONS_ATTR = "register_back_projections"
 
 
 class Encoder(FlexiVitBase):
@@ -2026,10 +2020,10 @@ class Encoder(FlexiVitBase):
 
         self.perceiver_config = perceiver_config
         self.use_perceiver = perceiver_config is not None
-        # Checkpoints from before the rename store the Perceiver under
-        # ``register_bottleneck``; rename those keys on plain state-dict loads (the
-        # distributed-checkpoint loaders use legacy_state_dict_key_mapping instead).
-        self._register_load_state_dict_pre_hook(self._rename_legacy_perceiver_keys_hook)
+        # Old checkpoints store the Perceiver under ``register_bottleneck`` and the
+        # student's back-projection heads on the encoder; fix both on plain state-dict
+        # loads (distributed-checkpoint loaders use legacy_state_dict_key_mapping).
+        self._register_load_state_dict_pre_hook(self._legacy_state_dict_hook)
         self.perceiver: Perceiver | None = None
         self.register_dim: int | None = None
         # Detached low-dim student readout of the register grid (see
@@ -2038,7 +2032,6 @@ class Encoder(FlexiVitBase):
         self.register_projection_dims: list[int] | None = None
         self.register_projection: nn.Linear | None = None
         self.register_projection_norm: nn.LayerNorm | None = None
-        self.register_back_projections: nn.ModuleDict | None = None
         if perceiver_config is not None:
             perceiver_config.validate(
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
@@ -2061,18 +2054,8 @@ class Encoder(FlexiVitBase):
                     if perceiver_config.projection_output_norm
                     else None
                 )
-                # One back-projection per Matryoshka prefix: dim d reconstructs the
-                # teacher from student[..., :d]
-                self.register_back_projections = nn.ModuleDict(
-                    {
-                        str(d): self._build_back_projection(
-                            d,
-                            self.register_dim,
-                            perceiver_config.back_projection_hidden,
-                        )
-                        for d in self.register_projection_dims
-                    }
-                )
+                # The per-prefix back-projection heads that train the student live on
+                # LatentMIM (training-only, like the supervision head), not here.
 
         # With a bottleneck the contrastive head projects from the register latents;
         # otherwise from the encoder patch-token output.
@@ -2100,28 +2083,24 @@ class Encoder(FlexiVitBase):
             self._init_register_tokens()
 
     @staticmethod
-    def _rename_legacy_perceiver_keys_hook(
+    def _legacy_state_dict_hook(
         state_dict: dict, prefix: str, *args: object, **kwargs: object
     ) -> None:
-        """Map ``<prefix>register_bottleneck.*`` keys of old checkpoints to ``perceiver.*``."""
+        """Rename ``register_bottleneck.*`` to ``perceiver.*``; drop stale training heads.
+
+        ``register_back_projections.*`` under the encoder prefix are the student's
+        back-projection heads from checkpoints written before they moved to
+        :class:`~olmoearth_pretrain.nn.latent_mim.LatentMIM`. When a whole LatentMIM
+        is loaded its own hook has already moved them; anything still here belongs to
+        an encoder-only load, where the training heads have no home and are dropped.
+        """
         old = prefix + LEGACY_PERCEIVER_ATTR + "."
         new = prefix + "perceiver."
         for key in [k for k in state_dict if k.startswith(old)]:
             state_dict[new + key[len(old) :]] = state_dict.pop(key)
-
-    @staticmethod
-    def _build_back_projection(
-        prefix_dim: int, register_dim: int, hidden: int | None
-    ) -> nn.Module:
-        """One per-prefix distillation head: ``prefix_dim -> register_dim``."""
-        if hidden is None:
-            return nn.Linear(prefix_dim, register_dim)
-        return nn.Sequential(
-            nn.Linear(prefix_dim, hidden),
-            nn.LayerNorm(hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, register_dim),
-        )
+        stale = prefix + LEGACY_BACK_PROJECTIONS_ATTR + "."
+        for key in [k for k in state_dict if k.startswith(stale)]:
+            del state_dict[key]
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.

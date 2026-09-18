@@ -105,7 +105,8 @@ class TestPoolProjectedRegisters:
         eval_on_encoder_tokens: bool = False,
     ) -> OlmoEarthEvalWrapper:
         return OlmoEarthEvalWrapper(
-            model=SimpleNamespace(),  # type: ignore[arg-type]
+            # A Perceiver model with a student, which the constructor now checks for.
+            model=SimpleNamespace(use_perceiver=True, register_projection_dims=[8, 4]),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
