@@ -418,23 +418,9 @@ class OlmoEarthTrainModule(TrainModule):
     def state_dict_to_load(
         self, metadata: Metadata, optim: bool | None = None
     ) -> dict[str, Any]:
-        """Get the state dict to load.
-
-        ``optim=False`` (from ``TrainerConfig.load_optim_state``) omits optimizer
-        state from the load plan. Honouring it matters when resuming with a
-        DIFFERENT optimizer param-group layout than the checkpoint was saved
-        with -- adding a group override renames the per-parameter
-        ``optim.param_groups.<fqn>.group_name`` keys, and requesting them raises
-        "Missing key in checkpoint state_dict".
-        """
+        """Get the state dict to load."""
         load_opts = self.state_dict_load_opts
-        state_dict = self._get_state_dict(load_opts)
-        if optim is False and state_dict.pop("optim", None) is not None:
-            logger.warning(
-                "load_optim_state=False: omitting optimizer state from the load "
-                "plan; the optimizer keeps its fresh state."
-            )
-        return state_dict
+        return self._get_state_dict(load_opts)
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
@@ -448,10 +434,6 @@ class OlmoEarthTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
-        if "optim" not in state_dict:
-            # load_optim_state=False omitted it; the optimizer keeps its fresh state.
-            logger.warning("No optimizer state in the load plan; not loading any.")
-            return
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
