@@ -761,12 +761,17 @@ def cmd_launch_h5_from_olmoearth(args: argparse.Namespace) -> None:
             raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
         args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
 
-    h5py_dir = _prepare_h5(args.olmoearth_dir)
+    h5py_dir = _prepare_h5(
+        args.olmoearth_dir, allcap=args.allcap, tile_size=args.h5_tile_size
+    )
     logger.info(f"launch-h5-from-olmoearth: launching workers for {h5py_dir}")
     launch_args = argparse.Namespace(
         h5py_dir=str(h5py_dir),
         num_h5_shards=args.num_h5_shards,
         clusters=args.clusters,
+        gpus=args.gpus,
+        cpus=args.cpus,
+        priority=args.priority,
     )
     cmd_launch_h5(launch_args)
 
@@ -1196,6 +1201,13 @@ def main() -> None:
     p.add_argument("--num-h5-shards", type=int, required=True)
     p.add_argument(
         "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
+    )
+    p.add_argument("--allcap", action="store_true", help="Use allcap modality list")
+    p.add_argument("--h5-tile-size", type=int, default=None, help="h5 subtile px (128)")
+    p.add_argument("--gpus", type=int, default=0)
+    p.add_argument("--cpus", type=int, default=None)
+    p.add_argument(
+        "--priority", default=None, choices=["low", "normal", "high", "urgent"]
     )
     p.set_defaults(func=cmd_launch_h5_from_olmoearth)
 
