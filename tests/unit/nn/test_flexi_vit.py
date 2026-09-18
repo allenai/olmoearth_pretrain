@@ -1,6 +1,7 @@
 """Unit tests for the flexi_vit module."""
 
 import logging
+from typing import Any
 
 import pytest
 import torch
@@ -559,6 +560,303 @@ class TestEncoder:
             )
         assert config.position_encoding == "rope"
         assert config.spatial_pos_encoding is None
+
+
+class TestWindowedAttention:
+    """Unit tests for neighborhood (windowed) attention in the Encoder."""
+
+    EMBED = 16
+    NUM_HEADS = 2
+
+    def _make_encoder(
+        self,
+        supported_modalities: list[ModalitySpec],
+        windowed_attention_size: int | None,
+        seed: int = 0,
+        **kwargs: Any,
+    ) -> Encoder:
+        torch.manual_seed(seed)
+        return Encoder(
+            embedding_size=self.EMBED,
+            max_patch_size=8,
+            min_patch_size=1,
+            num_heads=self.NUM_HEADS,
+            mlp_ratio=2.0,
+            depth=2,
+            drop_path=0.0,
+            supported_modalities=supported_modalities,
+            max_sequence_length=12,
+            windowed_attention_size=windowed_attention_size,
+            **kwargs,
+        )
+
+    def _make_tokens(
+        self, encoder: Encoder, batch: int, h: int, w: int, t: int
+    ) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+        """Build an ``apply_attn`` input dict: S2 (spatial) + latlon (static)."""
+        s2_bs = Modality.SENTINEL2_L2A.num_band_sets
+        ll_bs = Modality.LATLON.num_band_sets
+        torch.manual_seed(1)
+        x = {
+            "sentinel2_l2a": torch.randn(batch, h, w, t, s2_bs, self.EMBED),
+            "sentinel2_l2a_mask": torch.full(
+                (batch, h, w, t, s2_bs), float(MaskValue.ONLINE_ENCODER.value)
+            ),
+            "latlon": torch.randn(batch, ll_bs, self.EMBED),
+            "latlon_mask": torch.full(
+                (batch, ll_bs), float(MaskValue.ONLINE_ENCODER.value)
+            ),
+        }
+        timestamps = torch.tensor([[15, m, 2023] for m in range(1, t + 1)]).expand(
+            batch, -1, -1
+        )
+        return x, timestamps
+
+    def test_build_window_coordinates(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Spatial tokens get patch (row, col, 1); static tokens get (0, 0, 0)."""
+        encoder = self._make_encoder(supported_modalities, windowed_attention_size=3)
+        B, H, W, T = 2, 2, 3, 2
+        x, _ = self._make_tokens(encoder, B, H, W, T)
+        tokens_only, masks_only, dims = encoder.split_tokens_masks_and_dims(x)
+        coords = encoder.build_window_coordinates(tokens_only, masks_only)
+
+        s2_bs = Modality.SENTINEL2_L2A.num_band_sets
+        n_s2 = H * W * T * s2_bs
+        n_ll = Modality.LATLON.num_band_sets
+        assert coords.shape == (B, n_s2 + n_ll, 3)
+        # Coordinates follow the same modality order as the collapsed tokens, so
+        # split them back per modality the same way apply_attn does for tokens.
+        per_modality = FlexiVitBase.split_and_expand_per_modality(coords, dims)
+        s2_coords = per_modality["sentinel2_l2a"]  # (B, H, W, T, b_s, 3)
+        assert s2_coords.shape == (B, H, W, T, s2_bs, 3)
+        expected = torch.stack(
+            torch.meshgrid(
+                torch.arange(H, dtype=torch.float32),
+                torch.arange(W, dtype=torch.float32),
+                indexing="ij",
+            ),
+            dim=-1,
+        )  # (H, W, 2)
+        expected = repeat(expected, "h w p -> b h w t c p", b=B, t=T, c=s2_bs)
+        assert torch.equal(s2_coords[..., :2], expected)
+        assert (s2_coords[..., 2] == 1).all()
+        assert (per_modality["latlon"] == 0).all()
+
+    def test_build_window_attn_mask_neighborhood(self) -> None:
+        """Radius-1 mask: 8-neighborhood on the grid, static tokens global."""
+        # 3x3 grid, one token per cell, plus one static token at the end.
+        rows, cols = torch.meshgrid(
+            torch.arange(3, dtype=torch.float32),
+            torch.arange(3, dtype=torch.float32),
+            indexing="ij",
+        )
+        coords = torch.stack([rows.flatten(), cols.flatten(), torch.ones(9)], dim=-1)
+        coords = torch.cat([coords, torch.zeros(1, 3)], dim=0)[None]  # (1, 10, 3)
+
+        mask = Encoder._build_window_attn_mask(coords, None, window_size=3)
+        assert mask.shape == (1, 1, 10, 10)
+        assert mask.dtype == torch.bool
+        m = mask[0, 0]
+
+        def idx(r: int, c: int) -> int:
+            return r * 3 + c
+
+        # Center cell sees every grid cell.
+        assert m[idx(1, 1), :9].all()
+        # Corner (0, 0) sees itself, (0,1), (1,0), (1,1) and nothing else on the grid.
+        corner_visible = m[idx(0, 0), :9].nonzero().flatten().tolist()
+        assert corner_visible == [idx(0, 0), idx(0, 1), idx(1, 0), idx(1, 1)]
+        # Edge (0, 1) does not see (2, x).
+        assert not m[idx(0, 1), idx(2, 0)]
+        assert not m[idx(0, 1), idx(2, 1)]
+        # Everyone sees the static token, and the static token sees everyone.
+        assert m[:, 9].all()
+        assert m[9, :].all()
+        # Symmetric on the grid.
+        assert torch.equal(m[:9, :9], m[:9, :9].T)
+
+        # Radius 2 (5x5) makes the whole 3x3 grid mutually visible.
+        assert Encoder._build_window_attn_mask(coords, None, window_size=5).all()
+
+    def test_build_window_attn_mask_excludes_padding_keys(self) -> None:
+        """Padding keys are never attended, even inside the window."""
+        coords = torch.tensor(
+            [[[0.0, 0.0, 1.0], [0.0, 1.0, 1.0], [0.0, 0.0, 0.0]]]
+        )  # two adjacent spatial tokens + one static token
+        key_valid = torch.tensor([[True, False, True]])
+        mask = Encoder._build_window_attn_mask(coords, key_valid, window_size=3)[0, 0]
+        assert not mask[:, 1].any(), "padding key must be hidden from all queries"
+        assert mask[:, 0].all() and mask[:, 2].all()
+
+    def test_prepend_register_mask_4d(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Register tokens get all-True rows and columns in the 4D window mask."""
+        encoder = self._make_encoder(
+            supported_modalities, windowed_attention_size=3, num_register_tokens=2
+        )
+        mask = torch.zeros(1, 1, 3, 3, dtype=torch.bool)
+        mask[0, 0, 0, 0] = True
+        out = encoder._prepend_register_mask(mask)
+        assert out.shape == (1, 1, 5, 5)
+        assert out[0, 0, :2, :].all(), "register queries attend everything"
+        assert out[0, 0, :, :2].all(), "register keys visible to every query"
+        assert torch.equal(out[0, 0, 2:, 2:], mask[0, 0])
+        # 2D path is unchanged.
+        out2d = encoder._prepend_register_mask(torch.tensor([[True, False]]))
+        assert torch.equal(out2d, torch.tensor([[True, True, True, False]]))
+
+    def test_large_window_matches_full_attention(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """A window wider than the grid reproduces the unwindowed encoder exactly.
+
+        Run in training mode (no drop_path/dropout is configured) so that both
+        paths apply the padding key mask, with a batch whose samples have
+        different numbers of encoded tokens so that padding is present.
+        """
+        full = self._make_encoder(supported_modalities, None, seed=0)
+        windowed = self._make_encoder(supported_modalities, 99, seed=0)
+        windowed.load_state_dict(full.state_dict())
+        full.train()
+        windowed.train()
+
+        B, H, W, T = 2, 3, 3, 2
+        x, timestamps = self._make_tokens(full, B, H, W, T)
+        # Hide a few tokens from the encoder in sample 1 only -> padding in sample 1.
+        x["sentinel2_l2a_mask"][1, 0, :, 0, :] = MaskValue.DECODER.value
+
+        out_full, _, _ = full.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        out_win, _, _ = windowed.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        for key in ("sentinel2_l2a", "latlon"):
+            assert torch.allclose(out_full[key], out_win[key], atol=1e-5), key
+
+    def test_small_window_changes_output(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """A 3x3 window on a larger grid must change the encoded tokens."""
+        full = self._make_encoder(supported_modalities, None, seed=0)
+        windowed = self._make_encoder(supported_modalities, 3, seed=0)
+        windowed.load_state_dict(full.state_dict())
+        full.eval()
+        windowed.eval()
+
+        B, H, W, T = 1, 4, 4, 2
+        x, timestamps = self._make_tokens(full, B, H, W, T)
+        with torch.no_grad():
+            out_full, _, _ = full.apply_attn(
+                x, timestamps=timestamps, patch_size=4, input_res=10
+            )
+            out_win, _, _ = windowed.apply_attn(
+                x, timestamps=timestamps, patch_size=4, input_res=10
+            )
+        assert out_win["sentinel2_l2a"].shape == out_full["sentinel2_l2a"].shape
+        assert not torch.allclose(
+            out_full["sentinel2_l2a"], out_win["sentinel2_l2a"], atol=1e-5
+        )
+
+    def test_windowed_layers_subset(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Windowing only some layers: blocks outside the subset stay full."""
+        encoder = self._make_encoder(
+            supported_modalities, 3, windowed_attention_layers=[1]
+        )
+        assert encoder.windowed_attention_layers == frozenset({1})
+        encoder.eval()
+        B, H, W, T = 1, 4, 4, 1
+        x, timestamps = self._make_tokens(encoder, B, H, W, T)
+        with torch.no_grad():
+            out, _, _ = encoder.apply_attn(
+                x, timestamps=timestamps, patch_size=4, input_res=10
+            )
+        assert out["sentinel2_l2a"].shape == x["sentinel2_l2a"].shape
+
+    def test_windowed_attention_with_register_tokens(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Register tokens and the 4D window mask compose in a forward pass."""
+        encoder = self._make_encoder(supported_modalities, 3, num_register_tokens=2)
+        encoder.train()
+        B, H, W, T = 2, 4, 4, 1
+        x, timestamps = self._make_tokens(encoder, B, H, W, T)
+        x["sentinel2_l2a_mask"][1, 0, 0, 0, :] = MaskValue.DECODER.value
+        out, _, _ = encoder.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        assert out["sentinel2_l2a"].shape == x["sentinel2_l2a"].shape
+        assert torch.isfinite(out["sentinel2_l2a"]).all()
+
+    def test_encoder_config_windowed(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Config builds an encoder with the window settings applied."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            depth=2,
+            windowed_attention_size=5,
+            windowed_attention_layers=[0],
+        )
+        encoder = config.build()
+        assert encoder.windowed_attention_size == 5
+        assert encoder.windowed_attention_layers == frozenset({0})
+
+    @pytest.mark.parametrize("size", [1, 2, 4])
+    def test_encoder_config_rejects_bad_window_size(
+        self, supported_modalities: list[ModalitySpec], size: int
+    ) -> None:
+        """Window size must be odd and at least 3."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names, embedding_size=16, num_heads=2, windowed_attention_size=size
+        )
+        with pytest.raises(ValueError, match="odd int >= 3"):
+            config.validate()
+
+    def test_encoder_config_rejects_flash_attn_with_window(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Flash attention ignores attn_mask, so it cannot be windowed."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            windowed_attention_size=3,
+            use_flash_attn=True,
+        )
+        with pytest.raises(ValueError, match="use_flash_attn"):
+            config.validate()
+
+    def test_encoder_config_rejects_bad_layers(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Layer indices must lie in [0, depth), and require a window size."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            depth=2,
+            windowed_attention_size=3,
+            windowed_attention_layers=[0, 2],
+        )
+        with pytest.raises(ValueError, match="windowed_attention_layers"):
+            config.validate()
+        config = EncoderConfig(
+            names, embedding_size=16, num_heads=2, windowed_attention_layers=[0]
+        )
+        with pytest.raises(ValueError, match="requires windowed_attention_size"):
+            config.validate()
 
 
 class TestPredictor:

@@ -1189,6 +1189,47 @@ class FlexiVitBase(nn.Module):
             )
         return (h_max, w_max)
 
+    def build_window_coordinates(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Build per-token patch-grid coordinates for windowed (neighborhood) attention.
+
+        Returns ``[B, N, 3]`` with ``(row, col, is_spatial)`` in raw patch-index units
+        (no GSD scaling), collapsed in the same token order as
+        ``collapse_and_combine_hwtc``. Spatial tokens carry their ``(row, col)`` patch
+        index and ``is_spatial=1``; non-spatial tokens (static or temporal-only
+        modalities) carry zeros and ``is_spatial=0`` so the mask builder can let them
+        attend globally. Independent of ``position_encoding``.
+        """
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        coord_dict = {}
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            coords = self._zero_rope_positions(tokens, coord_dim=3)
+            if Modality.get(modality_name).is_spatial and tokens.ndim in (5, 6):
+                batch_size, height, width = tokens.shape[:3]
+                grid_row = torch.arange(
+                    height, device=tokens.device, dtype=torch.float32
+                )
+                grid_col = torch.arange(
+                    width, device=tokens.device, dtype=torch.float32
+                )
+                row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
+                # Broadcast (h, w) over the trailing (t, b_s) or (b_s) token axes.
+                trailing = (1,) * (tokens.ndim - 4)
+                coords[..., 0] = row_g.view(1, height, width, *trailing)
+                coords[..., 1] = col_g.view(1, height, width, *trailing)
+                coords[..., 2] = 1.0
+            coord_dict[modality_name] = coords
+        coord_dict.update(original_masks_dict)
+        coords, _ = self.collapse_and_combine_hwtc(coord_dict)
+        return coords
+
     @staticmethod
     def _zero_rope_positions(tokens: Tensor, coord_dim: int) -> Tensor:
         """Create zero RoPE coordinates matching token layout."""
@@ -1770,6 +1811,8 @@ class Encoder(FlexiVitBase):
         register_projection_dims: list[int] | None = None,
         register_projection_output_norm: bool = False,
         register_back_projection_hidden: int | None = None,
+        windowed_attention_size: int | None = None,
+        windowed_attention_layers: list[int] | None = None,
     ):
         """Initialize the encoder.
 
@@ -1872,6 +1915,17 @@ class Encoder(FlexiVitBase):
                 back-projection heads. ``None`` (default) keeps the shipped single
                 ``Linear(d, register_dim)``; an int makes each head a 2-layer MLP
                 ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
+            windowed_attention_size: If set, encoder self-attention is neighborhood
+                (windowed) attention over the patch grid: each spatial patch token
+                attends only to tokens whose patch-grid Chebyshev distance is at most
+                ``(windowed_attention_size - 1) // 2`` (3 -> 3x3 neighborhood, 5 ->
+                5x5), across all timesteps, band sets, and spatial modalities.
+                Non-spatial tokens and register tokens attend globally and are
+                attended by everyone. Must be odd and >= 3. Implemented as a dense
+                boolean SDPA mask, so it is incompatible with ``use_flash_attn``.
+            windowed_attention_layers: Block indices that use windowed attention.
+                ``None`` (default) windows every block when
+                ``windowed_attention_size`` is set; other blocks keep full attention.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1903,6 +1957,30 @@ class Encoder(FlexiVitBase):
             self.register_tokens = nn.Parameter(
                 torch.zeros(num_register_tokens, embedding_size)
             )
+        if windowed_attention_size is not None:
+            if windowed_attention_size < 3 or windowed_attention_size % 2 == 0:
+                raise ValueError(
+                    "windowed_attention_size must be an odd int >= 3, got "
+                    f"{windowed_attention_size}"
+                )
+            if use_flash_attn:
+                raise ValueError(
+                    "windowed_attention_size is implemented as an SDPA attention mask "
+                    "and cannot be combined with use_flash_attn=True"
+                )
+            if windowed_attention_layers is not None and any(
+                not 0 <= i < depth for i in windowed_attention_layers
+            ):
+                raise ValueError(
+                    f"windowed_attention_layers must be in [0, {depth}), got "
+                    f"{windowed_attention_layers}"
+                )
+        self.windowed_attention_size = windowed_attention_size
+        self.windowed_attention_layers: frozenset[int] | None = (
+            frozenset(windowed_attention_layers)
+            if windowed_attention_layers is not None
+            else None
+        )
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -2199,13 +2277,50 @@ class Encoder(FlexiVitBase):
         else:
             return new_mask
 
+    @staticmethod
+    def _build_window_attn_mask(
+        coords: Tensor,
+        key_valid: Tensor | None,
+        window_size: int,
+    ) -> Tensor:
+        """Build the neighborhood-attention mask from per-token patch coordinates.
+
+        Args:
+            coords: ``[B, N, 3]`` ``(row, col, is_spatial)`` from
+                ``build_window_coordinates`` (already reduced to the encoded tokens).
+            key_valid: optional ``[B, N]`` bool mask of keys that are real (not
+                padding) tokens. ``None`` treats every key as valid.
+            window_size: odd window side length; radius is ``(window_size - 1) // 2``.
+
+        Returns:
+            ``[B, 1, N, N]`` bool mask where True means the query (dim 2) may attend
+            to the key (dim 3). A spatial query sees spatial keys within the window
+            (Chebyshev distance <= radius on the patch grid) plus all non-spatial
+            keys; non-spatial queries see everything.
+        """
+        radius = (window_size - 1) // 2
+        row = coords[..., 0]
+        col = coords[..., 1]
+        spatial = coords[..., 2] > 0.5
+        d_row = (row[:, :, None] - row[:, None, :]).abs()
+        d_col = (col[:, :, None] - col[:, None, :]).abs()
+        in_window = (d_row <= radius) & (d_col <= radius)
+        allowed = in_window | ~spatial[:, :, None] | ~spatial[:, None, :]
+        if key_valid is not None:
+            allowed = allowed & key_valid.bool()[:, None, :]
+        return allowed[:, None]
+
     def add_register_tokens_and_masks(
         self,
         tokens: Tensor,
         attn_mask: Tensor | None,
         processed_register_tokens: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
-        """Concatenate register tokens to the tokens."""
+        """Concatenate register tokens to the tokens.
+
+        ``attn_mask`` may be a per-key ``[B, N]`` mask or a full ``[B, 1, N, N]``
+        query-key mask; register entries are all True in either case.
+        """
         batch_size = tokens.shape[0]
         # Expand register tokens to match batch size: [num_register_tokens, embedding_size] -> [batch_size, num_register_tokens, embedding_size]
         if processed_register_tokens is None:
@@ -2215,17 +2330,44 @@ class Encoder(FlexiVitBase):
         # Concatenate register tokens at the beginning: [batch_size, seq_len, embedding_size] -> [batch_size, num_register_tokens + seq_len, embedding_size]
         tokens = torch.cat([reg_tokens, tokens], dim=1)
         if attn_mask is not None:
+            attn_mask = self._prepend_register_mask(attn_mask)
+        return tokens, attn_mask
+
+    def _prepend_register_mask(self, attn_mask: Tensor) -> Tensor:
+        """Prepend all-True register entries to a 2D key mask or a 4D query-key mask."""
+        num_reg = self.num_register_tokens
+        if attn_mask.dim() == 2:
             # Create mask for register tokens (all True - they should participate in attention)
             reg_mask = torch.ones(
-                batch_size,
-                self.num_register_tokens,
+                attn_mask.shape[0],
+                num_reg,
                 dtype=attn_mask.dtype,
                 device=attn_mask.device,
             )
-            attn_mask = torch.cat([reg_mask, attn_mask], dim=1)
-        else:
-            reg_mask = None
-        return tokens, attn_mask
+            return torch.cat([reg_mask, attn_mask], dim=1)
+        if attn_mask.dim() == 4:
+            batch_size, heads, n_q, n_k = attn_mask.shape
+            # Register keys: visible to every query.
+            reg_cols = torch.ones(
+                batch_size,
+                heads,
+                n_q,
+                num_reg,
+                dtype=attn_mask.dtype,
+                device=attn_mask.device,
+            )
+            attn_mask = torch.cat([reg_cols, attn_mask], dim=3)
+            # Register queries: attend to everything.
+            reg_rows = torch.ones(
+                batch_size,
+                heads,
+                num_reg,
+                n_k + num_reg,
+                dtype=attn_mask.dtype,
+                device=attn_mask.device,
+            )
+            return torch.cat([reg_rows, attn_mask], dim=2)
+        raise ValueError(f"attn_mask must be 2D or 4D, got shape {attn_mask.shape}")
 
     def pop_register_tokens(self, tokens: Tensor) -> tuple[Tensor, Tensor]:
         """Pop the register tokens from the tokens."""
@@ -2351,6 +2493,14 @@ class Encoder(FlexiVitBase):
         ):
             register_kv_positions = register_kv_positions[..., 1:]
 
+        # Patch-grid coordinates for the neighborhood-attention mask. Built before the
+        # sequence is reduced so they follow the same gather as the tokens.
+        window_coords = (
+            self.build_window_coordinates(tokens_only_dict, original_masks_dict)
+            if self.windowed_attention_size is not None
+            else None
+        )
+
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -2360,6 +2510,10 @@ class Encoder(FlexiVitBase):
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
+        if window_coords is not None and bool_mask is not None:
+            window_coords, _, _, _, _ = self.remove_masked_tokens(
+                window_coords, bool_mask
+            )
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -2384,9 +2538,19 @@ class Encoder(FlexiVitBase):
             new_mask,
             fast_pass=fast_pass,
         )
+        # The window mask is always applied (train and eval): unlike the padding
+        # mask it changes which tokens a query can see, not just which are padding.
+        window_attn_mask: Tensor | None = None
+        if window_coords is not None:
+            assert self.windowed_attention_size is not None
+            window_attn_mask = self._build_window_attn_mask(
+                window_coords, new_mask, self.windowed_attention_size
+            )
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
+            if window_attn_mask is not None:
+                window_attn_mask = self._prepend_register_mask(window_attn_mask)
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
@@ -2407,13 +2571,20 @@ class Encoder(FlexiVitBase):
             # of True indicates the value *should* take part in
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+            if window_attn_mask is not None and (
+                self.windowed_attention_layers is None
+                or i_blk in self.windowed_attention_layers
+            ):
+                block_attn_mask = window_attn_mask
+            else:
+                block_attn_mask = attn_mask
 
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
-                attn_mask=attn_mask,
+                attn_mask=block_attn_mask,
                 rope_positions=positions,
             )
 
@@ -3148,6 +3319,9 @@ class EncoderConfig(Config):
     register_projection_dims: list[int] | None = None
     register_projection_output_norm: bool = False
     register_back_projection_hidden: int | None = None
+    # Neighborhood (windowed) attention over the patch grid; see Encoder.__init__.
+    windowed_attention_size: int | None = None
+    windowed_attention_layers: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -3269,6 +3443,33 @@ class EncoderConfig(Config):
             head_dim=self.embedding_size // self.num_heads,
             temporal_rope_dim_frac=self.temporal_rope_dim_frac,
         )
+        if self.windowed_attention_size is not None:
+            if (
+                self.windowed_attention_size < 3
+                or self.windowed_attention_size % 2 == 0
+            ):
+                raise ValueError(
+                    "windowed_attention_size must be an odd int >= 3, got "
+                    f"{self.windowed_attention_size}"
+                )
+            if self.use_flash_attn:
+                raise ValueError(
+                    "windowed_attention_size is implemented as an SDPA attention mask "
+                    "and cannot be combined with use_flash_attn=True"
+                )
+            if self.windowed_attention_layers is not None:
+                bad = [
+                    i for i in self.windowed_attention_layers if not 0 <= i < self.depth
+                ]
+                if bad:
+                    raise ValueError(
+                        f"windowed_attention_layers must be in [0, {self.depth}), "
+                        f"got {bad}"
+                    )
+        elif self.windowed_attention_layers is not None:
+            raise ValueError(
+                "windowed_attention_layers requires windowed_attention_size to be set"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
