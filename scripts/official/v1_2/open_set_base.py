@@ -141,7 +141,8 @@ def build_train_module_config(
 def build_dataloader_config(common: CommonComponents):
     """Build a dataloader that carries labels without treating them as model tokens."""
     config = base_build_dataloader_config(common)
-    config.token_budget_excluded_modalities = list(LABEL_MODALITIES)
+    # The dataloader excludes only_decode_modalities from the token budget, so
+    # listing the label modalities here also keeps them from consuming budget.
     config.masking_config.strategy_config["only_decode_modalities"] = list(
         ONLY_DECODE_MODALITIES
     ) + list(LABEL_MODALITIES)

@@ -32,11 +32,12 @@ from olmoearth_pretrain.data.collate import (
     collate_single_masked_batched,
 )
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
-from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE, Modality
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     OlmoEarthSample,
+    compute_bandset_rates,
     subset_sample_default,
 )
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
@@ -75,6 +76,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_patch_size: int,
         sampled_hw_p_list: list[int],
         token_budget: int | None = None,
+        time_priority_prob: float = 0.0,
+        temporal_bias: float = 0.0,
+        min_tokens_per_instance: int = 0,
+        max_timesteps: int = 12,
+        tile_size: int = 128,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -94,9 +100,29 @@ class OlmoEarthDataLoader(DataLoaderBase):
         masking_strategy_b: MaskingStrategy | None = None,
         num_masked_views: int = 1,
         tokenization_config: TokenizationConfig | None = None,
-        token_budget_excluded_modalities: list[str] | None = None,
     ):
         """Initialize the OlmoEarthDataLoader.
+
+        The dataloader is responsible for subsetting our 128x128 24-timestep tiles.
+        For a sampled patch size, we subset a spatiotemporal grid so that
+        the number of tokens is <= token_budget and >= min_tokens_per_instance. Given
+        this constraint, we use the following subsetting logic per microbatch:
+
+        1. Define all possible grid sizes (hw, t) combinations that fit within the budget.
+            Given the patch size we restrict hw so that hw * p is <= than the
+            total 128x128 chip). We also restrict t to be <= max_timesteps
+        2. with probability time_priority_prob, decide whether to sample timesteps or
+            grid size.
+            If sampling timesteps:
+                i.  Sample some timestep t (from our possible timesteps, defined in step 1)
+                ii. Sample some grid size hw which fits within this token budget and
+                    yields at least min_tokens_per_instance
+            If sampling grid size:
+                i. Sample some grid size hw where there are timesteps that fit the min / max budgets
+                ii. Sample a timestep t that respects the min / max budget
+            In both the grid size and timestep sampling, we prefer more timesteps with a bias
+            defined by temporal_bias.
+        Decode only modalities are excluded from the token budget calculations.
 
         Args:
             dataset: The dataset to load from.
@@ -106,6 +132,19 @@ class OlmoEarthDataLoader(DataLoaderBase):
             max_patch_size: Maximum patch size for training.
             sampled_hw_p_list: List of possible height/width in patches to sample.
             token_budget: Optional token budget per instance.
+            time_priority_prob: Given a token burdget, we can either sample the a grid size
+                and then find timesteps that fit this budget , or vice versa.
+                time_priority_prob defines how often we sample a number of timesteps and
+                find grid sizes that fit this budget. 1 - time_priority_prob is how often
+                we start by sampling the grid size.
+            temporal_bias: Skews the timestep draw toward the maximum of its feasible
+                window; timesteps are sampled with weight ``t ** temporal_bias``. 0.0
+                larger values favour fuller sequences
+            min_tokens_per_instance: Minimum token count a sampled shape must cost.
+                Shapes below the floor are excluded. 0 disables the floor.
+            max_timesteps: Maximum number of timesteps a sample can contribute.
+            tile_size: Spatial extent (in base-resolution pixels) of a training tile.
+                Used to bound the sampled grid so ``sampled_hw_p * patch_size`` fits.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -124,8 +163,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
             masking_strategy_b: Optional second masking strategy for Galileo-style training.
             num_masked_views: Number of masked views to return (1=single, 2=double).
             tokenization_config: Optional tokenization config for custom band groupings.
-            token_budget_excluded_modalities: Loaded modalities that are not tokenized
-                by the model and should not consume the token budget.
         """
         super().__init__(
             work_dir=work_dir,
@@ -142,6 +179,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.token_budget = token_budget
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
         self.sampled_hw_p_list = sampled_hw_p_list
+        self.time_priority_prob = time_priority_prob
+        self.temporal_bias = temporal_bias
+        self.min_tokens_per_instance = min_tokens_per_instance
+        self.max_timesteps = max_timesteps
+        self.tile_size = tile_size
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -160,9 +202,6 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.masking_strategy_b = masking_strategy_b
         self.num_masked_views = num_masked_views
         self.tokenization_config = tokenization_config
-        self.token_budget_excluded_modalities = frozenset(
-            token_budget_excluded_modalities or []
-        )
 
         # Validate configuration
         if masking_strategy is None:
@@ -173,6 +212,34 @@ class OlmoEarthDataLoader(DataLoaderBase):
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
+
+        # Modalities kept out of the encoder token budget (decode-only targets are
+        # never encoded, so they should not consume budget meant for the encoder).
+        self.budget_exclude_modalities: frozenset[str] = frozenset(
+            getattr(self.masking_strategy, "only_decode_modalities", []) or []
+        )
+
+        # Precompute per-instance band-set token rates so the shape sampler can
+        # invert the budget without a concrete sample in hand. Uses the full
+        # training modality set (a superset of any single sample), so the derived
+        # max_t is conservative and always fits the per-sample budget downstream.
+        training_modalities = getattr(self.dataset, "training_modalities", None)
+        if training_modalities is not None:
+            (
+                self._space_time_bandsets,
+                self._space_only_bandsets,
+                self._static_bandsets,
+                self._time_bandsets,
+            ) = compute_bandset_rates(
+                training_modalities,
+                self.tokenization_config,
+                exclude_modalities=self.budget_exclude_modalities,
+            )
+        else:
+            # No modality metadata (e.g. mock datasets): the sampler falls back to
+            # budget-unaware timestep sampling (max_t = max_timesteps).
+            self._space_time_bandsets = self._space_only_bandsets = 0
+            self._static_bandsets = self._time_bandsets = 0
 
     @property
     def total_unique_batches(self) -> int:
@@ -319,7 +386,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         return indices
 
     def _get_dataset_item(
-        self, idx: int, patch_size: int, sampled_hw_p: int
+        self, idx: int, patch_size: int, sampled_hw_p: int, target_t: int | None = None
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
         args = GetItemArgs(
@@ -328,7 +395,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
             tokenization_config=self.tokenization_config,
-            token_budget_excluded_modalities=self.token_budget_excluded_modalities,
+            target_t=target_t,
+            budget_exclude_modalities=self.budget_exclude_modalities,
         )
         item = self.dataset[args]
         return item
@@ -577,14 +645,62 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
-    ) -> Iterator[tuple[int, int, int]]:
-        """Get a generator that yields a tuple of (idx, patch_size, sampled_hw_p).
+    ) -> Iterator[tuple[int, int, int, int]]:
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t)`` per instance.
 
-        Changes patch_size and sampled_hw_p every rank_batch_size.
+        See the OlmoEarthDataLoader.__init__ docstring for a description
+        of the subsetting behaviour.
         """
+        dl = self.data_loader
         patch_size_array = np.array(patch_size_list)
         hw_p_to_sample_array = np.array(hw_p_to_sample)
         instances_processed = 0
+
+        budget = dl.token_budget
+        max_t_data = dl.max_timesteps
+        space_time_bandsets = dl._space_time_bandsets
+        space_only_bandsets = dl._space_only_bandsets
+        static_bs = dl._static_bandsets
+        time_bs = dl._time_bandsets
+        time_priority_prob = dl.time_priority_prob
+        temporal_bias = dl.temporal_bias
+        min_tokens = dl.min_tokens_per_instance
+
+        def max_t_for(hw: int) -> int:
+            """Largest number of timesteps that fits the budget for this grid."""
+            if budget is None:
+                return max_t_data
+            fixed = space_only_bandsets * hw * hw + static_bs
+            per_t = space_time_bandsets * hw * hw + time_bs
+            if per_t <= 0:  # no time-varying modalities
+                return max_t_data if fixed <= budget else 0
+            remaining = budget - fixed
+            if remaining < per_t:
+                return 0
+            return int(min(max_t_data, remaining // per_t))
+
+        def min_t_for(hw: int) -> int:
+            """Fewest timesteps whose (grid, t) shape clears the token floor."""
+            if min_tokens <= 0:
+                return 1
+            fixed = space_only_bandsets * hw * hw + static_bs
+            per_t = space_time_bandsets * hw * hw + time_bs
+            if fixed >= min_tokens:  # floor already met by the fixed spatial tokens
+                return 1
+            if per_t <= 0:  # no time-varying modalities and floor unmet
+                return max_t_data + 1  # unsatisfiable -> grid dropped below
+            return int(max(1, -(-(min_tokens - fixed) // per_t)))  # ceil division
+
+        def sample_t(lo: int, hi: int) -> int:
+            """Sample a timestep in [lo, hi], biased toward hi by temporal_bias."""
+            if hi <= lo:
+                return lo
+            ts = np.arange(lo, hi + 1)
+            if temporal_bias == 0:
+                return int(rng.choice(ts))
+            weights = ts.astype(np.float64) ** temporal_bias
+            weights /= weights.sum()
+            return int(rng.choice(ts, p=weights))
 
         # TODO: We need to maintain state and reproducibility here
         worker_id = self.worker_info.id if self.worker_info is not None else 0
@@ -592,16 +708,60 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
-                patch_size = rng.choice(patch_size_array)
-                max_height_width_tokens = int(IMAGE_TILE_SIZE / patch_size)
-                filtered_hw_p_to_sample_array = hw_p_to_sample_array[
-                    hw_p_to_sample_array <= max_height_width_tokens
+                patch_size = int(rng.choice(patch_size_array))
+                # Bound the grid so sampled_hw_p * patch_size fits the tile extent.
+                grid_cap = dl.tile_size // patch_size
+                grids = hw_p_to_sample_array[
+                    (hw_p_to_sample_array > 0) & (hw_p_to_sample_array <= grid_cap)
                 ]
-                filtered_hw_p_to_sample_array = filtered_hw_p_to_sample_array[
-                    filtered_hw_p_to_sample_array > 0
-                ]
-                sampled_hw_p = rng.choice(filtered_hw_p_to_sample_array)
-            yield idx, int(patch_size), int(sampled_hw_p)
+                # A grid is a candidate only if some timestep count satisfies both
+                # the budget ceiling and the token floor: min_t_for <= max_t_for.
+                windows = {
+                    int(h): (min_t_for(int(h)), max_t_for(int(h))) for h in grids
+                }
+                candidates = np.array(
+                    [h for h in grids if windows[int(h)][0] <= windows[int(h)][1]],
+                    dtype=grids.dtype,
+                )
+                if len(candidates) == 0:
+                    raise ValueError(
+                        f"No feasible sampled_hw_p for patch_size={patch_size}, "
+                        f"token_budget={budget}, min_tokens={min_tokens}, "
+                        f"tile_size={dl.tile_size}. Check sampled_hw_p_list, "
+                        f"token_budget and min_tokens_per_instance."
+                    )
+
+                if rng.random() < time_priority_prob:
+                    # Time-first: draw t (biased to the full sequence) among the
+                    # timesteps some candidate grid supports, then a grid for it.
+                    achievable = [
+                        t
+                        for t in range(1, max_t_data + 1)
+                        if any(lo <= t <= hi for lo, hi in windows.values())
+                    ]
+                    target_t = sample_t(achievable[0], achievable[-1])
+                    while not any(
+                        windows[int(h)][0] <= target_t <= windows[int(h)][1]
+                        for h in candidates
+                    ):
+                        # target_t landed in a gap between per-grid windows; redraw.
+                        target_t = int(rng.choice(achievable))
+                    feasible = np.array(
+                        [
+                            h
+                            for h in candidates
+                            if windows[int(h)][0] <= target_t <= windows[int(h)][1]
+                        ],
+                        dtype=candidates.dtype,
+                    )
+                    sampled_hw_p = int(rng.choice(feasible))
+                else:
+                    # Space-first: pick a (possibly large) grid, then t within its
+                    # feasible [min_t, max_t] window.
+                    sampled_hw_p = int(rng.choice(candidates))
+                    lo, hi = windows[sampled_hw_p]
+                    target_t = sample_t(lo, hi)
+            yield idx, int(patch_size), int(sampled_hw_p), int(target_t)
             instances_processed += 1
 
     @property
@@ -628,12 +788,16 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
 
         # Create iterator that fetches samples from the dataset
         instance_iterator = (
-            self.data_loader._get_dataset_item(int(idx), patch_size, sampled_hw_p)
-            for idx, patch_size, sampled_hw_p in self._get_batch_item_params_iterator(
-                indices,
-                self.data_loader.patch_sizes,
-                self.data_loader.sampled_hw_p_list,
-                self.data_loader.rank_batch_size,
+            self.data_loader._get_dataset_item(
+                int(idx), patch_size, sampled_hw_p, target_t
+            )
+            for idx, patch_size, sampled_hw_p, target_t in (
+                self._get_batch_item_params_iterator(
+                    indices,
+                    self.data_loader.patch_sizes,
+                    self.data_loader.sampled_hw_p_list,
+                    self.data_loader.rank_batch_size,
+                )
             )
         )
 
@@ -658,6 +822,11 @@ class OlmoEarthDataLoaderConfig(Config):
     sampled_hw_p_list: list[int]
     seed: int
     token_budget: int | None = None  # No subsetting if None
+    time_priority_prob: float = 0.0
+    temporal_bias: float = 0.0
+    min_tokens_per_instance: int = 0
+    max_timesteps: int = 12
+    tile_size: int = 128
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -670,7 +839,6 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
     tokenization_config: TokenizationConfig | None = None
-    token_budget_excluded_modalities: list[str] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -746,13 +914,17 @@ class OlmoEarthDataLoaderConfig(Config):
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
+            time_priority_prob=self.time_priority_prob,
+            temporal_bias=self.temporal_bias,
+            min_tokens_per_instance=self.min_tokens_per_instance,
+            max_timesteps=self.max_timesteps,
+            tile_size=self.tile_size,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
             masking_strategy_b=masking_strategy_b,
             num_masked_views=self.num_masked_views,
             tokenization_config=self.tokenization_config,
-            token_budget_excluded_modalities=self.token_budget_excluded_modalities,
         )
 
 
