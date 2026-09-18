@@ -51,6 +51,7 @@ class BaselineModelName(StrEnum):
     CLAY = "clay"
     # Precomputed embedding products (no forward pass; read off the sample)
     AEF = "aef"
+    TESSERA_V2_PRECOMPUTED = "tessera_v2_precomputed"
 
 
 MODELS_WITH_MULTIPLE_SIZES: dict[BaselineModelName, Any] = {
@@ -88,6 +89,11 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/prithviv2/prithviv2_launch.py"
     elif model_name == BaselineModelName.AEF:
         return "olmoearth_pretrain/evals/models/precomputed/aef_launch.py"
+    elif model_name == BaselineModelName.TESSERA_V2_PRECOMPUTED:
+        return (
+            "olmoearth_pretrain/evals/models/precomputed/"
+            "tessera_v2_precomputed_launch.py"
+        )
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
