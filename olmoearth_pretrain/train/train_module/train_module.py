@@ -12,7 +12,6 @@ import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint.state_dict as dist_cp_sd
 from olmo_core.config import DType
-from olmo_core.distributed.checkpoint import swap_param_keys
 from olmo_core.distributed.parallel import (
     DataParallelConfig,
     DataParallelType,
@@ -419,19 +418,9 @@ class OlmoEarthTrainModule(TrainModule):
     def state_dict_to_load(
         self, metadata: Metadata, optim: bool | None = None
     ) -> dict[str, Any]:
-        """Get the state dict to load.
-
-        Old checkpoints store the Perceiver under ``register_bottleneck``; the plan
-        asks for those keys under their old names so they load (a no-op otherwise).
-        """
-        from olmoearth_pretrain.model_loader import legacy_state_dict_key_mapping
-
+        """Get the state dict to load."""
         load_opts = self.state_dict_load_opts
-        state_dict = self._get_state_dict(load_opts)
-        swap_param_keys(
-            state_dict, legacy_state_dict_key_mapping(self.model), metadata=metadata
-        )
-        return state_dict
+        return self._get_state_dict(load_opts)
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
@@ -439,15 +428,6 @@ class OlmoEarthTrainModule(TrainModule):
 
     def load_state_dict(self, state_dict: dict[str, Any]) -> None:
         """Load the state dict."""
-        from olmoearth_pretrain.model_loader import legacy_state_dict_key_mapping
-
-        # Undo any legacy renames made in state_dict_to_load.
-        swap_param_keys(
-            state_dict,
-            legacy_state_dict_key_mapping(self.model),
-            reverse=True,
-            quiet=True,
-        )
         dist_cp_sd.set_model_state_dict(
             self.model,
             state_dict["model"],

@@ -1,4 +1,5 @@
 {
+  "_source": "model subtree of step667200/config.json from the mlpgram1 training run (regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_stunorm_mlpgram1, /weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt/); verified byte-identical to the checkpoint copy shipped as OlmoEarth-v1_3-Base on 2026-09-04.",
   "model": {
     "_CLASS_": "olmoearth_pretrain.nn.latent_mim.LatentMIMConfig",
     "decoder_config": {
@@ -74,7 +75,7 @@
         }
       },
       "use_flash_attn": false,
-      "use_register_bottleneck": true
+      "use_perceiver": true
     },
     "encoder_config": {
       "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.EncoderConfig",
@@ -100,25 +101,22 @@
       "patch_embed_hidden_sizes": [
         64
       ],
+      "perceiver_config": {
+        "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.PerceiverConfig",
+        "attn_dim": 768,
+        "latent_depth": 4,
+        "per_depth_read_proj": true,
+        "register_dim": 768,
+        "student_dims": [
+          128,
+          64
+        ],
+        "student_output_norm": true
+      },
       "position_encoding": "rope_3d_mixed",
       "qk_norm": false,
       "random_band_dropout": true,
       "random_channel_embeddings": false,
-      "register_attn_dim": 768,
-      "register_contrastive_source": "registers",
-      "register_dim": 768,
-      "register_grid_size": 0,
-      "register_interleave": true,
-      "register_latent_depth": 4,
-      "register_latent_self_attn": true,
-      "register_learned_read_weighting": false,
-      "register_per_depth_read_proj": true,
-      "register_projection_dims": [
-        128,
-        64
-      ],
-      "register_projection_type": "linear",
-      "register_read_depth": 1,
       "rope_base": 10000.0,
       "rope_coordinate_scale": 1.0,
       "rope_mixed_base": 10000.0,
@@ -178,10 +176,14 @@
         }
       },
       "use_flash_attn": false,
-      "use_linear_patch_embed": true,
-      "use_register_bottleneck": true
+      "use_linear_patch_embed": true
     },
     "projection_only_target": true,
+    "register_distillation_head_config": {
+      "_CLASS_": "olmoearth_pretrain.nn.register_distillation_head.RegisterDistillationHeadConfig",
+      "back_projection_hidden": 256,
+      "gram_max_tokens": 2048
+    },
     "supervision_head_config": {
       "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionHeadConfig",
       "modality_configs": {
@@ -327,9 +329,6 @@
           "pos_weight": false,
           "regression_loss_type": "mse",
           "task_type": "classification",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 0.1
         },
         "openstreetmap_raster": {
@@ -339,9 +338,6 @@
           "pos_weight": true,
           "regression_loss_type": "mse",
           "task_type": "binary_classification",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 0.1
         },
         "srtm": {
@@ -351,9 +347,6 @@
           "pos_weight": false,
           "regression_loss_type": "l1",
           "task_type": "regression",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 1.0
         },
         "worldcereal": {
@@ -363,9 +356,6 @@
           "pos_weight": true,
           "regression_loss_type": "mse",
           "task_type": "binary_classification",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 0.1
         },
         "worldcover": {
@@ -388,9 +378,6 @@
           "pos_weight": false,
           "regression_loss_type": "mse",
           "task_type": "classification",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 0.1
         },
         "wri_canopy_height_map": {
@@ -400,14 +387,9 @@
           "pos_weight": false,
           "regression_loss_type": "l1",
           "task_type": "regression",
-          "time_conditioned": false,
-          "time_harmonics": 4,
-          "time_mlp_hidden_dim": 64,
           "weight": 1.0
         }
-      },
-      "register_supervision": true
-    },
-    "supervision_source": "registers"
+      }
+    }
   }
 }

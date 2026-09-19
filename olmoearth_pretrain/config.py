@@ -74,9 +74,8 @@ class _StandaloneConfig:
 
     Like olmo-core's deserializer it is STRICT: a key the target dataclass does not
     have raises instead of being dropped, so a checkpoint config written by code with
-    a since-removed field can never silently build a different model (see
-    ``model_loader.patch_legacy_encoder_config`` for the sanctioned way to strip
-    known-inert leftovers first).
+    a since-removed field can never silently build a different model. Convert such a
+    checkpoint once (``scripts/official/v1_3/convert_legacy_checkpoint.py``) instead.
 
     For full functionality, install olmo-core.
     """
@@ -88,8 +87,7 @@ class _StandaloneConfig:
         if unknown:
             raise ValueError(
                 f"{target.__name__} has no field(s) {sorted(unknown)}; a checkpoint "
-                "config with removed fields must go through "
-                "patch_legacy_encoder_config first"
+                "written by older code must be converted first"
             )
 
     CLASS_NAME_FIELD = "_CLASS_"
