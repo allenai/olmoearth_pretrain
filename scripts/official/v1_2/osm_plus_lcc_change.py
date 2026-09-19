@@ -33,8 +33,10 @@ from base_faster import (
     build_common_components,
     build_dataloader_config,
     build_model_config,
-    build_train_module_config,
     build_visualize_config,
+)
+from base_faster import (
+    build_train_module_config as _base_faster_build_train_module_config,
 )
 from base_faster import build_trainer_config as _base_faster_build_trainer_config
 
@@ -53,6 +55,18 @@ WANDB_PROJECT = "2026_09_19_osm_plus_lcc_change"
 # H5 directory of the lcc_change dataset: 100k merged pre/post change samples, one
 # H5 per 128x128 window (the ..._128_x_1 layout).
 LCC_CHANGE_H5_DIR = "/weka/dfive-default/helios/dataset/lcc_change/h5py_data_w_missing_timesteps_zstd_3_128_x_1/landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/100000"
+
+# base_faster runs at ~90% VRAM with rank_microbatch_size=64; this variant OOMed at 64,
+# so halve it. The global batch size (512) is unchanged, so this only adds grad
+# accumulation steps and does not change the optimization.
+RANK_MICROBATCH_SIZE = 32
+
+
+def build_train_module_config(common: CommonComponents):
+    """base_faster train module config with a smaller per-rank microbatch."""
+    config = _base_faster_build_train_module_config(common)
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
+    return config
 
 
 def build_lcc_change_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
