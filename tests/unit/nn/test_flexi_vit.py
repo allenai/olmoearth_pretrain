@@ -625,12 +625,12 @@ class TestWindowedAttention:
         s2_bs = Modality.SENTINEL2_L2A.num_band_sets
         n_s2 = H * W * T * s2_bs
         n_ll = Modality.LATLON.num_band_sets
-        assert coords.shape == (B, n_s2 + n_ll, 3)
+        assert coords.shape == (B, n_s2 + n_ll, 5)
         # Coordinates follow the same modality order as the collapsed tokens, so
         # split them back per modality the same way apply_attn does for tokens.
         per_modality = FlexiVitBase.split_and_expand_per_modality(coords, dims)
-        s2_coords = per_modality["sentinel2_l2a"]  # (B, H, W, T, b_s, 3)
-        assert s2_coords.shape == (B, H, W, T, s2_bs, 3)
+        s2_coords = per_modality["sentinel2_l2a"]  # (B, H, W, T, b_s, 5)
+        assert s2_coords.shape == (B, H, W, T, s2_bs, 5)
         expected = torch.stack(
             torch.meshgrid(
                 torch.arange(H, dtype=torch.float32),
@@ -642,7 +642,24 @@ class TestWindowedAttention:
         expected = repeat(expected, "h w p -> b h w t c p", b=B, t=T, c=s2_bs)
         assert torch.equal(s2_coords[..., :2], expected)
         assert (s2_coords[..., 2] == 1).all()
-        assert (per_modality["latlon"] == 0).all()
+        # Timestep slot index broadcast over (b, h, w, b_s).
+        expected_t = repeat(
+            torch.arange(T, dtype=torch.float32),
+            "t -> b h w t c",
+            b=B,
+            h=H,
+            w=W,
+            c=s2_bs,
+        )
+        assert torch.equal(s2_coords[..., 4], expected_t)
+        # One modality index per modality, constant within it, distinct across them.
+        ll_coords = per_modality["latlon"]
+        assert (s2_coords[..., 3] == s2_coords[0, 0, 0, 0, 0, 3]).all()
+        assert (ll_coords[..., 3] == ll_coords[0, 0, 3]).all()
+        assert s2_coords[0, 0, 0, 0, 0, 3] != ll_coords[0, 0, 3]
+        # Non-spatial tokens: zero (row, col), is_spatial=0, t=0.
+        assert (ll_coords[..., :3] == 0).all()
+        assert (ll_coords[..., 4] == 0).all()
 
     def test_build_window_attn_mask_neighborhood(self) -> None:
         """Radius-1 mask: 8-neighborhood on the grid, static tokens global."""
@@ -856,6 +873,188 @@ class TestWindowedAttention:
             names, embedding_size=16, num_heads=2, windowed_attention_layers=[0]
         )
         with pytest.raises(ValueError, match="requires windowed_attention_size"):
+            config.validate()
+
+    # --- per-slice attention on the non-windowed blocks ---------------------------
+
+    def test_build_slice_attn_mask(self) -> None:
+        """Same (modality, timestep) attends; other slices do not; static is global."""
+        # Two modalities x two timesteps, two tokens each (different positions), plus
+        # one static token at the end. Columns: (row, col, is_spatial, mod, t).
+        rows = []
+        for mod in (0, 1):
+            for t in (0, 1):
+                rows.append([0.0, 0.0, 1.0, float(mod), float(t)])
+                rows.append([3.0, 3.0, 1.0, float(mod), float(t)])
+        rows.append([0.0, 0.0, 0.0, 2.0, 0.0])
+        coords = torch.tensor(rows)[None]  # (1, 9, 5)
+        mask = Encoder._build_slice_attn_mask(coords, None)
+        assert mask.shape == (1, 1, 9, 9)
+        assert mask.dtype == torch.bool
+        m = mask[0, 0]
+
+        def idx(mod: int, t: int, k: int) -> int:
+            return (mod * 2 + t) * 2 + k
+
+        for mod in (0, 1):
+            for t in (0, 1):
+                a, b = idx(mod, t, 0), idx(mod, t, 1)
+                # Within a slice: mutually visible regardless of spatial distance.
+                assert m[a, b] and m[b, a] and m[a, a]
+                # Same modality, other timestep: hidden.
+                assert not m[a, idx(mod, 1 - t, 0)]
+                # Same timestep, other modality: hidden.
+                assert not m[a, idx(1 - mod, t, 0)]
+                # Other modality and timestep: hidden.
+                assert not m[a, idx(1 - mod, 1 - t, 1)]
+        # Everyone sees the static token, and the static token sees everyone.
+        assert m[:, 8].all()
+        assert m[8, :].all()
+        assert torch.equal(m, m.T)
+
+        # Padding keys are hidden from all queries, even inside their slice.
+        key_valid = torch.ones(1, 9, dtype=torch.bool)
+        key_valid[0, idx(0, 0, 1)] = False
+        masked = Encoder._build_slice_attn_mask(coords, key_valid)[0, 0]
+        assert not masked[:, idx(0, 0, 1)].any()
+        assert masked[idx(0, 0, 0), idx(0, 0, 0)]
+
+    def test_per_slice_single_slice_matches_full_attention(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """One spatial modality at T=1 is a single slice: per-slice == full attention.
+
+        Block 0 is windowed with a window wider than the grid (so it is also full),
+        block 1 is per-slice. With padding present in one sample, the result must
+        match the unwindowed encoder exactly.
+        """
+        full = self._make_encoder(supported_modalities, None, seed=0)
+        alt = self._make_encoder(
+            supported_modalities,
+            99,
+            seed=0,
+            windowed_attention_layers=[0],
+            non_windowed_attention="per_slice",
+        )
+        alt.load_state_dict(full.state_dict())
+        full.train()
+        alt.train()
+
+        B, H, W, T = 2, 3, 3, 1
+        x, timestamps = self._make_tokens(full, B, H, W, T)
+        x["sentinel2_l2a_mask"][1, 0, :, 0, :] = MaskValue.DECODER.value
+
+        out_full, _, _ = full.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        out_alt, _, _ = alt.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        for key in ("sentinel2_l2a", "latlon"):
+            assert torch.allclose(out_full[key], out_alt[key], atol=1e-5), key
+
+    def test_per_slice_changes_output(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """With T=2 the per-slice block must differ from full attention."""
+        full = self._make_encoder(supported_modalities, None, seed=0)
+        alt = self._make_encoder(
+            supported_modalities,
+            99,
+            seed=0,
+            windowed_attention_layers=[0],
+            non_windowed_attention="per_slice",
+        )
+        alt.load_state_dict(full.state_dict())
+        full.eval()
+        alt.eval()
+
+        B, H, W, T = 1, 3, 3, 2
+        x, timestamps = self._make_tokens(full, B, H, W, T)
+        with torch.no_grad():
+            out_full, _, _ = full.apply_attn(
+                x, timestamps=timestamps, patch_size=4, input_res=10
+            )
+            out_alt, _, _ = alt.apply_attn(
+                x, timestamps=timestamps, patch_size=4, input_res=10
+            )
+        assert out_alt["sentinel2_l2a"].shape == out_full["sentinel2_l2a"].shape
+        assert torch.isfinite(out_alt["sentinel2_l2a"]).all()
+        assert not torch.allclose(
+            out_full["sentinel2_l2a"], out_alt["sentinel2_l2a"], atol=1e-5
+        )
+
+    def test_per_slice_with_register_tokens(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Register tokens compose with both 4D masks in a forward pass."""
+        encoder = self._make_encoder(
+            supported_modalities,
+            3,
+            num_register_tokens=2,
+            windowed_attention_layers=[0],
+            non_windowed_attention="per_slice",
+        )
+        encoder.train()
+        B, H, W, T = 2, 4, 4, 2
+        x, timestamps = self._make_tokens(encoder, B, H, W, T)
+        x["sentinel2_l2a_mask"][1, 0, 0, 0, :] = MaskValue.DECODER.value
+        out, _, _ = encoder.apply_attn(
+            x, timestamps=timestamps, patch_size=4, input_res=10
+        )
+        assert out["sentinel2_l2a"].shape == x["sentinel2_l2a"].shape
+        assert torch.isfinite(out["sentinel2_l2a"]).all()
+
+    def test_encoder_config_per_slice(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Config builds an encoder with per-slice non-windowed blocks."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            depth=4,
+            windowed_attention_size=3,
+            windowed_attention_layers=[0, 2],
+            non_windowed_attention="per_slice",
+        )
+        encoder = config.build()
+        assert encoder.non_windowed_attention == "per_slice"
+        assert encoder.windowed_attention_layers == frozenset({0, 2})
+        # Default is full attention on the non-windowed blocks.
+        assert EncoderConfig(names, embedding_size=16).non_windowed_attention == "full"
+
+    def test_encoder_config_rejects_bad_non_windowed_attention(
+        self, supported_modalities: list[ModalitySpec]
+    ) -> None:
+        """Unknown modes are rejected; per_slice needs a window size and layer subset."""
+        names = [m.name for m in supported_modalities]
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            windowed_attention_size=3,
+            windowed_attention_layers=[0],
+            non_windowed_attention="bogus",
+        )
+        with pytest.raises(ValueError, match="non_windowed_attention must be one of"):
+            config.validate()
+        # per_slice with every block windowed (no layer subset) has nothing to act on.
+        config = EncoderConfig(
+            names,
+            embedding_size=16,
+            num_heads=2,
+            windowed_attention_size=3,
+            non_windowed_attention="per_slice",
+        )
+        with pytest.raises(ValueError, match="requires windowed_attention_size and"):
+            config.validate()
+        # per_slice without any windowing at all.
+        config = EncoderConfig(
+            names, embedding_size=16, num_heads=2, non_windowed_attention="per_slice"
+        )
+        with pytest.raises(ValueError, match="requires windowed_attention_size and"):
             config.validate()
 
 

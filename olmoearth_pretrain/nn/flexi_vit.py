@@ -43,6 +43,39 @@ from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 logger = logging.getLogger(__name__)
 
+# What the encoder blocks NOT in ``windowed_attention_layers`` do; see Encoder.__init__.
+NON_WINDOWED_ATTENTION_FULL = "full"
+NON_WINDOWED_ATTENTION_PER_SLICE = "per_slice"
+NON_WINDOWED_ATTENTION_MODES = (
+    NON_WINDOWED_ATTENTION_FULL,
+    NON_WINDOWED_ATTENTION_PER_SLICE,
+)
+
+
+def validate_non_windowed_attention(
+    non_windowed_attention: str,
+    windowed_attention_size: int | None,
+    windowed_attention_layers: list[int] | None,
+) -> None:
+    """Validate the ``non_windowed_attention`` setting against the window settings.
+
+    Shared by ``Encoder.__init__`` and ``EncoderConfig.validate``. ``"per_slice"``
+    only has an effect on blocks that are not windowed, so it requires both a window
+    size and an explicit (proper) subset of windowed layers.
+    """
+    if non_windowed_attention not in NON_WINDOWED_ATTENTION_MODES:
+        raise ValueError(
+            f"non_windowed_attention must be one of {NON_WINDOWED_ATTENTION_MODES}, "
+            f"got {non_windowed_attention!r}"
+        )
+    if non_windowed_attention == NON_WINDOWED_ATTENTION_PER_SLICE and (
+        windowed_attention_size is None or windowed_attention_layers is None
+    ):
+        raise ValueError(
+            "non_windowed_attention='per_slice' requires windowed_attention_size and "
+            "windowed_attention_layers to be set (otherwise no block is non-windowed)"
+        )
+
 
 def get_modalities_to_process(
     available_modalities: list[str], supported_modality_names: list[str]
@@ -1194,23 +1227,28 @@ class FlexiVitBase(nn.Module):
         tokens_only_dict: dict[str, Tensor],
         original_masks_dict: dict[str, Tensor],
     ) -> Tensor:
-        """Build per-token patch-grid coordinates for windowed (neighborhood) attention.
+        """Build per-token patch-grid coordinates for windowed / per-slice attention.
 
-        Returns ``[B, N, 3]`` with ``(row, col, is_spatial)`` in raw patch-index units
-        (no GSD scaling), collapsed in the same token order as
+        Returns ``[B, N, 5]`` with ``(row, col, is_spatial, modality_idx, t_idx)`` in
+        raw patch-index units (no GSD scaling), collapsed in the same token order as
         ``collapse_and_combine_hwtc``. Spatial tokens carry their ``(row, col)`` patch
         index and ``is_spatial=1``; non-spatial tokens (static or temporal-only
-        modalities) carry zeros and ``is_spatial=0`` so the mask builder can let them
-        attend globally. Independent of ``position_encoding``.
+        modalities) carry zero ``(row, col)`` and ``is_spatial=0`` so the mask
+        builders can let them attend globally. ``modality_idx`` is the modality's
+        position in the processing order (set for every token); ``t_idx`` is the
+        timestep slot for spatial-temporal tokens and 0 otherwise (static spatial
+        modalities have no temporal axis and so form a single slice). Independent of
+        ``position_encoding``.
         """
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
         coord_dict = {}
-        for modality_name in modalities_to_process:
+        for modality_idx, modality_name in enumerate(modalities_to_process):
             tokens = tokens_only_dict[modality_name]
-            coords = self._zero_rope_positions(tokens, coord_dim=3)
+            coords = self._zero_rope_positions(tokens, coord_dim=5)
+            coords[..., 3] = float(modality_idx)
             if Modality.get(modality_name).is_spatial and tokens.ndim in (5, 6):
                 batch_size, height, width = tokens.shape[:3]
                 grid_row = torch.arange(
@@ -1225,6 +1263,12 @@ class FlexiVitBase(nn.Module):
                 coords[..., 0] = row_g.view(1, height, width, *trailing)
                 coords[..., 1] = col_g.view(1, height, width, *trailing)
                 coords[..., 2] = 1.0
+                if tokens.ndim == 6:
+                    # (b, h, w, t, b_s, d): broadcast the slot index over the t axis.
+                    num_timesteps = tokens.shape[3]
+                    coords[..., 4] = torch.arange(
+                        num_timesteps, device=tokens.device, dtype=torch.float32
+                    ).view(1, 1, 1, num_timesteps, 1)
             coord_dict[modality_name] = coords
         coord_dict.update(original_masks_dict)
         coords, _ = self.collapse_and_combine_hwtc(coord_dict)
@@ -1813,6 +1857,7 @@ class Encoder(FlexiVitBase):
         register_back_projection_hidden: int | None = None,
         windowed_attention_size: int | None = None,
         windowed_attention_layers: list[int] | None = None,
+        non_windowed_attention: str = NON_WINDOWED_ATTENTION_FULL,
     ):
         """Initialize the encoder.
 
@@ -1925,7 +1970,16 @@ class Encoder(FlexiVitBase):
                 boolean SDPA mask, so it is incompatible with ``use_flash_attn``.
             windowed_attention_layers: Block indices that use windowed attention.
                 ``None`` (default) windows every block when
-                ``windowed_attention_size`` is set; other blocks keep full attention.
+                ``windowed_attention_size`` is set; other blocks use
+                ``non_windowed_attention``.
+            non_windowed_attention: What the blocks NOT in
+                ``windowed_attention_layers`` do. ``"full"`` (default) is ordinary
+                full attention. ``"per_slice"`` restricts each spatial patch token to
+                keys from the same modality AND the same timestep slot (across band
+                sets); static spatial modalities form one slice per modality.
+                Non-spatial tokens and register tokens stay global. Requires
+                ``windowed_attention_size`` and ``windowed_attention_layers`` so that
+                some blocks are actually non-windowed.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1975,12 +2029,16 @@ class Encoder(FlexiVitBase):
                     f"windowed_attention_layers must be in [0, {depth}), got "
                     f"{windowed_attention_layers}"
                 )
+        validate_non_windowed_attention(
+            non_windowed_attention, windowed_attention_size, windowed_attention_layers
+        )
         self.windowed_attention_size = windowed_attention_size
         self.windowed_attention_layers: frozenset[int] | None = (
             frozenset(windowed_attention_layers)
             if windowed_attention_layers is not None
             else None
         )
+        self.non_windowed_attention = non_windowed_attention
         self.min_patch_size = min_patch_size
         self.max_patch_size = max_patch_size
         self.embedding_size = embedding_size
@@ -2310,6 +2368,37 @@ class Encoder(FlexiVitBase):
             allowed = allowed & key_valid.bool()[:, None, :]
         return allowed[:, None]
 
+    @staticmethod
+    def _build_slice_attn_mask(
+        coords: Tensor,
+        key_valid: Tensor | None,
+    ) -> Tensor:
+        """Build the per-slice (same modality, same timestep) attention mask.
+
+        Args:
+            coords: ``[B, N, 5]`` ``(row, col, is_spatial, modality_idx, t_idx)`` from
+                ``build_window_coordinates`` (already reduced to the encoded tokens).
+            key_valid: optional ``[B, N]`` bool mask of keys that are real (not
+                padding) tokens. ``None`` treats every key as valid.
+
+        Returns:
+            ``[B, 1, N, N]`` bool mask where True means the query (dim 2) may attend
+            to the key (dim 3). A spatial query sees spatial keys with the same
+            ``modality_idx`` and ``t_idx`` (i.e. the full spatial extent of one
+            modality at one timestep, all band sets) plus all non-spatial keys;
+            non-spatial queries see everything.
+        """
+        spatial = coords[..., 2] > 0.5
+        modality_idx = coords[..., 3]
+        t_idx = coords[..., 4]
+        same_slice = (modality_idx[:, :, None] == modality_idx[:, None, :]) & (
+            t_idx[:, :, None] == t_idx[:, None, :]
+        )
+        allowed = same_slice | ~spatial[:, :, None] | ~spatial[:, None, :]
+        if key_valid is not None:
+            allowed = allowed & key_valid.bool()[:, None, :]
+        return allowed[:, None]
+
     def add_register_tokens_and_masks(
         self,
         tokens: Tensor,
@@ -2541,16 +2630,22 @@ class Encoder(FlexiVitBase):
         # The window mask is always applied (train and eval): unlike the padding
         # mask it changes which tokens a query can see, not just which are padding.
         window_attn_mask: Tensor | None = None
+        # Per-slice mask for the non-windowed blocks (only when configured).
+        slice_attn_mask: Tensor | None = None
         if window_coords is not None:
             assert self.windowed_attention_size is not None
             window_attn_mask = self._build_window_attn_mask(
                 window_coords, new_mask, self.windowed_attention_size
             )
+            if self.non_windowed_attention == NON_WINDOWED_ATTENTION_PER_SLICE:
+                slice_attn_mask = self._build_slice_attn_mask(window_coords, new_mask)
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if window_attn_mask is not None:
                 window_attn_mask = self._prepend_register_mask(window_attn_mask)
+            if slice_attn_mask is not None:
+                slice_attn_mask = self._prepend_register_mask(slice_attn_mask)
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
@@ -2576,6 +2671,8 @@ class Encoder(FlexiVitBase):
                 or i_blk in self.windowed_attention_layers
             ):
                 block_attn_mask = window_attn_mask
+            elif slice_attn_mask is not None:
+                block_attn_mask = slice_attn_mask
             else:
                 block_attn_mask = attn_mask
 
@@ -3322,6 +3419,8 @@ class EncoderConfig(Config):
     # Neighborhood (windowed) attention over the patch grid; see Encoder.__init__.
     windowed_attention_size: int | None = None
     windowed_attention_layers: list[int] | None = None
+    # What the non-windowed blocks do: "full" or "per_slice"; see Encoder.__init__.
+    non_windowed_attention: str = NON_WINDOWED_ATTENTION_FULL
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -3470,6 +3569,11 @@ class EncoderConfig(Config):
             raise ValueError(
                 "windowed_attention_layers requires windowed_attention_size to be set"
             )
+        validate_non_windowed_attention(
+            self.non_windowed_attention,
+            self.windowed_attention_size,
+            self.windowed_attention_layers,
+        )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:
