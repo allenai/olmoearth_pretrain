@@ -38,6 +38,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.pixel_branch import PixelRegisterBranch
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -1741,6 +1742,7 @@ class SpatialRegisterBottleneck(nn.Module):
         spatial_grid: tuple[int, int],
         patch_size: int | None = None,
         patch_coordinate_scale: float | None = None,
+        register_init: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1757,6 +1759,10 @@ class SpatialRegisterBottleneck(nn.Module):
             patch_coordinate_scale: Spacing of the patch RoPE coordinates (GSD ratio x
                 rope_coordinate_scale); required in pixel-grid mode to place the
                 pixel-center register coordinates, ignored otherwise.
+            register_init: Optional ``[B, num_registers, register_dim]`` additive
+                initialization for the register grid (e.g. a pixel branch's per-pixel
+                features through a zero-init projection), added to the cloned learned
+                latent before the first read. Rows in row-major ``(h, w)`` order.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
@@ -1798,6 +1804,13 @@ class SpatialRegisterBottleneck(nn.Module):
             .expand(batch_size, num_registers, -1)
             .contiguous()
         )
+        if register_init is not None:
+            if register_init.shape != registers.shape:
+                raise ValueError(
+                    f"register_init shape {tuple(register_init.shape)} does not match "
+                    f"the register grid {tuple(registers.shape)}"
+                )
+            registers = registers + register_init.to(registers.dtype)
         register_positions = None
         if self.use_2d_rope:
             if patch_positions is None:
@@ -1899,6 +1912,12 @@ class Encoder(FlexiVitBase):
         register_projection_dims: list[int] | None = None,
         register_projection_output_norm: bool = False,
         register_back_projection_hidden: int | None = None,
+        pixel_branch_type: str | None = None,
+        pixel_embedding_size: int = 128,
+        pixel_conv_kernel: int = 3,
+        pixel_mlp_ratio: float = 4.0,
+        pixel_thin_depth: int = 4,
+        pixel_grad_checkpointing: bool = True,
     ):
         """Initialize the encoder.
 
@@ -2021,6 +2040,20 @@ class Encoder(FlexiVitBase):
                 back-projection heads. ``None`` (default) keeps the shipped single
                 ``Linear(d, register_dim)``; an int makes each head a 2-layer MLP
                 ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
+            pixel_branch_type: If set, attach the convolutional pixel branch whose
+                final per-pixel features initialize the pixel-resolution register
+                grid through a zero-init projection (``nn/pixel_branch.py``). Only
+                ``"thinconv"`` -- a standalone unconditioned conv stack on the dense
+                pixel grid with no coarse interaction -- is implemented. Requires
+                ``register_pixel_grid``. Defaults to None (no pixel branch).
+            pixel_embedding_size: Per-pixel embedding dimension (Dp) of the pixel
+                branch. Defaults to 128.
+            pixel_conv_kernel: Depthwise convolution kernel size (odd). Defaults to 3.
+            pixel_mlp_ratio: Pointwise MLP hidden-dim ratio of the conv steps.
+                Defaults to 4.0.
+            pixel_thin_depth: Number of conv steps in the branch. Defaults to 4.
+            pixel_grad_checkpointing: Recompute each conv step in backward instead
+                of storing its pixel-resolution activations. Defaults to True.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2184,6 +2217,29 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
 
+        # Convolutional pixel branch whose final per-pixel features initialize the
+        # pixel-resolution register grid (see nn/pixel_branch.py): a standalone
+        # unconditioned conv stack on the dense pixel grid, no coarse interaction.
+        self.pixel_branch: PixelRegisterBranch | None = None
+        if pixel_branch_type is not None:
+            if self.register_bottleneck is None or not register_pixel_grid:
+                raise ValueError(
+                    "pixel_branch_type requires the pixel-resolution register "
+                    "bottleneck (use_register_bottleneck + register_pixel_grid): "
+                    "the branch's only consumer is the register initialization"
+                )
+            self.pixel_branch = PixelRegisterBranch(
+                supported_modality_names=self.supported_modality_names,
+                register_dim=self.register_dim,
+                pixel_dim=pixel_embedding_size,
+                branch_type=pixel_branch_type,
+                num_steps=pixel_thin_depth,
+                kernel_size=pixel_conv_kernel,
+                mlp_ratio=pixel_mlp_ratio,
+                tokenization_config=self.tokenization_config,
+                grad_checkpointing=pixel_grad_checkpointing,
+            )
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -2191,6 +2247,10 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+        if self.pixel_branch is not None:
+            # After the blanket init: the register-init projection starts at zero, so
+            # the model is exactly the branch-free model at step 0 (init equivalence).
+            self.pixel_branch.zero_init()
 
     @staticmethod
     def _build_back_projection(
@@ -2465,8 +2525,13 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        input_sample: MaskedOlmoEarthSample | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``input_sample`` is the RAW (unpatchified) sample; only the pixel branch reads
+        it, since the patchified ``x`` no longer carries pixel-level values or masks.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2476,6 +2541,19 @@ class Encoder(FlexiVitBase):
         )
         # exited tokens are just the linear projection
         exited_tokens, _ = self.collapse_and_combine_hwtc(x)
+
+        # Pixel branch: embed the raw sample's pixels into dense frames (non-ONLINE
+        # pixels zeroed -- the leakage guard) and run the standalone conv stack,
+        # independent of the trunk. The final frames initialize the pixel-resolution
+        # register grid at the bottleneck read below.
+        pixel_frames: Tensor | None = None
+        pixel_ctx = None
+        if self.pixel_branch is not None and input_sample is not None:
+            pixel_frames, pixel_ctx = self.pixel_branch.build_frames(
+                input_sample, patch_size
+            )
+            if pixel_frames is not None:
+                pixel_frames = self.pixel_branch.run_thin_steps(pixel_frames)
 
         tokens_dict = self.composite_encodings.forward(
             tokens_only_dict,
@@ -2611,6 +2689,13 @@ class Encoder(FlexiVitBase):
                 CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
                 * self.rope_coordinate_scale
             )
+            # Pixel-branch handoff: the branch's final per-pixel features (pooled
+            # ONLINE-only over timesteps/band sets, zero-init projected) additively
+            # initialize the cloned register latent.
+            register_init: Tensor | None = None
+            if pixel_frames is not None and pixel_ctx is not None:
+                assert self.pixel_branch is not None
+                register_init = self.pixel_branch.register_init(pixel_frames, pixel_ctx)
             registers, register_positions = self.register_bottleneck(
                 patch_tokens=tokens,
                 patch_positions=register_kv_positions,
@@ -2618,6 +2703,7 @@ class Encoder(FlexiVitBase):
                 spatial_grid=spatial_grid,
                 patch_size=patch_size,
                 patch_coordinate_scale=register_patch_coordinate_scale,
+                register_init=register_init,
             )
             register_output = {
                 "registers": registers,
@@ -2675,6 +2761,9 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    # The pixel branch embeds the RAW sample (pixel-level values and
+                    # masks), which the patchified dict no longer carries.
+                    input_sample=x if self.pixel_branch is not None else None,
                 )
             )
         else:
@@ -3325,6 +3414,23 @@ class EncoderConfig(Config):
     register_projection_dims: list[int] | None = None
     register_projection_output_norm: bool = False
     register_back_projection_hidden: int | None = None
+    # Convolutional pixel branch whose final per-pixel features initialize the
+    # pixel-resolution register grid through a zero-init projection (see
+    # nn/pixel_branch.py). Only "thinconv" -- a standalone unconditioned conv stack on
+    # the dense pixel grid with NO coarse interaction -- is implemented. Requires
+    # register_pixel_grid. None (default) -> no pixel branch.
+    pixel_branch_type: str | None = None
+    # Per-pixel embedding dimension (Dp) of the pixel branch.
+    pixel_embedding_size: int = 128
+    # Depthwise convolution kernel size (odd).
+    pixel_conv_kernel: int = 3
+    # Pointwise MLP hidden-dim ratio of the conv steps.
+    pixel_mlp_ratio: float = 4.0
+    # Depth of the conv stack.
+    pixel_thin_depth: int = 4
+    # Recompute each conv step in backward instead of storing its pixel-resolution
+    # activations (the branch has no dropout, so recomputation is deterministic).
+    pixel_grad_checkpointing: bool = True
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -3456,6 +3562,38 @@ class EncoderConfig(Config):
             raise ValueError(
                 "register_pixel_grid requires use_register_bottleneck=True"
             )
+        if self.pixel_branch_type is not None:
+            # Validated here too (not only in PixelRegisterBranch) so a bad config
+            # fails before any module is built.
+            if self.pixel_branch_type != "thinconv":
+                raise ValueError(
+                    "pixel_branch_type must be 'thinconv' (the only implemented "
+                    f"variant), got {self.pixel_branch_type!r}"
+                )
+            if not (self.use_register_bottleneck and self.register_pixel_grid):
+                raise ValueError(
+                    "pixel_branch_type requires use_register_bottleneck=True and "
+                    "register_pixel_grid=True (the branch initializes the "
+                    "pixel-resolution register grid)"
+                )
+            if self.pixel_embedding_size <= 0 or self.pixel_embedding_size % 2 != 0:
+                raise ValueError(
+                    "pixel_embedding_size must be a positive even number (sincos "
+                    f"encodings), got {self.pixel_embedding_size}"
+                )
+            if self.pixel_conv_kernel <= 0 or self.pixel_conv_kernel % 2 != 1:
+                raise ValueError(
+                    f"pixel_conv_kernel must be a positive odd number, got "
+                    f"{self.pixel_conv_kernel}"
+                )
+            if self.pixel_thin_depth < 1:
+                raise ValueError(
+                    f"pixel_thin_depth must be >= 1, got {self.pixel_thin_depth}"
+                )
+            if self.pixel_mlp_ratio <= 0:
+                raise ValueError(
+                    f"pixel_mlp_ratio must be positive, got {self.pixel_mlp_ratio}"
+                )
         if self.rope_mixed_base <= 0:
             raise ValueError(
                 f"rope_mixed_base must be positive, got {self.rope_mixed_base}"

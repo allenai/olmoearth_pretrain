@@ -48,6 +48,11 @@ register read (``tanchor``) and an NDVI head; neither is carried over.
 
 IN-LOOP EVALS: the AEF trials + PASTIS scored on the register grid itself (no
 student). At the eval window (``ws16_ps1``) the pixel grid equals the patch grid.
+
+SIBLING ARMS: the other ``experiments/pixreg_*.py`` scripts import this module's
+builders (``build_pixreg_model_config``, ``apply_pixel_reconstruction``,
+``build_dataloader_config``, ``build_train_module_config``, ``build_trainer_config``)
+and vary one thing each; see the v1.3 README.
 """
 
 import logging
@@ -151,13 +156,25 @@ def apply_pixel_registers(config: LatentMIMConfig) -> LatentMIMConfig:
     return config
 
 
-def apply_pixel_reconstruction(config: LatentMIMConfig) -> LatentMIMConfig:
+def apply_pixel_reconstruction(
+    config: LatentMIMConfig,
+    *,
+    weight: float = PIXEL_RECON_WEIGHT,
+    masked_only: bool = False,
+) -> LatentMIMConfig:
     """Add per-pixel raw-band reconstruction heads (the ``pixrecon`` part), in place.
 
     One time-conditioned supervision head per time-series input modality (S2 L2A,
     S1): a small MLP on ``[register_cell ; phi(day_of_year)]`` predicts the cell's
     normalized band values at every observed timestep (MSE, MISSING_VALUE-masked).
     Apply AFTER attaching the supervision heads (it extends the existing config).
+
+    Args:
+        config: The model config to extend.
+        weight: Per-modality loss weight of the reconstruction heads.
+        masked_only: If True, score only the timesteps the online encoder did NOT
+            see (``masked_timesteps_only``): temporal inpainting instead of a
+            partial copy task. Default False scores every observed timestep.
     """
     assert config.supervision_head_config is not None, (
         "apply_pixel_reconstruction requires a supervision_head_config"
@@ -167,25 +184,40 @@ def apply_pixel_reconstruction(config: LatentMIMConfig) -> LatentMIMConfig:
             SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
                 num_output_channels=Modality.get(name).num_bands,
-                weight=PIXEL_RECON_WEIGHT,
+                weight=weight,
                 regression_loss_type="mse",
                 time_conditioned=True,
                 time_harmonics=PIXEL_RECON_TIME_HARMONICS,
+                masked_timesteps_only=masked_only,
             )
         )
     return config
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """d128 pixel registers + map supervision (w0.1) + S2 L2A / S1 reconstruction."""
+def build_pixreg_model_config(
+    common: CommonComponents,
+    *,
+    supervision_base_weight: float = SUPERVISION_BASE_WEIGHT,
+) -> LatentMIMConfig:
+    """d128 pixel registers + per-cell map supervision, WITHOUT reconstruction heads.
+
+    The shared core of every ``pixreg_*`` arm: the query-token-compaction shape with
+    the register grid at pixel resolution, patch embed at base 4 and the map heads at
+    one value per cell. Arms add their own heads / branches on top.
+    """
     config = build_register_bottleneck_model_config(common, register_dim=REGISTER_DIM)
     # Base patch size 4 for the patch embed (see MAX_PATCH_SIZE); must match the
     # dataloader's max_patch_size. The decoder has no patch embed of its own.
     config.encoder_config.max_patch_size = MAX_PATCH_SIZE
     config.supervision_head_config = build_supervision_head_config(
-        base_weight=SUPERVISION_BASE_WEIGHT
+        base_weight=supervision_base_weight
     )
-    return apply_pixel_reconstruction(apply_pixel_registers(config))
+    return apply_pixel_registers(config)
+
+
+def build_model_config(common: CommonComponents) -> LatentMIMConfig:
+    """d128 pixel registers + map supervision (w0.1) + S2 L2A / S1 reconstruction."""
+    return apply_pixel_reconstruction(build_pixreg_model_config(common))
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
@@ -203,11 +235,15 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
     return config
 
 
-def build_trainer_config(common: CommonComponents):
-    """AEF trials + PASTIS on the register grid via Beaker; pixel-branch W&B project."""
+def build_trainer_config(common: CommonComponents, module_path: str = MODULE_PATH):
+    """AEF trials + PASTIS on the register grid via Beaker; pixel-branch W&B project.
+
+    ``module_path`` is what the eval job re-imports to rebuild the model; sibling
+    arms MUST pass their own path (a stale value silently evaluates this model).
+    """
     trainer_config = route_loop_evals_through_beaker(
         _base_build_trainer_config(common),
-        MODULE_PATH,
+        module_path,
         aeftrial_loop_eval_tasks(LOOP_EVAL_INTERVAL_STEPS),
     )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT

@@ -18,6 +18,10 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/no_supervision.py` | `base.py` with `supervision_head_config = None` |
 | `ablations/query_token_compaction.py` | native d128 registers with supervision, no student |
 | `experiments/pixreg_pixrecon.py` | pixel-resolution d128 registers + per-pixel raw-band reconstruction (see below) |
+| `experiments/pixreg.py` | `pixreg_pixrecon` without the reconstruction heads (the pixel-grid control) |
+| `experiments/pixreg_pixrecon_w1.py` | `pixreg_pixrecon` at the v1.3 supervision weight (map 1.0, recon 0.5) |
+| `experiments/pixreg_maskedrecon.py` | `pixreg_pixrecon` with the reconstruction scored on encoder-masked timesteps only |
+| `experiments/pixreg_thinconv_pixrecon.py` | `pixreg_pixrecon` + a thin conv pixel branch that initializes the register grid |
 
 ## Experiments
 
@@ -39,6 +43,35 @@ v1.3 report.
   Re-bases `regbtl_v1_2_..._ps14_pixreg_pixrecon` (W&B `2026_08_19_pixel_branch`)
   onto the v1.3 stack, without that run's temporally anchored read or NDVI head.
   Evals score the register grid at 40k-step intervals.
+
+The four arms below each import `pixreg_pixrecon`'s builders and change one thing.
+They share its sampler, microbatch, eval schedule and W&B project.
+
+- **`pixreg.py`** -- the control: `pixreg_pixrecon` minus the two reconstruction
+  heads, so the pixel grid gets its fine-grained pressure only from the per-cell map
+  heads and the MIM decoder. The original program's pixel-registers-only run went NaN
+  at ~12k steps and was never evaluated, so every pixel-grid result so far is
+  grid + {recon, conv branch, embed read} against a PATCH-grid control; this arm
+  attributes the gain to the grid itself. Watch the loss / grad norm early.
+- **`pixreg_pixrecon_w1.py`** -- loss balance: map-supervision base weight 1.0 (the
+  v1.3 value; `pixreg_pixrecon` inherited 0.1 from its w0p1 lineage) with the
+  reconstruction heads scaled 10x to 0.5 each so the recon:map ratio is unchanged.
+  Motivated by `pixreg_pixrecon`'s map losses sitting 10-45% above the w1 `qtc`
+  ablation at matched steps. Directly comparable to `query_token_compaction`.
+- **`pixreg_maskedrecon.py`** -- objective: the reconstruction heads set
+  `masked_timesteps_only`, scoring only the (pixel, timestep) units the online
+  encoder did not see (`DECODER` / `TARGET_ENCODER_ONLY`), at weight 0.1 each to
+  offset the ~halved target count. Turns the partial copy task (half the targets were
+  visible timesteps) into temporal inpainting aligned with the MIM objective.
+- **`pixreg_thinconv_pixrecon.py`** -- architecture: `pixel_branch_type="thinconv"`
+  (`nn/pixel_branch.py`, ported from the pixel-branch program): 4 ConvNeXt-style
+  units (depthwise 3x3 + pointwise MLP, width 128) on the dense pixel grid of the
+  time-series inputs, run once and independent of the trunk; their per-pixel
+  features (ONLINE-only pooled, zero-init projected) are added to the cloned register
+  latent before the first read. Non-ONLINE pixels are zeroed before the first
+  convolution (leakage guard); the zero-init handoff makes step 0 identical to
+  `pixreg_pixrecon`. Tests the "detail-carrying init" alternative to the
+  "detail-forcing loss".
 
 ## Conventions
 

@@ -8,7 +8,10 @@ Covers the pixreg run (see ``scripts/official/v1_3/experiments/pixreg_pixrecon.p
 * the pixel spacing as a ground property, identical at every patch size;
 * the decoupled latent self-attention width/heads and the affine-free block norms;
 * the whole pixel-register LatentMIM forward (decoder over the larger grid, per-cell
-  map supervision, time-conditioned raw-band reconstruction heads).
+  map supervision, time-conditioned raw-band reconstruction heads);
+* the ``"thinconv"`` pixel branch (``pixreg_thinconv_pixrecon``): init equivalence
+  with the branch-free encoder, the leakage guard at branch and encoder level, and
+  the full LatentMIM forward with the branch attached.
 """
 
 import pytest
@@ -18,6 +21,7 @@ from torch import nn
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PredictorConfig
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+from olmoearth_pretrain.nn.pixel_branch import PixelRegisterBranch
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHeadConfig,
     SupervisionModalityConfig,
@@ -29,10 +33,12 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 REGISTER_DIM = 16
 LATENT_ATTN_DIM = 16
 LATENT_NUM_HEADS = 2
+PIXEL_DIM = 16
+PIXEL_THIN_DEPTH = 2
 B, H, W, T = 2, 8, 8, 2
 
 
-def _build_encoder() -> Encoder:
+def _build_encoder(pixel_branch_type: str | None = None) -> Encoder:
     """Small pixel-grid register encoder mirroring the pixreg run config."""
     return Encoder(
         supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
@@ -55,6 +61,9 @@ def _build_encoder() -> Encoder:
         register_latent_attn_dim=LATENT_ATTN_DIM,
         register_latent_num_heads=LATENT_NUM_HEADS,
         register_norm_affine=False,
+        pixel_branch_type=pixel_branch_type,
+        pixel_embedding_size=PIXEL_DIM,
+        pixel_thin_depth=PIXEL_THIN_DEPTH,
     )
 
 
@@ -235,8 +244,13 @@ def test_latent_head_shape_validated() -> None:
         config.validate()
 
 
-def _pixreg_pixrecon_model_config() -> LatentMIMConfig:
-    """Small version of the pixreg_pixrecon run: pixel registers + recon heads."""
+def _pixreg_pixrecon_model_config(
+    pixel_branch_type: str | None = None,
+) -> LatentMIMConfig:
+    """Small version of the pixreg_pixrecon run: pixel registers + recon heads.
+
+    ``pixel_branch_type="thinconv"`` gives the pixreg_thinconv_pixrecon shape.
+    """
     modalities = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
     encoder_config = EncoderConfig(
         supported_modality_names=modalities,
@@ -258,6 +272,9 @@ def _pixreg_pixrecon_model_config() -> LatentMIMConfig:
         register_latent_attn_dim=LATENT_ATTN_DIM,
         register_latent_num_heads=LATENT_NUM_HEADS,
         register_norm_affine=False,
+        pixel_branch_type=pixel_branch_type,
+        pixel_embedding_size=PIXEL_DIM,
+        pixel_thin_depth=PIXEL_THIN_DEPTH,
     )
     decoder_config = PredictorConfig(
         supported_modality_names=modalities,
@@ -334,3 +351,234 @@ def test_pixreg_pixrecon_latent_mim_forward(patch_size: int) -> None:
     assert model.encoder.register_bottleneck is not None
     grad = model.encoder.register_bottleneck.register.grad
     assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0
+
+
+# --- thinconv pixel branch --------------------------------------------------------------
+
+
+def _open_register_init(encoder: Encoder) -> None:
+    """Open the zero-init handoff so the pixel branch actually contributes."""
+    assert encoder.pixel_branch is not None
+    torch.manual_seed(7)
+    nn.init.normal_(encoder.pixel_branch.to_register.weight, std=0.05)
+
+
+def _perturb_masked_units(sample: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
+    """Copy of the sample with the values at every non-ONLINE unit perturbed."""
+    mask: torch.Tensor = sample.sentinel2_l2a_mask
+    masked_units = (mask != MaskValue.ONLINE_ENCODER.value).any(dim=-1, keepdim=True)
+    assert masked_units.any()
+    return MaskedOlmoEarthSample(
+        sentinel2_l2a=sample.sentinel2_l2a
+        + 100.0 * torch.randn_like(sample.sentinel2_l2a) * masked_units,
+        sentinel2_l2a_mask=sample.sentinel2_l2a_mask,
+        latlon=sample.latlon,
+        latlon_mask=sample.latlon_mask,
+        timestamps=sample.timestamps,
+    )
+
+
+def test_pixel_branch_init_equivalence() -> None:
+    """At init the branch model equals the branch-free model bit-for-bit.
+
+    The register-init projection is zeroed by ``zero_init``, so the branch's
+    parameters exist (and receive gradient) but contribute nothing at step 0 -- the
+    thinconv arm starts exactly where ``pixreg_pixrecon`` does.
+    """
+    torch.manual_seed(0)
+    plain = _build_encoder()
+    torch.manual_seed(0)
+    branch = _build_encoder("thinconv")
+    assert isinstance(branch.pixel_branch, PixelRegisterBranch)
+    assert len(branch.pixel_branch.steps) == PIXEL_THIN_DEPTH
+    assert torch.equal(
+        branch.pixel_branch.to_register.weight,
+        torch.zeros_like(branch.pixel_branch.to_register.weight),
+    )
+    # Copy every shared parameter; the branch-only parameters keep their init.
+    missing, unexpected = branch.load_state_dict(plain.state_dict(), strict=False)
+    assert not unexpected
+    assert missing and all(key.startswith("pixel_branch.") for key in missing)
+
+    sample = _make_sample()
+    for patch_size in (1, 2, 4):
+        out_plain = _forward(plain, sample, patch_size)
+        out_branch = _forward(branch, sample, patch_size)
+        assert out_plain.keys() == out_branch.keys()
+        for key, value in out_plain.items():
+            if isinstance(value, torch.Tensor):
+                assert torch.equal(value, out_branch[key]), (key, patch_size)
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_pixel_branch_changes_registers_once_open(patch_size: int) -> None:
+    """With the handoff open, the branch changes the register grid (it is wired in)."""
+    torch.manual_seed(0)
+    plain = _build_encoder()
+    torch.manual_seed(0)
+    branch = _build_encoder("thinconv")
+    branch.load_state_dict(plain.state_dict(), strict=False)
+    _open_register_init(branch)
+    sample = _make_sample()
+    regs_plain = _forward(plain, sample, patch_size)["registers"]
+    regs_branch = _forward(branch, sample, patch_size)["registers"]
+    assert regs_plain.shape == regs_branch.shape == (B, H, W, REGISTER_DIM)
+    assert not torch.allclose(regs_plain, regs_branch)
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_pixel_branch_masked_leakage(patch_size: int) -> None:
+    """Values at non-ONLINE units never reach the branch's outputs (leakage guard).
+
+    The branch zeroes non-ONLINE pixels BEFORE the first convolution, so even though
+    the depthwise convs mix across unit boundaries, nothing derived from masked
+    values can flow to the register init. Exercised at the BRANCH level because the
+    coarse trunk's own FlexiPatchEmbed bilinearly resizes the image whenever
+    ``patch_size < max_patch_size``, mixing masked pixels into neighbouring ONLINE
+    patch tokens -- a pre-existing base-encoder property this test must not conflate
+    with the branch (see the end-to-end check at the interpolation-free patch size).
+    """
+    torch.manual_seed(0)
+    encoder = _build_encoder("thinconv")
+    _open_register_init(encoder)
+    assert encoder.pixel_branch is not None
+    branch: PixelRegisterBranch = encoder.pixel_branch
+    sample = _make_sample()
+
+    def run(s: MaskedOlmoEarthSample) -> list[torch.Tensor]:
+        with torch.no_grad():
+            frames, ctx = branch.build_frames(s, patch_size)
+            assert frames is not None and ctx is not None
+            frames = branch.run_thin_steps(frames)
+            init = branch.register_init(frames, ctx)
+        assert init.shape == (B, H * W, REGISTER_DIM)
+        return [frames, init]
+
+    for out_a, out_b in zip(run(sample), run(_perturb_masked_units(sample))):
+        assert torch.equal(out_a, out_b)
+
+
+def test_encoder_masked_leakage_at_max_patch_size() -> None:
+    """End-to-end: at ps = max_patch_size no output depends on masked values.
+
+    At the maximum patch size the coarse FlexiPatchEmbed applies no resize, so the
+    base encoder is exactly invariant to masked-unit values -- any end-to-end
+    difference would be a leak introduced by the pixel branch (whose handoff is
+    opened here so it genuinely contributes to every output).
+    """
+    torch.manual_seed(0)
+    encoder = _build_encoder("thinconv")
+    _open_register_init(encoder)
+    sample = _make_sample()
+    out_a = _forward(encoder, sample, patch_size=4)
+    out_b = _forward(encoder, _perturb_masked_units(sample), patch_size=4)
+    assert out_a.keys() == out_b.keys()
+    for key, value in out_a.items():
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, out_b[key]), key
+
+
+def test_pixel_branch_register_init_is_online_only_pooling() -> None:
+    """A pixel whose every unit is masked gets a zero init (bare latent).
+
+    With the projection bias zero (as ``zero_init`` leaves it) and the weight open,
+    the init at an all-masked pixel is exactly zero, while visible pixels are not.
+    """
+    torch.manual_seed(0)
+    encoder = _build_encoder("thinconv")
+    _open_register_init(encoder)
+    assert encoder.pixel_branch is not None
+    branch = encoder.pixel_branch
+    num_bands = Modality.SENTINEL2_L2A.num_bands
+    # The top-left 4x4 block is masked at EVERY timestep; everything else ONLINE.
+    mask = torch.zeros(B, H, W, T, num_bands, dtype=torch.long)
+    mask[:, 0:4, 0:4, :, :] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, num_bands),
+        sentinel2_l2a_mask=mask,
+        timestamps=torch.tensor(
+            [[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+        ).expand(B, -1, -1),
+    )
+    with torch.no_grad():
+        frames, ctx = branch.build_frames(sample, patch_size=4)
+        assert frames is not None and ctx is not None
+        init = branch.register_init(branch.run_thin_steps(frames), ctx)
+    init = init.view(B, H, W, REGISTER_DIM)
+    assert torch.equal(init[:, 0:4, 0:4], torch.zeros_like(init[:, 0:4, 0:4]))
+    assert init[:, 4:, 4:].abs().sum() > 0
+
+
+def test_pixel_branch_requires_pixel_grid() -> None:
+    """pixel_branch_type without register_pixel_grid is rejected at config time."""
+    config = EncoderConfig(
+        supported_modality_names=[Modality.SENTINEL2_L2A.name],
+        embedding_size=16,
+        num_heads=2,
+        depth=1,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_dim=8,
+        pixel_branch_type="thinconv",
+    )
+    with pytest.raises(ValueError, match="register_pixel_grid"):
+        config.validate()
+
+
+def test_pixel_branch_type_validated() -> None:
+    """Only the thinconv variant exists; the old 'conv' name is rejected."""
+    config = EncoderConfig(
+        supported_modality_names=[Modality.SENTINEL2_L2A.name],
+        embedding_size=16,
+        num_heads=2,
+        depth=1,
+        position_encoding="rope",
+        use_register_bottleneck=True,
+        register_dim=8,
+        register_pixel_grid=True,
+        pixel_branch_type="conv",
+    )
+    with pytest.raises(ValueError, match="thinconv"):
+        config.validate()
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_pixreg_thinconv_pixrecon_latent_mim_forward(patch_size: int) -> None:
+    """The thinconv arm's full model trains end to end and the branch gets gradient.
+
+    The handoff is opened so the conv stack lies on the loss path; the register
+    latent and the branch's embedding both receive finite, non-zero gradient.
+    """
+    torch.manual_seed(0)
+    model = _pixreg_pixrecon_model_config("thinconv").build()
+    assert model.encoder.pixel_branch is not None
+    _open_register_init(model.encoder)
+    sample = _make_sample()
+    model.train()
+    (_latent, decoded, _pooled, _recon, _metrics, supervision_preds, _proj) = (
+        model.forward(sample, patch_size=patch_size)
+    )
+    assert supervision_preds is not None
+    assert supervision_preds["sentinel2_l2a"].shape == (
+        B,
+        H,
+        W,
+        T,
+        Modality.SENTINEL2_L2A.num_bands,
+    )
+    assert decoded.sentinel2_l2a is not None
+    assert decoded.sentinel2_l2a.shape[:3] == (B, H // patch_size, W // patch_size)
+
+    assert model.supervision_head is not None
+    loss, _ = compute_supervision_loss(
+        supervision_preds, sample, model.supervision_head
+    )
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert model.encoder.register_bottleneck is not None
+    grad = model.encoder.register_bottleneck.register.grad
+    assert grad is not None and torch.isfinite(grad).all() and grad.abs().sum() > 0
+    branch = model.encoder.pixel_branch
+    embed_grads = [p.grad for p in branch.embed.parameters() if p.grad is not None]
+    assert embed_grads and all(torch.isfinite(g).all() for g in embed_grads)
+    assert sum(g.abs().sum() for g in embed_grads) > 0

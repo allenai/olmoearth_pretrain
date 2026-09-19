@@ -22,7 +22,7 @@ from torch import Tensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.encodings import timestamps_to_day_of_year
 
 logger = logging.getLogger(__name__)
@@ -106,6 +106,15 @@ class SupervisionModalityConfig(Config):
             two-layer MLP head. Kept small on purpose: the point of the loss
             is to force the REGISTER to store the trajectory, not to let a
             clever head reconstruct it from weak features.
+        masked_timesteps_only: For time_conditioned only. If True, the loss scores
+            only the ``(pixel, timestep)`` targets whose input unit the ONLINE
+            encoder did NOT see (mask value ``DECODER`` or
+            ``TARGET_ENCODER_ONLY``; ``MISSING`` stays excluded). Without it about
+            half the targets are timesteps the register reads saw directly, making
+            the head a partial copy task; with it the objective is temporal
+            inpainting, aligned with the masked-modelling loss. The prediction is
+            still computed at every observed timestep; only the loss mask changes.
+            Requires the modality's mask tensor on the batch.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -118,6 +127,7 @@ class SupervisionModalityConfig(Config):
     time_conditioned: bool = False
     time_harmonics: int = 4
     time_mlp_hidden_dim: int = 64
+    masked_timesteps_only: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -147,6 +157,11 @@ class SupervisionModalityConfig(Config):
                 raise ValueError(
                     f"time_mlp_hidden_dim must be >= 1, got {self.time_mlp_hidden_dim}"
                 )
+        elif self.masked_timesteps_only:
+            raise ValueError(
+                "masked_timesteps_only requires time_conditioned=True (only the "
+                "time-conditioned heads predict per timestep)"
+            )
 
 
 @dataclass
@@ -391,6 +406,8 @@ def _compute_per_modality_losses(
             continue
 
         valid_mask = _build_valid_mask(raw_target)
+        if cfg.masked_timesteps_only:
+            valid_mask = valid_mask & _build_non_online_mask(batch, name)
 
         if not valid_mask.any():
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
@@ -454,6 +471,26 @@ def compute_supervision_loss(
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
+
+
+def _build_non_online_mask(batch: MaskedOlmoEarthSample, name: str) -> Tensor:
+    """Bool ``[B, H, W, T]`` mask, True where the online encoder did NOT see the unit.
+
+    Reads the modality's ``[B, H, W, T, band_sets]`` mask tensor and keeps the
+    ``DECODER`` / ``TARGET_ENCODER_ONLY`` units (``MISSING`` is excluded here too,
+    although the MISSING_VALUE target check already drops it). A pixel-timestep
+    counts as masked if ANY of its band sets was hidden from the online encoder.
+    """
+    mask = getattr(batch, batch.get_masked_modality_name(name), None)
+    if mask is None:
+        raise ValueError(
+            f"masked_timesteps_only supervision ({name}) requires the batch to carry "
+            f"{batch.get_masked_modality_name(name)}"
+        )
+    non_online = (mask != MaskValue.ONLINE_ENCODER.value) & (
+        mask != MaskValue.MISSING.value
+    )
+    return non_online.any(dim=-1)
 
 
 def _classification_loss(

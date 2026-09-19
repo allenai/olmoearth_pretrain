@@ -536,3 +536,163 @@ class TestTimeConditionedSupervision:
                 time_conditioned=True,
                 time_harmonics=0,
             )
+
+
+def _s2_masked_recon_config(
+    num_bands: int = 12, masked_only: bool = True
+) -> dict[str, SupervisionModalityConfig]:
+    """The maskedrecon head: pixrecon scored only on encoder-masked timesteps."""
+    return {
+        "sentinel2_l2a": SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=num_bands,
+            weight=0.1,
+            regression_loss_type="mse",
+            time_conditioned=True,
+            time_harmonics=4,
+            time_mlp_hidden_dim=16,
+            masked_timesteps_only=masked_only,
+        ),
+    }
+
+
+class TestMaskedTimestepsOnlySupervision:
+    """``masked_timesteps_only``: reconstruction scored on non-ONLINE units only."""
+
+    T = 3
+    NUM_BANDS = 12
+
+    def _make_timestamps(self) -> torch.Tensor:
+        return torch.tensor(
+            [[[1, 0, 2023], [15, 3, 2023], [1, 6, 2023]]], dtype=torch.long
+        ).expand(B, -1, -1)
+
+    def _make_head(self, masked_only: bool = True) -> SupervisionHead:
+        return SupervisionHead(
+            _s2_masked_recon_config(self.NUM_BANDS, masked_only),
+            embedding_dim=D,
+            max_patch_size=MAX_PATCH_SIZE,
+        )
+
+    def _make_batch(self, mask: torch.Tensor) -> MaskedOlmoEarthSample:
+        torch.manual_seed(0)
+        return MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(),
+            sentinel2_l2a=torch.randn(B, P_H, P_W, self.T, self.NUM_BANDS),
+            sentinel2_l2a_mask=mask,
+        )
+
+    def _mixed_mask(self) -> torch.Tensor:
+        """Timestep 0 ONLINE everywhere, timestep 1 DECODER, timestep 2 mixed by row."""
+        mask = torch.full(
+            (B, P_H, P_W, self.T, self.NUM_BANDS), MaskValue.ONLINE_ENCODER.value
+        )
+        mask[:, :, :, 1] = MaskValue.DECODER.value
+        mask[:, : P_H // 2, :, 2] = MaskValue.TARGET_ENCODER_ONLY.value
+        return mask
+
+    def test_loss_ignores_online_timesteps(self) -> None:
+        """Perturbing the targets at ONLINE units leaves the loss unchanged.
+
+        Perturbing a DECODER unit changes it, so the mask is doing the selecting and
+        not silently dropping everything.
+        """
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        mask = self._mixed_mask()
+        batch = self._make_batch(mask)
+        preds = head(register_grid, batch)
+        loss, _ = compute_supervision_loss(preds, batch, head)
+        assert torch.isfinite(loss) and loss > 0
+
+        online = mask[..., 0] == MaskValue.ONLINE_ENCODER.value  # [B, H, W, T]
+        assert online.any() and not online.all()
+        target: torch.Tensor = batch.sentinel2_l2a
+        assert target is not None
+        perturbed_online = target.clone()
+        perturbed_online[online] += 100.0
+        batch_online = MaskedOlmoEarthSample(
+            timestamps=batch.timestamps,
+            sentinel2_l2a=perturbed_online,
+            sentinel2_l2a_mask=mask,
+        )
+        loss_online, _ = compute_supervision_loss(preds, batch_online, head)
+        torch.testing.assert_close(loss_online, loss)
+
+        perturbed_masked = target.clone()
+        perturbed_masked[~online] += 100.0
+        batch_masked = MaskedOlmoEarthSample(
+            timestamps=batch.timestamps,
+            sentinel2_l2a=perturbed_masked,
+            sentinel2_l2a_mask=mask,
+        )
+        loss_masked, _ = compute_supervision_loss(preds, batch_masked, head)
+        assert not torch.allclose(loss_masked, loss)
+
+    def test_equals_unmasked_loss_when_nothing_is_online(self) -> None:
+        """With every unit DECODER the masked and plain losses coincide."""
+        torch.manual_seed(1)
+        register_grid = torch.randn(B, P_H, P_W, D)
+        mask = torch.full(
+            (B, P_H, P_W, self.T, self.NUM_BANDS), MaskValue.DECODER.value
+        )
+        batch = self._make_batch(mask)
+        masked_head = self._make_head(masked_only=True)
+        plain_head = self._make_head(masked_only=False)
+        plain_head.load_state_dict(masked_head.state_dict())
+        loss_masked, _ = compute_supervision_loss(
+            masked_head(register_grid, batch), batch, masked_head
+        )
+        loss_plain, _ = compute_supervision_loss(
+            plain_head(register_grid, batch), batch, plain_head
+        )
+        torch.testing.assert_close(loss_masked, loss_plain)
+
+    def test_all_online_gives_zero_loss_with_gradient_path(self) -> None:
+        """Nothing masked -> zero loss (the FSDP-friendly ``0 * pred.sum()`` branch)."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
+        mask = torch.full(
+            (B, P_H, P_W, self.T, self.NUM_BANDS), MaskValue.ONLINE_ENCODER.value
+        )
+        batch = self._make_batch(mask)
+        loss, per_mod = compute_supervision_loss(
+            head(register_grid, batch), batch, head
+        )
+        assert loss.item() == 0.0
+        assert per_mod["sentinel2_l2a"].item() == 0.0
+        loss.backward()
+        assert register_grid.grad is not None
+
+    def test_missing_units_stay_excluded(self) -> None:
+        """MISSING mask values never count as masked-for-reconstruction targets."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        mask = torch.full(
+            (B, P_H, P_W, self.T, self.NUM_BANDS), MaskValue.ONLINE_ENCODER.value
+        )
+        mask[:, :, :, 1] = MaskValue.MISSING.value
+        batch = self._make_batch(mask)
+        loss, _ = compute_supervision_loss(head(register_grid, batch), batch, head)
+        assert loss.item() == 0.0
+
+    def test_requires_mask_on_batch(self) -> None:
+        """A batch without the modality mask raises a clear error."""
+        head = self._make_head()
+        register_grid = torch.randn(B, P_H, P_W, D)
+        batch = MaskedOlmoEarthSample(
+            timestamps=self._make_timestamps(),
+            sentinel2_l2a=torch.randn(B, P_H, P_W, self.T, self.NUM_BANDS),
+        )
+        preds = head(register_grid, batch)
+        with pytest.raises(ValueError, match="sentinel2_l2a_mask"):
+            compute_supervision_loss(preds, batch, head)
+
+    def test_requires_time_conditioned(self) -> None:
+        """masked_timesteps_only without time_conditioned is rejected at config time."""
+        with pytest.raises(ValueError, match="time_conditioned"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                masked_timesteps_only=True,
+            )
