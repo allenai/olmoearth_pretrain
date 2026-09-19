@@ -10,6 +10,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 from olmo_core.distributed.utils import get_rank
 from olmo_core.exceptions import OLMoEnvironmentError
+from olmo_core.train.callbacks.beaker import BeakerCallback
 from olmo_core.train.callbacks.wandb import WANDB_API_KEY_ENV_VAR, WandBCallback
 from tqdm import tqdm
 
@@ -124,6 +125,7 @@ class OlmoEarthWandBCallback(WandBCallback):
                 runid_file.write_text(self.run.id)
 
             self._run_path = self.run.path  # type: ignore
+            self._seed_beaker_config()
             if self.upload_dataset_distribution_pre_train:
                 assert isinstance(self.trainer.data_loader, OlmoEarthDataLoader)
                 dataset = self.trainer.data_loader.dataset
@@ -159,6 +161,59 @@ class OlmoEarthWandBCallback(WandBCallback):
                             }
                         )
                         plt.close(fig)
+
+    def _seed_beaker_config(self) -> None:
+        """Pre-seed the Beaker experiment id/URL in the wandb run config.
+
+        olmo-core's BeakerCallback (which runs after this callback, since its
+        priority is lower) writes ``beaker_experiment_url`` and
+        ``beaker_experiment_id`` into the wandb run config without
+        ``allow_val_change``. When a run is relaunched as a new Beaker experiment
+        while resuming the same wandb run id (via the runid file), those keys
+        already hold the previous experiment's values and wandb raises a
+        ConfigError, killing rank 0. Writing the current values here with
+        ``allow_val_change=True`` means the BeakerCallback's update later finds
+        identical values and is a no-op, and the wandb config keeps pointing at
+        the live experiment.
+        """
+        beaker_callback: BeakerCallback | None = None
+        for callback in self.trainer.callbacks.values():
+            if isinstance(callback, BeakerCallback):
+                beaker_callback = callback
+                break
+        if beaker_callback is None or not beaker_callback.enabled:
+            return
+
+        try:
+            from olmo_core.launch.beaker import (
+                get_beaker_client,
+                get_beaker_experiment_id,
+            )
+
+            # Mirror BeakerCallback.pre_train exactly so the values match.
+            experiment_id = beaker_callback.experiment_id
+            if experiment_id is None:
+                experiment_id = get_beaker_experiment_id()
+            if experiment_id is None:
+                return
+            with get_beaker_client() as beaker:
+                workload = beaker.workload.get(experiment_id)
+                beaker_url = beaker.workload.url(workload)
+        except Exception as e:
+            logger.warning(f"Failed to resolve Beaker experiment for wandb config: {e}")
+            return
+
+        self.run.config.update(  # type: ignore
+            {
+                "beaker_experiment_url": beaker_url,
+                "beaker_experiment_id": experiment_id,
+            },
+            allow_val_change=True,
+        )
+        logger.info(
+            f"Seeded wandb config with beaker_experiment_url={beaker_url} "
+            f"beaker_experiment_id={experiment_id}"
+        )
 
 
 HeliosWandBCallback = _deprecated_class_alias(
