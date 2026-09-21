@@ -17,6 +17,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `base.py` | the release recipe: model, sampler, train module, in-loop evals |
 | `ablations/no_supervision.py` | `base.py` with `supervision_head_config = None` |
 | `ablations/query_token_compaction.py` | native d128 registers with supervision, no student |
+| `ablations/pure_perceiver.py` | `base.py` with 0 ViT blocks and a 12-layer Perceiver (W&B `20260921_perceiver_shapes`) |
 
 ## Conventions
 
