@@ -260,6 +260,7 @@ class JointLatentTransformer(nn.Module):
         visible_mask: Tensor | None,
         cell_ids: Tensor,
         spatial_grid: tuple[int, int],
+        grid_extent_positions: Tensor | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Run the joint blocks and return the latent grid.
 
@@ -273,6 +274,11 @@ class JointLatentTransformer(nn.Module):
                 ``spatial_grid`` (``-1`` for non-spatial tokens, which then see the
                 latents and each other but are read by no latent).
             spatial_grid: ``(n_h, n_w)`` patch grid the latent is cloned to.
+            grid_extent_positions: Optional ``[B, M, >=2]`` positions whose LAST two
+                coordinates give the full (pre-masking) patch extent the latent grid is
+                laid over. Defaults to ``patch_positions``; pass the unmasked positions so
+                a masking pattern that hides a whole edge row/column of cells cannot
+                shrink the grid off the cells.
 
         Returns:
             registers: ``[B, n_h, n_w, D]`` latent grid after the final norm.
