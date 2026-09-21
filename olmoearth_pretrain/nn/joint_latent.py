@@ -119,6 +119,7 @@ class JointLatentTransformer(nn.Module):
         rope_temporal_base: float | None,
         qk_norm: bool,
         drop_path: float = 0.0,
+        latent_time_range: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -143,6 +144,13 @@ class JointLatentTransformer(nn.Module):
             rope_temporal_base: Optional separate base for the temporal axis.
             qk_norm: QK normalisation in attention.
             drop_path: Stochastic depth rate.
+            latent_time_range: If True, latents are encoded as temporal INTERVALS
+                spanning the sample's visible-token time range (centred at its
+                midpoint) instead of points at the mean time: their RoPE pairs are
+                sinc-gated by how many turns the pair's temporal frequency makes across
+                the window (see :func:`apply_3d_mixed_rope`), so a latent's attention
+                over time is a soft box over its window rather than a peak at the
+                centre. Requires a 3D mixed RoPE encoder. Tokens stay points.
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -158,6 +166,12 @@ class JointLatentTransformer(nn.Module):
         self.embedding_size = embedding_size
         self.token_mlp = token_mlp
         self.position_encoding = position_encoding
+        if latent_time_range and position_encoding != PositionEncoding.MIXED_3D_ROPE:
+            raise ValueError(
+                "latent_time_range needs position_encoding == MIXED_3D_ROPE, got "
+                f"{position_encoding}"
+            )
+        self.latent_time_range = latent_time_range
         self.register = nn.Parameter(torch.empty(1, embedding_size))
         nn.init.trunc_normal_(self.register, std=0.02)
         block_kwargs: dict[str, Any] = dict(
@@ -236,6 +250,7 @@ class JointLatentTransformer(nn.Module):
         n_tokens: int,
         rope_positions: Tensor,
         attn_kwargs: dict[str, Any],
+        rope_extent: Tensor | None = None,
     ) -> Tensor:
         """One joint block.
 
@@ -244,7 +259,12 @@ class JointLatentTransformer(nn.Module):
         """
         x = x + blk.drop_path(
             blk.ls1(
-                blk.attn(x=blk.norm1(x), rope_positions=rope_positions, **attn_kwargs)
+                blk.attn(
+                    x=blk.norm1(x),
+                    rope_positions=rope_positions,
+                    rope_extent=rope_extent,
+                    **attn_kwargs,
+                )
             )
         )
         if self.token_mlp:
@@ -305,14 +325,31 @@ class JointLatentTransformer(nn.Module):
         latent_positions_2d = build_register_grid_positions(
             extent_source[..., -2:], spatial_grid
         )
+        rope_extent: Tensor | None = None
         if self.is_3d:
-            # Latents have no time of their own: anchor them at the mean valid
-            # token time so temporal RoPE offsets to the tokens stay bounded.
             t = patch_positions[..., 0]
-            t_mean = (t * valid_tokens).sum(1) / valid_tokens.sum(1).clamp(min=1)
+            if self.latent_time_range:
+                # Interval latents: centred on the midpoint of the visible tokens'
+                # time range and spanning its full width; tokens stay points.
+                big = torch.finfo(t.dtype).max
+                t_min = torch.where(valid_tokens, t, torch.full_like(t, big)).amin(1)
+                t_max = torch.where(valid_tokens, t, torch.full_like(t, -big)).amax(1)
+                t_anchor = (t_min + t_max) / 2
+                width = (t_max - t_min).clamp(min=0)
+                rope_extent = torch.cat(
+                    [
+                        torch.zeros(batch_size, n_tokens, device=device, dtype=t.dtype),
+                        width[:, None].expand(-1, n_latents),
+                    ],
+                    dim=1,
+                )
+            else:
+                # Point latents: anchored at the mean valid token time so temporal
+                # RoPE offsets to the tokens stay bounded.
+                t_anchor = (t * valid_tokens).sum(1) / valid_tokens.sum(1).clamp(min=1)
             latent_positions = torch.cat(
                 [
-                    t_mean[:, None, None].expand(-1, n_latents, 1),
+                    t_anchor[:, None, None].expand(-1, n_latents, 1),
                     latent_positions_2d,
                 ],
                 dim=-1,
@@ -341,7 +378,9 @@ class JointLatentTransformer(nn.Module):
         attn_kwargs = self._attention_masks(cell_id, is_latent, valid)
 
         for blk in self.joint_blocks:
-            x = self._joint_block(blk, x, n_tokens, rope_positions, attn_kwargs)
+            x = self._joint_block(
+                blk, x, n_tokens, rope_positions, attn_kwargs, rope_extent=rope_extent
+            )
         latents = x[:, n_tokens:]
         for blk in self.latent_blocks:
             latents = blk(x=latents, rope_positions=latent_positions_2d)
@@ -364,6 +403,9 @@ class JointLatentConfig(Config):
         joint_depth: Number of joint blocks over ``[tokens ; latents]``.
         latent_only_depth: Plain latent self-attention blocks after the joint ones.
         token_mlp: Whether tokens get the block MLP (True) or only the latents do.
+        latent_time_range: Encode latents as temporal intervals over the sample's
+            visible time range (sinc-gated RoPE) instead of points at the mean time.
+            Requires ``position_encoding == rope_3d_mixed`` on the encoder.
         student_dims / student_output_norm: As on ``PerceiverConfig``: a detached
             low-dim student readout of the register grid.
     """
@@ -372,6 +414,7 @@ class JointLatentConfig(Config):
     joint_depth: int = 12
     latent_only_depth: int = 0
     token_mlp: bool = True
+    latent_time_range: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
 
@@ -393,6 +436,14 @@ class JointLatentConfig(Config):
             )
         if self.joint_depth < 1:
             raise ValueError("joint_depth must be >= 1")
+        if (
+            self.latent_time_range
+            and position_encoding != PositionEncoding.MIXED_3D_ROPE
+        ):
+            raise ValueError(
+                "latent_time_range requires the rope_3d_mixed position_encoding, got "
+                f"{position_encoding}"
+            )
         if self.latent_only_depth < 0:
             raise ValueError("latent_only_depth must be >= 0")
         if self.student_dims is not None:
@@ -437,4 +488,5 @@ class JointLatentConfig(Config):
             rope_temporal_base=rope_temporal_base,
             qk_norm=qk_norm,
             drop_path=drop_path,
+            latent_time_range=self.latent_time_range,
         )

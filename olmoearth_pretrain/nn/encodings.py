@@ -9,6 +9,7 @@ They cover the following:
 - Month encoding (for temporal data)
 """
 
+import math
 import warnings
 from enum import StrEnum
 
@@ -457,6 +458,7 @@ def apply_3d_mixed_rope(
     x: torch.Tensor,
     positions: torch.Tensor,
     freqs: torch.Tensor,
+    extent: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Apply RoPE-Mixed (learnable 3D frequencies) to attention q/k.
 
@@ -465,12 +467,23 @@ def apply_3d_mixed_rope(
     3-vector ``(theta_t, theta_row, theta_col)`` is a learnable per-head,
     per-pair frequency.
 
+    With ``extent`` a token is encoded as a temporal INTERVAL of that width centred
+    on its ``t`` rather than as a point: the rotation is averaged over the interval,
+    which is exactly the centre rotation scaled per pair by
+    ``sinc(theta_t * extent / 2)`` (``sin(a) / a``). Pairs whose temporal frequency
+    completes a turn or more across the interval are attenuated to ~0, pairs coarser
+    than the interval pass unchanged, so the token's attention kernel over time
+    becomes a soft box of width ``extent`` instead of a point. Integrated positional
+    encoding (mip-NeRF) applied to RoPE. Zero extent is the plain rotation.
+
     Args:
         x: Attention tensor with shape ``(B, H, N, D)`` or packed
             ``(N, H, D)``.
         positions: Coordinates with shape ``(B, N, 3)`` or packed ``(N, 3)``.
             Last dim is ``(t, row, col)``.
         freqs: Learnable 3D frequencies of shape ``(3, H, D // 2)``.
+        extent: Optional temporal interval width per token, ``(B, N)`` or packed
+            ``(N,)``, in the same units as ``t``. ``None`` or zeros = point tokens.
     """
     head_dim = x.shape[-1]
     if head_dim % 2 != 0:
@@ -538,7 +551,30 @@ def apply_3d_mixed_rope(
 
     cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
     sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
-    return (x * cos) + (rotate_half(x) * sin)
+    out = (x * cos) + (rotate_half(x) * sin)
+    if extent is None:
+        return out
+    extent = extent.to(device=x.device, dtype=torch.float32)
+    if x.ndim == 4:
+        if extent.shape != positions.shape[:2]:
+            raise ValueError(
+                f"extent must have shape (B, N)={tuple(positions.shape[:2])}, got "
+                f"{tuple(extent.shape)}"
+            )
+        half_turns = extent[:, None, :, None] * freqs_t[None, :, None, :] / 2
+    else:
+        if extent.shape != positions.shape[:1]:
+            raise ValueError(
+                f"extent must have shape (N,)={tuple(positions.shape[:1])}, got "
+                f"{tuple(extent.shape)}"
+            )
+        half_turns = extent[:, None, None] * freqs_t[None, :, :] / 2
+    # Mean of exp(i*theta*p) over p uniform in an interval of this width around the
+    # centre = exp(i*theta*c) * sin(a)/a with a = theta*width/2. torch.sinc is the
+    # normalised sin(pi x)/(pi x), hence the division by pi.
+    gate = torch.sinc(half_turns / math.pi)
+    gate = torch.repeat_interleave(gate, repeats=2, dim=-1).to(dtype=dtype)
+    return out * gate
 
 
 def init_2d_mixed_rope_freqs(

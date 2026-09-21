@@ -331,6 +331,8 @@ class Attention(nn.Module):
         rope_positions_y: torch.Tensor | None = None,
         kv: tuple[torch.Tensor, torch.Tensor] | None = None,
         block_mask: Any | None = None,
+        rope_extent: torch.Tensor | None = None,
+        rope_extent_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -338,6 +340,12 @@ class Attention(nn.Module):
             x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
             block_mask: Optional FlexAttention block mask (see :meth:`sdpa`).
+            rope_extent: Optional per-query temporal interval widths ``(B, N)`` for
+                mixed 3D RoPE: queries are encoded as intervals (rotation averaged
+                over the interval, i.e. sinc-gated per pair) instead of points. Only
+                valid with ``position_encoding == MIXED_3D_ROPE``.
+            rope_extent_y: The same for the keys (``y`` in cross-attention; defaults to
+                ``rope_extent`` in self-attention).
             kv: Optional precomputed ``(k, v)`` projections of ``y``, each
                 ``(B, Nk, attn_dim)``, for cross-attention whose K/V projection is
                 shared across several blocks (computed once by the caller). ``self.k``
@@ -386,6 +394,13 @@ class Attention(nn.Module):
         # logger.info(f"q shape: {q.shape} k shape: {k.shape} v shape: {v.shape}")
 
         q, k = self.q_norm(q), self.k_norm(k)
+        if (
+            rope_extent is not None or rope_extent_y is not None
+        ) and self.position_encoding != PositionEncoding.MIXED_3D_ROPE:
+            raise ValueError(
+                "rope_extent (interval-valued RoPE) is only implemented for "
+                f"MIXED_3D_ROPE, got {self.position_encoding}"
+            )
         if PositionEncoding.is_rope(self.position_encoding):
             if rope_positions is None:
                 raise ValueError("rope_positions must be provided when RoPE is enabled")
@@ -416,8 +431,13 @@ class Attention(nn.Module):
                     temporal_base=self.rope_temporal_base,
                 )
             else:
-                q = apply_3d_mixed_rope(q, rope_positions, self.rope_mixed_freqs)
-                k = apply_3d_mixed_rope(k, k_positions, self.rope_mixed_freqs)
+                k_extent = rope_extent_y if y is not None else rope_extent
+                q = apply_3d_mixed_rope(
+                    q, rope_positions, self.rope_mixed_freqs, extent=rope_extent
+                )
+                k = apply_3d_mixed_rope(
+                    k, k_positions, self.rope_mixed_freqs, extent=k_extent
+                )
         x = self.sdpa(
             q,
             k,
@@ -706,12 +726,17 @@ class Block(nn.Module):
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
         kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        rope_extent: torch.Tensor | None = None,
+        rope_extent_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
+            rope_extent: Optional per-query temporal interval widths (see
+                :meth:`Attention.forward`).
+            rope_extent_y: The same for the keys.
             kv: Optional precomputed ``(k, v)`` projections of ``y`` (see
                 :meth:`Attention.forward`); the block's own K/V layers are skipped.
             attn_mask: Optional attention mask tensor
@@ -744,6 +769,8 @@ class Block(nn.Module):
                     rope_positions=rope_positions,
                     rope_positions_y=rope_positions_y,
                     kv=kv,
+                    rope_extent=rope_extent,
+                    rope_extent_y=rope_extent_y,
                 )
             )
         )

@@ -1535,6 +1535,7 @@ class Perceiver(nn.Module):
         rope_mixed_base: float = 10.0,
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
+        read_time_range: bool = False,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1591,6 +1592,11 @@ class Perceiver(nn.Module):
             temporal_rope_dim_frac: Fraction of head dims on the temporal axis for
                 time-aware reads.
             rope_temporal_base: Optional separate temporal base for time-aware reads.
+            read_time_range: With ``time_rope_encoding`` set to the mixed 3D mode,
+                encode the register queries as temporal INTERVALS spanning the visible
+                tokens' time range (sinc-gated RoPE, see :func:`apply_3d_mixed_rope`)
+                instead of points at the window centre, so a read attends over its
+                window as a soft box rather than a peak at the centre.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1604,6 +1610,12 @@ class Perceiver(nn.Module):
                 f"time_rope_encoding must be a 3D RoPE mode, got {time_rope_encoding}"
             )
         self.time_rope_encoding = time_rope_encoding
+        if read_time_range and time_rope_encoding != PositionEncoding.MIXED_3D_ROPE:
+            raise ValueError(
+                "read_time_range needs time_rope_encoding == MIXED_3D_ROPE, got "
+                f"{time_rope_encoding}"
+            )
+        self.read_time_range = read_time_range
         if not use_2d_rope:
             # With a single cloned latent the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
@@ -1785,6 +1797,7 @@ class Perceiver(nn.Module):
         register_positions = None
         read_query_positions: Tensor | None = None
         read_key_positions: Tensor | None = None
+        read_query_extent: Tensor | None = None
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
@@ -1809,15 +1822,26 @@ class Perceiver(nn.Module):
                 # sample's visible tokens. A key's rotation relative to its register is
                 # then its offset within the window, bounded and year-independent.
                 t = patch_positions[..., 0]
-                weights = (
-                    visible_mask.bool().to(t.dtype)
+                valid = (
+                    visible_mask.bool()
                     if visible_mask is not None
-                    else torch.ones_like(t)
+                    else torch.ones_like(t, dtype=torch.bool)
                 )
-                t_mean = (t * weights).sum(1) / weights.sum(1).clamp(min=1)
+                if self.read_time_range:
+                    # Interval queries: midpoint + full width of the visible time range.
+                    big = torch.finfo(t.dtype).max
+                    t_min = torch.where(valid, t, torch.full_like(t, big)).amin(1)
+                    t_max = torch.where(valid, t, torch.full_like(t, -big)).amax(1)
+                    t_anchor = (t_min + t_max) / 2
+                    read_query_extent = (
+                        (t_max - t_min).clamp(min=0)[:, None].expand(-1, num_registers)
+                    )
+                else:
+                    weights = valid.to(t.dtype)
+                    t_anchor = (t * weights).sum(1) / weights.sum(1).clamp(min=1)
                 read_query_positions = torch.cat(
                     [
-                        t_mean[:, None, None].expand(-1, num_registers, 1),
+                        t_anchor[:, None, None].expand(-1, num_registers, 1),
                         register_positions,
                     ],
                     dim=-1,
@@ -1839,6 +1863,7 @@ class Perceiver(nn.Module):
                 rope_positions=read_query_positions,
                 rope_positions_y=read_key_positions,
                 kv=shared_kv,
+                rope_extent=read_query_extent,
             )
             return out
 
@@ -1893,6 +1918,9 @@ class PerceiverConfig(Config):
             are time-blind and the only temporal signal on the tokens that reach them
             is the additive month embedding (plus whatever the encoder blocks mixed
             in). Requires a 3D RoPE encoder. Latent self-attention stays 2D.
+        read_time_range: With ``read_time_rope`` on a ``rope_3d_mixed`` encoder, the
+            register queries are encoded as temporal intervals over the visible time
+            range (sinc-gated RoPE) rather than points at its centre.
         student_dims: If set, add a DETACHED low-dim "student" readout of the
             register grid, exported alongside the registers as ``student_registers``
             at width ``max(student_dims)``. The student's input is detached, so its
@@ -1920,6 +1948,7 @@ class PerceiverConfig(Config):
     attn_dim: int | None = None
     share_read_kv: bool = False
     read_time_rope: bool = False
+    read_time_range: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
 
@@ -1956,6 +1985,12 @@ class PerceiverConfig(Config):
             raise ValueError(
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
+            )
+        if self.read_time_range and not (
+            self.read_time_rope and position_encoding == PositionEncoding.MIXED_3D_ROPE
+        ):
+            raise ValueError(
+                "read_time_range requires read_time_rope on a rope_3d_mixed encoder"
             )
         if self.read_time_rope and not PositionEncoding.is_3d_rope(position_encoding):
             raise ValueError(
@@ -2010,6 +2045,7 @@ class PerceiverConfig(Config):
             rope_mixed_base=rope_mixed_base,
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
+            read_time_range=self.read_time_range,
         )
 
 
