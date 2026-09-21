@@ -236,6 +236,7 @@ class Attention(nn.Module):
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
+        block_mask: Any | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -251,11 +252,22 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
+            block_mask: Optional FlexAttention ``BlockMask`` (CUDA only). Routes the
+                attention through the compiled block-sparse kernel instead of SDPA;
+                ``attn_mask`` must then be None.
 
         Returns:
             Output tensor of shape (B, H, N, D)
         """
-        if self.use_flash_attn:
+        if block_mask is not None:
+            if attn_mask is not None or self.use_flash_attn:
+                raise ValueError(
+                    "block_mask is exclusive with attn_mask / flash attention"
+                )
+            from olmoearth_pretrain.nn.joint_latent import flex_attention_cuda
+
+            x = flex_attention_cuda(q, k, v, block_mask)
+        elif self.use_flash_attn:
             x = dispatch_flash_attn(
                 q,
                 k,
@@ -318,12 +330,14 @@ class Attention(nn.Module):
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
         kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        block_mask: Any | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
+            block_mask: Optional FlexAttention block mask (see :meth:`sdpa`).
             kv: Optional precomputed ``(k, v)`` projections of ``y``, each
                 ``(B, Nk, attn_dim)``, for cross-attention whose K/V projection is
                 shared across several blocks (computed once by the caller). ``self.k``
@@ -418,6 +432,7 @@ class Attention(nn.Module):
             max_seqlen_q=max_seqlen_q,
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
+            block_mask=block_mask,
         )
         # The attention output is at the internal attention width (== the input width
         # unless attn_dim decouples them); proj maps it back to the input width.

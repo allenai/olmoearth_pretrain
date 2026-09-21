@@ -1,0 +1,231 @@
+"""Tests for the joint latent-token transformer (``nn/joint_latent.py``)."""
+
+import pytest
+import torch
+
+from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
+from olmoearth_pretrain.nn.joint_latent import (
+    JointLatentConfig,
+    JointLatentTransformer,
+    joint_attention_allowed,
+)
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
+
+
+def test_joint_attention_mask_matches_the_written_out_rule() -> None:
+    """The vectorised mask equals the two rules written as loops.
+
+    Latent -> every latent + tokens of its own cell; token -> every latent + tokens of
+    its own cell; padding is never a key; non-spatial tokens (cell -1) are read by no
+    latent but see the latents and each other.
+    """
+    torch.manual_seed(0)
+    n_tokens, n_latents = 11, 4
+    cell_tok = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3, -1, 0, 1]])
+    cell_id = torch.cat([cell_tok, torch.arange(n_latents)[None]], dim=1)
+    is_latent = torch.cat(
+        [
+            torch.zeros(1, n_tokens, dtype=torch.bool),
+            torch.ones(1, n_latents, dtype=torch.bool),
+        ],
+        1,
+    )
+    valid = torch.ones_like(is_latent)
+    valid[0, 9:11] = False  # two padding tokens
+    allowed = joint_attention_allowed(cell_id, is_latent, valid)[0]
+    for q in range(n_tokens + n_latents):
+        for kv in range(n_tokens + n_latents):
+            expect = bool(valid[0, kv]) and (
+                bool(is_latent[0, kv]) or int(cell_id[0, q]) == int(cell_id[0, kv])
+            )
+            assert bool(allowed[q, kv]) == expect, (q, kv)
+    # A latent never reads a non-spatial (-1) token; that token does see the latents.
+    assert not allowed[n_tokens:, 8].any()
+    assert allowed[8, n_tokens:].all()
+
+
+def test_joint_block_with_an_open_mask_is_a_plain_block() -> None:
+    """With an open mask ``_joint_block`` equals ``Block.forward``.
+
+    The only thing the joint path adds is the mask, so this pins the masked call
+    against the stock one.
+    """
+    torch.manual_seed(0)
+    module = JointLatentTransformer(
+        embedding_size=32,
+        num_heads=4,
+        mlp_ratio=2.0,
+        joint_depth=1,
+        latent_only_depth=0,
+        token_mlp=True,
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        rope_mixed_base=10.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_base=None,
+        qk_norm=False,
+    ).eval()
+    blk = module.joint_blocks[0]
+    x = torch.randn(2, 13, 32)
+    pos = torch.rand(2, 13, 3) * 10
+    open_mask = torch.ones(2, 1, 13, 13, dtype=torch.bool)
+    out_joint = module._joint_block(
+        blk, x, n_tokens=9, rope_positions=pos, attn_kwargs={"attn_mask": open_mask}
+    )
+    out_block = blk(x=x, rope_positions=pos)
+    torch.testing.assert_close(out_joint, out_block)
+
+
+def _joint_encoder(**config_kwargs: object) -> Encoder:
+    return Encoder(
+        supported_modalities=[Modality.SENTINEL2_L2A, Modality.SENTINEL1],
+        embedding_size=32,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=4,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=0,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        perceiver_config=JointLatentConfig(register_dim=32, **config_kwargs),  # type: ignore[arg-type]
+    )
+
+
+def _sample(B: int = 2, H: int = 8, W: int = 8, T: int = 3) -> MaskedOlmoEarthSample:
+    nb2 = Modality.SENTINEL2_L2A.num_bands
+    nb1 = Modality.SENTINEL1.num_bands
+    timestamps = torch.tensor([[[1, 0, 2020], [1, 3, 2020], [1, 6, 2020]]] * B).long()
+    return MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, nb2),
+        sentinel2_l2a_mask=torch.full(
+            (B, H, W, T, nb2), MaskValue.ONLINE_ENCODER.value
+        ),
+        sentinel1=torch.randn(B, H, W, T, nb1),
+        sentinel1_mask=torch.full((B, H, W, T, nb1), MaskValue.ONLINE_ENCODER.value),
+        timestamps=timestamps,
+    )
+
+
+@pytest.mark.parametrize("token_mlp", [True, False])
+def test_encoder_with_joint_latent_produces_the_register_grid(token_mlp: bool) -> None:
+    """A zero-depth encoder with a JointLatentConfig emits the register grid.
+
+    Grid, positions, student output and gradients, at more than one patch size (the
+    grid follows the input).
+    """
+    torch.manual_seed(0)
+    encoder = _joint_encoder(
+        joint_depth=2,
+        latent_only_depth=1,
+        token_mlp=token_mlp,
+        student_dims=[8],
+        student_output_norm=True,
+    )
+    assert len(encoder.blocks) == 0
+    assert isinstance(encoder.perceiver, JointLatentTransformer)
+    sample = _sample()
+    for patch_size in (2, 4):
+        encoder.zero_grad()
+        out = encoder(sample, patch_size=patch_size, input_res=10)
+        side = 8 // patch_size
+        assert out["registers"].shape == (2, side, side, 32)
+        assert out["register_positions"].shape == (2, side * side, 2)
+        assert out["student_registers"].shape == (2, side, side, 8)
+        assert torch.isfinite(out["registers"]).all()
+        out["registers"].sum().backward()
+        assert encoder.perceiver.register.grad is not None
+        assert encoder.perceiver.joint_blocks[0].attn.q.weight.grad is not None
+    # The inference fast path (no mask removal) gives the same shapes.
+    out = encoder(sample, patch_size=2, input_res=10, fast_pass=True)
+    assert out["registers"].shape == (2, 4, 4, 32)
+
+
+def test_invalid_tokens_do_not_reach_the_registers() -> None:
+    """Padding / invisible tokens are inert inside the joint blocks.
+
+    They are excluded as keys and their query outputs are discarded, so perturbing them
+    changes no register; perturbing a valid token does. Checked at the module boundary
+    because the encoder's patch embedding itself mixes neighbouring pixels below the
+    maximum patch size, which would confound a pixel-level version of this test.
+    """
+    torch.manual_seed(0)
+    module = JointLatentTransformer(
+        embedding_size=32,
+        num_heads=4,
+        mlp_ratio=2.0,
+        joint_depth=2,
+        latent_only_depth=1,
+        token_mlp=True,
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        rope_mixed_base=10.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_base=None,
+        qk_norm=False,
+    ).eval()
+    B, n_h, n_w, T = 2, 3, 3, 4
+    n_tokens = n_h * n_w * T
+    tokens = torch.randn(B, n_tokens, 32)
+    cells = torch.arange(n_h * n_w).repeat_interleave(T).expand(B, -1)
+    positions = torch.stack(
+        [
+            torch.arange(T).repeat(n_h * n_w).float().expand(B, -1),
+            (cells // n_w).float(),
+            (cells % n_w).float(),
+        ],
+        dim=-1,
+    )
+    valid = torch.ones(B, n_tokens, dtype=torch.bool)
+    valid[0, -5:] = False
+    perturbed = tokens.clone()
+    perturbed[0, -5:] += 100.0
+    with torch.no_grad():
+        ref, _ = module(tokens, positions, valid, cells, (n_h, n_w))
+        same, _ = module(perturbed, positions, valid, cells, (n_h, n_w))
+        touched = tokens.clone()
+        touched[0, 0] += 100.0
+        different, _ = module(touched, positions, valid, cells, (n_h, n_w))
+    torch.testing.assert_close(ref, same)
+    assert not torch.allclose(ref, different)
+
+
+def test_encoder_config_dispatches_the_joint_config_class() -> None:
+    """A serialised JointLatentConfig dict is rebuilt as that class.
+
+    A dict carrying the JointLatentConfig ``_CLASS_`` must not become a PerceiverConfig;
+    a plain Perceiver dict still does.
+    """
+    joint = EncoderConfig(
+        supported_modality_names=["sentinel2_l2a"],
+        embedding_size=32,
+        num_heads=4,
+        depth=0,
+        position_encoding="rope_3d_mixed",
+        perceiver_config={  # type: ignore[arg-type]
+            "_CLASS_": "olmoearth_pretrain.nn.joint_latent.JointLatentConfig",
+            "register_dim": 32,
+            "joint_depth": 3,
+        },
+    )
+    assert isinstance(joint.perceiver_config, JointLatentConfig)
+    assert joint.perceiver_config.joint_depth == 3
+    joint.validate()
+    plain = EncoderConfig(
+        supported_modality_names=["sentinel2_l2a"],
+        embedding_size=32,
+        num_heads=4,
+        position_encoding="rope",
+        perceiver_config={"register_dim": 32, "latent_depth": 2},  # type: ignore[arg-type]
+    )
+    assert isinstance(plain.perceiver_config, PerceiverConfig)
+    with pytest.raises(ValueError, match="embedding_size"):
+        EncoderConfig(
+            supported_modality_names=["sentinel2_l2a"],
+            embedding_size=32,
+            num_heads=4,
+            depth=0,
+            position_encoding="rope_3d_mixed",
+            perceiver_config=JointLatentConfig(register_dim=16),
+        ).build()

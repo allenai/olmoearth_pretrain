@@ -37,6 +37,11 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.joint_latent import (
+    JointLatentConfig,
+    JointLatentTransformer,
+    build_register_grid_positions,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -1166,6 +1171,42 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
+    def build_cell_ids(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Row-major patch-cell index per token, ``[B, N, 1]`` long, in collapsed order.
+
+        Spatial modalities index into the shared patch grid (``h * n_w + w``, repeated
+        over their time and bandset axes); non-spatial tokens get ``-1``. Every spatial
+        modality must sit on the same grid as :meth:`_patch_grid_hw` reports.
+        """
+        n_h, n_w = self._patch_grid_hw(tokens_only_dict)
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        ids_dict: dict[str, Tensor] = {}
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            shape = (*tokens.shape[:-1], 1)
+            if Modality.get(modality_name).is_spatial:
+                h, w = tokens.shape[1:3]
+                if (h, w) != (n_h, n_w):
+                    raise ValueError(
+                        f"{modality_name} patch grid {(h, w)} differs from the finest "
+                        f"grid {(n_h, n_w)}; joint latent attention needs one shared grid"
+                    )
+                grid = torch.arange(n_h * n_w, device=tokens.device).view(n_h, n_w)
+                ids = grid.view(1, n_h, n_w, *([1] * (tokens.ndim - 3))).expand(shape)
+            else:
+                ids = torch.full(shape, -1, dtype=torch.long, device=tokens.device)
+            ids_dict[modality_name] = ids
+        ids_dict.update(original_masks_dict)
+        cell_ids, _ = self.collapse_and_combine_hwtc(ids_dict)
+        return cell_ids
+
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
 
@@ -1651,17 +1692,7 @@ class Perceiver(nn.Module):
         Returns:
             ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
         """
-        n_h, n_w = register_grid
-        device = patch_positions.device
-        # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
-        max_pos = patch_positions.amax(dim=1)  # [B, 2]
-        lin_h = torch.linspace(0.0, 1.0, n_h, device=device)
-        lin_w = torch.linspace(0.0, 1.0, n_w, device=device)
-        grid_h, grid_w = torch.meshgrid(lin_h, lin_w, indexing="ij")
-        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(
-            -1, 2
-        )  # [n_reg, 2] in [0, 1]
-        return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
+        return build_register_grid_positions(patch_positions, register_grid)
 
     def forward(
         self,
@@ -1865,8 +1896,13 @@ class PerceiverConfig(Config):
         position_encoding: str,
         rope_base: float,
         qk_norm: bool,
+        **_encoder_rope_kwargs: Any,
     ) -> "Perceiver":
-        """Build the bottleneck module for an encoder with these settings."""
+        """Build the bottleneck module for an encoder with these settings.
+
+        The Perceiver reads with 2D axial RoPE only, so the encoder's mixed/3D RoPE
+        settings (passed for :class:`JointLatentConfig`'s benefit) are ignored here.
+        """
         return Perceiver(
             encoder_embedding_size=encoder_embedding_size,
             register_dim=self.register_dim,
@@ -1923,7 +1959,7 @@ class Encoder(FlexiVitBase):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
-        perceiver_config: PerceiverConfig | None = None,
+        perceiver_config: PerceiverConfig | JointLatentConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -1984,7 +2020,9 @@ class Encoder(FlexiVitBase):
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
             perceiver_config: If set, add a Perceiver-style spatial register
                 bottleneck (and optionally its detached student readout); see
-                :class:`PerceiverConfig`. Requires a RoPE position encoding.
+                :class:`PerceiverConfig`. Requires a RoPE position encoding. A
+                :class:`JointLatentConfig` instead produces the register grid by joint
+                token-latent attention (no ViT blocks, no reads; use ``depth=0``).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2057,7 +2095,7 @@ class Encoder(FlexiVitBase):
 
         self.perceiver_config = perceiver_config
         self.use_perceiver = perceiver_config is not None
-        self.perceiver: Perceiver | None = None
+        self.perceiver: Perceiver | JointLatentTransformer | None = None
         self.register_dim: int | None = None
         # Detached low-dim student readout of the register grid (see
         # PerceiverConfig). Dims are stored descending; the student runs at
@@ -2069,6 +2107,11 @@ class Encoder(FlexiVitBase):
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
             )
             self.register_dim = perceiver_config.register_dim
+            if isinstance(perceiver_config, JointLatentConfig) and self.use_flash_attn:
+                raise ValueError(
+                    "JointLatentTransformer needs unpacked [B, N, D] tokens; it does not "
+                    "support the packed flash-attention encoder path"
+                )
             self.perceiver = perceiver_config.build(
                 encoder_embedding_size=embedding_size,
                 encoder_num_heads=num_heads,
@@ -2076,6 +2119,10 @@ class Encoder(FlexiVitBase):
                 position_encoding=self.position_encoding,
                 rope_base=rope_base,
                 qk_norm=qk_norm,
+                rope_mixed_base=self.rope_mixed_base,
+                temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                rope_temporal_base=self.rope_temporal_base,
+                drop_path=drop_path,
             )
             self.register_student_dims = perceiver_config.sorted_student_dims
             if self.register_student_dims is not None:
@@ -2394,6 +2441,12 @@ class Encoder(FlexiVitBase):
             input_res,
             timestamps=timestamps,
         )
+        # Joint latent-token attention needs each token's patch cell (row-major index
+        # in the patch grid) to restrict token<->token attention to one cell. Built in
+        # the same collapsed order as the tokens and reduced alongside them below.
+        cell_ids: Tensor | None = None
+        if isinstance(self.perceiver, JointLatentTransformer):
+            cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
         # Full (pre-masking) positions in collapsed order, kept for the register
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
@@ -2417,6 +2470,8 @@ class Encoder(FlexiVitBase):
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
+        if cell_ids is not None and bool_mask is not None:
+            cell_ids, _, _, _, _ = self.remove_masked_tokens(cell_ids, bool_mask)
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -2501,12 +2556,29 @@ class Encoder(FlexiVitBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+
+        register_output = None
+        if isinstance(self.perceiver, JointLatentTransformer):
+            # Runs on the compact (visible-only, padded) sequence with its full RoPE
+            # coordinates, before the removed tokens are added back: the joint blocks
+            # are the encoder's depth, so masked-out tokens must not take part.
+            assert cell_ids is not None and positions is not None
+            registers, register_positions = self.perceiver(
+                patch_tokens=tokens,
+                patch_positions=positions,
+                visible_mask=new_mask,
+                cell_ids=cell_ids[..., 0],
+                spatial_grid=self._patch_grid_hw(tokens_only_dict),
+            )
+            register_output = {
+                "registers": registers,
+                "register_positions": register_positions,
+            }
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
-        register_output = None
-        if self.perceiver is not None:
+        if isinstance(self.perceiver, Perceiver):
             spatial_grid = self._patch_grid_hw(tokens_only_dict)
             registers, register_positions = self.perceiver(
                 patch_tokens=tokens,
@@ -2518,11 +2590,11 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
+        if register_output is not None and self.register_student is not None:
             # Detached student readout of the registers just computed.
-            if self.register_student is not None:
-                register_output["student_registers"] = self.register_student(
-                    registers.detach()
-                )
+            register_output["student_registers"] = self.register_student(
+                register_output["registers"].detach()
+            )
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
@@ -3192,14 +3264,20 @@ class EncoderConfig(Config):
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
     # Perceiver-style spatial Perceiver; None -> plain encoder.
-    perceiver_config: PerceiverConfig | None = None
+    perceiver_config: PerceiverConfig | JointLatentConfig | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
         if isinstance(self.perceiver_config, dict):
-            self.perceiver_config = PerceiverConfig(
+            class_name = str(self.perceiver_config.get(Config.CLASS_NAME_FIELD, ""))
+            register_cls: type[PerceiverConfig] | type[JointLatentConfig] = (
+                JointLatentConfig
+                if class_name.endswith("JointLatentConfig")
+                else PerceiverConfig
+            )
+            self.perceiver_config = register_cls(
                 **{
                     k: v
                     for k, v in self.perceiver_config.items()

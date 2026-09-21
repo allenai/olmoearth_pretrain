@@ -1,0 +1,430 @@
+"""Joint latent-token transformer: one attention over tokens and a latent grid.
+
+An alternative to the ``[ViT blocks -> Perceiver reads]`` encoder that keeps the
+register grid as the output but replaces both the joint ViT attention and the
+Perceiver's separate read / latent blocks with ONE block type over the concatenated
+sequence ``[patch tokens ; latents]`` and a structured attention pattern:
+
+* a latent at grid cell ``(i, j)`` attends to every latent and to the input tokens of
+  cell ``(i, j)`` (all timesteps, all modalities);
+* an input token at cell ``(i, j)`` attends to every latent and to the other input
+  tokens of cell ``(i, j)``.
+
+Tokens therefore interact along time and modality within their cell, latents carry
+spatial context, and the latent-to-token edges are the read, so no separate read
+block exists. Attention is linear in the number of tokens (each query sees
+``n_latents + tokens_per_cell`` keys) while every token still passes through the
+block's linear layers; on a 16x16 / 12-timestep / S1+S2+L8 / patch-size-1 input a
+block costs ~71 G MACs against ~196 G for a joint ViT block.
+
+The pattern is block-sparse (a same-cell band plus a dense latent stripe), so on CUDA
+it runs through FlexAttention with a compiled block mask and no quadratic memory. On
+other devices the same rule is materialised as a dense boolean mask for SDPA, which
+is exact and is what the tests compare against.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
+
+import torch
+from einops import rearrange
+from torch import Tensor, nn
+
+from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.encodings import PositionEncoding
+
+logger = logging.getLogger(__name__)
+
+_COMPILED_FLEX: Callable[..., Tensor] | None = None
+
+
+def flex_attention_cuda(q: Tensor, k: Tensor, v: Tensor, block_mask: Any) -> Tensor:
+    """FlexAttention over ``[B, H, L, D]`` tensors, compiled once per process.
+
+    The eager FlexAttention is a reference implementation (slow, and its backward is
+    not guaranteed); the compiled kernel is the real one, so this is CUDA-only.
+    """
+    global _COMPILED_FLEX
+    if _COMPILED_FLEX is None:
+        from torch.nn.attention.flex_attention import flex_attention
+
+        # dynamic=True: sequence lengths change every batch, and a recompile per
+        # length would dwarf the attention itself.
+        _COMPILED_FLEX = torch.compile(flex_attention, dynamic=True)
+    return _COMPILED_FLEX(q, k, v, block_mask=block_mask)
+
+
+def build_register_grid_positions(
+    patch_positions: Tensor, register_grid: tuple[int, int]
+) -> Tensor:
+    """Place an ``(n_h, n_w)`` grid evenly across the patch extent (GSD-scaled frame).
+
+    Args:
+        patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
+        register_grid: ``(n_h, n_w)`` grid to lay down.
+
+    Returns:
+        ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``,
+        row-major.
+    """
+    n_h, n_w = register_grid
+    device = patch_positions.device
+    # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
+    max_pos = patch_positions.amax(dim=1)  # [B, 2]
+    lin_h = torch.linspace(0.0, 1.0, n_h, device=device)
+    lin_w = torch.linspace(0.0, 1.0, n_w, device=device)
+    grid_h, grid_w = torch.meshgrid(lin_h, lin_w, indexing="ij")
+    grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)  # [n_reg, 2] in [0, 1]
+    return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
+
+
+def joint_attention_allowed(
+    cell_id: Tensor, is_latent: Tensor, valid: Tensor
+) -> Tensor:
+    """Dense ``[B, L, L]`` boolean mask for the joint pattern (reference / CPU path).
+
+    ``allowed[b, q, kv] = valid[b, kv] & (is_latent[b, kv] | cell_id[b, q] == cell_id[b, kv])``.
+    Latents carry the cell id of their grid position, so the one rule gives both
+    directions: latent -> (all latents + own cell), token -> (all latents + own cell).
+    """
+    same_cell = cell_id[:, :, None] == cell_id[:, None, :]
+    return valid[:, None, :] & (is_latent[:, None, :] | same_cell)
+
+
+class JointLatentTransformer(nn.Module):
+    """Latent grid + patch tokens under one structured attention (see module doc).
+
+    Has the same call contract as :class:`olmoearth_pretrain.nn.flexi_vit.Perceiver`
+    so it occupies the encoder's ``perceiver`` slot and everything downstream (student
+    readout, supervision heads, decoder cross-attention) reads the same register grid.
+    """
+
+    def __init__(
+        self,
+        embedding_size: int,
+        num_heads: int,
+        mlp_ratio: float,
+        joint_depth: int,
+        latent_only_depth: int,
+        token_mlp: bool,
+        position_encoding: str,
+        rope_base: float,
+        rope_mixed_base: float,
+        temporal_rope_dim_frac: float,
+        rope_temporal_base: float | None,
+        qk_norm: bool,
+        drop_path: float = 0.0,
+    ) -> None:
+        """Initialize the joint transformer.
+
+        Args:
+            embedding_size: Width of tokens AND latents (they share one residual stream),
+                which is also the register width the encoder ships.
+            num_heads: Attention heads.
+            mlp_ratio: MLP ratio of every block.
+            joint_depth: Number of joint blocks over ``[tokens ; latents]``.
+            latent_only_depth: Number of plain self-attention blocks over the latents
+                alone, run after the joint blocks (tokens are frozen by then).
+            token_mlp: If False, only the latent slice gets the block's MLP; tokens are
+                updated by attention alone. Cuts a block's per-token cost from 12 d^2 to
+                4 d^2 (the Q/K/V/out projections).
+            position_encoding: The encoder's RoPE mode, applied to the whole joint
+                sequence. Tokens carry ``(t, row, col)`` under 3D modes; latents get a
+                fixed temporal coordinate (the mean of the valid tokens') and their grid
+                ``(row, col)``.
+            rope_base: Axial RoPE frequency base.
+            rope_mixed_base: Mixed-RoPE frequency base.
+            temporal_rope_dim_frac: Fraction of head dims given to the temporal axis.
+            rope_temporal_base: Optional separate base for the temporal axis.
+            qk_norm: QK normalisation in attention.
+            drop_path: Stochastic depth rate.
+        """
+        super().__init__()
+        if not PositionEncoding.is_rope(position_encoding):
+            raise ValueError(
+                "JointLatentTransformer needs a RoPE position_encoding: latents are "
+                "clones of one vector and are told apart by their coordinates alone."
+            )
+        if joint_depth < 1:
+            raise ValueError(
+                "joint_depth must be >= 1 (otherwise nothing reads the tokens)"
+            )
+        self.register_dim = embedding_size
+        self.embedding_size = embedding_size
+        self.token_mlp = token_mlp
+        self.position_encoding = position_encoding
+        self.register = nn.Parameter(torch.empty(1, embedding_size))
+        nn.init.trunc_normal_(self.register, std=0.02)
+        block_kwargs: dict[str, Any] = dict(
+            qkv_bias=True,
+            qk_norm=qk_norm,
+            cross_attn=False,
+            use_flash_attn=False,
+            drop_path=drop_path,
+            rope_base=rope_base,
+            rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
+        )
+        self.joint_blocks = nn.ModuleList(
+            [
+                Block(
+                    embedding_size,
+                    num_heads,
+                    mlp_ratio,
+                    position_encoding=position_encoding,
+                    **block_kwargs,
+                )
+                for _ in range(joint_depth)
+            ]
+        )
+        # The latent grid is purely spatial, so the latent-only tail rotates over
+        # (row, col) like the Perceiver's latent blocks.
+        self.latent_blocks = nn.ModuleList(
+            [
+                Block(
+                    embedding_size,
+                    num_heads,
+                    mlp_ratio,
+                    position_encoding=PositionEncoding.AXIAL_2D_ROPE,
+                    **block_kwargs,
+                )
+                for _ in range(latent_only_depth)
+            ]
+        )
+        self.norm = nn.LayerNorm(embedding_size)
+
+    @property
+    def is_3d(self) -> bool:
+        """Whether the joint blocks rotate over ``(t, row, col)``."""
+        return PositionEncoding.is_3d_rope(self.position_encoding)
+
+    def _attention_masks(
+        self, cell_id: Tensor, is_latent: Tensor, valid: Tensor
+    ) -> dict[str, Any]:
+        """Attention-mask kwargs for :meth:`Attention.forward`.
+
+        A FlexAttention block mask on CUDA, a dense ``[B, 1, L, L]`` SDPA mask elsewhere.
+        """
+        if cell_id.is_cuda:
+            from torch.nn.attention.flex_attention import create_block_mask
+
+            def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+                return valid[b, kv] & (
+                    is_latent[b, kv] | (cell_id[b, q] == cell_id[b, kv])
+                )
+
+            batch, length = cell_id.shape
+            return {
+                "block_mask": create_block_mask(
+                    mask_mod, batch, None, length, length, device=cell_id.device
+                )
+            }
+        return {
+            "attn_mask": joint_attention_allowed(cell_id, is_latent, valid)[:, None]
+        }
+
+    def _joint_block(
+        self,
+        blk: Block,
+        x: Tensor,
+        n_tokens: int,
+        rope_positions: Tensor,
+        attn_kwargs: dict[str, Any],
+    ) -> Tensor:
+        """One joint block.
+
+        Masked attention over the whole sequence, then the MLP on all of it or on the
+        latents only.
+        """
+        x = x + blk.drop_path(
+            blk.ls1(
+                blk.attn(x=blk.norm1(x), rope_positions=rope_positions, **attn_kwargs)
+            )
+        )
+        if self.token_mlp:
+            return x + blk.drop_path(blk.ls2(blk.mlp(blk.norm2(x))))
+        latents = x[:, n_tokens:]
+        latents = latents + blk.drop_path(blk.ls2(blk.mlp(blk.norm2(latents))))
+        return torch.cat([x[:, :n_tokens], latents], dim=1)
+
+    def forward(
+        self,
+        patch_tokens: Tensor,
+        patch_positions: Tensor,
+        visible_mask: Tensor | None,
+        cell_ids: Tensor,
+        spatial_grid: tuple[int, int],
+    ) -> tuple[Tensor, Tensor]:
+        """Run the joint blocks and return the latent grid.
+
+        Args:
+            patch_tokens: ``[B, N, D]`` patch embeddings (already normed by the encoder).
+                May include padding positions; ``visible_mask`` marks the real ones.
+            patch_positions: ``[B, N, 3]`` ``(t, row, col)`` under 3D RoPE, or
+                ``[B, N, 2]`` ``(row, col)`` under 2D RoPE, in the GSD-scaled frame.
+            visible_mask: Bool ``[B, N]``, True where a token is real. None = all real.
+            cell_ids: Long ``[B, N]``: row-major index of each token's patch cell in
+                ``spatial_grid`` (``-1`` for non-spatial tokens, which then see the
+                latents and each other but are read by no latent).
+            spatial_grid: ``(n_h, n_w)`` patch grid the latent is cloned to.
+
+        Returns:
+            registers: ``[B, n_h, n_w, D]`` latent grid after the final norm.
+            register_positions: ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` for the
+                decoder's cross-attention.
+        """
+        batch_size, n_tokens, _ = patch_tokens.shape
+        device = patch_tokens.device
+        n_h, n_w = spatial_grid
+        n_latents = n_h * n_w
+        valid_tokens = (
+            visible_mask.bool()
+            if visible_mask is not None
+            else torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device)
+        )
+
+        # Latents: one vector cloned to the grid; identity comes from RoPE.
+        latents = self.register.unsqueeze(0).expand(batch_size, n_latents, -1)
+        spatial_positions = patch_positions[..., -2:]
+        latent_positions_2d = build_register_grid_positions(
+            spatial_positions, spatial_grid
+        )
+        if self.is_3d:
+            # Latents have no time of their own: anchor them at the mean valid
+            # token time so temporal RoPE offsets to the tokens stay bounded.
+            t = patch_positions[..., 0]
+            t_mean = (t * valid_tokens).sum(1) / valid_tokens.sum(1).clamp(min=1)
+            latent_positions = torch.cat(
+                [
+                    t_mean[:, None, None].expand(-1, n_latents, 1),
+                    latent_positions_2d,
+                ],
+                dim=-1,
+            )
+        else:
+            latent_positions = latent_positions_2d
+
+        x = torch.cat([patch_tokens, latents.to(patch_tokens.dtype)], dim=1)
+        rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
+        latent_cell_ids = torch.arange(n_latents, device=device).expand(batch_size, -1)
+        cell_id = torch.cat([cell_ids.long(), latent_cell_ids], dim=1)
+        is_latent = torch.cat(
+            [
+                torch.zeros(batch_size, n_tokens, dtype=torch.bool, device=device),
+                torch.ones(batch_size, n_latents, dtype=torch.bool, device=device),
+            ],
+            dim=1,
+        )
+        valid = torch.cat(
+            [
+                valid_tokens,
+                torch.ones(batch_size, n_latents, dtype=torch.bool, device=device),
+            ],
+            dim=1,
+        )
+        attn_kwargs = self._attention_masks(cell_id, is_latent, valid)
+
+        for blk in self.joint_blocks:
+            x = self._joint_block(blk, x, n_tokens, rope_positions, attn_kwargs)
+        latents = x[:, n_tokens:]
+        for blk in self.latent_blocks:
+            latents = blk(x=latents, rope_positions=latent_positions_2d)
+        out = self.norm(latents)
+        out = rearrange(out, "b (h w) d -> b h w d", h=n_h, w=n_w)
+        return out, latent_positions_2d
+
+
+@dataclass
+class JointLatentConfig(Config):
+    """Configuration for :class:`JointLatentTransformer` in the encoder's perceiver slot.
+
+    Set ``EncoderConfig.perceiver_config`` to one of these (with ``depth=0`` on the
+    encoder, since the joint blocks replace the ViT blocks) to get a register grid
+    produced by joint token-latent attention instead of ViT blocks + Perceiver reads.
+
+    Args:
+        register_dim: Width of the latent grid. Must equal the encoder
+            ``embedding_size``: tokens and latents share one residual stream.
+        joint_depth: Number of joint blocks over ``[tokens ; latents]``.
+        latent_only_depth: Plain latent self-attention blocks after the joint ones.
+        token_mlp: Whether tokens get the block MLP (True) or only the latents do.
+        student_dims / student_output_norm: As on ``PerceiverConfig``: a detached
+            low-dim student readout of the register grid.
+    """
+
+    register_dim: int
+    joint_depth: int = 12
+    latent_only_depth: int = 0
+    token_mlp: bool = True
+    student_dims: list[int] | None = None
+    student_output_norm: bool = False
+
+    @property
+    def sorted_student_dims(self) -> list[int] | None:
+        """Student dims descending: ``[0]`` is the student width, the rest prefixes."""
+        if not self.student_dims:
+            return None
+        return sorted(set(self.student_dims), reverse=True)
+
+    def validate(self, *, encoder_num_heads: int, position_encoding: str) -> None:
+        """Check the module against the encoder it will attach to."""
+        if not PositionEncoding.is_rope(position_encoding):
+            raise ValueError("JointLatentTransformer requires a RoPE position_encoding")
+        if self.register_dim % encoder_num_heads != 0:
+            raise ValueError(
+                f"register_dim ({self.register_dim}) must be divisible by num_heads "
+                f"({encoder_num_heads})"
+            )
+        if self.joint_depth < 1:
+            raise ValueError("joint_depth must be >= 1")
+        if self.latent_only_depth < 0:
+            raise ValueError("latent_only_depth must be >= 0")
+        if self.student_dims is not None:
+            if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
+                raise ValueError(
+                    "student_dims must be a non-empty list of positive ints, got "
+                    f"{self.student_dims}"
+                )
+
+    def build(
+        self,
+        *,
+        encoder_embedding_size: int,
+        encoder_num_heads: int,
+        mlp_ratio: float,
+        position_encoding: str,
+        rope_base: float,
+        qk_norm: bool,
+        rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
+        drop_path: float = 0.0,
+    ) -> JointLatentTransformer:
+        """Build the module for an encoder with these settings."""
+        if self.register_dim != encoder_embedding_size:
+            raise ValueError(
+                "JointLatentConfig.register_dim must equal the encoder embedding_size "
+                f"(tokens and latents share a residual stream): {self.register_dim} vs "
+                f"{encoder_embedding_size}"
+            )
+        return JointLatentTransformer(
+            embedding_size=encoder_embedding_size,
+            num_heads=encoder_num_heads,
+            mlp_ratio=mlp_ratio,
+            joint_depth=self.joint_depth,
+            latent_only_depth=self.latent_only_depth,
+            token_mlp=self.token_mlp,
+            position_encoding=position_encoding,
+            rope_base=rope_base,
+            rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
+            qk_norm=qk_norm,
+            drop_path=drop_path,
+        )
