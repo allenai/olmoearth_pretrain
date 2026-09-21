@@ -30,7 +30,7 @@ from base import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
-    build_register_bottleneck_model_config,
+    build_perceiver_model_config,
     build_supervision_head_config,
     build_train_module_config,
     build_visualize_config,
@@ -52,7 +52,7 @@ LOOP_EVAL_INTERVAL_STEPS = 40000
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """d128 registers + register supervision; no student."""
-    config = build_register_bottleneck_model_config(common, register_dim=REGISTER_DIM)
+    config = build_perceiver_model_config(common, register_dim=REGISTER_DIM)
     config.supervision_head_config = build_supervision_head_config()
     return config
 

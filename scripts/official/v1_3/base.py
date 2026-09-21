@@ -17,7 +17,7 @@ read of the patch tokens into a register grid that is a purely spatial summary:
 * a single learned latent cloned to match the patch grid at forward time, so
   windowing stays arbitrary;
 * interleaved reads with per-depth read projections, ``[read -> self-attn] x 4``;
-* ``register_dim=768`` with attention at ENCODER width (``register_attn_dim``), so
+* ``register_dim=768`` with attention at ENCODER width (``attn_dim``), so
   the register width is purely the storage width;
 * register supervision: per-modality heads on the register grid predict the
   decode-only map modalities (worldcover, srtm, openstreetmap, canopy height, cdl,
@@ -84,7 +84,11 @@ from olmoearth_pretrain.internal.all_evals import (  # noqa: E402
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
 from olmoearth_pretrain.nn.encodings import PositionEncoding  # noqa: E402
+from olmoearth_pretrain.nn.flexi_vit import PerceiverConfig  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
+from olmoearth_pretrain.nn.register_distillation_head import (  # noqa: E402
+    RegisterDistillationHeadConfig,
+)
 from olmoearth_pretrain.nn.supervision_head import (  # noqa: E402
     SupervisionHeadConfig,
     SupervisionModalityConfig,
@@ -201,13 +205,13 @@ AEFTRIAL_LOOP_EVAL_NAMES = tuple(
 # =========================================================================================
 
 
-def build_register_bottleneck_model_config(
+def build_perceiver_model_config(
     common: CommonComponents,
     *,
     register_dim: int,
     size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
-    """v1.2 base + the spatial register bottleneck, without supervision or a student.
+    """v1.2 base + the Perceiver, without supervision or a student.
 
     ``register_dim`` is the register (storage) width; attention runs at encoder width
     regardless. The projection-only target encoder is set here because it is part of
@@ -217,16 +221,17 @@ def build_register_bottleneck_model_config(
     encoder_config = config.encoder_config
     decoder_config = config.decoder_config
 
-    for sub_config in (encoder_config, decoder_config):
-        sub_config.use_register_bottleneck = True
-        sub_config.register_dim = register_dim
-
-    # Interleave reads with the latent transformer ([read -> self] per layer), each read
-    # block with its own input norm + K/V projection.
-    encoder_config.register_per_depth_read_proj = True
-    encoder_config.register_latent_depth = REGISTER_LATENT_DEPTH
-    # Bottleneck attention at encoder width: register_dim is purely the storage width.
-    encoder_config.register_attn_dim = encoder_config.embedding_size
+    encoder_config.perceiver_config = PerceiverConfig(
+        register_dim=register_dim,
+        # [read -> self-attend] x REGISTER_LATENT_DEPTH, each read block with its own
+        # input norm + K/V projection.
+        latent_depth=REGISTER_LATENT_DEPTH,
+        per_depth_read_proj=True,
+        # Attention at encoder width: register_dim is purely the storage width.
+        attn_dim=encoder_config.embedding_size,
+    )
+    decoder_config.use_perceiver = True
+    decoder_config.register_dim = register_dim
 
     # The decoder cross-attends the spatial (2D) register grid; the encoder stays 3D.
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
@@ -288,16 +293,19 @@ def build_supervision_head_config(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """The v1.3 model: d768 supervised teacher + detached linear [128, 64] student."""
-    config = build_register_bottleneck_model_config(common, register_dim=REGISTER_DIM)
+    config = build_perceiver_model_config(common, register_dim=REGISTER_DIM)
     config.supervision_head_config = build_supervision_head_config()
     # Heads attach to the teacher registers only; the student trains by distillation.
 
-    encoder_config = config.encoder_config
-    encoder_config.register_projection_dims = list(PROJECTION_DIMS)
+    perceiver_config = config.encoder_config.perceiver_config
+    assert perceiver_config is not None
+    perceiver_config.student_dims = list(PROJECTION_DIMS)
     # LayerNorm on the student output, at the full student width (LN(z)[:64] is what a
     # truncating consumer reads, so that is what is trained).
-    encoder_config.register_projection_output_norm = True
-    encoder_config.register_back_projection_hidden = BACK_PROJECTION_HIDDEN
+    perceiver_config.student_output_norm = True
+    config.register_distillation_head_config = RegisterDistillationHeadConfig(
+        back_projection_hidden=BACK_PROJECTION_HIDDEN
+    )
     return config
 
 
@@ -403,14 +411,14 @@ def set_student_loop_evals(
 ):
     """AEF trials + PASTIS on the student at every width in ``projection_dims``.
 
-    Every task probes the detached student (``eval_on_projected_registers``); the d768
+    Every task probes the detached student (``eval_on_student_registers``); the d768
     teacher is not scored, since these runs are judged on the shipped embedding. Order
     is the priority order: the shipped width first, PASTIS first within each width.
     """
     base_tasks = aeftrial_loop_eval_tasks(interval_steps)
     tasks = {
         f"{name}_proj{dim}": replace(
-            task, eval_on_projected_registers=True, eval_projection_dim=dim
+            task, eval_on_student_registers=True, eval_student_dim=dim
         )
         for dim in projection_dims
         for name, task in base_tasks.items()
