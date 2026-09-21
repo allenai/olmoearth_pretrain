@@ -5,6 +5,10 @@ from typing import Any
 
 from olmoearth_pretrain.evals.models.anysat.anysat import AnySat, AnySatConfig
 from olmoearth_pretrain.evals.models.clay.clay import Clay, ClayConfig
+from olmoearth_pretrain.evals.models.copernicusfm.copernicus_fm import (
+    CopernicusFMConfig,
+    CopernicusFMWrapper,
+)
 from olmoearth_pretrain.evals.models.croma.croma import CROMA_SIZES, Croma, CromaConfig
 from olmoearth_pretrain.evals.models.dinov3.constants import DinoV3Models
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DINOv3Config
@@ -44,6 +48,7 @@ class BaselineModelName(StrEnum):
     SATLAS = "satlas"
     CROMA = "croma"
     PRESTO = "presto"
+    COPERNICUS_FM = "copernicus_fm"
     ANYSAT = "anysat"
     TESSERA = "tessera"
     PRITHVI_V2 = "prithvi_v2"
@@ -83,6 +88,8 @@ def get_launch_script_path(model_name: str) -> str:
         return "olmoearth_pretrain/evals/models/clay/clay_launch.py"
     elif model_name == BaselineModelName.PRESTO:
         return "olmoearth_pretrain/evals/models/presto/presto_launch.py"
+    elif model_name == BaselineModelName.COPERNICUS_FM:
+        return "olmoearth_pretrain/evals/models/copernicusfm/copernicus_fm_launch.py"
     elif model_name == BaselineModelName.ANYSAT:
         return "olmoearth_pretrain/evals/models/anysat/anysat_launch.py"
     elif model_name == BaselineModelName.TESSERA:
@@ -111,6 +118,8 @@ def get_launch_script_path(model_name: str) -> str:
 
 # TODO: assert that they all store a patch_size variable and supported modalities
 __all__ = [
+    "CopernicusFMConfig",
+    "CopernicusFMWrapper",
     "Panopticon",
     "PanopticonConfig",
     "GalileoWrapper",
