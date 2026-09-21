@@ -1531,6 +1531,10 @@ class Perceiver(nn.Module):
         per_depth_read_proj: bool = False,
         attn_dim: int | None = None,
         share_read_kv: bool = False,
+        time_rope_encoding: str | None = None,
+        rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1576,12 +1580,30 @@ class Perceiver(nn.Module):
                 of the input, the dominant per-token cost of a Perceiver with no ViT
                 blocks in front of it. Incompatible with ``per_depth_read_proj`` (which
                 gives each read a differently normalised source).
+            time_rope_encoding: If set (a 3D RoPE mode, normally the encoder's), the
+                READS rotate over ``(t, row, col)`` instead of ``(row, col)``: keys carry
+                each token's calendar-day coordinate and the register queries are
+                anchored at the mean time of the sample's visible tokens (the window
+                centre), so a read sees each token's offset within the window. The
+                latent self-attention stays 2D (the grid has no time axis). ``None``
+                keeps the time-blind 2D reads.
+            rope_mixed_base: Mixed-RoPE frequency base for time-aware reads.
+            temporal_rope_dim_frac: Fraction of head dims on the temporal axis for
+                time-aware reads.
+            rope_temporal_base: Optional separate temporal base for time-aware reads.
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
         self.share_read_kv = share_read_kv
+        if time_rope_encoding is not None and not PositionEncoding.is_3d_rope(
+            time_rope_encoding
+        ):
+            raise ValueError(
+                f"time_rope_encoding must be a 3D RoPE mode, got {time_rope_encoding}"
+            )
+        self.time_rope_encoding = time_rope_encoding
         if not use_2d_rope:
             # With a single cloned latent the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
@@ -1620,11 +1642,17 @@ class Perceiver(nn.Module):
                 if attn_dim is not None
                 else nn.Linear(encoder_embedding_size, register_dim)
             )
-        # The register grid is a purely spatial map, so the reads and the latent
-        # self-attention both rotate over (row, col) only.
-        read_position_encoding = (
-            PositionEncoding.AXIAL_2D_ROPE if use_2d_rope else PositionEncoding.ABSOLUTE
-        )
+        # The register grid is a purely spatial map, so the latent self-attention
+        # rotates over (row, col) only. The reads do too unless ``time_rope_encoding``
+        # puts the tokens' calendar time back into the read.
+        if time_rope_encoding is not None:
+            read_position_encoding = time_rope_encoding
+        else:
+            read_position_encoding = (
+                PositionEncoding.AXIAL_2D_ROPE
+                if use_2d_rope
+                else PositionEncoding.ABSOLUTE
+            )
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1637,6 +1665,9 @@ class Perceiver(nn.Module):
                     use_flash_attn=False,
                     position_encoding=read_position_encoding,
                     rope_base=rope_base,
+                    rope_mixed_base=rope_mixed_base,
+                    temporal_rope_dim_frac=temporal_rope_dim_frac,
+                    rope_temporal_base=rope_temporal_base,
                     attn_dim=attn_dim,
                     kv_in_dim=(
                         encoder_embedding_size if attn_dim is not None else None
@@ -1746,12 +1777,44 @@ class Perceiver(nn.Module):
             .contiguous()
         )
         register_positions = None
+        read_query_positions: Tensor | None = None
+        read_key_positions: Tensor | None = None
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
+            # ``patch_positions`` may be ``(t, row, col)`` from a 3D encoder; the grid
+            # and the latent blocks only ever use the spatial (last two) coordinates.
+            spatial_positions = patch_positions[..., -2:]
             register_positions = self.build_register_positions(
-                patch_positions, register_grid
+                spatial_positions, register_grid
             )
+            if self.time_rope_encoding is not None:
+                if patch_positions.shape[-1] != 3:
+                    raise ValueError(
+                        "time_rope_encoding needs (t, row, col) patch positions from a "
+                        f"3D-RoPE encoder, got {patch_positions.shape[-1]} coordinates"
+                    )
+                # Anchor every register at the window centre: the mean time of the
+                # sample's visible tokens. A key's rotation relative to its register is
+                # then its offset within the window, bounded and year-independent.
+                t = patch_positions[..., 0]
+                weights = (
+                    visible_mask.bool().to(t.dtype)
+                    if visible_mask is not None
+                    else torch.ones_like(t)
+                )
+                t_mean = (t * weights).sum(1) / weights.sum(1).clamp(min=1)
+                read_query_positions = torch.cat(
+                    [
+                        t_mean[:, None, None].expand(-1, num_registers, 1),
+                        register_positions,
+                    ],
+                    dim=-1,
+                )
+                read_key_positions = patch_positions
+            else:
+                read_query_positions = register_positions
+                read_key_positions = spatial_positions
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
@@ -1762,8 +1825,8 @@ class Perceiver(nn.Module):
                 x=registers,
                 y=kv,
                 attn_mask=read_attn_mask,
-                rope_positions=register_positions,
-                rope_positions_y=patch_positions,
+                rope_positions=read_query_positions,
+                rope_positions_y=read_key_positions,
                 kv=shared_kv,
             )
             return out
@@ -1812,6 +1875,13 @@ class PerceiverConfig(Config):
             read cost from ``latent_depth`` K/V projections to one; matters when there
             are no ViT blocks and the reads are the only per-token compute. Cannot be
             combined with ``per_depth_read_proj``.
+        read_time_rope: If True, the reads rotate over ``(t, row, col)`` with the
+            encoder's 3D RoPE mode: keys carry each token's calendar time and the
+            register queries sit at the window-centre time (mean over visible tokens),
+            so a read sees each token's offset within the window. Without it the reads
+            are time-blind and the only temporal signal on the tokens that reach them
+            is the additive month embedding (plus whatever the encoder blocks mixed
+            in). Requires a 3D RoPE encoder. Latent self-attention stays 2D.
         student_dims: If set, add a DETACHED low-dim "student" readout of the
             register grid, exported alongside the registers as ``student_registers``
             at width ``max(student_dims)``. The student's input is detached, so its
@@ -1838,6 +1908,7 @@ class PerceiverConfig(Config):
     per_depth_read_proj: bool = False
     attn_dim: int | None = None
     share_read_kv: bool = False
+    read_time_rope: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
 
@@ -1875,6 +1946,11 @@ class PerceiverConfig(Config):
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
+        if self.read_time_rope and not PositionEncoding.is_3d_rope(position_encoding):
+            raise ValueError(
+                "read_time_rope needs a 3D RoPE encoder position_encoding (the reads "
+                f"take the tokens' temporal coordinate from it), got {position_encoding}"
+            )
         if self.share_read_kv and self.per_depth_read_proj and self.latent_depth > 1:
             raise ValueError(
                 "share_read_kv and per_depth_read_proj are mutually exclusive: a shared "
@@ -1896,12 +1972,16 @@ class PerceiverConfig(Config):
         position_encoding: str,
         rope_base: float,
         qk_norm: bool,
-        **_encoder_rope_kwargs: Any,
+        rope_mixed_base: float = 10.0,
+        temporal_rope_dim_frac: float = 0.25,
+        rope_temporal_base: float | None = None,
+        drop_path: float = 0.0,
     ) -> "Perceiver":
         """Build the bottleneck module for an encoder with these settings.
 
-        The Perceiver reads with 2D axial RoPE only, so the encoder's mixed/3D RoPE
-        settings (passed for :class:`JointLatentConfig`'s benefit) are ignored here.
+        The encoder's 3D RoPE settings only matter to the reads when
+        ``read_time_rope`` is set; ``drop_path`` is accepted for interface parity with
+        :class:`JointLatentConfig` and unused (the Perceiver blocks never used it).
         """
         return Perceiver(
             encoder_embedding_size=encoder_embedding_size,
@@ -1915,6 +1995,10 @@ class PerceiverConfig(Config):
             per_depth_read_proj=self.per_depth_read_proj,
             attn_dim=self.attn_dim,
             share_read_kv=self.share_read_kv,
+            time_rope_encoding=position_encoding if self.read_time_rope else None,
+            rope_mixed_base=rope_mixed_base,
+            temporal_rope_dim_frac=temporal_rope_dim_frac,
+            rope_temporal_base=rope_temporal_base,
         )
 
 
@@ -2451,15 +2535,9 @@ class Encoder(FlexiVitBase):
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
-        # The register grid has no temporal axis, so the bottleneck reads with 2D
-        # (row, col) positions even when the encoder self-attention uses 3D RoPE: drop
-        # the leading temporal coordinate (3D positions are ``(t, row, col)``). This
-        # does not touch `positions`, which the encoder blocks still use for full 3D
-        # RoPE.
-        if register_kv_positions is not None and PositionEncoding.is_3d_rope(
-            self.position_encoding
-        ):
-            register_kv_positions = register_kv_positions[..., 1:]
+        # Passed in full (``(t, row, col)`` under 3D RoPE): the Perceiver takes the
+        # spatial coordinates for its grid and latent blocks itself, and uses the
+        # temporal one only when its reads are configured to rotate over time.
 
         tokens_dict.update(original_masks_dict)
 

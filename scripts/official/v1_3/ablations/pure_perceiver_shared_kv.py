@@ -16,7 +16,10 @@ norm, since a shared projection needs a single shared source. Everything else --
 registers, supervision, the ``[128, 64]`` student with MLP back-projection + Gram
 distillation, sampler, train module, student in-loop evals -- is unchanged.
 
-W&B project ``20260921_perceiver_shapes``.
+Inherits ``read_time_rope`` (3D RoPE on the reads) from ``pure_perceiver.py``.
+
+W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_sharedkv_trope_ld12``
+(the time-blind first launch, ``v1_3_vit0_sharedkv_ld12``, was stopped at ~8k steps).
 """
 
 import logging

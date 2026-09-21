@@ -106,6 +106,7 @@
         "attn_dim": 768,
         "latent_depth": 4,
         "per_depth_read_proj": true,
+        "read_time_rope": false,
         "register_dim": 768,
         "share_read_kv": false,
         "student_dims": [

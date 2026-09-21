@@ -1205,6 +1205,76 @@ def test_encoder_perceiver_shared_read_kv_matches_tied_per_read_kv(
         )
 
 
+def test_encoder_perceiver_time_rope_reads(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """``read_time_rope`` puts the tokens' calendar time back into the Perceiver reads.
+
+    The read blocks rotate with the encoder's 3D mode, the latent blocks and the
+    returned register positions stay 2D, the forward runs at two patch sizes, and the
+    option is refused on a 2D encoder.
+    """
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim = 8
+    encoder = Encoder(
+        supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=0,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+            attn_dim=16,
+            read_time_rope=True,
+        ),
+    )
+    bottleneck = encoder.perceiver
+    assert bottleneck is not None
+    assert bottleneck.time_rope_encoding == "rope_3d_mixed"
+    assert bottleneck.read_blocks[0].attn.position_encoding == "rope_3d_mixed"
+    assert bottleneck.latent_blocks[0].attn.position_encoding == "rope"
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    for patch_size in (2, 4):
+        out = encoder.forward(sample, patch_size=patch_size, input_res=10)
+        side = H // patch_size
+        assert out["registers"].shape == (B, side, side, register_dim)
+        assert out["register_positions"].shape == (B, side * side, 2)
+        assert torch.isfinite(out["registers"]).all()
+    with pytest.raises(ValueError, match="3D RoPE"):
+        Encoder(
+            supported_modalities=[Modality.SENTINEL2_L2A],
+            embedding_size=16,
+            max_patch_size=4,
+            min_patch_size=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            max_sequence_length=12,
+            depth=0,
+            drop_path=0.0,
+            position_encoding="rope",
+            perceiver_config=PerceiverConfig(register_dim=8, read_time_rope=True),
+        )
+
+
 def test_encoder_perceiver_3d_rope_encoder_2d_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

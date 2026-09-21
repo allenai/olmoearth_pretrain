@@ -14,10 +14,11 @@ Why this is a fair swap and what changes:
 * The latent-MIM target is unchanged. v1.3 trains with all-zero token exits and a
   projection-only target encoder, so the decoder already predicts patch EMBEDDINGS,
   not ViT-encoded tokens; deleting the encoder blocks does not touch the target.
-* Time reaches the reads only through the additive month encoding. Under mixed 3D
-  RoPE the slot-index time encoding is skipped (it was carried by the encoder blocks'
-  RoPE, which no longer run) and the reads use 2D spatial RoPE, so two timesteps in
-  the same calendar month are indistinguishable to this model.
+* Time reaches the reads through 3D RoPE (``read_time_rope``): keys carry each
+  token's calendar-day coordinate and the register queries are anchored at the
+  window-centre time, so a read sees each token's offset within the window. (The
+  first launch of this arm, ``v1_3_vit0_ld12``, had time-blind 2D reads -- month
+  embedding only -- and was stopped at ~15k steps in favour of this version.)
 * Compute (MACs, attention included, 16x16 / 12 timesteps / S1+S2+L8 / patch size 1):
   base.py 2,449 G vs 244 G here -- 10x fewer, because the ViT is quadratic in the
   9,216 input tokens while the reads are linear in them and the latent blocks see
@@ -27,7 +28,7 @@ Why this is a fair swap and what changes:
 
 IN-LOOP EVALS: identical to ``base.py`` (student at 128 and 64 dims, 80k interval).
 
-W&B project ``20260921_perceiver_shapes``.
+W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_trope_ld12``.
 """
 
 import logging
@@ -61,6 +62,8 @@ ENCODER_DEPTH = 0
 # All the depth moves onto the register grid: 12 interleaved [read -> self-attend]
 # layers, matching the ViT block count of base.py.
 REGISTER_LATENT_DEPTH = 12
+# 3D RoPE on the reads (see build_model_config).
+READ_TIME_ROPE = True
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -70,6 +73,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     perceiver_config = config.encoder_config.perceiver_config
     assert perceiver_config is not None
     perceiver_config.latent_depth = REGISTER_LATENT_DEPTH
+    # Reads rotate over (t, row, col): keys carry calendar time, register queries sit
+    # at the window-centre time (same anchoring as the joint arm). Without this the
+    # reads were time-blind and the tokens' only temporal signal was the month
+    # embedding (the first launch, v1_3_vit0_ld12, trained that way and was stopped).
+    perceiver_config.read_time_rope = READ_TIME_ROPE
     return config
 
 
