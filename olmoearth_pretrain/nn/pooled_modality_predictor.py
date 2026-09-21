@@ -621,7 +621,7 @@ class EncodeEarlyAttnPool(Encoder):
             tokens, pooled_dims
         )
         out_dict["modality_pooled_masks"] = original_pooled_masks
-        # Third element (register_output) is None: this variant has no register bottleneck.
+        # Third element (register_output) is None: this variant has no Perceiver.
         return out_dict, token_norm_stats, None
 
     def forward(

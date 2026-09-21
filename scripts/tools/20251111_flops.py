@@ -43,7 +43,11 @@ from olmoearth_pretrain.evals.models import (
     Terramind,
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
-from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    Encoder,
+    EncoderConfig,
+    PerceiverConfig,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -81,13 +85,13 @@ SINGLE_BANDSET_CONFIG = TokenizationConfig(
 )
 
 
-def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
+def build_v1_3_rc_encoder(with_student: bool) -> Encoder:
     """The v1.3 distillation release candidate's encoder.
 
     Field values mirror ``encoder_config`` in
     regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
-    ``with_projection=True`` includes the shipped d128/d64 linear projection
-    (the distillation student); ``False`` measures the register bottleneck alone.
+    ``with_student=True`` includes the shipped d128/d64 linear projection
+    (the distillation student); ``False`` measures the Perceiver alone.
     """
     config = EncoderConfig(
         supported_modality_names=[
@@ -121,19 +125,17 @@ def build_v1_3_rc_encoder(with_projection: bool) -> Encoder:
         rope_mixed_base=10000.0,
         temporal_rope_dim_frac=0.25,
         rope_temporal_coordinate_scale=1.0 / 30.0,
-        use_register_bottleneck=True,
-        register_dim=768,
-        register_latent_depth=4,
-        register_per_depth_read_proj=True,
-        register_attn_dim=768,
-        register_projection_dims=[128, 64] if with_projection else None,
+        perceiver_config=PerceiverConfig(
+            register_dim=768,
+            latent_depth=4,
+            per_depth_read_proj=True,
+            attn_dim=768,
+            student_dims=[128, 64] if with_student else None,
+        ),
     )
-    encoder = config.build()
-    if with_projection:
-        # The per-prefix back-projections are training-only (never run in forward,
-        # discarded at inference); drop them so the param count is what ships.
-        encoder.register_back_projections = None
-    return encoder
+    # The student's back-projection heads are training-only and live on LatentMIM,
+    # so the encoder's parameter count is already what ships.
+    return config.build()
 
 
 def _sdpa_cpu_flop(q_shape, k_shape, v_shape, *args, out_shape=None, **kwargs):
