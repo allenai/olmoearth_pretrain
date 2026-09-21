@@ -3073,6 +3073,76 @@ FT_EVAL_TASKS = {
         window_size=64,
         patch_size=4,
     ),
+    # Temporal ablation for the v1.2 fine-tune: first N monthly mosaics, N=1..11.
+    # N=12 is pastis2_drom_bg8void_ft_ws64_ps4_sentinel2, so it comes free as the
+    # control. The mo{NN} datasets declare sentinel2_l2a only, so they are already
+    # the S2-only trim the FT combo needs -- no _s2 variant is required.
+    "pastis2_drom_bg8void_mo01_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo01",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo02_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo02",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo03_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo03",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo04_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo04",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo05_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo05",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo06_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo06",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo07_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo07",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo08_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo08",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo09_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo09",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo10_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo10",
+        window_size=64,
+        patch_size=4,
+    ),
+    "pastis2_drom_bg8void_mo11_ft_ws64_ps4_sentinel2": _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_mo11",
+        window_size=64,
+        patch_size=4,
+    ),
     "pastis2_drom_bg8void_ft_ws64_ps4_sentinel1": _pastis_ft_task(
         [Modality.SENTINEL1.name],
         dataset="pastis2_drom_bg8void_s1",
