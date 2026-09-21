@@ -61,6 +61,72 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     return dequantized
 
 
+# === Tessera's quantization scheme ===
+# Verified against the shipped client, geotessera/store.py:
+#
+#     def dequantise(emb_int8, scales):   # (B,H,W) + (H,W) -> (H,W,B) float32
+#         f32 = emb_int8.astype(np.float32) * scales[np.newaxis, :, :]
+#
+# i.e. LINEAR with one float32 scale per PIXEL (broadcast over all 128 bands),
+# published as `grid_{lon}_{lat}.npy` + `_scales.npy`. Two ways this differs
+# from the AEF power scheme above, both of which matter for a LayerNorm-geometry
+# embedding: the scale is fitted per vector instead of being the global constant
+# QUANTIZE_SCALE, and there is no companding curve. Together they make it
+# **clip-free by construction** -- the largest coordinate of every vector lands
+# exactly on +/-127 -- where the power scheme saturates everything beyond
+# QUANTIZE_CLIP_THRESHOLD. Measured on d128 register embeddings: cos(orig,
+# round-trip) 0.99998 here vs 0.95058 under the power scheme.
+#
+# Only their DECODER is in the client, so the encoder below is the natural
+# inverse (scale = max|x| / 127). Any per-vector scale is clip-free; the exact
+# choice moves the step size by a few percent, not the conclusion.
+TESSERA_INT8_MAX = 127.0
+
+
+def quantize_embeddings_tessera(
+    embeddings: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize to int8 with Tessera's per-vector scale.
+
+    Args:
+        embeddings: Float tensor of shape (N, dim) or (N, H, W, dim).
+
+    Returns:
+        ``(quantized, scales)``: int8 codes of the input shape, and the float32
+        scales with the last dim kept as 1 so they broadcast on dequantization.
+    """
+    scales = embeddings.abs().amax(dim=-1, keepdim=True) / TESSERA_INT8_MAX
+    # An all-zero vector has no scale; 1.0 leaves it at zero and keeps the
+    # round-trip finite (their product marks such pixels non-finite instead).
+    scales = torch.where(scales > 0, scales, torch.ones_like(scales))
+    quantized = (
+        torch.round(embeddings / scales)
+        .clamp(-TESSERA_INT8_MAX, TESSERA_INT8_MAX)
+        .to(torch.int8)
+    )
+    return quantized, scales
+
+
+def dequantize_embeddings_tessera(
+    quantized: torch.Tensor, scales: torch.Tensor
+) -> torch.Tensor:
+    """Dequantize Tessera-scheme int8 codes: ``codes * scales``."""
+    return quantized.float() * scales
+
+
+def roundtrip_embeddings_tessera(embeddings: torch.Tensor) -> torch.Tensor:
+    """Push embeddings through Tessera's int8 scheme, returning float32.
+
+    Fused because the per-vector scales are needed to reconstruct, and unlike
+    the power scheme the int8 codes alone are not a faithful stand-in for the
+    stored product (they have had each vector's magnitude divided out). The
+    result carries exactly the information a consumer of their published
+    ``int8 + _scales.npy`` pair gets after ``geotessera``'s ``dequantise``.
+    """
+    quantized, scales = quantize_embeddings_tessera(embeddings)
+    return dequantize_embeddings_tessera(quantized, scales)
+
+
 class QuantizationScheme(StrEnum):
     """Which int8 scheme ``quantize_embeddings=True`` applies.
 
@@ -71,6 +137,9 @@ class QuantizationScheme(StrEnum):
     # AlphaEarth's published scheme (POWER/SCALE above). The default, and the
     # right choice for AEF-geometry (unit-L2) embeddings.
     AEF_POWER = "aef_power"
+    # Tessera's scheme: linear, per-vector scale, clip-free. Used for the
+    # tessera_v2 arm, which we bake ourselves in float32.
+    TESSERA_PER_VECTOR = "tessera_per_vector"
 
 
 # === Normalization ===

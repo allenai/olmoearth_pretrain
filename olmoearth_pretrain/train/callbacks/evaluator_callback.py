@@ -176,7 +176,10 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
-    # Which int8 scheme quantize_embeddings applies (see QuantizationScheme).
+    # Which int8 scheme quantize_embeddings applies. AEF_POWER (the default) is
+    # AlphaEarth's published scheme; TESSERA_PER_VECTOR is Tessera's, and is set
+    # for the tessera_v2 arm so each product is scored under its own
+    # quantization rather than under a competitor's (see QuantizationScheme).
     quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
     # Normalize the extracted embeddings before the int8 round-trip and the
     # probe. Nothing in pretraining pins an embedding head's output geometry
@@ -642,7 +645,10 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if self.quantize_embeddings:
+        if (
+            self.quantize_embeddings
+            and self.quantization_scheme != QuantizationScheme.TESSERA_PER_VECTOR
+        ):
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             if self.quantize_bits is not None and self.quantile_config is not None:
                 # Percentile-based dequantization
