@@ -20,7 +20,6 @@ which is required for any config.json that still carries since-removed fields):
 
 import copy
 import json
-import logging
 from enum import StrEnum
 from os import PathLike
 
@@ -29,8 +28,6 @@ from huggingface_hub import hf_hub_download
 from upath import UPath
 
 from olmoearth_pretrain.config import Config
-
-logger = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "config.json"
 WEIGHTS_FILENAME = "weights.pth"
