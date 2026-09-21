@@ -222,6 +222,21 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         launch_script_key="prithvi_v2",
         supports_pretrained_normalizer=True,
     ),
+    "tessera": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        launch_script_key="tessera",
+        supports_pretrained_normalizer=True,
+    ),
+    "presto": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        launch_script_key="presto",
+        supports_pretrained_normalizer=True,
+    ),
+    "copernicus_fm": ModelPreset(
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        launch_script_key="copernicus_fm",
+        supports_pretrained_normalizer=True,
+    ),
 }
 
 

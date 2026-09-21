@@ -48,6 +48,16 @@ _MODALITY_SPECTRA: dict[str, tuple[list[float], list[float]]] = {
 class CopernicusFMWrapper(nn.Module):
     """Wrap CopernicusFMViT to the olmoearth eval-baseline interface."""
 
+    # forward() iterates every modality present on the sample, so a task may
+    # request more than one at a time (the evaluator gates multi-modality tasks
+    # on this flag).
+    supports_multiple_modalities_at_once = True
+
+    supported_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+
     def __init__(
         self,
         load_directory: str,
