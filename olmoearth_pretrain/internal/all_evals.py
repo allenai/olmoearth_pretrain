@@ -86,7 +86,8 @@ def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
     ``{load_path}/config.json`` -- the fully-resolved config that ConfigSaverCallback
     writes alongside every checkpoint -- and deserializes its ``model`` block. This
     rebuilds the EXACT architecture the checkpoint weights expect, so train-time
-    architecture overrides (e.g. ``--model.encoder_config.register_dim=768``) do NOT
+    architecture overrides (e.g.
+    ``--model.encoder_config.perceiver_config.register_dim=768``) do NOT
     need to be re-passed at eval time.
 
     Falls back to ``fallback_builder`` (the training module's ``build_model_config``)

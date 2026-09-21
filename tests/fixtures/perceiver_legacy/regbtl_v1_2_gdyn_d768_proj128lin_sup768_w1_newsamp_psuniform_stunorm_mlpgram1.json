@@ -1,4 +1,5 @@
 {
+  "_source": "model subtree of step667200/config.json from the mlpgram1 training run (regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_stunorm_mlpgram1, /weka/dfive-default/olmoearth_pretrain/checkpoints/gabrielt/); verified byte-identical to the checkpoint copy shipped as OlmoEarth-v1_3-Base on 2026-09-04.",
   "model": {
     "_CLASS_": "olmoearth_pretrain.nn.latent_mim.LatentMIMConfig",
     "decoder_config": {
@@ -105,18 +106,19 @@
       "random_band_dropout": true,
       "random_channel_embeddings": false,
       "register_attn_dim": 768,
+      "register_back_projection_hidden": 256,
       "register_contrastive_source": "registers",
       "register_dim": 768,
       "register_grid_size": 0,
       "register_interleave": true,
       "register_latent_depth": 4,
       "register_latent_self_attn": true,
-      "register_learned_read_weighting": false,
       "register_per_depth_read_proj": true,
       "register_projection_dims": [
         128,
         64
       ],
+      "register_projection_output_norm": true,
       "register_projection_type": "linear",
       "register_read_depth": 1,
       "rope_base": 10000.0,

@@ -18,6 +18,10 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.register_distillation_head import (
+    RegisterDistillationHead,
+    RegisterDistillationHeadConfig,
+)
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
@@ -83,6 +87,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         decoder: nn.Module,
         reconstructor: torch.nn.Module | None = None,
         supervision_head: SupervisionHead | None = None,
+        register_distillation_head: RegisterDistillationHead | None = None,
         projection_only_target: bool = False,
     ):
         """Initialize the Latent MIM Style.
@@ -93,6 +98,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision of
                 decode-only modalities from the encoder's register grid.
+            register_distillation_head: Optional head that distils the register grid
+                into the encoder's detached student (owns the per-prefix
+                back-projections and computes the loss). Training-only, like the
+                supervision head.
             projection_only_target: If True, the target encoder is only the frozen
                 initial projection (patch embeddings + optional embedding projector)
                 instead of a full copy of the encoder. Only valid when all token
@@ -104,6 +113,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.decoder = decoder
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
+        self.register_distillation_head = register_distillation_head
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -131,9 +141,9 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed: MAE predictions if enabled
             extra_metrics: additional metrics to log
             supervision_preds: per-modality supervision predictions (or None)
-            projection_outputs: register-grid outputs when the encoder has a
-                register bottleneck (else None): the teacher ``registers`` and, with a
-                student, the ``projected_registers``. Consumed by the train module's
+            student_outputs: register-grid outputs when the encoder has a
+                Perceiver (else None): the teacher ``registers`` and, with a
+                student, the ``student_registers``. Consumed by the train module's
                 distillation losses. The two grids are FLATTENED to ``[B, N, D]``
                 here: every consumer (Gram, cosine) is relational over cells and
                 takes a token sequence.
@@ -146,7 +156,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
         # The decoder reads only the registers; the student projection is for the
         # train module's losses (and evals), never a decoder input.
-        projected_registers = decoder_kwargs.pop("projected_registers", None)
+        student_registers = decoder_kwargs.pop("student_registers", None)
         extra_metrics = {}
         if token_norm_stats is not None:
             extra_metrics["token_norm_stats"] = token_norm_stats
@@ -163,21 +173,21 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_preds = None
         if self.supervision_head is not None:
             if registers is None:
-                raise ValueError("the supervision head requires a register bottleneck")
+                raise ValueError("the supervision head requires a Perceiver")
             supervision_preds = self.supervision_head(registers, x)
 
-        projection_outputs: dict | None = None
+        student_outputs: dict | None = None
         if registers is not None:
-            projection_outputs = {
+            student_outputs = {
                 "registers": rearrange(registers, "b h w d -> b (h w) d"),
-                "projected_registers": None,
+                "student_registers": None,
             }
-        if projected_registers is not None:
-            assert projection_outputs is not None, (
-                "a projection student cannot exist without a register bottleneck"
+        if student_registers is not None:
+            assert student_outputs is not None, (
+                "a projection student cannot exist without a Perceiver"
             )
-            projection_outputs["projected_registers"] = rearrange(
-                projected_registers, "b h w d -> b (h w) d"
+            student_outputs["student_registers"] = rearrange(
+                student_registers, "b h w d -> b (h w) d"
             )
 
         return (
@@ -187,7 +197,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             reconstructed,
             extra_metrics,
             supervision_preds,
-            projection_outputs,
+            student_outputs,
         )
 
     def apply_fsdp(
@@ -215,6 +225,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.reconstructor.apply_fsdp(**fsdp_config)
         if self.supervision_head is not None:
             fully_shard(self.supervision_head, **fsdp_config)
+        if self.register_distillation_head is not None:
+            fully_shard(self.register_distillation_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -241,8 +253,10 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
-    # Register-grid supervision heads (read the encoder's register bottleneck).
+    # Register-grid supervision heads (read the encoder's Perceiver).
     supervision_head_config: SupervisionHeadConfig | None = None
+    # Distillation of the register grid into the Perceiver's detached student.
+    register_distillation_head_config: RegisterDistillationHeadConfig | None = None
     projection_only_target: bool = False
 
     def validate(self) -> None:
@@ -265,20 +279,17 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
-        encoder_uses_registers = getattr(
-            self.encoder_config, "use_register_bottleneck", False
-        )
-        decoder_uses_registers = getattr(
-            self.decoder_config, "use_register_bottleneck", False
-        )
+        encoder_uses_registers = self.encoder_config.perceiver_config is not None
+        decoder_uses_registers = getattr(self.decoder_config, "use_perceiver", False)
         if encoder_uses_registers != decoder_uses_registers:
             raise ValueError(
-                "use_register_bottleneck must match between encoder and decoder"
+                "the decoder's use_perceiver must match whether the encoder "
+                "has a perceiver_config"
             )
-        if encoder_uses_registers:
+        if self.encoder_config.perceiver_config is not None:
             # The decoder cross-attends the grid the encoder ships, so its width must
-            # match the bottleneck's register_dim (required whenever the bottleneck is on).
-            encoder_register_dim = self.encoder_config.register_dim
+            # match the bottleneck's register_dim.
+            encoder_register_dim = self.encoder_config.perceiver_config.register_dim
             if self.decoder_config.register_dim != encoder_register_dim:
                 raise ValueError(
                     "decoder_config.register_dim "
@@ -288,8 +299,15 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None and not encoder_uses_registers:
             raise ValueError(
                 "the supervision heads read the register grid, so "
-                "supervision_head_config requires the encoder register bottleneck"
+                "supervision_head_config requires the encoder Perceiver"
             )
+        if self.register_distillation_head_config is not None:
+            perceiver_config = self.encoder_config.perceiver_config
+            if perceiver_config is None or perceiver_config.sorted_student_dims is None:
+                raise ValueError(
+                    "register_distillation_head_config requires a Perceiver with a "
+                    "student (perceiver_config.student_dims)"
+                )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -305,14 +323,25 @@ class LatentMIMConfig(Config):
         if self.supervision_head_config is not None:
             # Heads read the register grid, so embedding_dim is the width that grid is
             # shipped at: the bottleneck's register_dim.
+            assert self.encoder_config.perceiver_config is not None
             supervision_head = self.supervision_head_config.build(
-                embedding_dim=self.encoder_config.register_dim,
+                embedding_dim=self.encoder_config.perceiver_config.register_dim,
                 max_patch_size=self.encoder_config.max_patch_size,
+            )
+        register_distillation_head = None
+        if self.register_distillation_head_config is not None:
+            perceiver_config = self.encoder_config.perceiver_config
+            assert perceiver_config is not None
+            assert perceiver_config.sorted_student_dims is not None
+            register_distillation_head = self.register_distillation_head_config.build(
+                register_dim=perceiver_config.register_dim,
+                student_dims=perceiver_config.sorted_student_dims,
             )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             supervision_head=supervision_head,
+            register_distillation_head=register_distillation_head,
             projection_only_target=self.projection_only_target,
         )

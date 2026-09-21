@@ -7,7 +7,7 @@ trained with, not from HEAD.
 
     git worktree add /tmp/wt <commit>
     cd /tmp/wt && python scripts/tools/record_legacy_config_shapes.py \\
-        <config.json> tests/fixtures/legacy_configs/<name>.shapes.json
+        <config.json> tests/fixtures/checkpoint_configs/<name>.shapes.json
 
 The config may be a full checkpoint config.json or just its "model" subtree. The WHOLE
 model (encoder, decoder, supervision head, ...) is built on the meta device, so the
@@ -48,8 +48,7 @@ def main() -> int:
                 "recorded_at_commit": commit,
                 "note": (
                     f"Parameter manifest built from this config at {commit}, where it "
-                    f"deserializes natively. HEAD must rebuild the identical parameter "
-                    f"set after patch_legacy_encoder_config."
+                    f"deserializes natively. HEAD must build the identical parameter set."
                 ),
                 "shapes": {k: list(v.shape) for k, v in model.state_dict().items()},
             },
