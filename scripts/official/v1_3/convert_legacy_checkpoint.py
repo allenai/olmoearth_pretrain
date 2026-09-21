@@ -10,8 +10,9 @@ such a checkpoint ONCE, after which it loads with no compatibility code at all::
 
 The source directory must hold a ``config.json`` plus either the trainer's distributed
 ``model_and_optim/`` (needs olmo-core) or an already flat ``weights.pth``. The output
-directory gets a ``config.json`` in the current schema and a ``weights.pth`` under the
-current parameter names, and is loadable with
+directory gets a ``config.json`` holding just the ``model`` block in the current schema
+(the only part read when loading weights) and a ``weights.pth`` under the current
+parameter names, and is loadable with
 ``olmoearth_pretrain.model_loader.load_pretrain_checkpoint`` (or
 ``load_model_from_path``). ``--config-only`` converts just the config.
 
@@ -241,12 +242,12 @@ def convert_checkpoint(
     import olmoearth_pretrain.nn.latent_mim  # noqa: F401  (registers the model classes)
     from olmoearth_pretrain.config import Config
 
-    config = json.loads((src / "config.json").read_text())
-    config["model"] = convert_model_config(config["model"])
-    model_config = Config.from_dict(config["model"])  # strict: proves the schema
+    source = json.loads((src / "config.json").read_text())
+    model_config = Config.from_dict(convert_model_config(source["model"]))  # strict
+    # Only the ``model`` block is ever read when loading weights; the trainer, data
+    # loader, eval and launch sections describe the training run, not the artifact.
     # Re-serialize from the parsed config so the file carries exactly the current schema.
-    config["model"] = model_config.as_config_dict()
-    config["_converted_from"] = str(src)
+    config = {"model": model_config.as_config_dict(), "_converted_from": str(src)}
 
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "config.json").write_text(
