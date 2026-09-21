@@ -448,11 +448,15 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
         pass
     p.close()
 
-    _write_progress(
-        args.olmoearth_dir, "convert", args.shard_id, "running", "metadata + osm"
-    )
-    step_metadata(args.olmoearth_dir, args.allcap)
-    step_rasterize_osm(args.olmoearth_dir, args.workers)
+    if args.finalize_metadata:
+        # Consolidating ~N*100K tiny CSVs per shard is slow and redundant across
+        # shards; by default run pipeline.py --only metadata,rasterize_osm once after
+        # all convert shards finish.
+        _write_progress(
+            args.olmoearth_dir, "convert", args.shard_id, "running", "metadata + osm"
+        )
+        step_metadata(args.olmoearth_dir, args.allcap, args.workers)
+        step_rasterize_osm(args.olmoearth_dir, args.workers)
 
     _write_progress(args.olmoearth_dir, "convert", args.shard_id, "done")
     logger.info(f"convert-worker shard {args.shard_id} complete")
@@ -1150,6 +1154,11 @@ def main() -> None:
     p.add_argument("--window-manifest", default=None)
     p.add_argument("--group", default="res_10.0")
     p.add_argument("--allcap", action="store_true")
+    p.add_argument(
+        "--finalize-metadata",
+        action="store_true",
+        help="Also consolidate metadata + rasterize OSM in this shard (slow; off by default)",
+    )
     p.add_argument("--rslearn-dir", required=True)
     p.add_argument("--olmoearth-dir", default=None)
     p.add_argument("--shard-id", type=int, required=True)
