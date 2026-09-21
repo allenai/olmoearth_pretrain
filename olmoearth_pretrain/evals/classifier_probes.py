@@ -6,8 +6,8 @@ are linear in the embedding, so a gap between two arms could equally be "the
 information is not there" or "the information is there but not linearly
 readable". Fitting a few standard non-linear classifiers on the same embeddings
 separates those readings without adding a hyperparameter search: everything
-here runs at library defaults (random forest, xgboost, logistic regression, and
-a one-hidden-layer MLP).
+here runs at library defaults (random forest, logistic regression, and a
+one-hidden-layer MLP).
 
 Two entry points share one predictor registry:
 
@@ -22,9 +22,8 @@ Two entry points share one predictor registry:
   are reported under synthetic task names (``{host}_clf_{predictor}``) so a
   forest's mIoU can never be read as the linear probe's.
 
-The predictors are plain scikit-learn / xgboost estimators on CPU numpy (xgboost
-may use the GPU when one is present); the imports are lazy so the training
-image does not need them unless a task asks.
+The predictors are plain scikit-learn estimators on CPU numpy; the imports are
+lazy so the training image does not need them unless a task asks.
 """
 
 from __future__ import annotations
@@ -57,21 +56,14 @@ logger = logging.getLogger(__name__)
 TASK_SUFFIX = "clf"
 
 RANDOM_FOREST = "rf"
-XGBOOST = "xgb"
 LOGISTIC_REGRESSION = "logreg"
 MLP = "mlp"
-CLASSIFIERS: tuple[str, ...] = (RANDOM_FOREST, XGBOOST, LOGISTIC_REGRESSION, MLP)
+CLASSIFIERS: tuple[str, ...] = (RANDOM_FOREST, LOGISTIC_REGRESSION, MLP)
 
 # Cap on the worker threads handed to the estimators. ``os.cpu_count()`` inside
 # a container reports the host's cores, not the job's share, so -1 would
 # oversubscribe; the CPU affinity mask is the honest figure where available.
 MAX_DEFAULT_JOBS = 16
-
-# Set once the first xgboost GPU fit fails (driver / CUDA-version mismatch on
-# the node, say); every later xgboost fit in the process then runs on CPU
-# rather than repeating the failure per fold. A CPU forest is slower, not
-# different, so the eval survives instead of dying after its forward pass.
-_XGB_CUDA_BROKEN = False
 
 
 def classifier_task_name(host_task: str, predictor: str) -> str:
@@ -94,7 +86,7 @@ class ClassifierProbeConfig:
 
     ``names`` empty means disabled, so the config can sit on every task as a
     non-optional field and be switched on from the sweep CLI with one override
-    (``classifier_probes.names=[rf,xgb]``). The estimator settings are the
+    (``classifier_probes.names=[rf,logreg]``). The estimator settings are the
     libraries' own defaults on purpose: the point is a fixed, hyperparameter-free
     readout, the same argument AEF makes for lambda = 0.
     """
@@ -117,12 +109,6 @@ class ClassifierProbeConfig:
     # rows that is ~one leaf per row and tens of GB of trees, so dense tasks
     # should raise it (5 caps the node count at 2N/5).
     rf_min_samples_leaf: int = 1
-    # xgboost library defaults (eta 0.3, depth 6, 100 rounds, hist).
-    xgb_n_estimators: int = 100
-    xgb_max_depth: int = 6
-    xgb_learning_rate: float = 0.3
-    # "auto" -> cuda when torch sees a GPU, else cpu.
-    xgb_device: str = "auto"
     # scikit-learn LogisticRegression defaults (L2, C=1, lbfgs, multinomial),
     # with max_iter raised from 100 so the fit actually converges.
     logreg_c: float = 1.0
@@ -155,8 +141,8 @@ class _Fitted:
 
     model: Any
     # Sorted original class ids present in the training rows. The estimator was
-    # fit on their 0..k-1 encoding (xgboost requires contiguous labels), so its
-    # predict_proba columns line up with this array.
+    # fit on their 0..k-1 encoding, so its predict_proba columns line up with
+    # this array.
     classes: np.ndarray
 
 
@@ -171,24 +157,6 @@ def _build_estimator(name: str, config: ClassifierProbeConfig) -> Any:
             min_samples_leaf=config.rf_min_samples_leaf,
             n_jobs=n_jobs,
             random_state=config.seed,
-        )
-    if name == XGBOOST:
-        from xgboost import XGBClassifier
-
-        device = config.xgb_device
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        if _XGB_CUDA_BROKEN and device != "cpu":
-            device = "cpu"
-        return XGBClassifier(
-            n_estimators=config.xgb_n_estimators,
-            max_depth=config.xgb_max_depth,
-            learning_rate=config.xgb_learning_rate,
-            tree_method="hist",
-            device=device,
-            n_jobs=n_jobs,
-            random_state=config.seed,
-            verbosity=0,
         )
     if name == LOGISTIC_REGRESSION:
         from sklearn.linear_model import LogisticRegression
@@ -219,20 +187,7 @@ def fit_classifier(
         # Nothing to discriminate; predict_scores handles the degenerate case.
         return _Fitted(model=None, classes=classes)
     model = _build_estimator(name, config)
-    try:
-        model.fit(features, encoded)
-    except Exception as exc:
-        global _XGB_CUDA_BROKEN
-        on_gpu = name == XGBOOST and getattr(model, "device", "cpu") != "cpu"
-        if not on_gpu or _XGB_CUDA_BROKEN:
-            raise
-        logger.warning(
-            f"xgboost GPU fit failed ({type(exc).__name__}: {exc}); falling back "
-            f"to CPU for this and every later xgboost fit in this process"
-        )
-        _XGB_CUDA_BROKEN = True
-        model = _build_estimator(name, config)
-        model.fit(features, encoded)
+    model.fit(features, encoded)
     return _Fitted(model=model, classes=classes)
 
 

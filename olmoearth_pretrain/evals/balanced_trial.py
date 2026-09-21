@@ -21,7 +21,7 @@ This reproduces the evaluation protocol of *AlphaEarth Foundations* (arXiv
    Optionally, and outside AEF's protocol, the same draws can also be scored
    with extra ridge penalties (``ridge_lambdas``, reported as ``ridge_lam{l}``)
    and with off-the-shelf classifiers at library defaults (``classifiers``:
-   random forest, xgboost, logistic regression; see evals/classifier_probes.py).
+   random forest, logistic regression, MLP; see evals/classifier_probes.py).
    Each is its own predictor name, so the AEF-faithful ``ridge``/``knn*`` cells
    are untouched and a forest's number can never be read as the ridge's.
 
@@ -163,7 +163,7 @@ class BalancedTrialConfig:
     ridge_lambdas: tuple[float, ...] = ()
     # Off-the-shelf classifiers fit per fold on the same draws; ``names`` empty
     # (the default) runs none. Reported under their own predictor names
-    # ("rf", "xgb", "logreg").
+    # ("rf", "logreg", "mlp").
     classifiers: ClassifierProbeConfig = field(default_factory=ClassifierProbeConfig)
 
 
