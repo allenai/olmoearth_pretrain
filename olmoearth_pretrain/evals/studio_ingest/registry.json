@@ -5890,13 +5890,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",
@@ -11544,13 +11544,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",
@@ -11676,13 +11676,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",
@@ -11809,13 +11809,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",
@@ -11940,13 +11940,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",
@@ -12072,13 +12072,13 @@
       "source_path": "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/data/national_ds_monthly",
       "split_stats": {
         "test": {
-          "count": 324
+          "count": 443
         },
         "train": {
-          "count": 2003
+          "count": 1896
         },
         "val": {
-          "count": 423
+          "count": 411
         }
       },
       "split_tag_key": "eval_split",

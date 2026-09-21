@@ -3660,3 +3660,52 @@ if __name__ == "__main__":
         trainer_config_builder=build_trainer_config,
         train_module_config_builder=build_train_module_config,
     )
+
+
+# ---------------------------------------------------------------------------
+# PLANTEUR (pastis2_drom_bg8void) linear probes for LIVE ENCODER baselines.
+#
+# The 109 existing PLANTEUR probe tasks live in EMBEDDING_EVAL_TASKS, which
+# embedding_eval_sweep.py drives -- and that sweep only accepts precomputed
+# embedding products (SUPPORTED_BASELINES == the four entries of
+# PRECOMPUTED_MODEL_TO_MODALITY). Live encoders (anysat, galileo, presto,
+# tessera, croma, ...) run through full_eval_sweep.py, which reads EVAL_TASKS,
+# and EVAL_TASKS had no PLANTEUR entry at all -- so those models had no wired
+# probe path to PLANTEUR. These entries close that gap.
+#
+# Shaped after "pastis_sentinel2" above (the official-PASTIS probe) so the two
+# benchmarks stay comparable; the dataset names resolve through the studio
+# registry (dataset_to_config falls back to registry.json), and every one of
+# them is the 8-class + void taxonomy on the 1896/411/443 split.
+# ---------------------------------------------------------------------------
+_PLANTEUR_PROBE_MODALITIES: dict[str, list[str]] = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1": [Modality.SENTINEL1.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+}
+# dataset registration per modality set (each is its own rslearn export)
+_PLANTEUR_PROBE_DATASETS: dict[str, str] = {
+    "sentinel2": "pastis2_drom_bg8void_s2",
+    "sentinel1": "pastis2_drom_bg8void_s1",
+    "sentinel1_sentinel2": "pastis2_drom_bg8void_s1s2",
+}
+
+EVAL_TASKS.update(
+    {
+        f"planteur_probe_{_suffix}": DownstreamTaskConfig(
+            dataset=_PLANTEUR_PROBE_DATASETS[_suffix],
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=_mods,
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+        )
+        for _suffix, _mods in _PLANTEUR_PROBE_MODALITIES.items()
+    }
+)
