@@ -23,24 +23,7 @@ NUM_CLASSES = 4
 DIM = 8
 
 
-def _has_xgboost() -> bool:
-    try:
-        import xgboost  # noqa: F401
-    except Exception:  # missing wheel or missing OpenMP runtime
-        return False
-    return True
-
-
-# Every predictor, with xgboost skipped where its runtime is unavailable.
-PREDICTORS = [
-    pytest.param(
-        name,
-        marks=pytest.mark.skipif(
-            name == "xgb" and not _has_xgboost(), reason="xgboost unavailable"
-        ),
-    )
-    for name in CLASSIFIERS
-]
+PREDICTORS = list(CLASSIFIERS)
 
 
 def _config(task_type: TaskType, num_classes: int = NUM_CLASSES) -> EvalDatasetConfig:
@@ -67,7 +50,6 @@ def _fast_config(names: tuple[str, ...], **kwargs: Any) -> ClassifierProbeConfig
         names=names,
         n_jobs=1,
         rf_n_estimators=20,
-        xgb_n_estimators=20,
         mlp_hidden=16,
         mlp_max_iter=100,
         **kwargs,
@@ -116,63 +98,6 @@ class TestScores:
         scores = predict_scores(fitted, features, NUM_CLASSES, chunk_rows=100)
         assert np.all(scores[:, 2] == 1.0)
         assert scores.sum() == 10.0
-
-    def test_xgboost_falls_back_to_cpu_when_the_gpu_fit_fails(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A broken GPU build costs a warning and a CPU refit, not the eval."""
-        import olmoearth_pretrain.evals.classifier_probes as module
-
-        monkeypatch.setattr(module, "_XGB_CUDA_BROKEN", False)
-        real_build = module._build_estimator
-        calls: list[str] = []
-
-        class _BrokenGpuModel:
-            device = "cuda"
-
-            def fit(self, *_: object) -> None:
-                raise RuntimeError("CUDA driver version is insufficient")
-
-        def build(name: str, config: ClassifierProbeConfig) -> object:
-            calls.append(name)
-            if len(calls) == 1:
-                return _BrokenGpuModel()
-            # Second call: the fallback rebuild; a real CPU estimator (any
-            # sklearn-compatible one will do -- xgboost may be absent here).
-            return real_build("rf", config)
-
-        monkeypatch.setattr(module, "_build_estimator", build)
-        labels = torch.arange(120) % NUM_CLASSES
-        features = _separable(labels).numpy()
-        fitted = fit_classifier("xgb", _fast_config(("xgb",)), features, labels.numpy())
-        assert calls == ["xgb", "xgb"]
-        assert module._XGB_CUDA_BROKEN is True
-        scores = predict_scores(fitted, features, NUM_CLASSES, chunk_rows=1000)
-        assert (scores.argmax(axis=1) == labels.numpy()).mean() > 0.9
-
-    def test_xgboost_cpu_failures_are_not_swallowed(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Only a GPU fit gets the retry; a CPU failure is a real error."""
-        import olmoearth_pretrain.evals.classifier_probes as module
-
-        monkeypatch.setattr(module, "_XGB_CUDA_BROKEN", False)
-
-        class _BrokenCpuModel:
-            device = "cpu"
-
-            def fit(self, *_: object) -> None:
-                raise RuntimeError("boom")
-
-        monkeypatch.setattr(module, "_build_estimator", lambda n, c: _BrokenCpuModel())
-        with pytest.raises(RuntimeError, match="boom"):
-            fit_classifier(
-                "xgb",
-                _fast_config(("xgb",)),
-                np.zeros((4, DIM)),
-                np.array([0, 1, 0, 1]),
-            )
-        assert module._XGB_CUDA_BROKEN is False
 
     def test_unknown_name_is_rejected(self) -> None:
         """An unknown predictor name fails at validation, not mid-eval."""

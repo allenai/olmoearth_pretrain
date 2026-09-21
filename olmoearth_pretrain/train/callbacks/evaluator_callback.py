@@ -214,7 +214,7 @@ class DownstreamTaskConfig:
     # eval mode (KNN / LINEAR_PROBE); it is hosted on the KNN twin so the trials
     # compute once instead of once per swept probe LR. None = don't run.
     balanced_trial: BalancedTrialConfig | None = None
-    # Additionally fit off-the-shelf classifiers (random forest / xgboost /
+    # Additionally fit off-the-shelf classifiers (random forest / MLP /
     # logistic regression, at library defaults) on the embeddings this task
     # materializes, under the task's own train -> val / test protocol. Purely
     # additive, like balanced_trial; each predictor is reported as its own
