@@ -1,5 +1,5 @@
 {
-  "note": "Parameter manifest built from this config at 5c573d7a2, where it deserializes natively. HEAD must rebuild the identical parameter set after patch_legacy_encoder_config.",
+  "note": "Parameter manifest recorded at 5c573d7a2 from the checkpoint's original config, with parameter names mapped to the released layout by scripts/official/v1_3/convert_legacy_checkpoint.py. HEAD must build this exact parameter set.",
   "recorded_at_commit": "5c573d7a2",
   "shapes": {
     "decoder.blocks.0.attn.k.bias": [
@@ -1174,6 +1174,472 @@
       768,
       4096
     ],
+    "encoder.perceiver.input_norms.0.bias": [
+      768
+    ],
+    "encoder.perceiver.input_norms.0.weight": [
+      768
+    ],
+    "encoder.perceiver.input_norms.1.bias": [
+      768
+    ],
+    "encoder.perceiver.input_norms.1.weight": [
+      768
+    ],
+    "encoder.perceiver.input_norms.2.bias": [
+      768
+    ],
+    "encoder.perceiver.input_norms.2.weight": [
+      768
+    ],
+    "encoder.perceiver.input_norms.3.bias": [
+      768
+    ],
+    "encoder.perceiver.input_norms.3.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.0.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.0.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.1.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.1.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.2.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.2.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.latent_blocks.3.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.latent_blocks.3.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.norm.bias": [
+      768
+    ],
+    "encoder.perceiver.norm.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.read_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.read_blocks.0.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.0.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.read_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.read_blocks.1.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.1.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.read_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.read_blocks.2.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.2.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.k.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.q.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.v.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.perceiver.read_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.perceiver.read_blocks.3.norm1.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.norm1.weight": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.norm2.bias": [
+      768
+    ],
+    "encoder.perceiver.read_blocks.3.norm2.weight": [
+      768
+    ],
+    "encoder.perceiver.register": [
+      1,
+      768
+    ],
     "encoder.project_and_aggregate.projection.0.bias": [
       768
     ],
@@ -1181,492 +1647,26 @@
       768,
       768
     ],
-    "encoder.register_back_projections.128.bias": [
-      768
-    ],
-    "encoder.register_back_projections.128.weight": [
-      768,
+    "encoder.register_student.0.bias": [
       128
     ],
-    "encoder.register_back_projections.64.bias": [
-      768
-    ],
-    "encoder.register_back_projections.64.weight": [
-      768,
-      64
-    ],
-    "encoder.register_bottleneck.input_norms.0.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.0.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.3.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.input_norms.3.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.0.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.1.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.2.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.latent_blocks.3.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.norm.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.norm.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.0.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.0.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.0.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.1.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.1.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.1.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.2.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.2.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.2.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.k.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.proj.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.q.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.v.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.3.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.register_bottleneck.read_blocks.3.norm1.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.norm1.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.norm2.bias": [
-      768
-    ],
-    "encoder.register_bottleneck.read_blocks.3.norm2.weight": [
-      768
-    ],
-    "encoder.register_bottleneck.register": [
-      1,
-      768
-    ],
-    "encoder.register_projection.bias": [
-      128
-    ],
-    "encoder.register_projection.weight": [
+    "encoder.register_student.0.weight": [
       128,
       768
+    ],
+    "register_distillation_head.back_projections.128.bias": [
+      768
+    ],
+    "register_distillation_head.back_projections.128.weight": [
+      768,
+      128
+    ],
+    "register_distillation_head.back_projections.64.bias": [
+      768
+    ],
+    "register_distillation_head.back_projections.64.weight": [
+      768,
+      64
     ],
     "supervision_head._class_values_cdl": [
       133

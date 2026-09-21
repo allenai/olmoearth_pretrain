@@ -16,6 +16,7 @@ from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     MultiModalPatchEmbeddings,
+    PerceiverConfig,
     Predictor,
     TokensAndMasks,
 )
@@ -1062,7 +1063,7 @@ def test_encoder_rope_dynamic_patch_sizes(
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_dynamic_grid(
+def test_encoder_perceiver_dynamic_grid(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """A single learned latent is cloned across the patch grid."""
@@ -1081,13 +1082,14 @@ def test_encoder_register_bottleneck_dynamic_grid(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
     # Single shared latent, not a per-cell grid of parameters.
-    assert encoder.register_bottleneck is not None
-    assert encoder.register_bottleneck.register.shape == (1, register_dim)
+    assert encoder.perceiver is not None
+    assert encoder.perceiver.register.shape == (1, register_dim)
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1118,13 +1120,13 @@ def test_encoder_register_bottleneck_dynamic_grid(
         assert output_dict["register_positions"].shape == (B, n_reg, 2)
 
         output_dict["registers"].sum().backward()
-        assert encoder.register_bottleneck.register.grad is not None
+        assert encoder.perceiver.register.grad is not None
 
 
-def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
+def test_encoder_perceiver_3d_rope_encoder_2d_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """A 3D-RoPE encoder keeps the register bottleneck spatial: it reads with 2D RoPE.
+    """A 3D-RoPE encoder keeps the Perceiver spatial: it reads with 2D RoPE.
 
     The patch encoder self-attention rotates over ``(t, row, col)`` while the register
     grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
@@ -1145,13 +1147,14 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
         depth=2,
         drop_path=0.0,
         position_encoding="rope_3d_mixed",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
-    assert encoder.register_bottleneck is not None
+    assert encoder.perceiver is not None
     # The bottleneck reads spatially (2D RoPE) even though the encoder is 3D.
-    assert encoder.register_bottleneck.use_2d_rope
+    assert encoder.perceiver.use_2d_rope
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1178,11 +1181,11 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
     # Register positions are spatial only -- 2D, regardless of the 3D encoder.
     assert output_dict["register_positions"].shape == (B, n_reg, 2)
     output_dict["registers"].sum().backward()
-    assert encoder.register_bottleneck.register.grad is not None
-    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+    assert encoder.perceiver.register.grad is not None
+    assert torch.isfinite(encoder.perceiver.register.grad).all()
 
 
-def test_encoder_register_bottleneck_interleave(
+def test_encoder_perceiver_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """The bottleneck pairs one read with each latent self-attention block."""
@@ -1201,11 +1204,12 @@ def test_encoder_register_bottleneck_interleave(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=latent_depth,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     # One read per latent self-attention block.
     assert len(bottleneck.read_blocks) == latent_depth
@@ -1231,7 +1235,7 @@ def test_encoder_register_bottleneck_interleave(
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
+def test_encoder_perceiver_per_depth_read_proj_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """per_depth_read_proj gives each interleaved read its own input_norm + kv_proj.
@@ -1254,12 +1258,13 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=latent_depth,
-        register_per_depth_read_proj=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+            per_depth_read_proj=True,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.per_depth_read_proj
     # Interleave -> one read block per latent block; one norm + projection each, no shared.
@@ -1292,7 +1297,7 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         assert proj.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_decoupled_attn_dim(
+def test_encoder_perceiver_decoupled_attn_dim(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """register_attn_dim decouples the bottleneck attention width from register_dim.
@@ -1316,13 +1321,14 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=latent_depth,
-        register_per_depth_read_proj=True,
-        register_attn_dim=embedding_size,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+            per_depth_read_proj=True,
+            attn_dim=embedding_size,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.attn_dim == embedding_size
     # K/V down-projections are dropped (Identity); the per-depth norms remain.
@@ -1365,7 +1371,7 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
     assert latent_attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_attn_dim_default_unchanged(
+def test_encoder_perceiver_attn_dim_default_unchanged(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """Default register_attn_dim=None keeps the classic tied-width parameter set."""
@@ -1382,12 +1388,13 @@ def test_encoder_register_bottleneck_attn_dim_default_unchanged(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=4,
-        register_per_depth_read_proj=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=4,
+            per_depth_read_proj=True,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.attn_dim is None
     for proj in bottleneck.kv_projs:
@@ -1959,7 +1966,7 @@ def test_predictor_flash_register_context_matches_packing(
         max_sequence_length=12,
         drop_path=0.0,
         use_flash_attn=True,
-        use_register_bottleneck=True,
+        use_perceiver=True,
         register_dim=register_dim,
     )
 
