@@ -9,6 +9,7 @@ from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
+    PerceiverConfig,
     Predictor,
     PredictorConfig,
 )
@@ -44,11 +45,11 @@ def modality_band_set_len_and_total_bands(
     }
 
 
-def test_latentmim_register_bottleneck(
+def test_latentmim_perceiver(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """End-to-end LatentMIM where the decoder reads ONLY the register bottleneck."""
+    """End-to-end LatentMIM where the decoder reads ONLY the Perceiver."""
     supported_modalities = [
         Modality.SENTINEL2_L2A,
         Modality.LATLON,
@@ -73,9 +74,10 @@ def test_latentmim_register_bottleneck(
         max_sequence_length=12,
         drop_path=0.1,
         spatial_pos_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
     decoder_config = PredictorConfig(
         supported_modality_names=[m.name for m in supported_modalities],
@@ -87,7 +89,7 @@ def test_latentmim_register_bottleneck(
         max_sequence_length=12,
         drop_path=0.1,
         spatial_pos_encoding="rope",
-        use_register_bottleneck=True,
+        use_perceiver=True,
         register_dim=register_dim,
     )
     # Low-weight supervision on the registers: a spatial-salience nudge, not a learning
@@ -143,23 +145,21 @@ def test_latentmim_register_bottleneck(
     )
     (contrastive_loss + supervision_loss).backward()
 
-    # Gradients reach the register bottleneck (read + latent transformer), the decoder's
+    # Gradients reach the Perceiver (read + latent transformer), the decoder's
     # register->decoder projection (the only context it attends to), and the (register-fed)
     # supervision head.
-    assert model.encoder.register_bottleneck.register.grad is not None
-    assert model.encoder.register_bottleneck.kv_proj.weight.grad is not None
-    assert (
-        model.encoder.register_bottleneck.read_blocks[0].attn.q.weight.grad is not None
-    )
+    assert model.encoder.perceiver.register.grad is not None
+    assert model.encoder.perceiver.kv_proj.weight.grad is not None
+    assert model.encoder.perceiver.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.register_to_decoder_embed.weight.grad is not None
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
 
 
-def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
+def test_latentmim_perceiver_3d_encoder_2d_decoder(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """3D-RoPE encoder + spatial (2D) register bottleneck + 2D decoder, end-to-end.
+    """3D-RoPE encoder + spatial (2D) Perceiver + 2D decoder, end-to-end.
 
     The patch encoder self-attention keeps 3D RoPE over ``(t, row, col)``; the register
     grid is a spatial summary read with 2D RoPE; and the decoder cross-attends the mask
@@ -187,9 +187,10 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
         max_sequence_length=12,
         drop_path=0.1,
         position_encoding="rope_3d_mixed",  # 3D encoder self-attention
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_per_depth_read_proj=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            per_depth_read_proj=True,
+        ),
     )
     decoder_config = PredictorConfig(
         supported_modality_names=[m.name for m in supported_modalities],
@@ -201,7 +202,7 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
         max_sequence_length=12,
         drop_path=0.1,
         position_encoding="rope",  # 2D decoder: cross-attends the spatial register grid
-        use_register_bottleneck=True,
+        use_perceiver=True,
         register_dim=register_dim,
     )
     model = LatentMIMConfig(
@@ -235,10 +236,8 @@ def test_latentmim_register_bottleneck_3d_encoder_2d_decoder(
 
     # Gradients reach the (2D) register read and the decoder's register projection, and the
     # 3D encoder self-attention still trains.
-    assert model.encoder.register_bottleneck.register.grad is not None
-    assert (
-        model.encoder.register_bottleneck.read_blocks[0].attn.q.weight.grad is not None
-    )
+    assert model.encoder.perceiver.register.grad is not None
+    assert model.encoder.perceiver.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.register_to_decoder_embed.weight.grad is not None
     assert model.encoder.blocks[0].attn.q.weight.grad is not None
 
@@ -270,9 +269,10 @@ def test_eval_wrapper_probes_register_grid(
         depth=2,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        use_register_bottleneck=True,
-        register_dim=register_dim,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
     encoder.eval()
     labels = torch.zeros(B)
