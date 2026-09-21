@@ -42,13 +42,11 @@ from base import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
+    build_train_module_config,
     build_visualize_config,
     set_student_loop_evals,
 )
 from base import build_model_config as _base_build_model_config  # noqa: E402
-from base import (
-    build_train_module_config as _base_build_train_module_config,  # noqa: E402
-)
 from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
@@ -66,11 +64,6 @@ ENCODER_DEPTH = 0
 REGISTER_LATENT_DEPTH = 12
 # 3D RoPE on the reads (see build_model_config).
 READ_TIME_ROPE = True
-# Half of base.py's 64: the time-blind version of this arm already peaked at 67 GiB
-# active / 77 GiB reserved per GPU, and the 3D-RoPE reads (a rotated key copy plus
-# per-head angle tensors for every one of the 12 reads) pushed it into CUDA OOM
-# within ten steps. Two microbatches per step; the global batch is unchanged.
-RANK_MICROBATCH_SIZE = 32
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -85,13 +78,6 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     # reads were time-blind and the tokens' only temporal signal was the month
     # embedding (the first launch, v1_3_vit0_ld12, trained that way and was stopped).
     perceiver_config.read_time_rope = READ_TIME_ROPE
-    return config
-
-
-def build_train_module_config(common: CommonComponents):
-    """base.py's train module at half the rank microbatch (see RANK_MICROBATCH_SIZE)."""
-    config = _base_build_train_module_config(common)
-    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     return config
 
 

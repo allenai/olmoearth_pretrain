@@ -1205,6 +1205,73 @@ def test_encoder_perceiver_shared_read_kv_matches_tied_per_read_kv(
         )
 
 
+def test_encoder_perceiver_reads_compact_sequence_like_the_full_one(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """The encoder feeds the Perceiver the visible-only (compact) sequence.
+
+    Reading the full sequence under a key mask must give the same registers: a masked
+    key with zero weight and an absent key are identical to softmax, and the grid
+    extent comes from the full positions in both cases. Checked with ~half the S2
+    tokens hidden, in a pattern that empties the last patch row for one sample.
+    """
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    torch.manual_seed(0)
+    encoder = Encoder(
+        supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=1,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        perceiver_config=PerceiverConfig(
+            register_dim=8, latent_depth=2, attn_dim=16, read_time_rope=True
+        ),
+    ).eval()
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
+    mask[0, ::2] = MaskValue.DECODER.value  # alternate pixel rows hidden
+    mask[0, 6:] = MaskValue.DECODER.value  # ...and the whole last patch row
+    mask[1, :, ::2, 0] = MaskValue.DECODER.value  # alternate columns, first timestep
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=mask,
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    patch_size = 2
+    with torch.no_grad():
+        out = encoder.forward(sample, patch_size=patch_size, input_res=10)
+        # Rebuild the FULL normed token sequence the Perceiver used to receive, from
+        # the encoder's per-modality outputs, and read it under the full key mask.
+        tokens_dict = out["tokens_and_masks"].as_dict(include_nones=False)
+        tokens_only, masks_only, _ = encoder.split_tokens_masks_and_dims(tokens_dict)
+        full_tokens, full_mask = encoder.collapse_and_combine_hwtc(
+            {**tokens_only, **masks_only}
+        )
+        full_positions = encoder.build_rope_positions(
+            tokens_only, masks_only, patch_size, 10, timestamps=timestamps
+        )
+        assert encoder.perceiver is not None
+        registers_full, positions_full = encoder.perceiver(
+            patch_tokens=full_tokens,
+            patch_positions=full_positions,
+            visible_mask=full_mask == MaskValue.ONLINE_ENCODER.value,
+            spatial_grid=encoder._patch_grid_hw(tokens_only),
+        )
+    torch.testing.assert_close(out["registers"], registers_full, atol=1e-5, rtol=1e-4)
+    torch.testing.assert_close(out["register_positions"], positions_full)
+
+
 def test_encoder_perceiver_time_rope_reads(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:

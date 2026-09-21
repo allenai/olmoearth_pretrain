@@ -1731,6 +1731,7 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
+        grid_extent_positions: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1741,6 +1742,11 @@ class Perceiver(nn.Module):
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
+            grid_extent_positions: Optional ``[B, M, >=2]`` positions whose last two
+                coordinates give the full (pre-masking) patch extent to lay the grid
+                over. Defaults to ``patch_positions``. Pass the unmasked positions when
+                ``patch_tokens`` is the compact visible-only sequence, so a masking
+                pattern that hides an edge row/column of cells cannot shrink the grid.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
@@ -1785,8 +1791,13 @@ class Perceiver(nn.Module):
             # ``patch_positions`` may be ``(t, row, col)`` from a 3D encoder; the grid
             # and the latent blocks only ever use the spatial (last two) coordinates.
             spatial_positions = patch_positions[..., -2:]
+            extent_source = (
+                grid_extent_positions
+                if grid_extent_positions is not None
+                else patch_positions
+            )
             register_positions = self.build_register_positions(
-                spatial_positions, register_grid
+                extent_source[..., -2:], register_grid
             )
             if self.time_rope_encoding is not None:
                 if patch_positions.shape[-1] != 3:
@@ -2635,22 +2646,35 @@ class Encoder(FlexiVitBase):
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
 
+        # Both register modules run on the COMPACT sequence -- the visible tokens only,
+        # padded to the batch's longest sample -- BEFORE the removed tokens are added
+        # back. Masked-out tokens were never valid keys, so the registers are the same
+        # as reading the full sequence under a key mask, but the reads' norms, K/V
+        # projections and rotary tensors are computed for ~half the tokens (the
+        # masking recipe hides about half). Under ``fast_pass`` nothing was removed and
+        # the compact sequence IS the full one. The full pre-masking coordinates only
+        # set the register grid's extent.
         register_output = None
-        if isinstance(self.perceiver, JointLatentTransformer):
-            # Runs on the compact (visible-only, padded) sequence with its full RoPE
-            # coordinates, before the removed tokens are added back: the joint blocks
-            # are the encoder's depth, so masked-out tokens must not take part.
-            assert cell_ids is not None and positions is not None
-            registers, register_positions = self.perceiver(
-                patch_tokens=tokens,
-                patch_positions=positions,
-                visible_mask=new_mask,
-                cell_ids=cell_ids[..., 0],
-                spatial_grid=self._patch_grid_hw(tokens_only_dict),
-                # Full pre-masking coordinates: the grid must span the whole patch
-                # extent even if masking hid an entire edge row/column of cells.
-                grid_extent_positions=register_kv_positions,
-            )
+        if self.perceiver is not None:
+            spatial_grid = self._patch_grid_hw(tokens_only_dict)
+            if isinstance(self.perceiver, JointLatentTransformer):
+                assert cell_ids is not None and positions is not None
+                registers, register_positions = self.perceiver(
+                    patch_tokens=tokens,
+                    patch_positions=positions,
+                    visible_mask=new_mask,
+                    cell_ids=cell_ids[..., 0],
+                    spatial_grid=spatial_grid,
+                    grid_extent_positions=register_kv_positions,
+                )
+            else:
+                registers, register_positions = self.perceiver(
+                    patch_tokens=tokens,
+                    patch_positions=positions,
+                    visible_mask=new_mask,
+                    spatial_grid=spatial_grid,
+                    grid_extent_positions=register_kv_positions,
+                )
             register_output = {
                 "registers": registers,
                 "register_positions": register_positions,
@@ -2659,18 +2683,6 @@ class Encoder(FlexiVitBase):
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
-        if isinstance(self.perceiver, Perceiver):
-            spatial_grid = self._patch_grid_hw(tokens_only_dict)
-            registers, register_positions = self.perceiver(
-                patch_tokens=tokens,
-                patch_positions=register_kv_positions,
-                visible_mask=bool_mask,
-                spatial_grid=spatial_grid,
-            )
-            register_output = {
-                "registers": registers,
-                "register_positions": register_positions,
-            }
         if register_output is not None and self.register_student is not None:
             # Detached student readout of the registers just computed.
             register_output["student_registers"] = self.register_student(

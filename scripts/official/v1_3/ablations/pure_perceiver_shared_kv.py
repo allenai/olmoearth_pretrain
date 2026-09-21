@@ -34,10 +34,11 @@ from base import (  # noqa: E402
     build_common_components,
     build_dataloader_config,
     build_dataset_config,
+    build_train_module_config,
     build_visualize_config,
     set_student_loop_evals,
 )
-from pure_perceiver import WANDB_PROJECT, build_train_module_config  # noqa: E402
+from pure_perceiver import WANDB_PROJECT  # noqa: E402
 from pure_perceiver import (
     build_model_config as _pure_perceiver_model_config,  # noqa: E402
 )
