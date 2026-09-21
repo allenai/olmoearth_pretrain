@@ -144,6 +144,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
             "m_cashew_plant": {"ft_batch_size": 4},
             "m_forestnet": {"ft_batch_size": 4},
         },
+        launch_script_key="anysat",
     ),
     "anysat_ps8": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
@@ -151,6 +152,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
         },
+        launch_script_key="anysat",
     ),
     "anysat_ps16": ModelPreset(
         per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
@@ -159,6 +161,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 16},
             "m_forestnet": {"ft_batch_size": 4, "patch_size": 16},
         },
+        launch_script_key="anysat",
     ),
     # Models with pretrained normalizer
     "terramind": ModelPreset(
