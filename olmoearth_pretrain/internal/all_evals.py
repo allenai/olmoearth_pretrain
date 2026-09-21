@@ -3631,37 +3631,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return trainer_config
 
 
-if __name__ == "__main__":
-    module_path = os.environ.get("TRAIN_SCRIPT_PATH")
-    if module_path is None:
-        raise ValueError("TRAIN_SCRIPT_PATH environment variable must be set")
-    user_mod = load_user_module(module_path)
-
-    try:
-        build_common_components = user_mod.build_common_components
-    except AttributeError:
-        from olmoearth_pretrain.internal.common import build_common_components
-
-    # if the user module has no train module config builder, because it is an external model, we can just pass None
-    # If the model is an olmoearth model, we need to build the train module config to load the checkpoint
-    try:
-        build_train_module_config = user_mod.build_train_module_config
-    except AttributeError:
-        build_train_module_config = None
-
-    build_model_config = user_mod.build_model_config
-    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
-    # so train-time architecture overrides don't need to be re-passed at eval time.
-    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
-        build_model_config = build_model_config_from_checkpoint(build_model_config)
-    main(
-        common_components_builder=build_common_components,
-        model_config_builder=build_model_config,
-        trainer_config_builder=build_trainer_config,
-        train_module_config_builder=build_train_module_config,
-    )
-
-
 # ---------------------------------------------------------------------------
 # PLANTEUR (pastis2_drom_bg8void) linear probes for LIVE ENCODER baselines.
 #
@@ -3709,3 +3678,34 @@ EVAL_TASKS.update(
         for _suffix, _mods in _PLANTEUR_PROBE_MODALITIES.items()
     }
 )
+
+
+if __name__ == "__main__":
+    module_path = os.environ.get("TRAIN_SCRIPT_PATH")
+    if module_path is None:
+        raise ValueError("TRAIN_SCRIPT_PATH environment variable must be set")
+    user_mod = load_user_module(module_path)
+
+    try:
+        build_common_components = user_mod.build_common_components
+    except AttributeError:
+        from olmoearth_pretrain.internal.common import build_common_components
+
+    # if the user module has no train module config builder, because it is an external model, we can just pass None
+    # If the model is an olmoearth model, we need to build the train module config to load the checkpoint
+    try:
+        build_train_module_config = user_mod.build_train_module_config
+    except AttributeError:
+        build_train_module_config = None
+
+    build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
+    main(
+        common_components_builder=build_common_components,
+        model_config_builder=build_model_config,
+        trainer_config_builder=build_trainer_config,
+        train_module_config_builder=build_train_module_config,
+    )
