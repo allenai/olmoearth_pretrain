@@ -18,6 +18,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/no_supervision.py` | `base.py` with `supervision_head_config = None` |
 | `ablations/query_token_compaction.py` | native d128 registers with supervision, no student |
 | `ablations/pure_perceiver.py` | `base.py` with 0 ViT blocks and a 12-layer Perceiver (W&B `20260921_perceiver_shapes`) |
+| `ablations/pure_perceiver_shared_kv.py` | the pure Perceiver with one K/V projection shared by all 12 reads (`share_read_kv`) |
 
 ## Conventions
 

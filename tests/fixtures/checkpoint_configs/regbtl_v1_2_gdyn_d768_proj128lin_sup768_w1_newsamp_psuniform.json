@@ -107,6 +107,7 @@
         "latent_depth": 4,
         "per_depth_read_proj": true,
         "register_dim": 768,
+        "share_read_kv": false,
         "student_dims": [
           128,
           64

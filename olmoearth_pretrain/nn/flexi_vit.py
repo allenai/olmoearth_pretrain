@@ -1489,6 +1489,7 @@ class Perceiver(nn.Module):
         qk_norm: bool = False,
         per_depth_read_proj: bool = False,
         attn_dim: int | None = None,
+        share_read_kv: bool = False,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1525,11 +1526,21 @@ class Perceiver(nn.Module):
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks.
+            share_read_kv: If True, ONE K/V projection of the read source is computed
+                and attended over by every read block, instead of each read block
+                projecting the same source through its own K and V layers. The read
+                blocks keep their own queries, output projections and MLPs. The K/V
+                source is identical for every read (they all re-query the same tokens),
+                so this removes ``latent_transformer_depth - 1`` full-width projections
+                of the input, the dominant per-token cost of a Perceiver with no ViT
+                blocks in front of it. Incompatible with ``per_depth_read_proj`` (which
+                gives each read a differently normalised source).
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
+        self.share_read_kv = share_read_kv
         if not use_2d_rope:
             # With a single cloned latent the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
@@ -1541,6 +1552,11 @@ class Perceiver(nn.Module):
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         num_read_blocks = latent_transformer_depth
         self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
+        if self.per_depth_read_proj and share_read_kv:
+            raise ValueError(
+                "share_read_kv needs one shared read source; it cannot be combined "
+                "with per_depth_read_proj"
+            )
         if self.per_depth_read_proj:
             # One norm + projection per read block.
             self.input_norms = nn.ModuleList(
@@ -1609,6 +1625,17 @@ class Perceiver(nn.Module):
                 for _ in range(latent_transformer_depth)
             ]
         )
+        if share_read_kv:
+            # One K and one V projection for all reads, sized like the per-block layers
+            # they replace; the blocks' own K/V layers are removed so no parameter is
+            # left unused (DDP would otherwise wait on their gradients).
+            first_attn = self.read_blocks[0].attn
+            kv_in, kv_out = first_attn.k.in_features, first_attn.k.out_features
+            self.read_k = nn.Linear(kv_in, kv_out, bias=True)
+            self.read_v = nn.Linear(kv_in, kv_out, bias=True)
+            for blk in self.read_blocks:
+                del blk.attn.k
+                del blk.attn.v
         self.norm = nn.LayerNorm(register_dim)
 
     def build_register_positions(
@@ -1669,6 +1696,13 @@ class Perceiver(nn.Module):
         else:
             kv = self.kv_proj(self.input_norm(patch_tokens))
             kv_per_read = [kv] * len(self.read_blocks)
+        # With a shared K/V projection, project the read source once here; the read
+        # blocks then only compute their queries against it.
+        shared_kv: tuple[Tensor, Tensor] | None = (
+            (self.read_k(kv_per_read[0]), self.read_v(kv_per_read[0]))
+            if self.share_read_kv
+            else None
+        )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
         register_grid = spatial_grid
@@ -1699,6 +1733,7 @@ class Perceiver(nn.Module):
                 attn_mask=read_attn_mask,
                 rope_positions=register_positions,
                 rope_positions_y=patch_positions,
+                kv=shared_kv,
             )
             return out
 
@@ -1740,6 +1775,12 @@ class PerceiverConfig(Config):
             register stream stays at ``register_dim``; the read K/V source is then
             consumed at full encoder width with no down-projection. None ties the
             attention width to ``register_dim``.
+        share_read_kv: If True, all read blocks attend over ONE K/V projection of the
+            read source instead of each projecting it through its own K and V layers
+            (queries, output projections and MLPs stay per block). Cuts the per-token
+            read cost from ``latent_depth`` K/V projections to one; matters when there
+            are no ViT blocks and the reads are the only per-token compute. Cannot be
+            combined with ``per_depth_read_proj``.
         student_dims: If set, add a DETACHED low-dim "student" readout of the
             register grid, exported alongside the registers as ``student_registers``
             at width ``max(student_dims)``. The student's input is detached, so its
@@ -1765,6 +1806,7 @@ class PerceiverConfig(Config):
     num_heads: int | None = None
     per_depth_read_proj: bool = False
     attn_dim: int | None = None
+    share_read_kv: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
 
@@ -1802,6 +1844,11 @@ class PerceiverConfig(Config):
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
+        if self.share_read_kv and self.per_depth_read_proj and self.latent_depth > 1:
+            raise ValueError(
+                "share_read_kv and per_depth_read_proj are mutually exclusive: a shared "
+                "K/V projection needs one shared read source"
+            )
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -1831,6 +1878,7 @@ class PerceiverConfig(Config):
             qk_norm=qk_norm,
             per_depth_read_proj=self.per_depth_read_proj,
             attn_dim=self.attn_dim,
+            share_read_kv=self.share_read_kv,
         )
 
 

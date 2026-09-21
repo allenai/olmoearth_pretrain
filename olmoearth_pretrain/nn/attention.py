@@ -317,12 +317,18 @@ class Attention(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        kv: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
+            kv: Optional precomputed ``(k, v)`` projections of ``y``, each
+                ``(B, Nk, attn_dim)``, for cross-attention whose K/V projection is
+                shared across several blocks (computed once by the caller). ``self.k``
+                and ``self.v`` are skipped; ``y`` must still be passed, since it selects
+                the key positions for RoPE.
             attn_mask: Attention mask. Defaults to None.
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
@@ -344,12 +350,16 @@ class Attention(nn.Module):
 
         if y is None:
             assert not self.cross_attn
+            assert kv is None, "precomputed kv is a cross-attention feature"
             k = self.k(x)
             v = self.v(x)
         else:
             assert self.cross_attn
-            k = self.k(y)
-            v = self.v(y)
+            if kv is not None:
+                k, v = kv
+            else:
+                k = self.k(y)
+                v = self.v(y)
         if not self.use_flash_attn:
             q = rearrange(q, "b n (h d) -> b h n d", h=self.num_heads)
             k = rearrange(k, "b n (h d) -> b h n d", h=self.num_heads)
@@ -680,12 +690,15 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        kv: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
+            kv: Optional precomputed ``(k, v)`` projections of ``y`` (see
+                :meth:`Attention.forward`); the block's own K/V layers are skipped.
             attn_mask: Optional attention mask tensor
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
@@ -715,6 +728,7 @@ class Block(nn.Module):
                     attn_mask=attn_mask,
                     rope_positions=rope_positions,
                     rope_positions_y=rope_positions_y,
+                    kv=kv,
                 )
             )
         )

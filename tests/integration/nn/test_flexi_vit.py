@@ -1123,6 +1123,88 @@ def test_encoder_perceiver_dynamic_grid(
         assert encoder.perceiver.register.grad is not None
 
 
+def _perceiver_encoder(
+    register_dim: int, latent_depth: int, **perceiver_kwargs: object
+) -> Encoder:
+    return Encoder(
+        supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=2.0,
+        max_sequence_length=12,
+        depth=0,
+        drop_path=0.0,
+        position_encoding="rope",
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+            **perceiver_kwargs,  # type: ignore[arg-type]
+        ),
+    )
+
+
+def test_encoder_perceiver_shared_read_kv_matches_tied_per_read_kv(
+    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
+) -> None:
+    """``share_read_kv`` equals per-read K/V whose weights are all copies of the shared pair.
+
+    The shared path projects the read source once and hands the same ``(k, v)`` to every
+    read block; it must be numerically the per-read model with identical K/V weights in
+    every block. Also pins that the read blocks carry no K/V parameters of their own (an
+    unused parameter would stall DDP) and that a zero-depth encoder is a valid host.
+    """
+    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
+    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
+    register_dim, latent_depth = 8, 3
+    torch.manual_seed(0)
+    shared = _perceiver_encoder(register_dim, latent_depth, share_read_kv=True)
+    per_read = _perceiver_encoder(register_dim, latent_depth, share_read_kv=False)
+    assert shared.perceiver is not None and per_read.perceiver is not None
+    assert len(shared.blocks) == 0
+
+    shared_keys = set(shared.state_dict())
+    assert "perceiver.read_k.weight" in shared_keys
+    assert not any(
+        ".attn.k." in k or ".attn.v." in k for k in shared_keys if "read_blocks" in k
+    )
+    # Copy every common tensor, then tie each read block's K/V to the shared pair.
+    per_read.load_state_dict(
+        {k: v for k, v in shared.state_dict().items() if k in per_read.state_dict()},
+        strict=False,
+    )
+    with torch.no_grad():
+        for blk in per_read.perceiver.read_blocks:
+            blk.attn.k.load_state_dict(shared.perceiver.read_k.state_dict())
+            blk.attn.v.load_state_dict(shared.perceiver.read_v.state_dict())
+    shared.eval()
+    per_read.eval()
+
+    B, H, W, T = 2, 8, 8, 2
+    timestamps = torch.tensor(
+        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+    )
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
+        sentinel2_l2a_mask=torch.zeros(
+            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
+        ),
+        latlon=torch.randn(B, latlon_num_bands),
+        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
+        timestamps=timestamps,
+    )
+    out_shared = shared.forward(sample, patch_size=2, input_res=10)["registers"]
+    out_per_read = per_read.forward(sample, patch_size=2, input_res=10)["registers"]
+    assert out_shared.shape == (B, H // 2, W // 2, register_dim)
+    torch.testing.assert_close(out_shared, out_per_read)
+
+    with pytest.raises(ValueError, match="per_depth_read_proj"):
+        _perceiver_encoder(
+            register_dim, latent_depth, share_read_kv=True, per_depth_read_proj=True
+        )
+
+
 def test_encoder_perceiver_3d_rope_encoder_2d_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
