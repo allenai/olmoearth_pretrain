@@ -260,6 +260,36 @@ def _window_size_args(window_size: int | None, task_names: list[str]) -> str:
     return " " + " ".join(overrides)
 
 
+def _balanced_trial_args(args: argparse.Namespace, task_names: list[str]) -> str:
+    """Per-KNN-task overrides for the AEF balanced trials.
+
+    Only the KNN tasks carry a ``balanced_trial`` config (see
+    ``_aef_ps1_task``), so these must not be applied to the LP tasks -- there is
+    no nested config there to override.
+
+    Read through ``getattr`` like ``priority``/``window_size`` above: the
+    cluster-side submitters in olmoearth_plus_cropharvest build this namespace
+    by hand, so a new field must not become a required attribute.
+    """
+    overrides = []
+    max_folds = getattr(args, "balanced_trial_max_folds", None)
+    draw_pool = getattr(args, "balanced_trial_draw_pool", None)
+    disabled = getattr(args, "no_balanced_trials", False)
+    for name in task_names:
+        if EMBEDDING_EVAL_TASKS[name].balanced_trial is None:
+            continue
+        if disabled:
+            overrides.append(_task_arg(name, "balanced_trial.enabled", "False"))
+        if max_folds is not None:
+            overrides.append(_task_arg(name, "balanced_trial.max_folds", max_folds))
+        if draw_pool is not None:
+            pool = "[" + ",".join(draw_pool.split(",")) + "]"
+            overrides.append(_task_arg(name, "balanced_trial.draw_pool", pool))
+    if not overrides:
+        return ""
+    return " " + " ".join(overrides)
+
+
 def _select_best_val_args(task_names: list[str]) -> str:
     """Per-LP-task early-stopping args (best epoch by primary val metric)."""
     return " " + " ".join(
@@ -343,6 +373,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         cmd += _model_args(model, knn_tasks, quantization)
         cmd += _window_size_args(window_size, knn_tasks)
         cmd += _normalization_args(args, knn_tasks)
+        cmd += _balanced_trial_args(args, knn_tasks)
         cmd += _tasks_to_run_arg(knn_tasks)
         commands.append(cmd)
     return commands
@@ -485,6 +516,33 @@ def main() -> None:
             "companding curve), or none (float32; the ceiling, since every arm "
             "so far has round-tripped). Baselines are unaffected: they are "
             "scored at the precision they ship. Tags the run names."
+        ),
+    )
+    parser.add_argument(
+        "--no_balanced_trials",
+        action="store_true",
+        help=(
+            "Skip the AEF balanced trials that the KNN job runs by default "
+            "(class-balanced draw from the pooled splits, scored on the "
+            "remainder, over AEF's k draws)"
+        ),
+    )
+    parser.add_argument(
+        "--balanced_trial_max_folds",
+        type=int,
+        default=None,
+        help=(
+            "Cap the balanced trials' fold count (default: AEF's "
+            "k = 1000 / (2 * log10(least class)), which is 200-500)"
+        ),
+    )
+    parser.add_argument(
+        "--balanced_trial_draw_pool",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated splits the balanced draw is taken from "
+            "(default train,val,test -- AEF pools everything)."
         ),
     )
     parser.add_argument(
