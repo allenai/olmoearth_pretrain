@@ -2569,6 +2569,9 @@ class Encoder(FlexiVitBase):
                 visible_mask=new_mask,
                 cell_ids=cell_ids[..., 0],
                 spatial_grid=self._patch_grid_hw(tokens_only_dict),
+                # Full pre-masking coordinates: the grid must span the whole patch
+                # extent even if masking hid an entire edge row/column of cells.
+                grid_extent_positions=register_kv_positions,
             )
             register_output = {
                 "registers": registers,

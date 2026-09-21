@@ -297,9 +297,13 @@ class JointLatentTransformer(nn.Module):
 
         # Latents: one vector cloned to the grid; identity comes from RoPE.
         latents = self.register.unsqueeze(0).expand(batch_size, n_latents, -1)
-        spatial_positions = patch_positions[..., -2:]
+        extent_source = (
+            grid_extent_positions
+            if grid_extent_positions is not None
+            else patch_positions
+        )
         latent_positions_2d = build_register_grid_positions(
-            spatial_positions, spatial_grid
+            extent_source[..., -2:], spatial_grid
         )
         if self.is_3d:
             # Latents have no time of their own: anchor them at the mean valid
