@@ -22,8 +22,9 @@ This guide explains how we launch evaluations for OlmoEarth checkpoints and base
 4. [KNN / Linear Probing](#knn--linear-probing)
 5. [Finetune](#finetune-sweep)
 6. [Monitoring & Outputs](#monitoring--outputs)
-7. [Helpful Files](#helpful-files)
-8. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
+7. [Landsat Eval Variants](#landsat-eval-variants-year-aligned-internal)
+8. [Helpful Files](#helpful-files)
+9. [Adding New Eval Datasets (Internal)](#adding-new-eval-datasets-internal)
 
 ---
 
@@ -315,6 +316,30 @@ python -m olmoearth_pretrain.internal.full_eval_sweep_finetune \
 
 - **W&B logging:** Both scripts default to `EVAL_WANDB_PROJECT`. Override with `--project_name` or disable W&B via `--trainer.callbacks.wandb.enabled=False`.
 - **Inspecting results:** Use [`scripts/tools/get_max_eval_metrics_from_wandb.py`](../scripts/tools/get_max_eval_metrics_from_wandb.py) to pull the best metric per task across runs.
+
+---
+
+## Landsat Eval Variants (Year-Aligned, Internal)
+
+The `*_year_aligned` embedding tasks read Sentinel-1 + Sentinel-2 + Landsat
+(the `..._sentinel1_sentinel2_landsat` tasks in `EMBEDDING_EVAL_TASKS`). The
+Landsat input needs the `landsat_mo*` layers **and** `landsat` in the registry
+entry's `modalities` on the **registered** tree (`registry weka_path`).
+
+**Setup** (once per dataset; see the script's docstring for the full runbook):
+`scripts/tools/setup_extra_layers.py` adds the Landsat layers to the dataset
+config and prepares/materializes them via Beaker jobs. **Mind the two trees**:
+materialization typically runs on the staging tree
+(`rslearn-eai/datasets/olmoearth_evals`), but evals read the registered tree
+(`olmoearth/eval_datasets`) — rasters must be copied across, and
+`backfill_eval_registry_provenance.py` must re-stamp the config hash after any
+config.json change (evals fail loudly on a stale stamp).
+
+**Failure mode is graceful but silent-ish — check the job logs.** The Landsat
+input is `required: false`, so a dataset missing it does not crash: the
+modality runs **all-MISSING** (`ragged imagery` warnings clustered at loader
+startup — one per worker within seconds — instead of scattered singles;
+landsat scores equal to the non-landsat variant are the tell).
 
 ---
 
