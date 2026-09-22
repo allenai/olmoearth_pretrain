@@ -504,7 +504,9 @@ def cmd_scan_worker(args: argparse.Namespace) -> None:
     converter, _, _ = _build_h5_converter(
         args.olmoearth_dir, args.allcap, args.h5_tile_size, args.scan_modalities
     )
-    samples = converter._get_samples()
+    # _get_samples() order is not deterministic across processes (built from a set),
+    # so sort before sharding to make the shards a true partition.
+    samples = sorted(converter._get_samples(), key=_grid_key)
     shard = samples[args.shard_id :: args.num_shards]
     logger.info(f"scan-worker {args.shard_id}/{args.num_shards}: {len(shard)} samples")
     with multiprocessing.Pool(args.workers) as pool:
