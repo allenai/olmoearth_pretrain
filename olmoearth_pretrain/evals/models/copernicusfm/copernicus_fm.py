@@ -27,12 +27,40 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = getLogger(__name__)
 
-# Sentinel-2 L2A, in PLANTEUR's stored band order
-# (B02,B03,B04,B05,B06,B07,B08,B8A,B11,B12). Values are Copernicus-FM's own
-# constants, taken from Copernicus-Bench/src/configs/dataset/cobench_lcz_s2.yaml
-# so the hypernetwork sees exactly what it saw in their benchmarks.
-S2_WAVELENGTHS: list[float] = [490, 560, 665, 705, 740, 783, 842, 860, 1610, 2190]
-S2_BANDWIDTHS: list[float] = [65, 35, 30, 15, 15, 20, 115, 20, 90, 180]
+# Sentinel-2 L2A in the OlmoEarth modality band order, which the eval pipeline
+# feeds (see Modality.SENTINEL2_L2A in data/constants.py):
+#   B02 B03 B04 B08 B05 B06 B07 B8A B11 B12 B01 B09   -- 12 bands, NOT 10.
+# Central wavelength / bandwidth per band are Copernicus-FM's own constants
+# (Copernicus-Bench/src/configs/dataset/cobench_lcz_s2.yaml gives the 10-band
+# subset and their 13-band list supplies B01/B09), reordered to match.
+S2_WAVELENGTHS: list[float] = [
+    490,
+    560,
+    665,
+    842,
+    705,
+    740,
+    783,
+    860,
+    1610,
+    2190,
+    443,
+    945,
+]
+S2_BANDWIDTHS: list[float] = [
+    65,
+    35,
+    30,
+    115,
+    15,
+    15,
+    20,
+    20,
+    90,
+    180,
+    20,
+    20,
+]
 
 # Sentinel-1 GRD (VV, VH) -- microwave, expressed as wavelength in nm for the
 # same Fourier expansion. C-band ~5.405 GHz => ~55.5 mm.
