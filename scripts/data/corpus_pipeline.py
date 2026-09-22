@@ -514,6 +514,13 @@ def _prepare_h5(
     converter.save_sample_metadata(tuples)
     converter.save_latlon_distribution(tuples)
 
+    # Persist the filtered samples so h5-workers do not each redo the full-dataset
+    # image scan that get_and_filter_samples() performs.
+    import pickle
+
+    with (h5py_dir / "samples.pkl").open("wb") as f:
+        pickle.dump(samples, f)
+
     # Write manifest for h5-workers to consume
     manifest_path = h5py_dir / "sample_manifest.json"
     manifest = {
@@ -578,7 +585,19 @@ def cmd_h5_worker(args: argparse.Namespace) -> None:
         tile_size=manifest.get("tile_size") or 256,
     )
     converter = config.build()
-    samples = converter.get_and_filter_samples()
+    samples_path = h5py_dir / "samples.pkl"
+    if samples_path.exists():
+        import pickle
+
+        with samples_path.open("rb") as f:
+            samples = pickle.load(f)
+        raw_tile_sizes = {s.grid_tile.get_tile_size() for s in samples}
+        converter._set_raw_tile_size(
+            raw_tile_sizes.pop() if raw_tile_sizes else manifest.get("tile_size") or 256
+        )
+        logger.info(f"h5-worker: loaded {len(samples)} filtered samples from {samples_path}")
+    else:
+        samples = converter.get_and_filter_samples()
 
     assert converter.num_subtiles is not None
     all_tuples: list[tuple[int, object]] = []
