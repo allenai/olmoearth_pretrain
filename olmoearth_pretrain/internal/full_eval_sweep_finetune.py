@@ -96,6 +96,12 @@ def _format_task_specific_args(task_overrides: dict[str, dict[str, Any]]) -> lis
     return args
 
 
+# Fine-tunes run 50 epochs, so a preemption costs the whole run (this path does
+# not resume). Override per launch when the cluster is busy:
+#   FT_LAUNCH_PRIORITY=urgent FT_LAUNCH_PREEMPTIBLE=False
+_FT_LAUNCH_PRIORITY = os.environ.get("FT_LAUNCH_PRIORITY", "high")
+_FT_LAUNCH_PREEMPTIBLE = os.environ.get("FT_LAUNCH_PREEMPTIBLE", "True")
+
 FT_MODE_ARGS = _format_per_task_args({"eval_mode": "FINETUNE"})
 DATASET_STATS_ARGS = _format_per_task_args({"norm_stats_from_pretrained": "False"})
 
@@ -361,9 +367,9 @@ def _format_launch_command(
     if cluster != "local":
         parts.extend(
             [
-                "--launch.priority=high",
+                f"--launch.priority={_FT_LAUNCH_PRIORITY}",
                 "--launch.num_gpus=1",
-                "--launch.preemptible=True",
+                f"--launch.preemptible={_FT_LAUNCH_PREEMPTIBLE}",
                 "--launch.task_name=eval",
             ]
         )
