@@ -83,6 +83,43 @@ class OlmoEarthWandBCallback(WandBCallback):
     # their metrics consolidate into a single run instead of one run per job.
     runid_path: str | None = None
 
+    def _refresh_beaker_keys_on_resume(self) -> None:
+        """Re-record the Beaker workload keys on a run resumed from a NEW experiment.
+
+        olmo-core's ``BeakerCallback.pre_train`` (ordered after this callback) writes
+        ``beaker_experiment_url`` / ``beaker_experiment_id`` via ``config.update``
+        WITHOUT ``allow_val_change``. On a same-name relaunch the resumed W&B run
+        already holds the previous experiment's values, so wandb raises ConfigError on
+        rank 0 before the first step and the other ranks sit in the dataloader barrier
+        until gloo's 15-min timeout (v1_3_vit0_joint12 relaunch, 2026-09-22, x3).
+        ``wandb.init(allow_val_change=...)`` does not cover later ``update`` calls
+        (wandb 0.22 only auto-allows in Jupyter), so pre-write the same two values
+        here, derived exactly as BeakerCallback derives them; its update then changes
+        nothing.
+        """
+        from olmo_core.launch.beaker import (
+            get_beaker_client,
+            get_beaker_experiment_id,
+            is_running_in_beaker_batch_job,
+        )
+
+        if not is_running_in_beaker_batch_job():
+            return
+        experiment_id = get_beaker_experiment_id()
+        if experiment_id is None:
+            return
+        with get_beaker_client() as beaker:
+            workload = beaker.workload.get(experiment_id)
+            beaker_url = beaker.workload.url(workload)
+        self.run.config.update(
+            {
+                "beaker_experiment_url": beaker_url,
+                "beaker_experiment_id": experiment_id,
+            },
+            allow_val_change=True,
+        )
+        logger.info(f"Resumed W&B run: refreshed beaker_experiment_url -> {beaker_url}")
+
     def pre_train(self) -> None:
         """Pre-train callback for the wandb callback."""
         if self.enabled and get_rank() == 0:
@@ -126,40 +163,6 @@ class OlmoEarthWandBCallback(WandBCallback):
                 runid_file.write_text(self.run.id)
 
             self._run_path = self.run.path  # type: ignore
-
-    def _refresh_beaker_keys_on_resume(self) -> None:
-        """Re-record the Beaker workload keys on a run resumed from a NEW experiment.
-
-        olmo-core's ``BeakerCallback.pre_train`` (ordered after this callback) writes
-        ``beaker_experiment_url`` / ``beaker_experiment_id`` via ``config.update``
-        WITHOUT ``allow_val_change``. On a same-name relaunch the resumed W&B run
-        already holds the previous experiment's values, so wandb raises ConfigError on
-        rank 0 before the first step and the other ranks sit in the dataloader barrier
-        until gloo's 15-min timeout (v1_3_vit0_joint12 relaunch, 2026-09-22, x3).
-        ``wandb.init(allow_val_change=...)`` does not cover later ``update`` calls
-        (wandb 0.22 only auto-allows in Jupyter), so pre-write the same two values
-        here, derived exactly as BeakerCallback derives them; its update then changes
-        nothing.
-        """
-        from olmo_core.launch.beaker import (
-            get_beaker_client,
-            get_beaker_experiment_id,
-            is_running_in_beaker_batch_job,
-        )
-
-        if not is_running_in_beaker_batch_job():
-            return
-        experiment_id = get_beaker_experiment_id()
-        if experiment_id is None:
-            return
-        with get_beaker_client() as beaker:
-            workload = beaker.workload.get(experiment_id)
-            beaker_url = beaker.workload.url(workload)
-        self.run.config.update(
-            {"beaker_experiment_url": beaker_url, "beaker_experiment_id": experiment_id},
-            allow_val_change=True,
-        )
-        logger.info(f"Resumed W&B run: refreshed beaker_experiment_url -> {beaker_url}")
             if self.upload_dataset_distribution_pre_train:
                 assert isinstance(self.trainer.data_loader, OlmoEarthDataLoader)
                 dataset = self.trainer.data_loader.dataset
