@@ -12,6 +12,7 @@ from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
     Clay,
+    CopernicusFMWrapper,
     Croma,
     DINOv3,
     GalileoWrapper,
@@ -486,6 +487,27 @@ class PrestoEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
+class CopernicusFMEvalWrapper(EvalWrapper):
+    """Wrapper for Copernicus-FM model."""
+
+    def __call__(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+        is_train: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Forward pass through the model produces the embedding specified by initialization."""
+        spatial_pool = self.spatial_pool or self.use_center_token
+        batch_embeddings = self.model(
+            masked_olmoearth_sample,
+            pooling=self.pooling_type,
+            spatial_pool=spatial_pool,
+        )
+        if self.use_center_token:
+            batch_embeddings = self._extract_center_token(batch_embeddings)
+        return batch_embeddings, labels
+
+
 class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
@@ -615,6 +637,9 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, PrestoWrapper):
         logger.info("Using PrestoEvalWrapper")
         return PrestoEvalWrapper(model=model, **kwargs)
+    elif isinstance(model, CopernicusFMWrapper):
+        logger.info("Using CopernicusFMEvalWrapper")
+        return CopernicusFMEvalWrapper(model=model, **kwargs)
     elif isinstance(model, AnySat):
         logger.info("Using AnySatEvalWrapper")
         return AnySatEvalWrapper(model=model, **kwargs)
