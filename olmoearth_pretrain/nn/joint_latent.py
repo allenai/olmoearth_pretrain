@@ -59,6 +59,41 @@ def flex_attention_cuda(q: Tensor, k: Tensor, v: Tensor, block_mask: Any) -> Ten
     return _COMPILED_FLEX(q, k, v, block_mask=block_mask)
 
 
+_COMPILED_CREATE_BLOCK_MASK: Callable[..., Any] | None = None
+
+
+def create_block_mask_cuda(
+    mask_mod: Callable[[Tensor, Tensor, Tensor, Tensor], Tensor],
+    batch: int,
+    length: int,
+    device: torch.device,
+) -> Any:
+    """``create_block_mask`` compiled once per process (CUDA only).
+
+    The eager ``create_block_mask`` evaluates ``mask_mod`` on the full
+    ``[B, L, L]`` grid -- with int64 gather intermediates, 8 bytes per element -- and
+    only then reduces it to 128-blocks. At the eval shape (ws16, ps1, S1+S2+Landsat,
+    12 timesteps: L ~ 9.5k, batch ~64) that is one 42.78 GiB allocation, which OOMed
+    every joint-arm eval job (v1_3_vit0_rangerope_joint12_eval_step80000, 2026-09-22).
+    Compiled, Inductor fuses the predicate into the block reduction, so peak memory is
+    the block table rather than the dense grid. Training never hit this only because
+    sampled patch sizes and rank-microbatch 32 keep L small.
+
+    ``dynamic=True`` for the same reason as :func:`flex_attention_cuda`: L changes
+    every batch. ``mask_mod`` is a fresh closure per call, but Dynamo guards on its
+    code object and treats the captured tensors as graph inputs, so this does not
+    recompile per call (the standard attention-gym pattern).
+    """
+    global _COMPILED_CREATE_BLOCK_MASK
+    if _COMPILED_CREATE_BLOCK_MASK is None:
+        from torch.nn.attention.flex_attention import create_block_mask
+
+        _COMPILED_CREATE_BLOCK_MASK = torch.compile(create_block_mask, dynamic=True)
+    return _COMPILED_CREATE_BLOCK_MASK(
+        mask_mod, batch, None, length, length, device=device
+    )
+
+
 def build_register_grid_positions(
     patch_positions: Tensor, register_grid: tuple[int, int]
 ) -> Tensor:
@@ -212,7 +247,6 @@ class JointLatentTransformer(nn.Module):
         A FlexAttention block mask on CUDA, a dense ``[B, 1, L, L]`` SDPA mask elsewhere.
         """
         if cell_id.is_cuda:
-            from torch.nn.attention.flex_attention import create_block_mask
 
             def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
                 return valid[b, kv] & (
@@ -221,8 +255,8 @@ class JointLatentTransformer(nn.Module):
 
             batch, length = cell_id.shape
             return {
-                "block_mask": create_block_mask(
-                    mask_mod, batch, None, length, length, device=cell_id.device
+                "block_mask": create_block_mask_cuda(
+                    mask_mod, batch, length, cell_id.device
                 )
             }
         return {
