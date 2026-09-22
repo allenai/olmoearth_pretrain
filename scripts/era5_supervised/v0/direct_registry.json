@@ -67,6 +67,66 @@
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
     },
+    "cybench_maize_eval": {
+      "groups": [
+        "maize"
+      ],
+      "height_width": 1,
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_maize_era5d.yaml",
+      "notes": "CY-Bench maize yield (t/ha) regression from ERA5-Land daily aggregated over each admin unit (crop-fraction weighted). One window per (adm_id, harvest_year), 448 days ending at the crop-calendar end of season; harvest years 2000+. Splits by harvest_year tag: train<=2017, val 2018-2019, test>=2020. target_mean/target_std: fill from meta/label_stats_crop.json ('train') once the export finishes. Built by olmoearth_pretrain/dataset_creation/cybench.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": null,
+      "target_std": null,
+      "task_type": "regression",
+      "test_groups": [
+        "maize"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "maize"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_wheat_eval": {
+      "groups": [
+        "wheat"
+      ],
+      "height_width": 1,
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
+      "notes": "CY-Bench wheat yield (t/ha) regression from ERA5-Land daily aggregated over each admin unit (crop-fraction weighted). One window per (adm_id, harvest_year), 448 days ending at the crop-calendar end of season; harvest years 2000+. Splits by harvest_year tag: train<=2017, val 2018-2019, test>=2020. target_mean/target_std: fill from meta/label_stats_crop.json ('train') once the export finishes. Built by olmoearth_pretrain/dataset_creation/cybench.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": null,
+      "target_std": null,
+      "task_type": "regression",
+      "test_groups": [
+        "wheat"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "wheat"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
     "era5enc_pretrain_ssl": {
       "groups": [
         "default"
