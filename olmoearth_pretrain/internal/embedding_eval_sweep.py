@@ -27,13 +27,9 @@ Pass --task_names=<name>[,<name>...] to run a subset of EMBEDDING_EVAL_TASKS.
 """
 
 import argparse
-import json
-import os
 import subprocess  # nosec
-import uuid
 from logging import getLogger
 
-from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
 from olmoearth_pretrain.evals.models import BaselineModelName, get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import EMBEDDING_EVAL_TASKS
@@ -46,53 +42,43 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     QUANTIZE_AT_EVAL_MODALITIES,
     QUANTIZE_SCHEME_BY_MODALITY,
     LP_LRs,
+    _get_base_run_name,
     _get_checkpoint_args,
     _get_sub_command,
+    _modality_capable_tasks,
     parse_task_names,
+    select_best_val_args,
+    task_arg,
+    tasks_to_run_arg,
+    window_size_args,
 )
-from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
+from olmoearth_pretrain.train.callbacks.evaluator_callback import (
+    DownstreamTaskConfig,
+    EvalMode,
+)
 
 logger = getLogger(__name__)
 
 SUPPORTED_BASELINES = tuple(PRECOMPUTED_MODEL_TO_MODALITY)
 
-LP_TASK_NAMES = [
-    name
+# The LP and KNN twins run in separate jobs (KNN has no hyperparameters).
+LP_TASKS = {
+    name: task
     for name, task in EMBEDDING_EVAL_TASKS.items()
     if task.eval_mode == EvalMode.LINEAR_PROBE
-]
-KNN_TASK_NAMES = [
-    name
+}
+KNN_TASKS = {
+    name: task
     for name, task in EMBEDDING_EVAL_TASKS.items()
     if task.eval_mode == EvalMode.KNN
-]
+}
+LP_TASK_NAMES = list(LP_TASKS)
+KNN_TASK_NAMES = list(KNN_TASKS)
 
 
-def _task_arg(task_name: str, field_name: str, value: object) -> str:
-    """Build one per-task downstream-evaluator override."""
-    return (
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
-        f".{field_name}={value}"
-    )
-
-
-def _capable_tasks(task_names: list[str], modality: str) -> list[str]:
-    """Task names whose dataset carries the given precomputed modality.
-
-    A precomputed baseline reads only the embedding modality, so tasks that
-    differ solely in imagery input_modalities (e.g. the S2-only and S1+S2
-    PASTIS variants) collapse to the same run — keep one task per dataset.
-    """
-    capable = []
-    seen_datasets = set()
-    for name in task_names:
-        dataset = EMBEDDING_EVAL_TASKS[name].dataset
-        if dataset in seen_datasets:
-            continue
-        if modality in dataset_to_config(dataset).supported_modalities:
-            capable.append(name)
-            seen_datasets.add(dataset)
-    return capable
+def _selected(task_names: list[str]) -> dict[str, DownstreamTaskConfig]:
+    """The EMBEDDING_EVAL_TASKS entries for ``task_names``, in order."""
+    return {name: EMBEDDING_EVAL_TASKS[name] for name in task_names}
 
 
 def _model_task_names(
@@ -102,8 +88,9 @@ def _model_task_names(
     if model is None:
         return LP_TASK_NAMES, KNN_TASK_NAMES
     modality, product = PRECOMPUTED_MODEL_TO_MODALITY[model]
-    lp = _capable_tasks(LP_TASK_NAMES, modality)
-    knn = _capable_tasks(KNN_TASK_NAMES, modality)
+    # Per eval mode, so an LP task and its KNN twin never collapse into one.
+    lp = _modality_capable_tasks(modality, LP_TASKS)
+    knn = _modality_capable_tasks(modality, KNN_TASKS)
     skipped = sorted(set(LP_TASK_NAMES + KNN_TASK_NAMES) - set(lp + knn))
     if skipped:
         logger.warning(
@@ -173,20 +160,20 @@ def _model_args(
         quantize = (quantization or "aef_power") != "none"
         args = [" --trainer.no_checkpoints=False"]
         for task_name in task_names:
-            args.append(_task_arg(task_name, "norm_stats_from_pretrained", "True"))
-            args.append(_task_arg(task_name, "quantize_embeddings", str(quantize)))
+            args.append(task_arg(task_name, "norm_stats_from_pretrained", "True"))
+            args.append(task_arg(task_name, "quantize_embeddings", str(quantize)))
         return " ".join(args)
     modality, _ = PRECOMPUTED_MODEL_TO_MODALITY[model]
     quantize = modality in QUANTIZE_AT_EVAL_MODALITIES
     args = [" --trainer.no_checkpoints=True"]
     for task_name in task_names:
-        args.append(_task_arg(task_name, "norm_stats_from_pretrained", "False"))
-        args.append(_task_arg(task_name, "norm_method", "NormMethod.NO_NORM"))
-        args.append(_task_arg(task_name, "input_modalities", f"[{modality}]"))
-        args.append(_task_arg(task_name, "quantize_embeddings", str(quantize)))
+        args.append(task_arg(task_name, "norm_stats_from_pretrained", "False"))
+        args.append(task_arg(task_name, "norm_method", "NormMethod.NO_NORM"))
+        args.append(task_arg(task_name, "input_modalities", f"[{modality}]"))
+        args.append(task_arg(task_name, "quantize_embeddings", str(quantize)))
         if quantize:
             args.append(
-                _task_arg(
+                task_arg(
                     task_name,
                     "quantization_scheme",
                     # StrEnum interpolates to its VALUE ("tessera_per_vector"),
@@ -212,60 +199,13 @@ def _normalization_args(args: argparse.Namespace, task_names: list[str]) -> str:
     if not normalization or normalization == "none":
         return ""
     return " " + " ".join(
-        _task_arg(
+        task_arg(
             name,
             "embedding_normalization",
             f"EmbeddingNormalization.{normalization.upper()}",
         )
         for name in task_names
     )
-
-
-def _tasks_to_run_arg(task_names: list[str]) -> str:
-    """Restrict the evaluator to the given tasks (compact JSON; see full sweep)."""
-    return (
-        " --trainer.callbacks.downstream_evaluator.tasks_to_run="
-        f"'{json.dumps(task_names, separators=(',', ':'))}'"
-    )
-
-
-def _window_size_args(window_size: int | None, task_names: list[str]) -> str:
-    """Per-task window_size overrides for windowed-sampling tasks.
-
-    Only tasks whose config already sets window_size are overridden. Tiled
-    (tile_samples) datasets require window_size to divide the stored sample
-    size (128 for pastis_rslearn).
-    """
-    if window_size is None:
-        return ""
-    overrides = [
-        _task_arg(name, "window_size", window_size)
-        for name in task_names
-        if EMBEDDING_EVAL_TASKS[name].window_size is not None
-    ]
-    if not overrides:
-        return ""
-    return " " + " ".join(overrides)
-
-
-def _select_best_val_args(task_names: list[str]) -> str:
-    """Per-LP-task early-stopping args (best epoch by primary val metric)."""
-    return " " + " ".join(
-        f"{_task_arg(name, 'select_best_by_primary_metric', 'True')} "
-        f"{_task_arg(name, 'linear_probe_eval_interval', '5')}"
-        for name in task_names
-    )
-
-
-def _base_run_name(args: argparse.Namespace) -> str:
-    """Base run name from --model_name, checkpoint path, or model."""
-    if args.model_name is not None:
-        return args.model_name
-    if args.checkpoint_path is not None:
-        parent_dir = os.path.basename(os.path.dirname(args.checkpoint_path))[:100]
-        step_num = os.path.basename(args.checkpoint_path)
-        return f"{parent_dir}_{step_num}"
-    return f"{args.model}_{str(uuid.uuid4())[:4]}"
 
 
 def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
@@ -289,7 +229,7 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
     checkpoint_args = _get_checkpoint_args(args.checkpoint_path)
     project_name = args.project_name or EVAL_WANDB_PROJECT
     extra = " " + " ".join(extra_cli) if extra_cli else ""
-    base_run_name = _base_run_name(args) + "_emb"
+    base_run_name = _get_base_run_name(args) + "_emb"
     quantization = getattr(args, "quantization", None)
     if quantization and quantization != "aef_power":
         # The arm changes what the probe consumes, so it must be separable in
@@ -319,19 +259,19 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
         for lr in LP_LRs:
             cmd = common.format(run_name=f"{base_run_name}_lr{lr}")
             cmd += lp_model_args
-            cmd += _window_size_args(window_size, lp_tasks)
+            cmd += window_size_args(window_size, _selected(lp_tasks))
             cmd += _normalization_args(args, lp_tasks)
-            cmd += " " + " ".join(_task_arg(name, "probe_lr", lr) for name in lp_tasks)
+            cmd += " " + " ".join(task_arg(name, "probe_lr", lr) for name in lp_tasks)
             if args.select_best_val:
-                cmd += _select_best_val_args(lp_tasks)
-            cmd += _tasks_to_run_arg(lp_tasks)
+                cmd += select_best_val_args(lp_tasks)
+            cmd += tasks_to_run_arg(lp_tasks)
             commands.append(cmd)
     if knn_tasks:
         cmd = common.format(run_name=f"{base_run_name}_knn")
         cmd += _model_args(model, knn_tasks, quantization)
-        cmd += _window_size_args(window_size, knn_tasks)
+        cmd += window_size_args(window_size, _selected(knn_tasks))
         cmd += _normalization_args(args, knn_tasks)
-        cmd += _tasks_to_run_arg(knn_tasks)
+        cmd += tasks_to_run_arg(knn_tasks)
         commands.append(cmd)
     return commands
 

@@ -9,7 +9,7 @@ import json
 import os
 import subprocess  # nosec
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Iterable, Mapping
 from logging import getLogger
 from typing import Any
 
@@ -29,6 +29,7 @@ from olmoearth_pretrain.internal.constants import (
 )
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.train.callbacks.evaluator_callback import DownstreamTaskConfig
 
 LP_LRs = [1e-4, 5e-4, 1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 5e-1]
 Normalization_MODES = ["pre_trained", "dataset"]
@@ -37,12 +38,17 @@ pooling_types = [PoolingType.MEAN, PoolingType.MAX]
 logger = getLogger(__name__)
 
 
+def task_arg(task_name: str, field_name: str, value: object) -> str:
+    """One per-task downstream-evaluator override, ``value`` already rendered."""
+    return (
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+        f".{field_name}={value}"
+    )
+
+
 def create_linear_probe_arg(task_name: str, field_name: str) -> str:
     """Create a linear probe argument for a given task name."""
-    initial_str = (
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.{field_name}="
-    )
-    return initial_str + "{arg}"
+    return task_arg(task_name, field_name, "{arg}")
 
 
 lr_args = " ".join(
@@ -155,15 +161,18 @@ def lr_only_params() -> Generator[dict[str, Any], None, None]:
         }
 
 
-def select_best_val_args() -> str:
+def select_best_val_args(task_names: Iterable[str] | None = None) -> str:
     """Get the early stopping arguments.
 
-    Selects the best test result based on the epoch with the best primary validation metric.
+    Selects the best test result based on the epoch with the best primary validation
+    metric. ``task_names`` defaults to every task in ``EVAL_TASKS``.
     """
+    names = list(EVAL_TASKS) if task_names is None else list(task_names)
     return " ".join(
         [
-            f" --trainer.callbacks.downstream_evaluator.tasks.{task_name}.select_best_by_primary_metric=True  --trainer.callbacks.downstream_evaluator.tasks.{task_name}.linear_probe_eval_interval=5"
-            for task_name in EVAL_TASKS.keys()
+            f" {task_arg(task_name, 'select_best_by_primary_metric', True)}  "
+            f"{task_arg(task_name, 'linear_probe_eval_interval', 5)}"
+            for task_name in names
         ]
     )
 
@@ -218,16 +227,21 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
     return tessera_args
 
 
-def _modality_capable_tasks(modality_name: str) -> list[str]:
+def _modality_capable_tasks(
+    modality_name: str, tasks: Mapping[str, DownstreamTaskConfig] | None = None
+) -> list[str]:
     """Task names whose dataset carries the given precomputed embedding modality.
 
     Tasks that differ only by input imagery (e.g. the _sentinel1 variants of a
     probe) collapse into identical evals once input_modalities is overridden to
     the embedding modality, so only the first task of each such group is kept.
+    ``tasks`` defaults to ``EVAL_TASKS``.
     """
+    if tasks is None:
+        tasks = EVAL_TASKS
     seen: set[str] = set()
     task_names: list[str] = []
-    for task_name, task in EVAL_TASKS.items():
+    for task_name, task in tasks.items():
         if modality_name not in dataset_to_config(task.dataset).supported_modalities:
             continue
         key = repr(dataclasses.replace(task, input_modalities=[]))
@@ -688,26 +702,33 @@ def _get_patch_size_run_suffix(args: argparse.Namespace) -> str:
     return f"_ps{patch_size}"
 
 
-def _get_window_size_args(args: argparse.Namespace) -> str:
-    """Build per-task window_size overrides for windowed-sampling tasks.
+def window_size_args(
+    window_size: int | None, tasks: Mapping[str, DownstreamTaskConfig]
+) -> str:
+    """Per-task window_size overrides for the windowed-sampling tasks in ``tasks``.
 
     Only tasks whose config already sets window_size are overridden: for the
     full-sample tasks window_size is unsupported and would fail evaluator
     validation. Tiled (tile_samples) datasets require window_size to divide
     the stored sample size (e.g. 128 for pastis_rslearn).
     """
-    if getattr(args, "embedding_diagnostics_only", False):
-        return ""
-    window_size = getattr(args, "window_size", None)
     if window_size is None:
         return ""
-    return " " + " ".join(
-        [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.window_size={window_size}"
-            for task_name, task in EVAL_TASKS.items()
-            if task.window_size is not None
-        ]
-    )
+    overrides = [
+        task_arg(task_name, "window_size", window_size)
+        for task_name, task in tasks.items()
+        if task.window_size is not None
+    ]
+    if not overrides:
+        return ""
+    return " " + " ".join(overrides)
+
+
+def _get_window_size_args(args: argparse.Namespace) -> str:
+    """``window_size_args`` for the full sweep's ``--window_size`` over EVAL_TASKS."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    return window_size_args(getattr(args, "window_size", None), EVAL_TASKS)
 
 
 def _get_window_size_run_suffix(args: argparse.Namespace) -> str:
@@ -748,15 +769,8 @@ def any_linear_probe_task_selected(args: argparse.Namespace) -> bool:
     )
 
 
-def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
-    """Build a downstream evaluator include-list override."""
-    if getattr(args, "embedding_diagnostics_only", False):
-        return ""
-
-    tasks_to_run = selected_task_names(args)
-
-    if len(tasks_to_run) == len(EVAL_TASKS):
-        return ""
+def tasks_to_run_arg(task_names: list[str]) -> str:
+    """Restrict the downstream evaluator to ``task_names`` (compact JSON)."""
     # Emit compact JSON (no space after commas). json.dumps' default separators
     # add a space after each comma (["a", "b"]); when this list-valued override
     # is baked into a launched Beaker job command, the surrounding quotes can be
@@ -766,8 +780,18 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     # word-splitting entirely.
     return (
         " --trainer.callbacks.downstream_evaluator.tasks_to_run="
-        f"'{json.dumps(tasks_to_run, separators=(',', ':'))}'"
+        f"'{json.dumps(task_names, separators=(',', ':'))}'"
     )
+
+
+def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
+    """Build a downstream evaluator include-list override."""
+    if getattr(args, "embedding_diagnostics_only", False):
+        return ""
+    tasks_to_run = selected_task_names(args)
+    if len(tasks_to_run) == len(EVAL_TASKS):
+        return ""
+    return tasks_to_run_arg(tasks_to_run)
 
 
 LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
