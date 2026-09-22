@@ -4,25 +4,17 @@ This module works with or without olmo-core installed:
 - Without olmo-core: inference-only mode (loading pre-trained models)
 - With olmo-core: full functionality including training
 
-The weights are converted to pth file from distributed checkpoint like this:
-
-    import json
-    from pathlib import Path
+The weights are converted to a pth file from a distributed checkpoint like this
+(``load_pretrain_checkpoint`` applies ``patch_legacy_encoder_config`` before building,
+which is required for any config.json that still carries since-removed fields):
 
     import torch
 
-    from olmo_core.config import Config
-    from olmo_core.distributed.checkpoint import load_model_and_optim_state
+    from olmoearth_pretrain.model_loader import load_pretrain_checkpoint
 
-    checkpoint_path = Path("/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000")
-    with (checkpoint_path / "config.json").open() as f:
-        config_dict = json.load(f)
-        model_config = Config.from_dict(config_dict["model"])
-
-    model = model_config.build()
-
-    train_module_dir = checkpoint_path / "model_and_optim"
-    load_model_and_optim_state(str(train_module_dir), model)
+    model = load_pretrain_checkpoint(
+        "/weka/dfive-default/helios/checkpoints/joer/nano_lr0.001_wd0.002/step370000"
+    )
     torch.save(model.state_dict(), "OlmoEarth-v1-Nano.pth")
 """
 
@@ -106,6 +98,41 @@ def load_model_from_path(
     return model
 
 
+def load_pretrain_checkpoint(
+    checkpoint_dir: PathLike | str, device: torch.device | None = None
+) -> torch.nn.Module:
+    """Load a raw pretraining checkpoint directory into a model, eval-ready.
+
+    Unlike ``load_model_from_path`` (which expects a released ``weights.pth``),
+    this reads a checkpoint as the trainer writes it: a ``config.json`` plus
+    either a distributed ``model_and_optim/`` directory or an already-converted
+    ``weights.pth``. Requires olmo-core for the distributed layout.
+    """
+    ckpt_path = UPath(checkpoint_dir)
+    with (ckpt_path / CONFIG_FILENAME).open() as f:
+        config_dict = json.load(f)
+    config_dict = patch_legacy_encoder_config(config_dict)
+    model = Config.from_dict(config_dict["model"]).build()
+
+    train_module_dir = ckpt_path / "model_and_optim"
+    weights_path = ckpt_path / WEIGHTS_FILENAME
+    if train_module_dir.exists():
+        from olmo_core.distributed.checkpoint import load_model_and_optim_state
+
+        load_model_and_optim_state(str(train_module_dir), model)
+    elif weights_path.exists():
+        model.load_state_dict(torch.load(weights_path, map_location="cpu"))
+    else:
+        raise FileNotFoundError(
+            f"Neither {train_module_dir} nor {weights_path} found in {ckpt_path}"
+        )
+
+    if device is not None:
+        model.to(device)
+    model.eval()
+    return model
+
+
 def _resolve_artifact_path(
     model_id_or_path: ModelID | PathLike | str, filename: str
 ) -> UPath:
@@ -124,6 +151,9 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     Old checkpoints used Conv2d for patch projection and have no use_linear_patch_embed
     key. Without this patch they would incorrectly default to True (Linear) and fail
     to load. Call this on the raw config dict before passing to Config.from_dict.
+
+    Checkpoints trained on the ``gabi/perceiver`` branch are NOT patched here: convert
+    them once with ``scripts/official/v1_3/convert_legacy_checkpoint.py``.
     """
     enc = config_dict.get("model", {}).get("encoder_config", {})
     if isinstance(enc, dict) and "use_linear_patch_embed" not in enc:

@@ -17,6 +17,7 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -177,6 +178,16 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
 
+        self._supervised_modality_names: list[str] = []
+        if self.model.supervision_head is not None:
+            self._supervised_modality_names = list(
+                self.model.supervision_head.modality_configs.keys()
+            )
+            self.total_loss_name = f"{self.total_loss_name}+supervision"
+
+        if self.model.register_distillation_head is not None:
+            self.total_loss_name = f"{self.total_loss_name}+student"
+
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
         return self.base_loss.compute(pred, targets)
@@ -208,6 +219,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        accumulated_extra_metrics: dict[str, Any] = {}
+        extra_metric_counts: dict[str, int] = {}
         patch_size = batch[0]
         batch_data = batch[1]
 
@@ -225,9 +238,13 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch = microbatch_masked.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss, latent, decoded, target_output = self.model_forward(
-                    masked_batch, patch_size, self.token_exit_cfg
+                loss, latent, decoded, target_output, extra_metrics = (
+                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
                 )
+                if extra_metrics is not None:
+                    self.accumulate_extra_metrics(
+                        accumulated_extra_metrics, extra_metric_counts, extra_metrics
+                    )
                 reg_term = self.compute_regularization(latent)
                 if reg_term is not None:
                     loss = loss + reg_term
@@ -257,6 +274,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             total_batch_loss,
             ReduceType.mean,
         )
+        self.log_accumulated_extra_metrics(
+            accumulated_extra_metrics, extra_metric_counts
+        )
         self.log_regularization(total_batch_reg)
 
         del batch, batch_data  # In case this helps with memory utilization.
@@ -268,15 +288,25 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
-    ) -> tuple[torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks]:
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, Any] | None,
+    ]:
         """Run a forward pass."""
         with self._model_forward_context():
-            latent, decoded, _, reconstructed, extra_metrics = self.model(
-                batch, patch_size
-            )
+            (
+                latent,
+                decoded,
+                _,
+                reconstructed,
+                extra_metrics,
+                supervision_preds,
+                student_outputs,
+            ) = self.model(batch, patch_size)
 
-            if extra_metrics is not None:
-                self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -294,4 +324,39 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 loss = self.loss_fn(decoded, target_output)
                 if self.mae_loss is not None:
                     loss += self.mae_loss.compute(reconstructed, batch)
-            return loss, latent, decoded, target_output
+
+                if (
+                    supervision_preds is not None
+                    and self.model.supervision_head is not None
+                ):
+                    sup_loss, per_modality_losses = compute_supervision_loss(
+                        supervision_preds,
+                        batch,
+                        self.model.supervision_head,
+                    )
+                    loss = loss + sup_loss
+                    for mod_name, mod_loss in per_modality_losses.items():
+                        if extra_metrics is None:
+                            extra_metrics = {}
+                        extra_metrics[f"supervision/{mod_name}"] = mod_loss
+
+                if (
+                    self.model.register_distillation_head is not None
+                    and student_outputs is not None
+                    and student_outputs["student_registers"] is not None
+                ):
+                    # Detached-student loss: the head detaches the teacher registers and
+                    # the student's inputs were detached inside the encoder, so none of
+                    # this reaches the encoder or the Perceiver.
+                    distill_loss, distill_metrics = (
+                        self.model.register_distillation_head(
+                            student_outputs["registers"],
+                            student_outputs["student_registers"],
+                        )
+                    )
+                    loss = loss + distill_loss
+                    if extra_metrics is None:
+                        extra_metrics = {}
+                    extra_metrics.update(distill_metrics)
+
+            return loss, latent, decoded, target_output, extra_metrics
