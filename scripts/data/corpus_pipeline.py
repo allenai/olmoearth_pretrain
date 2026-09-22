@@ -468,7 +468,10 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
 
 
 def _prepare_h5(
-    olmoearth_dir: str, allcap: bool = False, tile_size: int | None = None
+    olmoearth_dir: str,
+    allcap: bool = False,
+    tile_size: int | None = None,
+    scan_modalities: list[str] | None = None,
 ) -> UPath:
     """Scan olmoearth TIFFs, filter, assign global indices, write metadata.
 
@@ -491,6 +494,7 @@ def _prepare_h5(
         compression="zstd",
         compression_opts=3,
         tile_size=tile_size,
+        scan_modality_names=scan_modalities,
     )
     converter = config.build()
 
@@ -546,7 +550,12 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
         if not args.rslearn_dir:
             raise SystemExit("Must provide --olmoearth-dir or --rslearn-dir")
         args.olmoearth_dir = _derive_olmoearth_dir(args.rslearn_dir)
-    _prepare_h5(args.olmoearth_dir, allcap=args.allcap, tile_size=args.h5_tile_size)
+    _prepare_h5(
+        args.olmoearth_dir,
+        allcap=args.allcap,
+        tile_size=args.h5_tile_size,
+        scan_modalities=args.scan_modalities,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1199,6 +1208,13 @@ def main() -> None:
     )
     p.add_argument("--allcap", action="store_true", help="Use allcap modality list")
     p.add_argument("--h5-tile-size", type=int, default=None, help="h5 subtile px (128)")
+    p.add_argument(
+        "--scan-modalities",
+        nargs="*",
+        default=None,
+        help="Only load these modalities in the bad-modality filter scan "
+        "(e.g. sentinel1 openstreetmap_raster); default scans all",
+    )
     p.set_defaults(func=cmd_prepare_h5)
 
     # -- launch-h5 --

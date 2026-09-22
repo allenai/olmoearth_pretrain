@@ -64,6 +64,10 @@ class ConvertToH5pyConfig(Config):
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
+    # If set, only these modalities are loaded during the bad-modality scan; the NaN /
+    # all-zero / nodata checks can only trigger for float or map layers, so skipping
+    # the large uint16 stacks avoids reading most of the dataset twice.
+    scan_modality_names: list[str] | None = None
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -81,6 +85,11 @@ class ConvertToH5pyConfig(Config):
             reserved_cores=self.reserved_cores,
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
+            ),
+            scan_modalities=(
+                get_modality_specs_from_names(self.scan_modality_names)
+                if self.scan_modality_names is not None
+                else None
             ),
         )
 
@@ -108,6 +117,7 @@ class ConvertToH5py:
         tile_size: int = IMAGE_TILE_SIZE,
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
+        scan_modalities: list[ModalitySpec] | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -140,6 +150,7 @@ class ConvertToH5py:
         self.chunk_options = chunk_options
         self.h5py_dir: UPath | None = None
         self.required_modalities = required_modalities
+        self.scan_modalities = scan_modalities
         self.tile_size = tile_size
         self.raw_tile_size: int | None = None
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
@@ -325,6 +336,8 @@ class ConvertToH5py:
         """Remove bad modalities from the sample."""
         modalities_to_remove = set()
         for modality in sample.modalities:
+            if self.scan_modalities is not None and modality not in self.scan_modalities:
+                continue
             sample_modality = sample.modalities[modality]
             image = self.load_sample(sample_modality, sample)
             # Remove modalities that contains any nan
