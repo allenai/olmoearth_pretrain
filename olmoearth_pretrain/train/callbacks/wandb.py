@@ -116,6 +116,12 @@ class OlmoEarthWandBCallback(WandBCallback):
                 config=self.config,
                 id=resume_id,
                 resume="allow",
+                # A same-name relaunch resumes this run from a NEW Beaker experiment,
+                # and olmo-core's BeakerCallback then config.update()s
+                # beaker_experiment_url/_id without allow_val_change -- wandb raises
+                # ConfigError and rank 0 dies before the first step (the other ranks
+                # then sit in the dataloader barrier until gloo's 15-min timeout).
+                allow_val_change=True,
                 settings=self.wandb.Settings(init_timeout=240),
             )
 
