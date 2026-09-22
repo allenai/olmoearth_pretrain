@@ -581,3 +581,103 @@ class TestIntegration:
                 "--trainer.callbacks.downstream_evaluator.tasks_to_run=[m_eurosat]"
                 in command
             )
+
+
+def test_finetune_task_names_selects_only_those_tasks() -> None:
+    """--task-names must narrow the FT sweep, and a typo must not widen it.
+
+    The FT sweep only had a skip-list, which is the wrong shape for re-running
+    two tasks out of twenty-one: a task added to FT_EVAL_TASKS later would
+    silently join the run. Both sweeps parse with parse_known_args, so an
+    unrecognized selector is forwarded to the eval command rather than
+    rejected -- which is why an unknown name has to raise here.
+    """
+    import json as _json
+    import sys as _sys
+
+    from olmoearth_pretrain.internal import full_eval_sweep_finetune as ft
+
+    def run(task_arg: str) -> list[str]:
+        captured: list[str] = []
+        argv = [
+            "full_eval_sweep_finetune",
+            "--cluster=local",
+            "--dry_run",
+            "--checkpoint_path=/weka/fake/step1",
+            "--module_path=scripts/official/v1_2/base.py",
+            task_arg,
+        ]
+
+        def capture(cmd: str, **kwargs: Any) -> Mock:
+            captured.append(cmd)
+            return Mock(returncode=0)
+
+        with (
+            patch.object(_sys, "argv", argv),
+            patch.object(ft.subprocess, "run", side_effect=capture),
+        ):
+            ft.main()
+        return captured
+
+    commands = run("--task-names=m_eurosat,m_brick_kiln")
+    assert commands, "expected one command per FT learning rate"
+    expected = _json.dumps(["m_eurosat", "m_brick_kiln"], separators=(",", ":"))
+    for cmd in commands:
+        # Compact separators: a space after the comma is word-split when the
+        # override is re-serialized into a launched command.
+        assert f"tasks_to_run='{expected}'" in cmd
+
+    with pytest.raises(ValueError, match="Unknown FT eval task names: m_brickkiln"):
+        run("--task-names=m_eurosat,m_brickkiln")
+
+
+def test_lr_axis_collapses_when_no_linear_probe_task_is_selected() -> None:
+    """A KNN-only selection must not repeat every config once per probe LR.
+
+    ``lr_args`` is emitted only for tasks whose type maps to ``linear_probe``,
+    so a KNN-only run (m-eurosat and m-brick-kiln are both classification) gets
+    no ``probe_lr`` override at all and the eight LRs would produce eight
+    identical runs of each (norm, pooling) pair. The norm and pooling sweeps
+    must survive the collapse untouched -- that is the part that carries real
+    information.
+    """
+    import sys as _sys
+
+    from olmoearth_pretrain.internal import full_eval_sweep as fs
+
+    def run(task_args: list[str]) -> list[str]:
+        captured: list[str] = []
+
+        def capture(cmd: str, **kwargs: Any) -> Mock:
+            captured.append(cmd)
+            return Mock(returncode=0)
+
+        argv = ["full_eval_sweep", "--cluster=local", "--dry_run", "--model=croma"]
+        with (
+            patch.object(_sys, "argv", argv + task_args),
+            patch.object(fs.subprocess, "run", side_effect=capture),
+        ):
+            fs.main()
+        return captured
+
+    knn_only = run(["--task-names=m_eurosat,m_brick_kiln"])
+    assert len(knn_only) == len(Normalization_MODES) * len(pooling_types)
+    # Every (norm, pooling) pair still runs; only the dead LR axis is gone.
+    combos = {
+        (
+            "pretrained" if "norm_stats_from_pretrained=True" in cmd else "dataset",
+            "mean" if "pooling_type=mean" in cmd else "max",
+        )
+        for cmd in knn_only
+    }
+    assert combos == {
+        (norm, pool) for norm in ("pretrained", "dataset") for pool in ("mean", "max")
+    }
+
+    # A linear-probe task in the selection makes the LR axis meaningful again.
+    with_probe = run(["--task-names=m_eurosat,m_cashew_plant"])
+    assert len(with_probe) == len(LP_LRs) * len(Normalization_MODES) * len(
+        pooling_types
+    )
+    # And an unfiltered sweep is unaffected.
+    assert len(run([])) == len(with_probe)
