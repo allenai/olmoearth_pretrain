@@ -1489,6 +1489,8 @@ class Perceiver(nn.Module):
         qk_norm: bool = False,
         per_depth_read_proj: bool = False,
         attn_dim: int | None = None,
+        student_dims: list[int] | None = None,
+        student_output_norm: bool = False,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1525,6 +1527,13 @@ class Perceiver(nn.Module):
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks.
+            student_dims: If set, add a DETACHED low-dim "student" readout of the
+                register grid, returned alongside the grid at width ``max(student_dims)``.
+                Smaller entries are Matryoshka prefixes of that output. The student's
+                input is detached, so losses on it never reach the reads, the latent
+                blocks or the encoder.
+            student_output_norm: Put a ``LayerNorm`` on the student's output (at the
+                full student width; a prefix is then a slice of a normalized vector).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1610,6 +1619,18 @@ class Perceiver(nn.Module):
             ]
         )
         self.norm = nn.LayerNorm(register_dim)
+        # Detached low-dim student readout of the register grid. Dims are stored
+        # descending: the student runs at dims[0] and the smaller entries are
+        # Matryoshka prefixes of its output.
+        self.student_dims: list[int] | None = None
+        self.student: nn.Sequential | None = None
+        if student_dims:
+            self.student_dims = sorted(set(student_dims), reverse=True)
+            student_dim = self.student_dims[0]
+            student_layers: list[nn.Module] = [nn.Linear(register_dim, student_dim)]
+            if student_output_norm:
+                student_layers.append(nn.LayerNorm(student_dim))
+            self.student = nn.Sequential(*student_layers)
 
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
@@ -1642,7 +1663,7 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
-    ) -> tuple[Tensor, Tensor | None]:
+    ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
         Args:
@@ -1660,6 +1681,8 @@ class Perceiver(nn.Module):
                 only consumer is the decoder's cross-attention, which wants a token
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
                 ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
+            student_registers: ``[B, n_h, n_w, max(student_dims)]`` -- the detached
+                student's readout of ``registers`` -- or None without a student.
         """
         if self.per_depth_read_proj:
             kv_per_read = [
@@ -1712,7 +1735,11 @@ class Perceiver(nn.Module):
         out = rearrange(
             out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
         )
-        return out, register_positions
+        # The student reads a detached copy: its losses train the student alone.
+        student_registers = (
+            self.student(out.detach()) if self.student is not None else None
+        )
+        return out, register_positions, student_registers
 
 
 @dataclass
@@ -1831,6 +1858,8 @@ class PerceiverConfig(Config):
             qk_norm=qk_norm,
             per_depth_read_proj=self.per_depth_read_proj,
             attn_dim=self.attn_dim,
+            student_dims=self.sorted_student_dims,
+            student_output_norm=self.student_output_norm,
         )
 
 
@@ -2011,11 +2040,6 @@ class Encoder(FlexiVitBase):
         self.use_perceiver = perceiver_config is not None
         self.perceiver: Perceiver | None = None
         self.register_dim: int | None = None
-        # Detached low-dim student readout of the register grid (see
-        # PerceiverConfig). Dims are stored descending; the student runs at
-        # dims[0] and the smaller entries are Matryoshka prefixes of its output.
-        self.register_student_dims: list[int] | None = None
-        self.register_student: nn.Sequential | None = None
         if perceiver_config is not None:
             perceiver_config.validate(
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
@@ -2029,13 +2053,6 @@ class Encoder(FlexiVitBase):
                 rope_base=rope_base,
                 qk_norm=qk_norm,
             )
-            self.register_student_dims = perceiver_config.sorted_student_dims
-            if self.register_student_dims is not None:
-                student_dim = self.register_student_dims[0]
-                student_layers = [nn.Linear(self.register_dim, student_dim)]
-                if perceiver_config.student_output_norm:
-                    student_layers.append(nn.LayerNorm(student_dim))
-                self.register_student = nn.Sequential(*student_layers)
 
         # With a bottleneck the contrastive head projects from the register latents;
         # otherwise from the encoder patch-token output.
@@ -2460,7 +2477,7 @@ class Encoder(FlexiVitBase):
         register_output = None
         if self.perceiver is not None:
             spatial_grid = self._patch_grid_hw(tokens_only_dict)
-            registers, register_positions = self.perceiver(
+            registers, register_positions, student_registers = self.perceiver(
                 patch_tokens=tokens,
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
@@ -2470,11 +2487,8 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
-            # Detached student readout of the registers just computed.
-            if self.register_student is not None:
-                register_output["student_registers"] = self.register_student(
-                    registers.detach()
-                )
+            if student_registers is not None:
+                register_output["student_registers"] = student_registers
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
