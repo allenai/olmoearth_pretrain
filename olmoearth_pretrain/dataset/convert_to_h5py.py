@@ -68,6 +68,9 @@ class ConvertToH5pyConfig(Config):
     # all-zero / nodata checks can only trigger for float or map layers, so skipping
     # the large uint16 stacks avoids reading most of the dataset twice.
     scan_modality_names: list[str] | None = None
+    # Skip the in-process bad-modality scan entirely (caller has already applied
+    # precomputed removals, e.g. from distributed scan-workers).
+    skip_bad_modality_scan: bool = False
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -91,6 +94,7 @@ class ConvertToH5pyConfig(Config):
                 if self.scan_modality_names is not None
                 else None
             ),
+            skip_bad_modality_scan=self.skip_bad_modality_scan,
         )
 
 
@@ -118,6 +122,7 @@ class ConvertToH5py:
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
         scan_modalities: list[ModalitySpec] | None = None,
+        skip_bad_modality_scan: bool = False,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -151,6 +156,7 @@ class ConvertToH5py:
         self.h5py_dir: UPath | None = None
         self.required_modalities = required_modalities
         self.scan_modalities = scan_modalities
+        self.skip_bad_modality_scan = skip_bad_modality_scan
         self.tile_size = tile_size
         self.raw_tile_size: int | None = None
         # Tile_size_split_factor is the factor by which the tile size is split into subtiles
@@ -330,11 +336,9 @@ class ConvertToH5py:
             missing_timesteps_masks_data[mod_spec.name] = mask
         return missing_timesteps_masks_data
 
-    def _remove_bad_modalities_from_sample(
-        self, sample: SampleInformation
-    ) -> SampleInformation:
-        """Remove bad modalities from the sample."""
-        modalities_to_remove = set()
+    def bad_modalities_for_sample(self, sample: SampleInformation) -> set[ModalitySpec]:
+        """Return the modalities of this sample that fail the quality checks."""
+        modalities_to_remove: set[ModalitySpec] = set()
         for modality in sample.modalities:
             if self.scan_modalities is not None and modality not in self.scan_modalities:
                 continue
@@ -361,7 +365,13 @@ class ConvertToH5py:
                     f"Image for modality {modality.name} contains nodata values, removing this modality"
                 )
                 modalities_to_remove.add(modality)
-        for modality in modalities_to_remove:
+        return modalities_to_remove
+
+    def _remove_bad_modalities_from_sample(
+        self, sample: SampleInformation
+    ) -> SampleInformation:
+        """Remove bad modalities from the sample."""
+        for modality in self.bad_modalities_for_sample(sample):
             del sample.modalities[modality]
         return sample
 
@@ -637,7 +647,10 @@ class ConvertToH5py:
 
         # Remove bad modalities from samples
         # This ensures that the metadata is consistent with the actual data saved in h5
-        processed_samples = self._process_samples(samples)
+        if self.skip_bad_modality_scan:
+            processed_samples = samples
+        else:
+            processed_samples = self._process_samples(samples)
         filtered_samples = []
         for sample in processed_samples:
             if not all(

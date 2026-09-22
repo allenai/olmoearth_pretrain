@@ -467,17 +467,18 @@ def cmd_convert_worker(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _prepare_h5(
-    olmoearth_dir: str,
-    allcap: bool = False,
-    tile_size: int | None = None,
-    scan_modalities: list[str] | None = None,
-) -> UPath:
-    """Scan olmoearth TIFFs, filter, assign global indices, write metadata.
+def _grid_key(sample) -> str:
+    gt = sample.grid_tile
+    return f"{gt.crs}|{gt.resolution_factor}|{gt.col}|{gt.row}|{gt.sample_id}"
 
-    Produces sample_manifest.json + sample_metadata.csv + latlon_distribution.npy
-    in the H5 output directory.
-    """
+
+def _build_h5_converter(
+    olmoearth_dir: str,
+    allcap: bool,
+    tile_size: int | None,
+    scan_modalities: list[str] | None,
+    skip_scan: bool = False,
+):
     from olmoearth_pretrain.data.constants import IMAGE_TILE_SIZE
     from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5pyConfig
     from olmoearth_pretrain.dataset_creation.pipeline import (
@@ -486,20 +487,92 @@ def _prepare_h5(
     )
 
     modalities = MODALITIES_FOR_H5_ALLCAP if allcap else MODALITIES_FOR_H5
-    tile_size = tile_size or IMAGE_TILE_SIZE
-    logger.info(f"prepare-h5: scanning {olmoearth_dir}")
     config = ConvertToH5pyConfig(
         tile_path=olmoearth_dir,
         supported_modality_names=modalities,
         compression="zstd",
         compression_opts=3,
-        tile_size=tile_size,
+        tile_size=tile_size or IMAGE_TILE_SIZE,
         scan_modality_names=scan_modalities,
+        skip_bad_modality_scan=skip_scan,
     )
-    converter = config.build()
+    return config.build(), modalities, tile_size or IMAGE_TILE_SIZE
 
-    # Phase 1: scan and filter
-    samples = converter.get_and_filter_samples()
+
+def cmd_scan_worker(args: argparse.Namespace) -> None:
+    """Run the bad-modality image scan for one shard of samples; write decisions."""
+    converter, _, _ = _build_h5_converter(
+        args.olmoearth_dir, args.allcap, args.h5_tile_size, args.scan_modalities
+    )
+    samples = converter._get_samples()
+    shard = samples[args.shard_id :: args.num_shards]
+    logger.info(f"scan-worker {args.shard_id}/{args.num_shards}: {len(shard)} samples")
+    with multiprocessing.Pool(args.workers) as pool:
+        results = list(pool.imap(converter.bad_modalities_for_sample, shard, chunksize=4))
+    decisions = {
+        _grid_key(sample): sorted(m.name for m in bad)
+        for sample, bad in zip(shard, results)
+        if bad
+    }
+    out_dir = UPath(args.olmoearth_dir) / "h5_scan"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with (out_dir / f"shard_{args.shard_id:05d}.json").open("w") as f:
+        json.dump(decisions, f)
+    logger.info(
+        f"scan-worker {args.shard_id}: {len(decisions)} samples with removals written"
+    )
+
+
+def _apply_bad_modalities(samples: list, bad_dir: str) -> list:
+    """Apply precomputed scan-worker removals (h5_scan/shard_*.json) to samples."""
+    from olmoearth_pretrain.data.constants import Modality
+
+    decisions: dict[str, list[str]] = {}
+    for fname in sorted(UPath(bad_dir).glob("shard_*.json")):
+        with fname.open() as f:
+            decisions.update(json.load(f))
+    n_removed = 0
+    for sample in samples:
+        for name in decisions.get(_grid_key(sample), []):
+            spec = Modality.get(name)
+            if spec in sample.modalities:
+                del sample.modalities[spec]
+                n_removed += 1
+    logger.info(
+        f"applied {len(decisions)} scan decisions ({n_removed} modality removals) "
+        f"from {bad_dir}"
+    )
+    return samples
+
+
+def _prepare_h5(
+    olmoearth_dir: str,
+    allcap: bool = False,
+    tile_size: int | None = None,
+    scan_modalities: list[str] | None = None,
+    bad_modalities_dir: str | None = None,
+) -> UPath:
+    """Scan olmoearth TIFFs, filter, assign global indices, write metadata.
+
+    Produces sample_manifest.json + sample_metadata.csv + latlon_distribution.npy
+    in the H5 output directory.
+    """
+    logger.info(f"prepare-h5: scanning {olmoearth_dir}")
+    converter, modalities, tile_size = _build_h5_converter(
+        olmoearth_dir,
+        allcap,
+        tile_size,
+        scan_modalities,
+        skip_scan=bad_modalities_dir is not None,
+    )
+
+    # Phase 1: scan and filter (or apply precomputed scan-worker decisions)
+    if bad_modalities_dir is not None:
+        samples = converter._get_samples()
+        samples = _apply_bad_modalities(samples, bad_modalities_dir)
+        samples = converter._filter_samples(samples)
+    else:
+        samples = converter.get_and_filter_samples()
     logger.info(f"prepare-h5: {len(samples)} samples after filtering")
 
     # Phase 2: build (index, sample) tuples
@@ -555,6 +628,7 @@ def cmd_prepare_h5(args: argparse.Namespace) -> None:
         allcap=args.allcap,
         tile_size=args.h5_tile_size,
         scan_modalities=args.scan_modalities,
+        bad_modalities_dir=args.bad_modalities_dir,
     )
 
 
@@ -745,6 +819,43 @@ def cmd_launch_convert(args: argparse.Namespace) -> None:
     experiment_ids = launch_beaker_jobs(
         run_name=run_name,
         step_name="convert",
+        worker_cmd_template=cmd_template,
+        num_shards=args.num_shards,
+        clusters=args.clusters,
+        shard_ids=args.shard_ids,
+        gpus=args.gpus,
+        cpus=args.cpus,
+        priority=args.priority,
+    )
+    for eid in experiment_ids:
+        print(f"  https://beaker.org/ex/{eid}")
+
+
+def cmd_launch_scan(args: argparse.Namespace) -> None:
+    """Launch the bad-modality scan across Beaker shards (writes h5_scan/*.json)."""
+    from olmoearth_pretrain.dataset_creation.distributed import launch_beaker_jobs
+
+    cmd_template = [
+        "scripts/data/corpus_pipeline.py",
+        "scan-worker",
+        "--olmoearth-dir",
+        args.olmoearth_dir,
+        "--shard-id",
+        "{shard_id}",
+        "--num-shards",
+        str(args.num_shards),
+        "--workers",
+        str(args.workers),
+    ]
+    if args.allcap:
+        cmd_template.append("--allcap")
+    if args.h5_tile_size:
+        cmd_template.extend(["--h5-tile-size", str(args.h5_tile_size)])
+    if args.scan_modalities:
+        cmd_template.extend(["--scan-modalities", *args.scan_modalities])
+    experiment_ids = launch_beaker_jobs(
+        run_name=UPath(args.olmoearth_dir).name,
+        step_name="h5scan",
         worker_cmd_template=cmd_template,
         num_shards=args.num_shards,
         clusters=args.clusters,
@@ -1215,7 +1326,40 @@ def main() -> None:
         help="Only load these modalities in the bad-modality filter scan "
         "(e.g. sentinel1 openstreetmap_raster); default scans all",
     )
+    p.add_argument(
+        "--bad-modalities-dir",
+        default=None,
+        help="Apply precomputed scan-worker decisions from this dir (h5_scan/) "
+        "instead of scanning images in-process",
+    )
     p.set_defaults(func=cmd_prepare_h5)
+
+    # -- scan-worker / launch-scan --
+    p = subparsers.add_parser("scan-worker", help="Bad-modality scan for one shard")
+    p.add_argument("--olmoearth-dir", required=True)
+    p.add_argument("--shard-id", type=int, required=True)
+    p.add_argument("--num-shards", type=int, required=True)
+    p.add_argument("--workers", type=int, default=32)
+    p.add_argument("--allcap", action="store_true")
+    p.add_argument("--h5-tile-size", type=int, default=None)
+    p.add_argument("--scan-modalities", nargs="*", default=None)
+    p.set_defaults(func=cmd_scan_worker)
+
+    p = subparsers.add_parser("launch-scan", help="Launch bad-modality scan on Beaker")
+    p.add_argument("--olmoearth-dir", required=True)
+    p.add_argument("--num-shards", type=int, required=True)
+    p.add_argument("--workers", type=int, default=32)
+    p.add_argument("--allcap", action="store_true")
+    p.add_argument("--h5-tile-size", type=int, default=None)
+    p.add_argument("--scan-modalities", nargs="*", default=None)
+    p.add_argument("--clusters", nargs="+", default=["ai2/neptune-cirrascale"])
+    p.add_argument("--shard-ids", nargs="*", type=int, default=None)
+    p.add_argument("--gpus", type=int, default=0)
+    p.add_argument("--cpus", type=int, default=None)
+    p.add_argument(
+        "--priority", default=None, choices=["low", "normal", "high", "urgent"]
+    )
+    p.set_defaults(func=cmd_launch_scan)
 
     # -- launch-h5 --
     p = subparsers.add_parser("launch-h5", help="Launch H5 writing on Beaker")
