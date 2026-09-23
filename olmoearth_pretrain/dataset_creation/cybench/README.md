@@ -25,7 +25,13 @@ No rslearn ingest / tile store: Zarr chunks are streamed and reduced in memory
 | 3a | `write_windows series` | `agg/series_crop/<ridx>.npy` — one `(T_all, 14)` series per region |
 | 3b | `write_windows windows` | `rslearn_dataset/` — one window per (adm_id, harvest_year), + `meta/windows_summary_*.csv`, `meta/label_stats_*.json` |
 
+| 4 | `tag_eval_subset` | `oep_eval` tag on a stratified 3k/1k/1k subset per crop (the `cybench_<crop>_eval` registry entries); `meta/eval_subset_oep_eval.csv` |
+
 Root on weka: `/weka/dfive-default/helios/dataset/cybench/`.
+
+Registry: `cybench_<crop>` = full dataset (too large for the in-loop evaluator,
+which embeds the whole train split every eval interval); `cybench_<crop>_eval`
+= the `oep_eval` subset, like `lfmc_woody` vs `lfmc_woody_eval`.
 
 ### Weights (stage 1)
 
