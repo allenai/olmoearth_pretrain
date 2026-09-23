@@ -229,3 +229,125 @@ def test_encoder_config_dispatches_the_joint_config_class() -> None:
             position_encoding="rope_3d_mixed",
             perceiver_config=JointLatentConfig(register_dim=16),
         ).build()
+
+
+def test_latent_reads_all_opens_only_the_latent_rows() -> None:
+    """With ``latent_reads_all`` a latent query sees every valid key; tokens unchanged."""
+    torch.manual_seed(0)
+    n_tokens, n_latents = 11, 4
+    cell_tok = torch.tensor([[0, 0, 1, 1, 2, 2, 3, 3, -1, 0, 1]])
+    cell_id = torch.cat([cell_tok, torch.arange(n_latents)[None]], dim=1)
+    is_latent = torch.cat(
+        [
+            torch.zeros(1, n_tokens, dtype=torch.bool),
+            torch.ones(1, n_latents, dtype=torch.bool),
+        ],
+        1,
+    )
+    valid = torch.ones_like(is_latent)
+    valid[0, 9:11] = False
+    base = joint_attention_allowed(cell_id, is_latent, valid)[0]
+    opened = joint_attention_allowed(cell_id, is_latent, valid, latent_reads_all=True)[
+        0
+    ]
+    # Token rows are identical.
+    torch.testing.assert_close(opened[:n_tokens], base[:n_tokens])
+    # Latent rows: exactly the valid keys (including the non-spatial -1 token).
+    for q in range(n_tokens, n_tokens + n_latents):
+        assert torch.equal(opened[q], valid[0]), q
+    assert opened[n_tokens:, 8].all()  # the -1 token is now read by every latent
+    assert not base[n_tokens:, 8].any()
+
+
+def _joint_module(**overrides) -> JointLatentTransformer:
+    kwargs: dict = dict(
+        embedding_size=32,
+        num_heads=4,
+        mlp_ratio=2.0,
+        joint_depth=2,
+        latent_only_depth=1,
+        token_mlp=True,
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        rope_mixed_base=10.0,
+        temporal_rope_dim_frac=0.25,
+        rope_temporal_base=None,
+        qk_norm=False,
+    )
+    kwargs.update(overrides)
+    return JointLatentTransformer(**kwargs).eval()
+
+
+def _encoder_order_inputs(B: int, n_h: int, n_w: int, T: int, n_mod: int):
+    """Tokens in the encoder's collapsed order: per modality ``(h, w, t)``, then concat."""
+    cells_one = torch.arange(n_h * n_w).repeat_interleave(T)
+    cells = cells_one.repeat(n_mod).expand(B, -1)
+    t = torch.arange(T).repeat(n_h * n_w).repeat(n_mod).float().expand(B, -1)
+    positions = torch.stack([t, (cells // n_w).float(), (cells % n_w).float()], dim=-1)
+    n_tokens = cells.shape[1]
+    tokens = torch.randn(B, n_tokens, 32)
+    valid = torch.ones(B, n_tokens, dtype=torch.bool)
+    valid[0, 5:9] = False  # padding inside the first modality's run
+    return tokens, positions, valid, cells
+
+
+def test_cell_sorted_layout_is_numerically_a_no_op() -> None:
+    """Sorting tokens by cell changes no register (attention is permutation-equivariant)."""
+    torch.manual_seed(0)
+    tokens, positions, valid, cells = _encoder_order_inputs(
+        B=2, n_h=3, n_w=3, T=4, n_mod=2
+    )
+    unsorted = _joint_module(sort_by_cell=False)
+    sorted_ = _joint_module(sort_by_cell=True)
+    sorted_.load_state_dict(unsorted.state_dict())
+    with torch.no_grad():
+        ref, ref_pos = unsorted(tokens, positions, valid, cells, (3, 3))
+        out, out_pos = sorted_(tokens, positions, valid, cells, (3, 3))
+    torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(out_pos, ref_pos)
+
+
+def test_sort_by_cell_groups_cells_and_parks_padding_last() -> None:
+    """The permutation is stable within a cell, groups its runs, and sends padding last."""
+    tokens, positions, valid, cells = _encoder_order_inputs(
+        B=1, n_h=2, n_w=2, T=3, n_mod=2
+    )
+    n_latents = 4
+    tok, pos, val, cid = JointLatentTransformer._sort_by_cell(
+        tokens, positions, valid, cells, n_latents
+    )
+    n_valid = int(valid.sum())
+    # Valid tokens first, sorted by cell; padding after.
+    assert val[0, :n_valid].all() and not val[0, n_valid:].any()
+    assert torch.equal(cid[0, :n_valid], cid[0, :n_valid].sort().values)
+    # Positions travelled with their tokens.
+    inv = torch.argsort(cells[0].masked_fill(~valid[0], n_latents), stable=True)
+    torch.testing.assert_close(tok[0], tokens[0, inv])
+    torch.testing.assert_close(pos[0], positions[0, inv])
+
+
+def test_latent_reads_all_changes_registers_only_through_latent_rows() -> None:
+    """A far-away token (other cell) reaches a register under latent_reads_all only."""
+    torch.manual_seed(0)
+    tokens, positions, valid, cells = _encoder_order_inputs(
+        B=1, n_h=2, n_w=2, T=3, n_mod=1
+    )
+    local = _joint_module(latent_reads_all=False)
+    opened = _joint_module(latent_reads_all=True)
+    opened.load_state_dict(local.state_dict())
+    with torch.no_grad():
+        a, _ = local(tokens, positions, valid, cells, (2, 2))
+        b, _ = opened(tokens, positions, valid, cells, (2, 2))
+    # The two masks differ, so the registers differ.
+    assert not torch.allclose(a, b)
+    # Config round-trip carries both flags.
+    cfg = JointLatentConfig(register_dim=32, latent_reads_all=True, sort_by_cell=False)
+    built = cfg.build(
+        encoder_embedding_size=32,
+        encoder_num_heads=4,
+        mlp_ratio=2.0,
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        qk_norm=False,
+    )
+    assert built.latent_reads_all is True and built.sort_by_cell is False

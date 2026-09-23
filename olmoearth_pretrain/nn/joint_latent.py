@@ -119,16 +119,23 @@ def build_register_grid_positions(
 
 
 def joint_attention_allowed(
-    cell_id: Tensor, is_latent: Tensor, valid: Tensor
+    cell_id: Tensor, is_latent: Tensor, valid: Tensor, latent_reads_all: bool = False
 ) -> Tensor:
     """Dense ``[B, L, L]`` boolean mask for the joint pattern (reference / CPU path).
 
     ``allowed[b, q, kv] = valid[b, kv] & (is_latent[b, kv] | cell_id[b, q] == cell_id[b, kv])``.
     Latents carry the cell id of their grid position, so the one rule gives both
     directions: latent -> (all latents + own cell), token -> (all latents + own cell).
+
+    With ``latent_reads_all`` a latent QUERY additionally sees every valid key
+    (``| is_latent[b, q]``): latents read the whole sample in one hop, as the pure
+    Perceiver's reads do, while token rows keep the cell-local pattern.
     """
     same_cell = cell_id[:, :, None] == cell_id[:, None, :]
-    return valid[:, None, :] & (is_latent[:, None, :] | same_cell)
+    allowed = is_latent[:, None, :] | same_cell
+    if latent_reads_all:
+        allowed = allowed | is_latent[:, :, None]
+    return valid[:, None, :] & allowed
 
 
 class JointLatentTransformer(nn.Module):
@@ -155,6 +162,8 @@ class JointLatentTransformer(nn.Module):
         qk_norm: bool,
         drop_path: float = 0.0,
         latent_time_range: bool = False,
+        latent_reads_all: bool = False,
+        sort_by_cell: bool = True,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -186,6 +195,18 @@ class JointLatentTransformer(nn.Module):
                 the window (see :func:`apply_3d_mixed_rope`), so a latent's attention
                 over time is a soft box over its window rather than a peak at the
                 centre. Requires a 3D mixed RoPE encoder. Tokens stay points.
+            latent_reads_all: If True, latent queries attend to every valid token (and
+                every latent), not only their own cell; token queries are unchanged.
+                Restores the pure Perceiver's one-hop view of the whole sample for the
+                latents while tokens keep cell-local attention. Costs
+                ``M x (N + M)`` extra score pairs per block (~+5% MACs at the ws16/ps1
+                eval shape, ~+1% at training shapes).
+            sort_by_cell: If True, tokens are permuted so that each cell's tokens are
+                contiguous before the joint blocks. Attention is permutation-equivariant
+                given positions and mask move with the tokens, and only the latents are
+                returned, so this changes nothing numerically; it only makes the
+                FlexAttention block mask sparser (whole 128-blocks off the cell
+                diagonal are skipped instead of computed).
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -207,6 +228,8 @@ class JointLatentTransformer(nn.Module):
                 f"{position_encoding}"
             )
         self.latent_time_range = latent_time_range
+        self.latent_reads_all = latent_reads_all
+        self.sort_by_cell = sort_by_cell
         self.register = nn.Parameter(torch.empty(1, embedding_size))
         nn.init.trunc_normal_(self.register, std=0.02)
         block_kwargs: dict[str, Any] = dict(
@@ -253,6 +276,39 @@ class JointLatentTransformer(nn.Module):
         """Whether the joint blocks rotate over ``(t, row, col)``."""
         return PositionEncoding.is_3d_rope(self.position_encoding)
 
+    @staticmethod
+    def _sort_by_cell(
+        patch_tokens: Tensor,
+        patch_positions: Tensor,
+        valid_tokens: Tensor,
+        cell_ids: Tensor,
+        n_latents: int,
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+        """Permute the token axis so each cell's tokens are contiguous.
+
+        The encoder flattens each modality as ``(h, w, t[, bandset])`` and concatenates
+        modalities, so a cell's tokens arrive as one run per modality, spread across
+        the sequence. Sorting by cell (stable, so the within-cell modality/time order is
+        kept) puts every run of a cell side by side: a 128-block of queries then needs
+        only the key blocks covering the same handful of cells plus the latent blocks,
+        and FlexAttention skips the rest outright. Non-spatial tokens (cell ``-1``)
+        sort first as one run; invalid (padding) tokens are sent to the end so they
+        cannot fragment a cell's run. Positions and validity move with the tokens, so
+        the attention pattern and RoPE are unchanged, and the caller only consumes the
+        latents, which never move.
+        """
+        sort_key = cell_ids.masked_fill(~valid_tokens, n_latents)
+        order = torch.argsort(sort_key, dim=1, stable=True)
+        gather_d = lambda x: torch.gather(  # noqa: E731
+            x, 1, order[..., None].expand(-1, -1, x.shape[-1])
+        )
+        return (
+            gather_d(patch_tokens),
+            gather_d(patch_positions),
+            torch.gather(valid_tokens, 1, order),
+            torch.gather(cell_ids, 1, order),
+        )
+
     def _attention_masks(
         self, cell_id: Tensor, is_latent: Tensor, valid: Tensor
     ) -> dict[str, Any]:
@@ -261,11 +317,13 @@ class JointLatentTransformer(nn.Module):
         A FlexAttention block mask on CUDA, a dense ``[B, 1, L, L]`` SDPA mask elsewhere.
         """
         if cell_id.is_cuda:
+            reads_all = self.latent_reads_all  # Python bool: specialised at trace time
 
             def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-                return valid[b, kv] & (
-                    is_latent[b, kv] | (cell_id[b, q] == cell_id[b, kv])
-                )
+                allowed = is_latent[b, kv] | (cell_id[b, q] == cell_id[b, kv])
+                if reads_all:
+                    allowed = allowed | is_latent[b, q]
+                return valid[b, kv] & allowed
 
             batch, length = cell_id.shape
             return {
@@ -274,7 +332,9 @@ class JointLatentTransformer(nn.Module):
                 )
             }
         return {
-            "attn_mask": joint_attention_allowed(cell_id, is_latent, valid)[:, None]
+            "attn_mask": joint_attention_allowed(
+                cell_id, is_latent, valid, latent_reads_all=self.latent_reads_all
+            )[:, None]
         }
 
     def _joint_block(
@@ -348,6 +408,11 @@ class JointLatentTransformer(nn.Module):
             if visible_mask is not None
             else torch.ones(batch_size, n_tokens, dtype=torch.bool, device=device)
         )
+        cell_ids = cell_ids.long()
+        if self.sort_by_cell:
+            patch_tokens, patch_positions, valid_tokens, cell_ids = self._sort_by_cell(
+                patch_tokens, patch_positions, valid_tokens, cell_ids, n_latents
+            )
 
         # Latents: one vector cloned to the grid; identity comes from RoPE.
         latents = self.register.unsqueeze(0).expand(batch_size, n_latents, -1)
@@ -394,7 +459,7 @@ class JointLatentTransformer(nn.Module):
         x = torch.cat([patch_tokens, latents.to(patch_tokens.dtype)], dim=1)
         rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
         latent_cell_ids = torch.arange(n_latents, device=device).expand(batch_size, -1)
-        cell_id = torch.cat([cell_ids.long(), latent_cell_ids], dim=1)
+        cell_id = torch.cat([cell_ids, latent_cell_ids], dim=1)
         is_latent = torch.cat(
             [
                 torch.zeros(batch_size, n_tokens, dtype=torch.bool, device=device),
@@ -442,6 +507,10 @@ class JointLatentConfig(Config):
             Requires ``position_encoding == rope_3d_mixed`` on the encoder.
         student_dims / student_output_norm: As on ``PerceiverConfig``: a detached
             low-dim student readout of the register grid.
+        latent_reads_all: Latent queries attend to every valid token, not only their
+            own cell (tokens unchanged). See :class:`JointLatentTransformer`.
+        sort_by_cell: Cell-contiguous token layout inside the joint blocks. Numerically
+            a no-op; makes the FlexAttention block mask sparser. Default True.
     """
 
     register_dim: int
@@ -451,6 +520,8 @@ class JointLatentConfig(Config):
     latent_time_range: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
+    latent_reads_all: bool = False
+    sort_by_cell: bool = True
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -523,4 +594,6 @@ class JointLatentConfig(Config):
             qk_norm=qk_norm,
             drop_path=drop_path,
             latent_time_range=self.latent_time_range,
+            latent_reads_all=self.latent_reads_all,
+            sort_by_cell=self.sort_by_cell,
         )
