@@ -7,11 +7,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/africa_crop_mask",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "africa_crop_mask",
@@ -127,6 +131,7 @@
       ],
       "config_json_sha256": "8384edbe0305325e4fc376b3805fb92d9bcbdb4e70453e7b839de0d98d826eb4",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -239,6 +244,7 @@
       ],
       "config_json_sha256": "ac910832632dfae2381e2114985df6a5119149401797677063a1c1d2595ca8f0",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -359,11 +365,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_coarse",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "canada_crops_coarse",
@@ -494,11 +504,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/canada_crops_fine",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "canada_crops_fine",
@@ -607,6 +621,7 @@
       ],
       "config_json_sha256": "5718ec3753983905d3636a863b82a389f03d545e61605e035c76e98a9f9016c9",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -723,11 +738,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/descals",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "descals",
@@ -838,11 +857,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/ethiopia_crops",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "ethiopia_crops",
@@ -959,6 +982,7 @@
       ],
       "config_json_sha256": "f53418b156fe53cf5f54b89bf116b659f79e7203c81a02d8a2e4ac07f00043ab",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -1182,6 +1206,7 @@
       ],
       "config_json_sha256": "5cc22cc8a9c070b84e7c8c6abbc6c60898a8dac5c73900364c2442ee4f5f5953",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -1303,11 +1328,15 @@
       ],
       "config_json_sha256": "b70f856351f4af3717140831dddd8fd8481e47f4c0d44dfed58604f367f29dd7",
       "config_repo_dir": "data/rslearn_dataset_configs/glance",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "glance",
@@ -1417,6 +1446,7 @@
       ],
       "config_json_sha256": "91f09869987e22b33137b684823196ef58a6d05646f976bb83f6bf2d6193d2f5",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -1533,11 +1563,15 @@
       ],
       "config_json_sha256": "e90327b731ed420526ac661f861d736e50965e498e4abab261c7b3855c068741",
       "config_repo_dir": "data/rslearn_dataset_configs/lcmap_lu",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "lcmap_lu",
@@ -1645,6 +1679,7 @@
       ],
       "config_json_sha256": "d998336af1a19d9d339c5179e1a89f36c4f572e55cb3543d1c4c964b669b7644",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -1798,6 +1833,7 @@
       ],
       "config_json_sha256": "e04e9d4016c0c8289f521b89994dd70d8ee6fc301be35be37998eebe59e39bd1",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -1920,6 +1956,7 @@
       ],
       "config_json_sha256": "e04e9d4016c0c8289f521b89994dd70d8ee6fc301be35be37998eebe59e39bd1",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2038,6 +2075,7 @@
       ],
       "config_json_sha256": "827f36040d2c734c09b1d7ead45da25ee8b14e361f63c46ead401a0e264feb5b",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2232,6 +2270,7 @@
       ],
       "config_json_sha256": "bc86b4aa5ca837fabb448e756af9085705c4c4a53497e0174fc520906f34f34c",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2344,6 +2383,7 @@
       ],
       "config_json_sha256": "803131154db45e56f59fd819457d98d15b0f50f8b01fede46638e077545c2fde",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2395,6 +2435,7 @@
       ],
       "config_json_sha256": "7a607028e2193dd637053c8f0202742e3e08382ff62dd717ad79fd303ce0e5b3",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2508,6 +2549,7 @@
       ],
       "config_json_sha256": "7a607028e2193dd637053c8f0202742e3e08382ff62dd717ad79fd303ce0e5b3",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2613,6 +2655,7 @@
       ],
       "config_json_sha256": "a21bc70c6f8a3c596b558902733e07153db8259e8f36749fe237a39bbf1915e9",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2672,6 +2715,7 @@
       ],
       "config_json_sha256": "a21bc70c6f8a3c596b558902733e07153db8259e8f36749fe237a39bbf1915e9",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2723,6 +2767,7 @@
       ],
       "config_json_sha256": "9244b1af2e5ce26a9c6eae64f437c9acd6da135e950be92737c9b3651d0e93dc",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2842,6 +2887,7 @@
       ],
       "config_json_sha256": "9244b1af2e5ce26a9c6eae64f437c9acd6da135e950be92737c9b3651d0e93dc",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -2981,6 +3027,7 @@
       ],
       "config_json_sha256": "15862519de2c2e6a0c0f74675d34363c1f0c36f60a25ebbc500de3bd8e354302",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -3098,6 +3145,7 @@
       ],
       "config_json_sha256": "72b1ecdd8fa62a3c8ee2f58d00c46c94733749f1bf5e59fba4e1912f861b271d",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -3247,11 +3295,15 @@
       ],
       "config_json_sha256": "e90327b731ed420526ac661f861d736e50965e498e4abab261c7b3855c068741",
       "config_repo_dir": "data/rslearn_dataset_configs/us_trees",
+      "embedding_products": {
+        "gse": {
+          "product": "aef"
+        }
+      },
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "gse",
         "sentinel2_l2a"
       ],
       "name": "us_trees",
@@ -3367,6 +3419,7 @@
       ],
       "config_json_sha256": "c1c8882f6fc85018b62687bdf5582fae9599500057b303a17637693561829abe",
       "config_repo_dir": null,
+      "embedding_products": {},
       "end_time": null,
       "imputes": [],
       "is_multilabel": false,
@@ -3473,6 +3526,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-08-19T20:51:22.017287",
+  "updated_at": "2026-09-23T11:50:39.113582",
   "version": "1.0"
 }
