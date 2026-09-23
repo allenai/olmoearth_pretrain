@@ -159,8 +159,11 @@ class Registry:
         }
 
         logger.info(f"Saving registry to {registry_path}")
+        # sort_keys + trailing newline match the repo's pretty-format-json /
+        # end-of-file-fixer hooks, so a regenerated registry does not fail CI.
         with registry_path.open("w") as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
 
         logger.info(f"Registry saved with {len(self.datasets)} datasets")
 
@@ -251,7 +254,9 @@ class Registry:
             List of datasets that include this modality
         """
         return [
-            entry for entry in self.datasets.values() if modality in entry.modalities
+            entry
+            for entry in self.datasets.values()
+            if modality in entry.supported_modalities
         ]
 
     def __len__(self) -> int:

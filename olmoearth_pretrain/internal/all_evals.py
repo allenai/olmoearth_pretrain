@@ -1299,6 +1299,116 @@ EVAL_TASKS.update(
     }
 )
 
+# The AEF supplemental evaluation datasets (arXiv:2507.22291): S2 timeseries
+# crops carrying a single labeled center pixel each, ingested via the registry
+# (their plain 32x32 segmentation variants are defined above).
+AEF_SUPPLEMENTAL_DATASETS = (
+    "africa_crop_mask",
+    "canada_crops_coarse",
+    "canada_crops_fine",
+    "descals",
+    "ethiopia_crops",
+    "glance",
+    "lcmap_lu",
+    "us_trees",
+)
+
+# Window size the embedding evals run at: the ws16 embedding-product convention
+# (a 16x16 window around the labeled pixel), shared with the precomputed baselines.
+EMBEDDING_EVAL_WINDOW_SIZES = (16,)
+
+
+def _embedding_eval_batch_scale(window_size: int) -> int:
+    """Batch-size multiplier keeping tokens per batch constant across ws.
+
+    Each window carries (window_size/patch_size)^2 spatial tokens, so halving
+    the window quarters the tokens per window; scaling the batch by
+    (16/ws)^2 keeps the token throughput (and for PASTIS the
+    one-stored-sample-per-batch tiling property) identical to ws16.
+    """
+    return (16 // window_size) ** 2
+
+
+def _aef_ps1_task(
+    name: str,
+    eval_mode: EvalMode,
+    window_size: int = 16,
+    input_modalities: list[str] | None = None,
+) -> DownstreamTaskConfig:
+    """AEF supplemental task under the per-pixel embedding-product convention.
+
+    Each sample is center-cropped to a window_size x window_size window around
+    its labeled pixel, OlmoEarth emits per-pixel (patch_size=1) embeddings
+    int8 round-tripped like an embedding product, and only the labeled pixel's
+    token is kept — the task runs as center-pixel classification
+    (label_at_center_pixel + use_center_token). Balanced accuracy is the AEF
+    paper's protocol metric.
+    """
+    scale = _embedding_eval_batch_scale(window_size)
+    return DownstreamTaskConfig(
+        dataset=name,
+        embedding_batch_size=32 * scale,
+        probe_batch_size=8 * scale,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=input_modalities or [Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=eval_mode,
+        primary_metric=EvalMetric.BALANCED_ACCURACY,
+        window_size=window_size,
+        patch_size=1,
+        quantize_embeddings=True,
+        use_center_token=True,
+        label_at_center_pixel=True,
+    )
+
+
+# Embedding-product evals: OlmoEarth scored under the same conventions as the
+# precomputed embedding products (AEF/Tessera) — per-pixel (patch_size=1)
+# embeddings from fixed windows, int8 round-tripped. OlmoEarth checkpoints
+# run every window size in EMBEDDING_EVAL_WINDOW_SIZES by default (ws16 is
+# the product-parity convention; ws8/ws4/ws1 ablate the spatial context the
+# embeddings are computed from). Kept separate from EVAL_TASKS and swept by
+# embedding_eval_sweep.py (EMBEDDING_EVALS=1), which holds normalization
+# fixed to pretraining stats and sweeps only the probe LR for olmoearth /
+# aef / tessera_v2_precomputed. The precomputed baselines run these same tasks
+# with input_modalities overridden to the embedding modality and
+# quantize_embeddings=False (they are already int8 at source); they keep one
+# task per dataset, so they stay ws16-only.
+#
+# The AEF supplemental tasks are effectively pixel-wise classification, so each
+# gets a KNN twin (`_knn`). The PASTIS tasks stay LP-only: their dense labels
+# flatten to millions of train pixels, and KNN keeps every one as a reference
+# point (cost scales with train x query pixels), unlike the LP which compresses
+# them into a single weight matrix.
+#
+# The _pretrain_export suffix marks that the PASTIS tasks read the
+# pastis_rslearn pretraining-mirror export, distinguishing their metrics from
+# earlier pastis_ws16_ps1_* runs on the benchmark-shipped imagery. One task
+# set per window size in EMBEDDING_EVAL_WINDOW_SIZES, ws16 first.
+EMBEDDING_EVAL_TASKS = {}
+for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            **{
+                f"{name}_ws{_ws}_ps1": _aef_ps1_task(
+                    name, EvalMode.LINEAR_PROBE, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+            **{
+                f"{name}_ws{_ws}_ps1_knn": _aef_ps1_task(
+                    name, EvalMode.KNN, window_size=_ws
+                )
+                for name in AEF_SUPPLEMENTAL_DATASETS
+            },
+        }
+    )
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
@@ -1596,6 +1706,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
                     if os.environ.get("FINETUNE")
+                    else EMBEDDING_EVAL_TASKS
+                    if os.environ.get("EMBEDDING_EVALS")
                     else EVAL_TASKS
                 ),
                 eval_on_startup=True,

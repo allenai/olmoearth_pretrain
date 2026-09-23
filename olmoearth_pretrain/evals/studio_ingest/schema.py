@@ -118,6 +118,24 @@ def rslearn_to_olmoearth(layer_name: str) -> ModalitySpec:
     raise KeyError(f"Unknown rslearn layer name: {layer_name!r}")
 
 
+class EmbeddingProductRecord(BaseModel):
+    """A precomputed embedding product that is live on a dataset.
+
+    Written by scripts/tools/register_embedding_products.py once the product's
+    bake manifest shows a finished, well-covered bake. Eval jobs read it from
+    the git-tracked registry: every model on the dataset skips windows where
+    the product's layer is not completed on disk, so all models are scored on
+    the same windows.
+
+    Attributes:
+        product: the materializer product name (e.g. "aef", "tessera_v2").
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    product: str
+
+
 class EvalDatasetEntry(BaseModel):
     """A single entry in the eval dataset registry.
 
@@ -141,6 +159,8 @@ class EvalDatasetEntry(BaseModel):
         # === Modality Configuration ===
         modalities: List of OlmoEarth modality names (e.g., ["sentinel2_l2a"])
         imputes: List of (src_band, tgt_band) tuples for band imputation
+        embedding_products: Live precomputed embedding products, keyed by
+            modality name (e.g., {"gse": ...})
 
         # === Sizing ===
         window_size: Window/patch size (used as height_width for segmentation)
@@ -186,6 +206,11 @@ class EvalDatasetEntry(BaseModel):
     # Modality configuration
     modalities: list[str] = Field(default_factory=list)
     imputes: list[tuple[str, str]] = Field(default_factory=list)
+    # Precomputed embedding products (e.g. "gse" for AlphaEarth) are not
+    # declared in model.yaml: eval jobs add the input for the precomputed
+    # baseline at load time and, for every model, skip windows lacking any
+    # product's layer. Keyed by modality name, which is also the layer name.
+    embedding_products: dict[str, EmbeddingProductRecord] = Field(default_factory=dict)
 
     # Sizing
     window_size: int | None = None
@@ -196,6 +221,26 @@ class EvalDatasetEntry(BaseModel):
     use_pretrain_norm: bool = True
 
     num_timesteps: int = 1
+
+    # Time range the imagery covers ("YYYY-MM-DD"), used at eval time to
+    # synthesize per-timestep (monthly) timestamps fed to the model. None
+    # falls back to RslearnToOlmoEarthDataset's defaults.
+    start_time: str | None = None
+    end_time: str | None = None
+
+    # === Config provenance ===
+    # Repo-relative directory containing this dataset's model.yaml (e.g.
+    # "data/rslearn_dataset_configs/pastis_rslearn"). When set, eval jobs read
+    # model.yaml from the git checkout — pinned by the commit being run —
+    # instead of the Weka copy, which can silently go stale between ingests.
+    # None falls back to the Weka copy (datasets whose configs are not yet
+    # committed to the repo).
+    config_repo_dir: str | None = None
+    # sha256 of the dataset folder's config.json, recorded at ingest. Unlike
+    # model.yaml, config.json must stay physically in the dataset folder
+    # (rslearn reads it from the dataset root), so eval jobs verify it against
+    # this hash instead. None skips verification with a warning.
+    config_json_sha256: str | None = None
 
     @field_validator("task_type", mode="before")
     @classmethod
@@ -233,8 +278,26 @@ class EvalDatasetEntry(BaseModel):
         return self
 
     @property
+    def supported_modalities(self) -> list[str]:
+        """Imagery modalities plus the live precomputed embedding products."""
+        extra = [m for m in self.embedding_products if m not in self.modalities]
+        return [*self.modalities, *sorted(extra)]
+
+    @property
     def model_yaml_path(self) -> str:
-        """Get the path to the model.yaml file."""
+        """Path to the model.yaml eval jobs should read.
+
+        Entries with ``config_repo_dir`` resolve against the repo checkout
+        (git-pinned; raises if the checkout or file is missing rather than
+        silently falling back to a possibly-stale Weka copy). Entries without
+        it fall back to the copy in the Weka dataset folder.
+        """
+        if self.config_repo_dir is not None:
+            from olmoearth_pretrain.evals.studio_ingest.provenance import (
+                resolve_repo_config_path,
+            )
+
+            return resolve_repo_config_path(self.config_repo_dir, "model.yaml")
         return f"{self.weka_path}/model.yaml"
 
     def to_eval_config(self) -> EvalDatasetConfig:
@@ -263,7 +326,7 @@ class EvalDatasetEntry(BaseModel):
             imputes=self.imputes,
             num_classes=self.num_classes,
             is_multilabel=self.is_multilabel,
-            supported_modalities=self.modalities,
+            supported_modalities=self.supported_modalities,
             height_width=height_width,
             timeseries=self.timeseries,
         )
