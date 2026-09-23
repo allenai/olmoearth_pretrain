@@ -108,7 +108,7 @@ class DownstreamTaskConfig:
     # If the model has a Perceiver, probe the pooled encoder patch tokens
     # instead of the register latents. No effect without a Perceiver.
     eval_on_encoder_tokens: bool = False
-    # If the model has a detached register projection (register_student_dims),
+    # If the model has a detached register projection (perceiver_config.student_dims),
     # probe the low-dim student_registers instead of the register grid -- the same
     # checkpoint can then be evaluated at both widths by registering the task twice.
     # Mutually exclusive with eval_on_encoder_tokens.

@@ -1640,25 +1640,25 @@
       1,
       768
     ],
+    "encoder.perceiver.student.0.bias": [
+      128
+    ],
+    "encoder.perceiver.student.0.weight": [
+      128,
+      768
+    ],
+    "encoder.perceiver.student.1.bias": [
+      128
+    ],
+    "encoder.perceiver.student.1.weight": [
+      128
+    ],
     "encoder.project_and_aggregate.projection.0.bias": [
       768
     ],
     "encoder.project_and_aggregate.projection.0.weight": [
       768,
       768
-    ],
-    "encoder.register_student.0.bias": [
-      128
-    ],
-    "encoder.register_student.0.weight": [
-      128,
-      768
-    ],
-    "encoder.register_student.1.bias": [
-      128
-    ],
-    "encoder.register_student.1.weight": [
-      128
     ],
     "register_distillation_head.back_projections.128.0.bias": [
       256

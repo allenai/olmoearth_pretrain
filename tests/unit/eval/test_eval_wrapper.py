@@ -106,7 +106,7 @@ class TestPoolStudentRegisters:
     ) -> OlmoEarthEvalWrapper:
         return OlmoEarthEvalWrapper(
             # A Perceiver model with a student, which the constructor now checks for.
-            model=SimpleNamespace(use_perceiver=True, register_student_dims=[8, 4]),  # type: ignore[arg-type]
+            model=SimpleNamespace(use_perceiver=True),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
@@ -140,7 +140,7 @@ class TestPoolStudentRegisters:
     def test_missing_projection_raises(self) -> None:
         """A model without the student cannot be probed on it."""
         wrapper = self._wrapper()
-        with pytest.raises(ValueError, match="register_student_dims"):
+        with pytest.raises(ValueError, match="student_dims"):
             wrapper._pool_registers({"registers": torch.randn(2, 16, self.DIM)})
 
     def test_projected_and_encoder_tokens_mutually_exclusive(self) -> None:
