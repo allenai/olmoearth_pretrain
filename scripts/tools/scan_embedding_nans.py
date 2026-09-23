@@ -1,9 +1,8 @@
 """Find windows whose precomputed embedding layer contains NaN.
 
-``mosaic_tiles_to_bounds`` (embedding_materializer/fetchers.py) returns None --
-and so records a coverage gap -- only when NO pixel of a window is covered
-(``if not filled.any()``). A window that the product's tiles cover *partially*
-is written as a normal layer with NaN in the uncovered pixels. Because the
+A bake records a coverage gap only when NO pixel of a window is covered. A
+window that the product's tiles cover *partially* is written as a normal layer
+with NaN in the uncovered pixels. Because the
 layer exists, ``required: true`` does not drop that window, and the NaNs reach
 the probe, where sklearn raises ``ValueError: Input contains NaN``.
 

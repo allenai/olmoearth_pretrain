@@ -1,13 +1,14 @@
 """Wire a materialized embedding product into eval datasets so evals can read it.
 
-The embedding materializer bakes rasters into windows and marks the layers
-completed, but it does not touch any config. Three more things must be true
+The embedding materializer declares its rslearn layer in config.json and
+materializes it, but touches no other config. Three things must be true
 before a precomputed baseline (``--model=aef`` / ``--model=tessera_v2_precomputed``)
 can run on a dataset:
 
 1. the dataset folder's ``config.json`` declares the raster layer (rslearn
    looks up ``dataset.layers[<name>]`` when reading, so a missing entry is a
-   KeyError);
+   KeyError). The materializer already did this for AEF; it is only needed
+   here for layers written directly, like tessera_v2;
 2. the dataset's ``model.yaml`` declares a matching input;
 3. the registry entry lists the modality in ``modalities``, which is what
    ``supported_modalities`` — and therefore the sweep's task gating — reads.
@@ -59,6 +60,9 @@ import yaml
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
+from olmoearth_pretrain.evals.embedding_materializer.materialize import (
+    CONFIG_BACKUP_NAME,
+)
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
     RSLEARN_DATASET_CONFIGS_DIR,
     find_repo_root,
@@ -70,7 +74,7 @@ from olmoearth_pretrain.internal.all_evals import AEF_SUPPLEMENTAL_DATASETS
 logger = logging.getLogger(__name__)
 
 # Materializer product name -> the modality whose name is the layer/input name.
-# Mirrors embedding_materializer.fetchers.build_fetcher so the two cannot drift.
+# Mirrors embedding_materializer.materialize.PRODUCTS so the two cannot drift.
 # tessera_v2 is the exception: no v2 product is published, so its layer is
 # baked by our own inference run (evals/datasets/tessera_v2_export.py), which
 # writes a manifest in the materializer's shape so the gate below still works.
@@ -79,11 +83,9 @@ PRODUCT_TO_MODALITY: dict[str, ModalitySpec] = {
     "tessera_v2": Modality.TESSERA_V2,
 }
 
-# Backup of the pre-edit config.json, written once so re-runs keep the
-# pristine copy. Useful because ingest overwrites the dataset folder's
-# config.json from the source dataset (_try_copy_config_json), which would
-# silently drop the layer added here.
-CONFIG_BACKUP_NAME = "config.json.pre_embedding_layers.bak"
+# The pre-edit config.json backup is shared with the materializer. Useful
+# because ingest overwrites the dataset folder's config.json from the source
+# dataset (_try_copy_config_json), which would silently drop the layer added.
 
 # Fraction of a dataset's windows that must carry the layer before the product
 # goes live there. See bake_is_complete for why partial coverage is unsafe.
