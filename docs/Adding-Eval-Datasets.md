@@ -16,12 +16,13 @@ Adding a new eval dataset requires two things:
 Optionally, to make the dataset evaluable by precomputed embedding products
 (AlphaEarth/GSE, Tessera): the dataset is eligible if its windows have real
 geometry and a resolvable year. After ingest, run the embedding materializer
-over it, then `scripts/tools/wire_embedding_modalities.py` to declare the
-`gse`/`tessera` layer in its `config.json`, add the matching `model.yaml`
-input, and list the modality in its `modalities` (which is what
-`supported_modalities` reads). Re-stamp `config_json_sha256` afterwards with
-`scripts/tools/backfill_eval_registry_provenance.py`, since eval jobs verify
-the dataset folder's `config.json` against it.
+over it (it declares the layer in the dataset's `config.json`), then
+`scripts/tools/register_embedding_products.py`. That records the product under
+the entry's `embedding_products` (which `supported_modalities` reads) and
+re-stamps `config_json_sha256`. Nothing is added to `model.yaml`: eval jobs add
+the product's input for the precomputed baseline at load time, and for every
+model skip windows whose product layer is not completed on disk, so all models
+are scored on the same windows. Commit `registry.json` afterwards.
 
 ---
 

@@ -12,12 +12,10 @@ embedding_materializer_manifest_<product>.json, and the corresponding windows
 simply lack the layer.
 
 Materializing declares the layer in the dataset's config.json, but that alone
-does not make a dataset evaluable: the layer also has to be wired as a
-model.yaml input and listed in the registry entry's modalities. Run
-scripts/tools/wire_embedding_modalities.py afterwards to do all three (it
-gates on the manifests this script writes, so it only turns on datasets whose
-bake finished cleanly), then backfill_eval_registry_provenance.py to re-stamp
-config_json_sha256.
+does not make a dataset evaluable: the product also has to be registered.
+Run scripts/tools/register_embedding_products.py afterwards (it gates on the
+manifests this script writes, so it only registers datasets whose bake
+finished cleanly) and commit registry.json.
 
 Example:
     python scripts/tools/materialize_aef_supplemental_embeddings.py

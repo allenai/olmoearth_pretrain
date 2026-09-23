@@ -8,7 +8,7 @@ materialize on that one layer. What this module adds on top of rslearn:
 - the layer's time window is chosen so each window reads the annual product for
   the year its own time range is centred on (see ``request_time_offset``);
 - a per-dataset manifest recording which windows carry the layer, which fell in
-  coverage gaps and which failed. ``scripts/tools/wire_embedding_modalities.py``
+  coverage gaps and which failed. ``scripts/tools/register_embedding_products.py``
   reads it to decide when a dataset goes live.
 """
 
@@ -30,7 +30,7 @@ from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 logger = logging.getLogger(__name__)
 
 # Backup of the pre-edit config.json, written once so re-runs keep the pristine
-# copy. Shared with wire_embedding_modalities.py, which edits the same file.
+# copy. Shared with register_embedding_products.py, which edits the same file.
 CONFIG_BACKUP_NAME = "config.json.pre_embedding_layers.bak"
 
 # rslearn resolves a relative metadata_cache_dir against the dataset root, so
@@ -177,8 +177,8 @@ def write_layer_config(
 ) -> bool:
     """Set a layer entry in the dataset's config.json, backing it up once.
 
-    Replaces an existing entry of the same name, such as the data-source-less
-    layer wire_embedding_modalities.py declares for layers written directly.
+    Replaces an existing entry of the same name, such as a data-source-less
+    layer declared for an earlier bake that wrote the rasters directly.
 
     Args:
         dataset_path: the rslearn dataset root.

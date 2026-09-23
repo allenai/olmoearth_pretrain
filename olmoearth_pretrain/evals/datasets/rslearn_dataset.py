@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -57,6 +59,123 @@ logger = logging.getLogger(__name__)
 # record the dataset's actual time range.
 DEFAULT_START_TIME = "2022-09-01"
 DEFAULT_END_TIME = "2023-09-01"
+
+
+def embedding_product_input(modality: str) -> dict[str, Any]:
+    """The model.yaml input block reading a precomputed embedding layer.
+
+    The layer is named after the modality and read whole (band set 0), as the
+    embedding materializer writes it. It is required, so windows without the
+    layer are skipped rather than handed to the model.
+
+    Args:
+        modality: the embedding product's modality name (e.g. "gse").
+
+    Returns:
+        the input config, as it would appear under data.init_args.inputs.
+    """
+    return {
+        "data_type": "raster",
+        "dtype": "FLOAT32",
+        "layers": [modality],
+        "required": True,
+        "use_all_bands_in_order_of_band_set_idx": 0,
+        "passthrough": True,
+    }
+
+
+def add_embedding_product_inputs(
+    model_config: dict[str, Any], input_modalities: list[str]
+) -> None:
+    """Declare the requested embedding products as model.yaml inputs, in place.
+
+    Embedding products are not declared in the dataset's model.yaml, which
+    every eval on the dataset shares; only the precomputed baseline reading
+    one needs its input.
+
+    Args:
+        model_config: the parsed model.yaml.
+        input_modalities: the modalities this eval reads.
+    """
+    inputs = model_config["data"]["init_args"].setdefault("inputs", {})
+    for modality in input_modalities:
+        if modality in EMBEDDING_PRODUCT_MODALITIES:
+            inputs[modality] = embedding_product_input(modality)
+
+
+# Threads checking layer-completion markers; each check is one small file
+# lookup, so this is IO-bound.
+LAYER_CHECK_WORKERS = 32
+
+
+def _example_windows(dataset: Any) -> list[Any]:
+    """Return the window of each example of an rslearn dataset, in index order.
+
+    Unwraps rslearn's single-dataset wrappers (e.g. RetryDataset), which keep
+    the inner dataset's indexing.
+
+    Raises:
+        TypeError: for datasets that do not index windows directly (iterable
+            or multi-dataset), which window filtering does not support.
+    """
+    inner = dataset
+    while not hasattr(inner, "get_dataset_examples"):
+        inner = getattr(inner, "dataset", None)
+        if inner is None:
+            raise TypeError(
+                f"Cannot filter windows of {type(dataset).__name__}: it does "
+                "not expose rslearn dataset examples."
+            )
+    # With load_all_crops, examples are (window, crop_bounds, crop_idx).
+    return [
+        example[0] if isinstance(example, tuple) else example
+        for example in inner.get_dataset_examples()
+    ]
+
+
+def drop_windows_missing_layers(
+    dataset: Any, layers: list[str]
+) -> tuple[Any, list[str]]:
+    """Drop examples whose window lacks a completed layer, without reading it.
+
+    This is rslearn's filtering for a required input, minus the read: the
+    layers are the live embedding products, and applying this to every model
+    keeps all models on a dataset on the same windows.
+
+    Args:
+        dataset: the rslearn dataset for one split.
+        layers: layer names every kept window must have completed.
+
+    Returns:
+        (dataset, excluded) — the dataset, or a Subset of it without the
+        dropped examples, and the sorted "group/name" ids of dropped windows.
+    """
+    if not layers:
+        return dataset, []
+    windows = _example_windows(dataset)
+    unique = {f"{w.group}/{w.name}": w for w in windows}
+
+    def is_complete(window: Any) -> bool:
+        return all(window.is_layer_completed(layer) for layer in layers)
+
+    with ThreadPoolExecutor(max_workers=LAYER_CHECK_WORKERS) as executor:
+        complete = dict(
+            zip(unique, executor.map(is_complete, unique.values()), strict=True)
+        )
+    excluded = sorted(window_id for window_id, ok in complete.items() if not ok)
+    if not excluded:
+        return dataset, []
+    keep = [
+        idx
+        for idx, window in enumerate(windows)
+        if complete[f"{window.group}/{window.name}"]
+    ]
+    logger.info(
+        f"Dropping {len(windows) - len(keep)} of {len(windows)} examples "
+        f"({len(excluded)} windows) missing a completed layer in {layers}"
+    )
+    return Subset(dataset, keep), excluded
+
 
 # The year-aligned eval exports are twelve ascending monthly layers.
 MONTHS_PER_YEAR = 12
@@ -277,6 +396,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
+        # "group/name" ids of windows dropped for lacking a live embedding
+        # product's layer; set by from_model_config.
+        self.excluded_windows: list[str] = []
 
         if tile_samples:
             if label_at_center_pixel:
@@ -337,6 +459,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         sample_size: int | None = None,
+        required_layers: list[str] | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -372,6 +495,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 windows instead of center-cropping (see
                 RslearnToOlmoEarthDataset).
             sample_size: Stored sample height/width, required with tile_samples.
+            required_layers: layers every window must have completed; other
+                windows are dropped before label_fraction subsampling. Their
+                ids are kept on the result as ``excluded_windows``.
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -397,6 +523,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             max_samples=max_samples,
             groups_override=groups_override,
             tags_override=tags_override,
+        )
+        model_dataset, excluded_windows = drop_windows_missing_layers(
+            model_dataset, required_layers or []
         )
         if label_fraction != 1.0:
             if isinstance(model_dataset, IterableDataset) or not hasattr(
@@ -427,7 +556,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             if not cfg.get("is_target") and cfg.get("bands")
         }
 
-        return wrap_rslearn_dataset(
+        dataset = wrap_rslearn_dataset(
             model_dataset=model_dataset,
             input_modalities=input_modalities,
             declared_bands=declared_bands,
@@ -445,6 +574,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             tile_samples=tile_samples,
             sample_size=sample_size,
         )
+        dataset.excluded_windows = excluded_windows
+        return dataset
 
     @staticmethod
     def _parse_norm_stats(
@@ -1148,6 +1279,7 @@ def from_registry_entry(
             f"Failed to load model.yaml from {model_yaml_path}. "
             "Check that the file exists and is valid YAML."
         )
+    add_embedding_product_inputs(model_config, input_modalities)
 
     log.info(f"Building dataset for {entry.name} (path: {dataset_path})")
     if not use_pretrain_norm and not entry.norm_stats:
@@ -1159,7 +1291,7 @@ def from_registry_entry(
             f"tile_samples requires registry entry '{entry.name}' to record its "
             "stored sample size in window_size."
         )
-    return RslearnToOlmoEarthDataset.from_model_config(
+    dataset = RslearnToOlmoEarthDataset.from_model_config(
         model_config=model_config,
         source_path=dataset_path,
         split=normalized_split,
@@ -1182,4 +1314,20 @@ def from_registry_entry(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=entry.window_size if tile_samples else None,
+        # Every model skips windows lacking a live embedding product's layer,
+        # so all models on the dataset are scored on the same windows.
+        required_layers=sorted(entry.embedding_products),
     )
+    # Log which windows were dropped so results can be checked for
+    # comparability; keyed per split, since each split drops its own.
+    excluded = dataset.excluded_windows
+    log_eval_dataset_provenance_to_wandb(
+        f"{entry.name}/{normalized_split}",
+        {
+            "num_excluded_windows": len(excluded),
+            "excluded_windows_sha256": hashlib.sha256(
+                "\n".join(excluded).encode()
+            ).hexdigest(),
+        },
+    )
+    return dataset

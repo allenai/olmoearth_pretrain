@@ -1418,8 +1418,9 @@ def check_precomputed_embedding_tasks(
             f"embeddings into the eval datasets first, e.g.\n"
             f"  python -m olmoearth_pretrain.evals.embedding_materializer "
             f"--dataset_path <dataset> --products {product}\n"
-            f"and list '{modality}' in the dataset's supported_modalities "
-            f"(olmoearth_pretrain/evals/datasets/configs.py)."
+            f"then register it with scripts/tools/register_embedding_products.py "
+            f"(registry datasets) or list '{modality}' in the dataset's "
+            f"supported_modalities (olmoearth_pretrain/evals/datasets/configs.py)."
         )
     logger.info(
         f"--model={model}: {len(capable)} tasks support '{modality}': "
