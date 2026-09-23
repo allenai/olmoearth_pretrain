@@ -3731,19 +3731,10 @@ _PLANTEUR_PROBE_DATASETS: dict[str, str] = {
 
 EVAL_TASKS.update(
     {
-        f"planteur_probe_{_suffix}": DownstreamTaskConfig(
+        f"planteur_probe_{_suffix}": _pastis_ps1_task(
+            _mods,
+            window_size=16,
             dataset=_PLANTEUR_PROBE_DATASETS[_suffix],
-            embedding_batch_size=32,
-            probe_batch_size=8,
-            num_workers=2,
-            pooling_type=PoolingType.MEAN,
-            norm_stats_from_pretrained=True,
-            probe_lr=0.1,
-            eval_interval=Duration.epochs(50),
-            input_modalities=_mods,
-            epochs=50,
-            eval_mode=EvalMode.LINEAR_PROBE,
-            primary_metric=EvalMetric.MIOU,
         )
         for _suffix, _mods in _PLANTEUR_PROBE_MODALITIES.items()
     }
