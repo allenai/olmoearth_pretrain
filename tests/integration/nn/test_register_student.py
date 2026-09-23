@@ -97,7 +97,7 @@ def _assert_student_isolated(model_or_encoder: torch.nn.Module) -> None:
     """No encoder-block or primary-Perceiver parameter may carry gradient."""
     encoder = getattr(model_or_encoder, "encoder", model_or_encoder)
     for name, param in encoder.named_parameters():
-        if name.startswith("register_student"):
+        if name.startswith("perceiver.student"):
             continue
         assert param.grad is None or torch.all(param.grad == 0), (
             f"student gradient leaked into encoder parameter {name}"
@@ -117,7 +117,10 @@ def test_encoder_register_student_detached(
     assert output_dict["registers"].shape == (B, *grid, REGISTER_DIM)
     projected = output_dict["student_registers"]
     assert projected.shape == (B, *grid, max(PROJECTION_DIMS))
-    assert encoder.register_student is not None
+    assert encoder.perceiver is not None and encoder.perceiver.student is not None
+    assert encoder.perceiver.student_dims == sorted(PROJECTION_DIMS, reverse=True)
+    # The student lives on the Perceiver, not loose on the encoder.
+    assert not hasattr(encoder, "register_student")
     # The training-only back-projection heads are not part of the encoder.
     assert not any(
         n.startswith("register_back_projections") for n, _ in encoder.named_parameters()
@@ -126,7 +129,7 @@ def test_encoder_register_student_detached(
     encoder.zero_grad()
     projected.sum().backward()
     _assert_student_isolated(encoder)
-    assert encoder.register_student[0].weight.grad is not None
+    assert encoder.perceiver.student[0].weight.grad is not None
 
 
 def test_encoder_registers_grad_without_student_interference(
@@ -140,8 +143,8 @@ def test_encoder_registers_grad_without_student_interference(
     output_dict["registers"].sum().backward()
     assert encoder.perceiver is not None
     assert encoder.perceiver.register.grad is not None
-    assert encoder.register_student is not None
-    assert encoder.register_student[0].weight.grad is None
+    assert encoder.perceiver.student is not None
+    assert encoder.perceiver.student[0].weight.grad is None
 
 
 def test_latentmim_supervision_reads_the_registers(

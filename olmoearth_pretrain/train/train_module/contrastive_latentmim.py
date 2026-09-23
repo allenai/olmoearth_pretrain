@@ -313,7 +313,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             ) = self.model(batch, patch_size)
             if supervision_preds is not None or student_outputs is not None:
                 raise NotImplementedError(
-                    "supervision heads and register_student_dims are not supported "
+                    "supervision heads and perceiver_config.student_dims are not supported "
                     "by ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
                 )
             if extra_metrics is not None:

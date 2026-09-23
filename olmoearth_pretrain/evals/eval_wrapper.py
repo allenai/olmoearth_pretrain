@@ -68,7 +68,7 @@ class EvalWrapper:
                 No effect when the model has no Perceiver (encoder tokens are
                 always used in that case).
             eval_on_student_registers: If True and the model has a detached register
-                projection (``register_student_dims``), probe the low-dim
+                projection (``perceiver_config.student_dims``), probe the low-dim
                 ``student_registers`` instead of the register grid -- the same run
                 can then be evaluated at both widths. Mutually exclusive with
                 eval_on_encoder_tokens.
@@ -191,7 +191,7 @@ class OlmoEarthEvalWrapper(EvalWrapper):
             if "student_registers" not in encoder_output:
                 raise ValueError(
                     "eval_on_student_registers requires a model with "
-                    "register_student_dims (no student_registers in the encoder "
+                    "perceiver_config.student_dims (no student_registers in the encoder "
                     "output)"
                 )
             grid = encoder_output["student_registers"]  # [B, n_h, n_w, d]
