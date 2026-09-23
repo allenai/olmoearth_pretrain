@@ -781,7 +781,20 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
     )
 
 
-LAUNCH_OVERRIDES = "--launch.priority=high --launch.num_gpus=1 --launch.task_name=eval"
+# Probe child-job launch settings. Defaults preserve previous behaviour
+# (priority=high, preemptible unset). Override per launch, e.g. on a busy
+# cluster:  LP_LAUNCH_PRIORITY=urgent LP_LAUNCH_PREEMPTIBLE=False
+_LP_LAUNCH_PRIORITY = os.environ.get("LP_LAUNCH_PRIORITY", "high")
+_LP_LAUNCH_PREEMPTIBLE = os.environ.get("LP_LAUNCH_PREEMPTIBLE")
+LAUNCH_OVERRIDES = (
+    f"--launch.priority={_LP_LAUNCH_PRIORITY} "
+    "--launch.num_gpus=1 --launch.task_name=eval"
+    + (
+        f" --launch.preemptible={_LP_LAUNCH_PREEMPTIBLE}"
+        if _LP_LAUNCH_PREEMPTIBLE is not None
+        else ""
+    )
+)
 # Overwrite the max duration to enable eval of the last step of the checkpoint
 MAX_DURATION_OVERRIDE = (
     "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
