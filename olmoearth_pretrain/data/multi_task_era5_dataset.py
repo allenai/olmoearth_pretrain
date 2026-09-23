@@ -201,13 +201,31 @@ def default_regression_label(target: Any, key: str = "value") -> Tensor:
     return torch.as_tensor(target, dtype=torch.float32).reshape(())
 
 
+class RegressionLabelExtractor:
+    """Picklable regression `LabelExtractor` for a given target dict key.
+
+    A module-level class (not a closure) so that `Era5TaskDataset` instances
+    holding it can be sent to spawned DataLoader workers: the eval callback's
+    batch materialization pickles the dataset, and a nested function raised
+    ``Can't pickle local object 'make_regression_extractor.<locals>._fn'``.
+    """
+
+    def __init__(self, key: str = "value") -> None:
+        """Store the target-dict key to read the scalar from."""
+        self.key = key
+
+    def __call__(self, target: Any) -> Tensor:
+        """Extract the scalar regression label."""
+        return default_regression_label(target, key=self.key)
+
+    def __repr__(self) -> str:
+        """Readable repr for logs."""
+        return f"RegressionLabelExtractor(key={self.key!r})"
+
+
 def make_regression_extractor(key: str = "value") -> LabelExtractor:
-    """Return a regression `LabelExtractor` for a given target dict key."""
-
-    def _fn(target: Any) -> Tensor:
-        return default_regression_label(target, key=key)
-
-    return _fn
+    """Return a (picklable) regression `LabelExtractor` for a target dict key."""
+    return RegressionLabelExtractor(key)
 
 
 def segmentation_to_scalar_label(target: Any) -> Tensor:
@@ -302,6 +320,8 @@ LABEL_EXTRACTORS: dict[str, LabelExtractor] = {
     "default_classification": default_classification_label,
     "segmentation_to_scalar": segmentation_to_scalar_label,
     "per_pixel_regression_to_scalar": per_pixel_regression_to_scalar,
+    # Window-level rslearn RegressionTask target ({"value", "valid"}).
+    "default_regression": default_regression_label,
 }
 
 
