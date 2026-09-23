@@ -1017,3 +1017,31 @@ class TestSwtInputNoDataHandling:
             if p.grad is not None
         )
         assert enc_grads > 0
+
+
+def test_regression_label_extractor_is_picklable() -> None:
+    """Spawned eval DataLoader workers must be able to pickle the dataset's extractor.
+
+    Regression: the closure returned by ``make_regression_extractor`` failed with
+    ``Can't pickle local object`` the first time a window-level RegressionTask
+    (CY-Bench yield) ran through the eval callback on Beaker.
+    """
+    import pickle
+
+    import torch
+
+    from olmoearth_pretrain.data.multi_task_era5_dataset import (
+        LABEL_EXTRACTORS,
+        Era5TaskSpec,
+        make_regression_extractor,
+    )
+
+    spec = Era5TaskSpec(name="t", task_type="regression", num_classes=1)
+    for fn in (
+        spec.get_label_extractor(),
+        make_regression_extractor("value"),
+        LABEL_EXTRACTORS["default_regression"],
+    ):
+        restored = pickle.loads(pickle.dumps(fn))
+        out = restored({"value": torch.tensor(3.5), "valid": torch.tensor(1.0)})
+        assert float(out) == 3.5 and out.shape == ()

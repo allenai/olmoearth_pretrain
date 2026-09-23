@@ -72,6 +72,7 @@
         "maize"
       ],
       "height_width": 1,
+      "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield, FULL dataset (too large for the in-loop evaluator; use cybench_maize_eval) (t/ha) regression from ERA5-Land daily aggregated over each admin unit (crop-fraction weighted). One window per (adm_id, harvest_year), 448 days ending at the crop-calendar end of season; harvest years 2000+. Splits by harvest_year tag: train<=2017, val 2018-2019, test>=2020. target_mean/std = train-split yield stats from meta/label_stats_crop.json (export job 01M34H6E1YM5RA0QD1SNMD3344, 2026-09-22). Built by olmoearth_pretrain/dataset_creation/cybench.",
@@ -102,6 +103,7 @@
         "maize"
       ],
       "height_width": 1,
+      "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_maize. Same windows/splits/target stats as the full entry.",
@@ -135,6 +137,7 @@
         "wheat"
       ],
       "height_width": 1,
+      "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield, FULL dataset (too large for the in-loop evaluator; use cybench_wheat_eval) (t/ha) regression from ERA5-Land daily aggregated over each admin unit (crop-fraction weighted). One window per (adm_id, harvest_year), 448 days ending at the crop-calendar end of season; harvest years 2000+. Splits by harvest_year tag: train<=2017, val 2018-2019, test>=2020. target_mean/std = train-split yield stats from meta/label_stats_crop.json (export job 01M34H6E1YM5RA0QD1SNMD3344, 2026-09-22). Built by olmoearth_pretrain/dataset_creation/cybench.",
@@ -165,6 +168,7 @@
         "wheat"
       ],
       "height_width": 1,
+      "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_wheat. Same windows/splits/target stats as the full entry.",
