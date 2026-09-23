@@ -1,11 +1,14 @@
 """Utils for the data module."""
 
-import math
+from __future__ import annotations
 
-import cartopy.crs as ccrs
-import cartopy.feature as cfeature
-import matplotlib.pyplot as plt
+import math
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:
+    import matplotlib.pyplot as plt
 
 
 def to_cartesian(lat: float, lon: float) -> np.ndarray:
@@ -121,6 +124,11 @@ def update_streaming_stats(
 
 def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
     """Plot the geographic distribution of the data."""
+    # Plotting deps are optional (not in the dataset-creation extra); import lazily.
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    import matplotlib.pyplot as plt
+
     fig = plt.figure(figsize=(12, 8))
     ax = plt.axes(projection=ccrs.PlateCarree())
 
@@ -146,6 +154,8 @@ def plot_latlon_distribution(latlons: np.ndarray, title: str) -> plt.Figure:
 
 def plot_modality_data_distribution(modality: str, modality_data: dict) -> plt.Figure:
     """Plot the data distribution."""
+    import matplotlib.pyplot as plt
+
     fig, axes = plt.subplots(
         len(modality_data), 1, figsize=(10, 5 * len(modality_data))
     )
