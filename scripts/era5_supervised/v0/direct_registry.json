@@ -401,6 +401,66 @@
       },
       "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
     },
+    "dfmc1000h": {
+      "groups": [
+        "spatial_split"
+      ],
+      "has_test": false,
+      "height_width": 1,
+      "label_extractor_name": "per_pixel_regression_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/dfmc1000h_era5d.yaml",
+      "notes": "1000-hour DFMC supervised training, all methods. Complete 448-day histories only; 19019 train and the same 907 gravimetric validation labels as dfmc1000h_grav_eval. Use common.eval_tasks=[dfmc1000h_grav_eval] for comparable frozen-encoder probes. No test split.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "era5_448d_complete": "complete",
+        "split": "train"
+      },
+      "target_mean": 14.607138321678322,
+      "target_std": 11.09642488569183,
+      "task_type": "regression",
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "era5_448d_complete": "complete",
+        "method": "Gravimetric",
+        "oep_eval_val": ""
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/dfmc/h1000"
+    },
+    "dfmc1000h_grav_eval": {
+      "groups": [
+        "spatial_split"
+      ],
+      "has_test": false,
+      "height_width": 1,
+      "label_extractor_name": "per_pixel_regression_to_scalar",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/dfmc1000h_era5d.yaml",
+      "notes": "1000-hour DFMC gravimetric linear-probe benchmark. Complete 448-day histories only; 1845 train and 907 merged original val/test labels. No test split.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "era5_448d_complete": "complete",
+        "method": "Gravimetric",
+        "oep_eval_train": "",
+        "split": "train"
+      },
+      "target_mean": 15.551056780487805,
+      "target_std": 11.438464816344538,
+      "task_type": "regression",
+      "val_groups": [
+        "spatial_split"
+      ],
+      "val_tags": {
+        "era5_448d_complete": "complete",
+        "method": "Gravimetric",
+        "oep_eval_val": ""
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/dfmc/h1000"
+    },
     "era5enc_pretrain_ssl": {
       "groups": [
         "default"

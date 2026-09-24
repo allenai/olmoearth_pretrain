@@ -1,0 +1,64 @@
+# Data-only DFMC config for ERA5 supervised training and frozen-encoder probes.
+# The direct registry supplies per-task train/val filters and has_test=false.
+# Keep labels in DFMC units: the probe / supervised head handles normalization.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/rslearn-eai/datasets/dfmc/h1000
+    inputs:
+      era5_daily:
+        data_type: raster
+        layers:
+        - era5d_448d_historical
+        bands:
+        - d2m
+        - e
+        - pev
+        - ro
+        - sp
+        - ssr
+        - ssrd
+        - str
+        - swvl1
+        - swvl2
+        - t2m
+        - tp
+        - u10
+        - v10
+        passthrough: true
+        dtype: FLOAT32
+      targets:
+        data_type: raster
+        layers:
+        - labels
+        bands:
+        - value
+        dtype: FLOAT32
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.per_pixel_regression.PerPixelRegressionTask
+      init_args:
+        nodata_value: -1
+        metrics:
+        - rmse
+        - l1
+        - r2
+    batch_size: 64
+    num_workers: 16
+    default_config:
+      crop_size: 32
+    train_config:
+      groups:
+      - spatial_split
+      tags:
+        split: train
+        era5_448d_complete: complete
+    val_config:
+      groups:
+      - spatial_split
+      tags:
+        oep_eval_val: ""
+        method: Gravimetric
+        era5_448d_complete: complete
+    predict_config:
+      skip_targets: true
