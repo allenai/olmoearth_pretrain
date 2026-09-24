@@ -891,6 +891,7 @@ def cmd_launch_h5(args: argparse.Namespace) -> None:
         worker_cmd_template=cmd_template,
         num_shards=args.num_h5_shards,
         clusters=args.clusters,
+        shard_ids=args.shard_ids,
         gpus=args.gpus,
         cpus=args.cpus,
         priority=args.priority,
@@ -914,6 +915,7 @@ def cmd_launch_h5_from_olmoearth(args: argparse.Namespace) -> None:
         h5py_dir=str(h5py_dir),
         num_h5_shards=args.num_h5_shards,
         clusters=args.clusters,
+        shard_ids=None,
         gpus=args.gpus,
         cpus=args.cpus,
         priority=args.priority,
@@ -1367,6 +1369,7 @@ def main() -> None:
     p = subparsers.add_parser("launch-h5", help="Launch H5 writing on Beaker")
     p.add_argument("--h5py-dir", required=True, help="H5 output dir from prepare-h5")
     p.add_argument("--num-h5-shards", type=int, required=True)
+    p.add_argument("--shard-ids", nargs="*", type=int, default=None)
     p.add_argument(
         "--clusters", nargs="+", default=["ai2/jupiter"], help="Beaker clusters"
     )
