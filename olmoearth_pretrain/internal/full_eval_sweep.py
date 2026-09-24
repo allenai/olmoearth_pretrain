@@ -194,6 +194,24 @@ def get_croma_args() -> str:
     return croma_args
 
 
+def get_copernicus_fm_args() -> str:
+    """Get the Copernicus-FM arguments."""
+    # Copernicus-FM preprocesses inputs to [0, 1] as
+    # (x - (mean - 2*std)) / (4*std) then clips -- see the Copernicus-Bench
+    # dataset wrappers, e.g. cobench_dfc2020s12_wrapper.py normalize().
+    # NORM_YES_CLIP_2_STD is exactly that transform. Without this entry the
+    # probe fell through to the task default and fed the frozen ViT an
+    # out-of-distribution input scale.
+    copernicus_fm_args = dataset_args
+    copernicus_fm_args += " " + " ".join(
+        [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+    return copernicus_fm_args
+
+
 def get_tessera_args(pretrained_normalizer: bool = True) -> str:
     """Get the tessera arguments."""
     tessera_args = dataset_args
@@ -544,6 +562,7 @@ def _get_model_specific_args(model: BaselineModelName | None) -> str:
         BaselineModelName.CLAY: get_clay_args,
         BaselineModelName.AEF: get_aef_args,
         BaselineModelName.TESSERA_PRECOMPUTED: get_tessera_precomputed_args,
+        BaselineModelName.COPERNICUS_FM: get_copernicus_fm_args,
     }
     if model is None or model not in model_args_map:
         return ""
