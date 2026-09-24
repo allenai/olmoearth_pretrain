@@ -107,6 +107,12 @@ CLASS_TEXT_EMBEDDINGS_PATH = (
     "class_text_embeddings/class_text_embeddings.npy"
 )
 
+# Half the v1.3 base microbatch (64). The label layers make the open-set batches
+# variable-shape enough that per-step active memory swung 5-67 GiB at 64 and the
+# runs OOMed (~10 GiB lost to fragmentation) on 80 GiB GPUs; 32 runs as two
+# microbatches per step with the same global batch.
+RANK_MICROBATCH_SIZE = 32
+
 # Weight on the combined supervised (CE + MSE) loss relative to the SSL objective.
 # 1.0 inflated the total grad norm under the fixed clip and slowed SSL learning in the
 # v1.2 runs; the probe converges fine at 0.1 (per-sample-balanced loss).
@@ -180,6 +186,7 @@ def build_train_module_config(
         **{f.name: getattr(base_config, f.name) for f in fields(base_config)},
         sup_loss_weight=SUP_LOSS_WEIGHT,
     )
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     # token_exit_cfg is only meaningful for encoded modalities; keep it imagery-only.
     config.token_exit_cfg = {modality: 0 for modality in IMAGERY_MODALITIES}
     # The masking strategy must know the labels are decode-only (never encoded).
