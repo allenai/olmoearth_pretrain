@@ -238,17 +238,10 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         launch_script_key="presto",
         supports_pretrained_normalizer=True,
     ),
-    # Copernicus-FM preprocesses to [0, 1] via mean +/- 2*std then clips (see
-    # Copernicus-Bench dataset wrappers, e.g. cobench_dfc2020s12_wrapper.py
-    # normalize()). NORM_YES_CLIP_2_STD reproduces that exactly, so it replaces
-    # the z-score STANDARDIZE that fed the model an out-of-distribution scale.
-    # supports_pretrained_normalizer is False because CopernicusFMWrapper has no
-    # internal normalizer -- its use_pretrained_normalizer flag is inert, so the
-    # normalizer=True path would force NO_NORM and pass raw reflectance through.
     "copernicus_fm": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
+        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
         launch_script_key="copernicus_fm",
-        supports_pretrained_normalizer=False,
+        supports_pretrained_normalizer=True,
     ),
 }
 

@@ -94,6 +94,28 @@ data:
         required: false
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
+      # Tessera v1 (published product, geotessera v1/vultr) 128-d embedding,
+      # fetched into the `tessera` layer by the embedding materializer at
+      # year=2019 to match tessera_v2. Enables `--model=tessera_precomputed`.
+      tessera:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera
+        required: false
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
+      # Tessera v1.1 (published product, geotessera v1.1/cambridge) 128-d
+      # embedding, fetched into the `tessera_v11` layer by the embedding
+      # materializer at year=2019. Enables `--model=tessera_v11_precomputed`.
+      tessera_v11:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera_v11
+        required: false
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
       # Landsat 8/9 OLI-TIRS monthly mosaics (aws_landsat), 12 slots. required:
       # false so S2/S1-only evals run before landsat is materialized (the eval
       # loader supports ragged/optional Landsat). Band order = Modality.LANDSAT.

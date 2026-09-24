@@ -5791,8 +5791,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -6325,8 +6323,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -7121,8 +7117,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -7917,8 +7911,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -8713,8 +8705,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
@@ -9509,8 +9499,6 @@
         "sentinel1",
         "sentinel2_l2a",
         "gse",
-        "tessera",
-        "tessera_v11",
         "tessera_v2",
         "landsat"
       ],
