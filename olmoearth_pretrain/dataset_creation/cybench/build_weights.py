@@ -1,29 +1,23 @@
 """Stage 1: region x ERA5-Land cell weights for the CY-Bench admin units.
 
-For every (crop, country, admin unit) with a CY-Bench yield csv, rasterize the
-admin polygon on a 0.01 deg sub-grid (10 x 10 per ERA5-Land cell), read the
-WorldCereal crop area-fraction image (AFI, 0..100 %) resampled onto the same
-sub-grid, and reduce to per-cell weights:
+For every (crop, country, admin unit) with a CY-Bench yield csv:
 
-* ``w_area`` — fraction of the ERA5 cell covered by the polygon;
-* ``w_crop`` — coverage-weighted mean crop fraction (what CY-Bench used to
-  aggregate its own predictors). Falls back to ``w_area`` when the region has
-  no crop pixels at all (``crop_fallback`` flag in the regions table).
+1. rasterize the admin polygon on a 0.01 deg sub-grid (10 x 10 per ERA5 cell)
+   -> ``w_area`` = fraction of each cell inside the polygon;
+2. resample the WorldCereal crop area-fraction image onto the same sub-grid
+   -> ``w_crop`` = coverage-weighted crop fraction (CY-Bench's own weighting);
+3. fall back to ``w_area`` when the region has no crop pixels
+   (``crop_fallback`` flag).
 
-Outputs two parquet files:
-
-* ``weights.parquet``: ``region, crop, cc, adm_id, i, j, w_area, w_crop`` with
-  ``(i, j)`` the canonical ERA5-Land grid indices (see ``common``).
-* ``regions.parquet``: one row per region with centroid, cell count, label year
-  span and the fallback flag.
+Outputs ``weights.parquet`` (one row per region x cell, canonical ``i, j``
+indices) and ``regions.parquet`` (one row per region).
 
 Usage::
 
     python -m olmoearth_pretrain.dataset_creation.cybench.build_weights \
-        --polygons-root /weka/.../cybench/raw/polygons/polygons \
-        --afi-dir /path/to/AgML-CY-Bench/data_preparation/global_crop_AFIs_ESA_WC \
-        --labels-root /weka/.../cybench/raw/cybench-data/cybench-data \
-        --out-dir /weka/.../cybench/meta
+        --polygons-root .../raw/polygons/polygons \
+        --afi-dir <AgML-CY-Bench>/data_preparation/global_crop_AFIs_ESA_WC \
+        --labels-root .../raw/cybench-data/cybench-data --out-dir .../meta
 """
 
 from __future__ import annotations
@@ -33,6 +27,7 @@ import logging
 import math
 import multiprocessing
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import geopandas as gpd
 import numpy as np
@@ -41,6 +36,7 @@ import rasterio
 import rasterio.features
 import rasterio.windows
 import shapely
+from affine import Affine
 from rasterio.enums import Resampling
 from rasterio.transform import from_origin
 
@@ -62,91 +58,109 @@ from .common import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-HALF = CELL_DEG / 2.0
+HALF_CELL = CELL_DEG / 2.0
+CROP_FALLBACK_RATIO = 1e-3  # w_crop total below this fraction of w_area -> use area
 
 
-def _cell_rows(miny: float, maxy: float) -> tuple[int, int]:
-    """Inclusive canonical row range covering [miny, maxy]."""
-    i_min = int(math.floor((90.0 + HALF - maxy) / CELL_DEG))
-    i_max = int(math.floor((90.0 + HALF - miny) / CELL_DEG))
-    return max(i_min, 0), min(i_max, N_LAT - 1)
+class Footprint(NamedTuple):
+    """The block of canonical cells covering a polygon, plus its fine sub-grid."""
 
+    i_min: int
+    j_min: int
+    n_rows: int
+    n_cols: int
 
-def _cell_cols(minx: float, maxx: float) -> tuple[int, int]:
-    """Inclusive (unwrapped) column range covering [minx, maxx] (lon in -180..180)."""
-    j_min = int(math.floor((minx + HALF) / CELL_DEG))
-    j_max = int(math.floor((maxx + HALF) / CELL_DEG))
-    return j_min, j_max
+    @classmethod
+    def around(cls, bounds: tuple[float, float, float, float]) -> Footprint:
+        """Smallest block of cells containing ``(minx, miny, maxx, maxy)``."""
+        minx, miny, maxx, maxy = bounds
+        i_min = max(int(math.floor((90.0 + HALF_CELL - maxy) / CELL_DEG)), 0)
+        i_max = min(int(math.floor((90.0 + HALF_CELL - miny) / CELL_DEG)), N_LAT - 1)
+        j_min = int(math.floor((minx + HALF_CELL) / CELL_DEG))
+        j_max = int(math.floor((maxx + HALF_CELL) / CELL_DEG))
+        return cls(i_min, j_min, i_max - i_min + 1, j_max - j_min + 1)
 
-
-def _block_mean(a: np.ndarray, k: int) -> np.ndarray:
-    """Mean over k x k blocks of a 2-D array whose dims are multiples of k."""
-    h, w = a.shape
-    return a.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
-
-
-def _part_weights(
-    geom: shapely.Geometry, afi: rasterio.DatasetReader
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Weights for one polygon part that does not cross the antimeridian.
-
-    Returns ``(i, j, w_area, w_crop)`` arrays over the cells with w_area > 0.
-    """
-    minx, miny, maxx, maxy = geom.bounds
-    i_min, i_max = _cell_rows(miny, maxy)
-    j_min, j_max = _cell_cols(minx, maxx)
-    n_rows = i_max - i_min + 1
-    n_cols = j_max - j_min + 1
-    north = 90.0 + HALF - CELL_DEG * i_min
-    west = CELL_DEG * j_min - HALF
-    south = north - CELL_DEG * n_rows
-    east = west + CELL_DEG * n_cols
-    fine_shape = (n_rows * FINE_PER_CELL, n_cols * FINE_PER_CELL)
-    transform = from_origin(west, north, FINE_DEG, FINE_DEG)
-
-    cover = rasterio.features.rasterize(
-        [(geom, 1)], out_shape=fine_shape, transform=transform, fill=0, dtype="uint8"
-    )
-    if cover.sum() == 0:
-        # Polygon smaller than a 0.01 deg sub-pixel: take every touched sub-pixel.
-        cover = rasterio.features.rasterize(
-            [(geom, 1)],
-            out_shape=fine_shape,
-            transform=transform,
-            fill=0,
-            dtype="uint8",
-            all_touched=True,
+    @property
+    def geo_bounds(self) -> tuple[float, float, float, float]:
+        """(west, south, east, north) of the block in degrees."""
+        north = 90.0 + HALF_CELL - CELL_DEG * self.i_min
+        west = CELL_DEG * self.j_min - HALF_CELL
+        return (
+            west,
+            north - CELL_DEG * self.n_rows,
+            west + CELL_DEG * self.n_cols,
+            north,
         )
-    cover_f = cover.astype(np.float32)
 
-    # Crop area fraction resampled (mean) onto the fine grid; 0 outside the AFI
-    # extent (AFI covers lat -56..75, which contains every CY-Bench region).
-    win = rasterio.windows.from_bounds(west, south, east, north, afi.transform)
-    afi_fine = afi.read(
+    @property
+    def fine_shape(self) -> tuple[int, int]:
+        """(rows, cols) of the 0.01 deg sub-grid over the block."""
+        return self.n_rows * FINE_PER_CELL, self.n_cols * FINE_PER_CELL
+
+    @property
+    def fine_transform(self) -> Affine:
+        """Affine transform of the sub-grid (north-up, 0.01 deg pixels)."""
+        west, _, _, north = self.geo_bounds
+        return from_origin(west, north, FINE_DEG, FINE_DEG)
+
+
+def _fine_mask(geom: shapely.Geometry, fp: Footprint) -> np.ndarray:
+    """1.0 on sub-pixels inside ``geom``, 0.0 elsewhere."""
+    kwargs = dict(
+        out_shape=fp.fine_shape, transform=fp.fine_transform, fill=0, dtype="uint8"
+    )
+    inside = rasterio.features.rasterize([(geom, 1)], **kwargs)
+    if inside.sum() == 0:  # polygon smaller than one sub-pixel
+        inside = rasterio.features.rasterize([(geom, 1)], all_touched=True, **kwargs)
+    return inside.astype(np.float32)
+
+
+def crop_fraction(afi: rasterio.DatasetReader, fp: Footprint) -> np.ndarray:
+    """Crop area fraction (0..1) of the AFI raster on the fine sub-grid."""
+    west, south, east, north = fp.geo_bounds
+    window = rasterio.windows.from_bounds(west, south, east, north, afi.transform)
+    pct = afi.read(
         1,
-        window=win,
-        out_shape=fine_shape,
+        window=window,
+        out_shape=fp.fine_shape,
         resampling=Resampling.average,
         boundless=True,
         fill_value=0,
         out_dtype="float32",
     )
-    afi_fine = np.clip(np.nan_to_num(afi_fine, nan=0.0), 0.0, 100.0) / 100.0
+    return np.clip(np.nan_to_num(pct, nan=0.0), 0.0, 100.0) / 100.0
 
-    w_area = _block_mean(cover_f, FINE_PER_CELL)
-    w_crop = _block_mean(cover_f * afi_fine, FINE_PER_CELL)
-    ii, jj = np.nonzero(w_area > 0)
-    i = ii + i_min
-    j = (jj + j_min) % N_LON
-    return i, j, w_area[ii, jj], w_crop[ii, jj]
+
+def _block_mean(fine: np.ndarray) -> np.ndarray:
+    """Mean over each cell's FINE_PER_CELL x FINE_PER_CELL sub-pixels."""
+    h, w = fine.shape
+    k = FINE_PER_CELL
+    return fine.reshape(h // k, k, w // k, k).mean(axis=(1, 3))
+
+
+def part_weights(geom: shapely.Geometry, afi: rasterio.DatasetReader) -> pd.DataFrame:
+    """Per-cell weights for a polygon that does not cross the antimeridian."""
+    fp = Footprint.around(geom.bounds)
+    inside = _fine_mask(geom, fp)
+    w_area = _block_mean(inside)
+    w_crop = _block_mean(inside * crop_fraction(afi, fp))
+    rows, cols = np.nonzero(w_area > 0)
+    return pd.DataFrame(
+        {
+            "i": rows + fp.i_min,
+            "j": (cols + fp.j_min) % N_LON,
+            "w_area": w_area[rows, cols],
+            "w_crop": w_crop[rows, cols],
+        }
+    )
 
 
 def region_weights(
     geom: shapely.Geometry, afi: rasterio.DatasetReader
 ) -> tuple[pd.DataFrame, bool]:
-    """Per-cell weights for one admin polygon (handles antimeridian crossing)."""
+    """Per-cell weights for one admin polygon; returns (weights, used_area_fallback)."""
     minx, _, maxx, _ = geom.bounds
-    if maxx - minx > 180.0:
+    if maxx - minx > 180.0:  # crosses the antimeridian: handle each side separately
         parts = [
             geom.intersection(shapely.box(-180.0, -90.0, 0.0, 90.0)),
             geom.intersection(shapely.box(0.0, -90.0, 180.0, 90.0)),
@@ -154,95 +168,133 @@ def region_weights(
         parts = [p for p in parts if not p.is_empty]
     else:
         parts = [geom]
-    frames = []
-    for p in parts:
-        i, j, wa, wc = _part_weights(p, afi)
-        frames.append(pd.DataFrame({"i": i, "j": j, "w_area": wa, "w_crop": wc}))
-    df = pd.concat(frames, ignore_index=True)
-    # A polygon split into parts (or a multipolygon) can touch the same cell
-    # twice; sum the contributions.
+    df = pd.concat([part_weights(p, afi) for p in parts], ignore_index=True)
     df = df.groupby(["i", "j"], as_index=False)[["w_area", "w_crop"]].sum()
-    fallback = False
-    # Fall back to plain area weights when the crop mask is (near-)empty for the
-    # region; a handful of crop sub-pixels would otherwise dominate the mean.
-    if df["w_crop"].sum() < 1e-3 * df["w_area"].sum():
+    fallback = df["w_crop"].sum() < CROP_FALLBACK_RATIO * df["w_area"].sum()
+    if fallback:
         df["w_crop"] = df["w_area"]
-        fallback = True
-    return df, fallback
+    return df, bool(fallback)
 
 
-def _process_country(args: tuple) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Worker: weights + regions for every crop of one country."""
-    cc, crops, polygons_root, afi_dir, labels_root = args
-    shp = Path(polygons_root) / cc / f"{cc}.shp"
-    gdf = gpd.read_file(shp)
-    if gdf.crs is None:
-        gdf = gdf.set_crs(4326)
-    gdf = gdf.to_crs(4326)
-    gdf["adm_id"] = gdf["adm_id"].astype(str)
-    gdf = gdf.drop_duplicates("adm_id")
-
+def weights_for_country(job: tuple) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Worker: weights and region rows for every crop of one country."""
+    cc, crops, polygons_root, afi_dir, labels_root = job
+    polygons = _load_polygons(Path(polygons_root) / cc / f"{cc}.shp")
     weight_frames, region_rows = [], []
     for crop in crops:
-        labels = None
-        if labels_root is not None:
-            labels = load_labels(Path(labels_root), crop, cc)
-            keep = set(labels["adm_id"])
-            sub = gdf[gdf["adm_id"].isin(keep)]
-            missing = keep - set(sub["adm_id"])
-            if missing:
-                logger.warning(
-                    "%s/%s: %d labelled adm_ids have no polygon (e.g. %s)",
-                    crop,
-                    cc,
-                    len(missing),
-                    sorted(missing)[:3],
-                )
-        else:
-            sub = gdf
+        labels = load_labels(Path(labels_root), crop, cc) if labels_root else None
+        regions = (
+            polygons
+            if labels is None
+            else _labelled_polygons(polygons, labels, crop, cc)
+        )
         with rasterio.open(Path(afi_dir) / CROP_TO_AFI[crop]) as afi:
-            for row in sub.itertuples(index=False):
-                geom = row.geometry
-                if geom is None or geom.is_empty:
+            for row in regions.itertuples(index=False):
+                if row.geometry is None or row.geometry.is_empty:
                     continue
-                df, fallback = region_weights(geom, afi)
+                weights, fallback = region_weights(row.geometry, afi)
                 key = region_key(crop, cc, row.adm_id)
-                df.insert(0, "adm_id", row.adm_id)
-                df.insert(0, "cc", cc)
-                df.insert(0, "crop", crop)
-                df.insert(0, "region", key)
-                weight_frames.append(df)
-                c = geom.representative_point()
-                yrs = (
-                    labels.loc[labels["adm_id"] == row.adm_id, "year"]
-                    if labels is not None
-                    else pd.Series(dtype=int)
+                weight_frames.append(
+                    weights.assign(region=key, crop=crop, cc=cc, adm_id=row.adm_id)
                 )
                 region_rows.append(
-                    dict(
-                        region=key,
-                        crop=crop,
-                        cc=cc,
-                        adm_id=row.adm_id,
-                        centroid_lat=float(c.y),
-                        centroid_lon=float(c.x),
-                        area_km2=float(
-                            gpd.GeoSeries([geom], crs=4326)
-                            .to_crs("+proj=cea")
-                            .area.iloc[0]
-                            / 1e6
-                        ),
-                        n_cells=int(len(df)),
-                        crop_fallback=bool(fallback),
-                        n_labels=int(len(yrs)),
-                        min_year=int(yrs.min()) if len(yrs) else -1,
-                        max_year=int(yrs.max()) if len(yrs) else -1,
-                    )
+                    _region_row(key, crop, cc, row, weights, fallback, labels)
                 )
-    w = pd.concat(weight_frames, ignore_index=True) if weight_frames else pd.DataFrame()
-    r = pd.DataFrame(region_rows)
-    logger.info("%s: %d regions, %d cells", cc, len(r), len(w))
-    return w, r
+    weights_df = (
+        pd.concat(weight_frames, ignore_index=True) if weight_frames else pd.DataFrame()
+    )
+    regions_df = pd.DataFrame(region_rows)
+    logger.info("%s: %d regions, %d cells", cc, len(regions_df), len(weights_df))
+    return weights_df, regions_df
+
+
+def _load_polygons(shp: Path) -> gpd.GeoDataFrame:
+    gdf = gpd.read_file(shp)
+    gdf = (gdf if gdf.crs is not None else gdf.set_crs(4326)).to_crs(4326)
+    gdf["adm_id"] = gdf["adm_id"].astype(str)
+    return gdf.drop_duplicates("adm_id")
+
+
+def _labelled_polygons(
+    polygons: gpd.GeoDataFrame, labels: pd.DataFrame, crop: str, cc: str
+) -> gpd.GeoDataFrame:
+    """Polygons that have at least one label; warn about labels without a polygon."""
+    labelled = set(labels["adm_id"])
+    sub = polygons[polygons["adm_id"].isin(labelled)]
+    missing = labelled - set(sub["adm_id"])
+    if missing:
+        logger.warning(
+            "%s/%s: %d labelled adm_ids have no polygon (e.g. %s)",
+            crop,
+            cc,
+            len(missing),
+            sorted(missing)[:3],
+        )
+    return sub
+
+
+def _region_row(
+    key: str,
+    crop: str,
+    cc: str,
+    row: Any,
+    weights: pd.DataFrame,
+    fallback: bool,
+    labels: pd.DataFrame | None,
+) -> dict[str, Any]:
+    point = row.geometry.representative_point()
+    years = (
+        labels.loc[labels["adm_id"] == row.adm_id, "year"]
+        if labels is not None
+        else pd.Series(dtype=int)
+    )
+    return dict(
+        region=key,
+        crop=crop,
+        cc=cc,
+        adm_id=row.adm_id,
+        centroid_lat=float(point.y),
+        centroid_lon=float(point.x),
+        area_km2=float(
+            gpd.GeoSeries([row.geometry], crs=4326).to_crs("+proj=cea").area.iloc[0]
+            / 1e6
+        ),
+        n_cells=int(len(weights)),
+        crop_fallback=fallback,
+        n_labels=int(len(years)),
+        min_year=int(years.min()) if len(years) else -1,
+        max_year=int(years.max()) if len(years) else -1,
+    )
+
+
+def plan_jobs(args: argparse.Namespace) -> list[tuple]:
+    """One job per country: (cc, crops, polygons_root, afi_dir, labels_root | None)."""
+    labels_root = None if args.labels_root == "none" else args.labels_root
+    if labels_root:
+        pairs = [
+            (c, cc)
+            for c, cc in list_crop_countries(Path(labels_root))
+            if c in args.crops
+        ]
+    else:
+        pairs = [
+            (c, p.name)
+            for p in sorted(Path(args.polygons_root).iterdir())
+            if p.is_dir()
+            for c in args.crops
+        ]
+    crops_by_cc: dict[str, list[str]] = {}
+    for crop, cc in pairs:
+        if args.only_cc and cc not in args.only_cc:
+            continue
+        if not (Path(args.polygons_root) / cc / f"{cc}.shp").exists():
+            logger.warning("no polygons for %s, skipping", cc)
+            continue
+        crops_by_cc.setdefault(cc, []).append(crop)
+    return [
+        (cc, crops, args.polygons_root, args.afi_dir, labels_root)
+        for cc, crops in sorted(crops_by_cc.items())
+    ]
 
 
 def main() -> None:
@@ -257,7 +309,7 @@ def main() -> None:
     ap.add_argument(
         "--labels-root",
         default=str(DEFAULT_LABELS_ROOT),
-        help="CY-Bench data root (<crop>/<CC>/yield_*.csv); 'none' to use all polygons",
+        help="CY-Bench data root; 'none' = all polygons",
     )
     ap.add_argument("--crops", nargs="+", default=sorted(CROP_TO_AFI))
     ap.add_argument(
@@ -267,43 +319,13 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=8)
     args = ap.parse_args()
 
-    labels_root = None if args.labels_root == "none" else Path(args.labels_root)
-    if labels_root is not None:
-        pairs = [
-            (c, cc) for c, cc in list_crop_countries(labels_root) if c in args.crops
-        ]
-    else:
-        pairs = [
-            (c, p.name)
-            for p in sorted(Path(args.polygons_root).iterdir())
-            if p.is_dir()
-            for c in args.crops
-        ]
-    by_cc: dict[str, list[str]] = {}
-    for crop, cc in pairs:
-        if args.only_cc and cc not in args.only_cc:
-            continue
-        if not (Path(args.polygons_root) / cc / f"{cc}.shp").exists():
-            logger.warning("no polygons for %s, skipping", cc)
-            continue
-        by_cc.setdefault(cc, []).append(crop)
-    jobs = [
-        (
-            cc,
-            crops,
-            args.polygons_root,
-            args.afi_dir,
-            str(labels_root) if labels_root else None,
-        )
-        for cc, crops in sorted(by_cc.items())
-    ]
+    jobs = plan_jobs(args)
     logger.info("%d countries", len(jobs))
-
     if args.workers > 1:
         with multiprocessing.get_context("spawn").Pool(args.workers) as pool:
-            results = pool.map(_process_country, jobs)
+            results = pool.map(weights_for_country, jobs)
     else:
-        results = [_process_country(j) for j in jobs]
+        results = [weights_for_country(j) for j in jobs]
 
     weights = pd.concat([w for w, _ in results if len(w)], ignore_index=True)
     regions = pd.concat([r for _, r in results if len(r)], ignore_index=True)
@@ -313,17 +335,8 @@ def main() -> None:
     regions.to_parquet(out_dir / "regions.parquet", index=False)
     logger.info(
         "wrote %d weight rows for %d regions (%d crop-mask fallbacks) to %s",
-        len(weights),
-        len(regions),
-        int(regions["crop_fallback"].sum()),
-        out_dir,
-    )
-    cells = weights[["i", "j"]].drop_duplicates()
-    logger.info(
-        "distinct ERA5 cells: %d; distinct (lat,lon) 150x300 chunks: %d",
-        len(cells),
-        len((cells[["i", "j"]] // np.array([150, 300])).drop_duplicates()),
-    )
+        len(weights), len(regions), int(regions["crop_fallback"].sum()), out_dir,
+    )  # fmt: skip
 
 
 if __name__ == "__main__":
