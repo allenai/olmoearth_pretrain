@@ -32,6 +32,7 @@ from torch.distributed.fsdp import FSDPModule
 from torch.distributed.tensor import DTensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
+from upath import UPath
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
@@ -95,6 +96,18 @@ class OlmoEarthTrainModuleConfig(Config):
         state_dict_save_opts: Override state dict options for saving.
         state_dict_load_opts: Override state dict options for loading.
         find_unused_parameters: Whether to find unused parameters for DDP.
+        init_weights_path: Optional path to a flat ``weights.pth`` model state dict
+            (as written by ``scripts/official/v1_3/convert_legacy_checkpoint.py`` or
+            ``torch.save(model.state_dict(), ...)``) to initialize the model from
+            at construction. Only affects a fresh start: a checkpoint found in the
+            trainer's save folder (preemption resume) is loaded afterwards and
+            overrides these weights. Use this instead of ``trainer.load_path`` when
+            the source is not an olmo-core distributed checkpoint with the current
+            parameter names, or when the model extends the checkpointed one.
+        init_weights_allow_missing: Parameter-name prefixes (e.g.
+            ``["open_set_probe."]``) that may be ABSENT from ``init_weights_path``;
+            those parameters keep their fresh initialization. Any other missing or
+            unexpected key is an error.
     """
 
     # Training settings
@@ -121,6 +134,8 @@ class OlmoEarthTrainModuleConfig(Config):
     # Checkpoint settings
     state_dict_save_opts: dict[str, Any] | None = None
     state_dict_load_opts: dict[str, Any] | None = None
+    init_weights_path: str | None = None
+    init_weights_allow_missing: list[str] | None = None
     regularizer_config: LossConfig | None = None
 
     def prepare_kwargs(self) -> dict[str, Any]:
@@ -198,6 +213,8 @@ class OlmoEarthTrainModule(TrainModule):
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
+        init_weights_path: str | None = None,
+        init_weights_allow_missing: list[str] | None = None,
     ):
         """Initialize the training module.
 
@@ -216,10 +233,20 @@ class OlmoEarthTrainModule(TrainModule):
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
+            init_weights_path: Optional ``weights.pth`` to initialize the model from
+                (see :class:`OlmoEarthTrainModuleConfig`).
+            init_weights_allow_missing: Parameter-name prefixes that may be absent
+                from ``init_weights_path`` (see :class:`OlmoEarthTrainModuleConfig`).
         """
         super().__init__()
 
         self.model = model
+        if init_weights_path is not None:
+            # Before DP setup so every rank starts from the same weights (the DDP path
+            # additionally broadcasts from rank 0 below).
+            self._load_init_weights(
+                init_weights_path, tuple(init_weights_allow_missing or ())
+            )
 
         # Band dropout is disabled by default in the encoder so it never activates
         # during fine-tuning. We enable it here since the train module is only
@@ -418,9 +445,51 @@ class OlmoEarthTrainModule(TrainModule):
     def state_dict_to_load(
         self, metadata: Metadata, optim: bool | None = None
     ) -> dict[str, Any]:
-        """Get the state dict to load."""
+        """Get the state dict to load.
+
+        Args:
+            metadata: The checkpoint metadata.
+            optim: Whether to load the optimizer state (``trainer.load_optim_state``).
+                ``False`` drops the ``optim`` entry so the optimizer keeps its fresh
+                state; ``None``/``True`` load it.
+        """
         load_opts = self.state_dict_load_opts
-        return self._get_state_dict(load_opts)
+        state_dict = self._get_state_dict(load_opts)
+        if optim is False:
+            state_dict.pop("optim", None)
+        return state_dict
+
+    def _load_init_weights(self, path: str, allow_missing: tuple[str, ...]) -> None:
+        """Initialize the model from a flat ``weights.pth`` state dict.
+
+        See ``OlmoEarthTrainModuleConfig.init_weights_path``. Must run before any
+        data-parallel wrapping so the plain module's parameter names apply.
+        """
+        with UPath(path).open("rb") as f:
+            state_dict = torch.load(f, map_location="cpu", weights_only=True)
+        if "model" in state_dict and isinstance(state_dict["model"], dict):
+            state_dict = state_dict["model"]
+        model_keys = set(self.model.state_dict().keys())
+        missing = sorted(model_keys - set(state_dict))
+        unexpected = sorted(set(state_dict) - model_keys)
+        disallowed_missing = [
+            k for k in missing if not any(k.startswith(p) for p in allow_missing)
+        ]
+        if disallowed_missing or unexpected:
+            raise RuntimeError(
+                f"init_weights_path {path} does not match the model: missing keys "
+                f"{disallowed_missing[:10]}{'...' if len(disallowed_missing) > 10 else ''}, "
+                f"unexpected keys {unexpected[:10]}{'...' if len(unexpected) > 10 else ''}"
+            )
+        result = self.model.load_state_dict(state_dict, strict=False)
+        assert not result.unexpected_keys
+        logger.info(
+            "Initialized %d model tensors from %s; %d kept their fresh initialization: %s",
+            len(state_dict),
+            path,
+            len(missing),
+            ", ".join(missing) if missing else "-",
+        )
 
     def state_dict_to_save(self) -> dict[str, Any]:
         """Get the state dict to save."""
@@ -434,6 +503,11 @@ class OlmoEarthTrainModule(TrainModule):
             options=self.state_dict_load_opts,
         )
         gc_cuda()
+        if "optim" not in state_dict:
+            # Dropped by state_dict_to_load (load_optim_state=False): the optimizer
+            # keeps its fresh state.
+            logger.warning("No optimizer state in the load plan; not loading any.")
+            return
         dist_cp_sd.set_optimizer_state_dict(
             self.model,
             self.optimizer,
@@ -559,8 +633,9 @@ class OlmoEarthTrainModule(TrainModule):
             model_config = Config.from_dict(_strip_unknown_fields(config_dict["model"]))
             model = model_config.build()
             # Check if any keys are missing
+            checkpoint_keys = set(model.state_dict().keys())
             for key in self.model.state_dict().keys():
-                if key not in model.state_dict():
+                if key not in checkpoint_keys:
                     logger.info("Key %s not in checkpoint", key)
                     raise RuntimeError("Model and checkpoint are not compatible")
             logger.info("Model and checkpoint are compatible")

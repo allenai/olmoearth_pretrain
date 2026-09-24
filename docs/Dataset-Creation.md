@@ -240,6 +240,14 @@ python -m olmoearth_pretrain.dataset_creation.scripts.sentinel2_l1c.launch_jobs 
 
 Now convert the data from the rslearn dataset to OlmoEarth format.
 
+The commands below are for the legacy grid dataset and retain their historical group
+defaults (`res_10`, `res_160`, or `res_0.625`). Every converter also accepts one or more
+groups as `--group GROUP [GROUP ...]`. For the 128x128 sample-centered open-set dataset,
+use the dedicated conversion sequence in
+[`open_set_segmentation_data/README.md`](../olmoearth_pretrain/open_set_segmentation_data/README.md),
+including `--group open_set` on shared static converters and the identity-aware metadata
+summary steps before H5 creation.
+
 ```
 export OLMOEARTH_PATH=./olmoearth_dataset
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.cdl --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH

@@ -146,6 +146,7 @@ def convert_era5l_day(window: Window, olmoearth_path: UPath) -> None:
         for idx, ts in enumerate(timestamps):
             writer.writerow(
                 dict(
+                    example_id=window_metadata.example_id or "",
                     crs=window_metadata.crs,
                     col=window_metadata.col,
                     row=window_metadata.row,
@@ -163,7 +164,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Convert ERA5-Land daily data to OlmoEarth Pretrain format",
     )
-    add_common_arguments(parser)
+    add_common_arguments(parser, default_groups=["res_10"])
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))
@@ -171,7 +172,7 @@ if __name__ == "__main__":
 
     jobs = []
     for window in dataset.load_windows(
-        workers=args.workers, show_progress=True, groups=["res_10"]
+        workers=args.workers, show_progress=True, groups=args.groups
     ):
         jobs.append(
             dict(

@@ -23,6 +23,9 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.change_boundary import (
+    restrict_start_ts_to_change_boundary,
+)
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -167,6 +170,31 @@ def get_valid_start_ts(
     return sorted(valid_start_ts)
 
 
+def _choose_start_t(
+    sample: OlmoEarthSample,
+    missing_timesteps_masks: dict[str, Any],
+    max_t: int,
+    current_length: int,
+) -> int:
+    """Pick the temporal crop start, straddling a change boundary when there is one.
+
+    Change samples (``open_set_change_boundary`` present) are restricted to start
+    timesteps whose ``max_t`` window keeps at least one timestep on each side of the
+    boundary, so the model always sees both a "before" and an "after" image. (Every
+    timestamp within ``current_length`` has data in at least one modality: the H5
+    timestamps come from the longest modality and are cropped to the valid range.)
+    """
+    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
+    if sample.timestamps is not None:
+        valid_start_ts = restrict_start_ts_to_change_boundary(
+            valid_start_ts,
+            max_t,
+            sample.timestamps,
+            getattr(sample, Modality.OPEN_SET_CHANGE_BOUNDARY.name, None),
+        )
+    return int(np.random.choice(valid_start_ts))
+
+
 def subset_sample_default(
     sample: OlmoEarthSample,
     patch_size: int,
@@ -214,8 +242,7 @@ def subset_sample_default(
     )
     if target_t is not None:
         max_t = min(max_t, target_t)
-    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
-    start_t = np.random.choice(valid_start_ts)
+    start_t = _choose_start_t(sample, missing_timesteps_masks, max_t, current_length)
     new_data_dict: dict[str, ArrayTensor] = {}
 
     sampled_hw = sampled_hw_p * patch_size
@@ -300,8 +327,7 @@ def subset_sample_cutmix(
     )
     if target_t is not None:
         max_t = min(max_t, target_t)
-    valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
-    start_t = np.random.choice(valid_start_ts)
+    start_t = _choose_start_t(sample, missing_timesteps_masks, max_t, current_length)
     new_data_dict: dict[str, ArrayTensor] = {}
 
     height_p, width_p = sample.height // patch_size, sample.width // patch_size
