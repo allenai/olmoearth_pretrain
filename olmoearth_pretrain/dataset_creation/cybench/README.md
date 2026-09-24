@@ -98,9 +98,35 @@ Only harvest years >= 2000 are written by default (`--min-year`, CY-Bench's
 - `target_mean` / `target_std` in `direct_registry.json` must be filled from
   `meta/label_stats_crop.json` (`train` split) after the export finishes.
 
-## Running on Beaker
+## Provenance: exactly how the dataset on weka was built
 
-`scripts/era5_supervised/v0/cybench_export.yaml` runs stages 1-3 in one 0-GPU
-job (resumable; resubmit after preemption). Extra aggregation shards can run
-concurrently with `SHARD`/`NUM_SHARDS`/`RUN_WINDOWS=0`; the main job waits on
+Every step ran as a Beaker job whose spec is committed under
+`scripts/era5_supervised/v0/cybench/`. `__HELIOS_REF__` in a spec is
+substituted with the commit to run (`sed "s/__HELIOS_REF__/<sha>/"`) at submit
+time; the shas below are what actually ran.
+
+| Step | Spec | Beaker experiment | Commit | Exact invocation / args |
+|---|---|---|---|---|
+| Download CY-Bench v1.10 + label coverage count | `download_and_count.yaml` | 01M328XCQD9TW25CNPS4WRER14 (2026-09-21) | n/a (inline) | Zenodo record 17279151 -> `raw/{cybench-data,polygons,centroids}`; resume loop because Zenodo drops long transfers; python `zipfile` (image has no unzip) |
+| Stages 1-3 (weights, aggregate, series+windows) | `export.yaml` | 01M34H6E1YM5RA0QD1SNMD3344 (2026-09-22, 2h40) | f94f55a13 | `build_weights --polygons-root raw/polygons/polygons --afi-dir <AgML-CY-Bench clone>/data_preparation/global_crop_AFIs_ESA_WC --labels-root raw/cybench-data/cybench-data --out-dir meta --workers 8` ; `aggregate_era5 --meta-dir meta --out-dir agg --start 1998-09-01 --end 2025-07-01 --limit-to-label-years --workers 16 --shard 0 --num-shards 1` ; `write_windows all --agg-dir agg --labels-root raw/cybench-data/cybench-data --ds-path rslearn_dataset --variant crop --min-year 2000 --workers 16` |
+| Pooled eval subset tags | `tag_pooled_subset.yaml` | 01M36NPPEX876WN98P5XDY00ZV (2026-09-23) | 9acb7b13f | `tag_eval_subset --labels-root ... --ds-path rslearn_dataset --n-train 3000 --n-val 1000 --n-test 1000 --tag oep_eval --seed 0 --workers 32` -> 10,000 windows |
+| Per-country last-year-out tags | `tag_last_year_out.yaml` | 01M390ZTNQKZ3ASFE2A7A37FYV (2026-09-24) | 471f45cc8 | `tag_eval_subset --labels-root ... --ds-path rslearn_dataset --per-country US DE AR --n-train 3000 --lyo-tag loyo_split --seed 0 --workers 32` -> 21,190 windows |
+| Training run with the evals | `launch_train_cybench_lyo.sh` | 01M3918WPJ07SZGTVAFP70BMK1 (`..._cybench_lyo`, 11 evals); 01M36VHFRFDS9MNHD9M33N82XV (`..._cybench`, 7 evals) | 471f45cc8 / 060faf414 | see the script (clone of hadriens' era5enc_1306_halo75_nogate, Beaker 01M28KK8ENQF6N8DAXHKPK2J9Q) |
+
+Outputs that record what was produced: `meta/windows_summary_crop.csv`
+(per crop/country labels vs windows written vs skips), `meta/label_stats_crop.json`
+(yield mean/std per crop and split; the registry `target_mean/std`),
+`meta/eval_subset_oep_eval.csv` and `meta/eval_subset_loyo_split.csv` (the exact
+windows carrying each tag), `meta/weights.parquet` + `meta/regions.parquet`.
+
+Operational notes from the first launch: the pretraining windows
+(`era5enc_pretrain`) had gone cold on weka after ~11 idle days and the run
+crawled at ~1 step/min until a 192-way parallel `cat` of all 1.58M files
+(Beaker 01M36WTG7Y4V11XDSDEVE3Z9BE, ~85 min) rehydrated them; and the very first
+attempt (01M36P66YPDT5774C1X9BMFA02) died on the regression label extractor
+not being picklable (fixed in 060faf414).
+
+`export.yaml` runs stages 1-3 in one 0-GPU job (resumable; resubmit after
+preemption). Extra aggregation shards can run concurrently with
+`SHARD`/`NUM_SHARDS`/`RUN_WINDOWS=0`; the main job waits on
 `aggregate_era5 --check-complete` before stage 3.
