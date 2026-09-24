@@ -29,6 +29,16 @@ No rslearn ingest / tile store: Zarr chunks are streamed and reduced in memory
 
 Root on weka: `/weka/dfive-default/helios/dataset/cybench/`.
 
+Per-country last-year-out tasks (`cybench_<crop>_{US,DE,AR}_lyo_eval`):
+`tag_eval_subset --per-country US DE AR` writes `loyo_split=test` on every window
+of the country's last label year and `loyo_split=train` on a 3k stratified
+sample of its earlier years; the probe is scored on the held-out year (reported
+as `val`). This is one fold of CY-Bench's leave-one-year-out protocol (they hold
+out every year in turn); pooled-subset and per-country scores are both in
+`direct_registry.json`. Countries were chosen for labels through 2021+, several
+hundred sub-provincial regions, both crops, and a spread of CY-Bench baseline
+R2 (DE maize 0.10 .. AR wheat 0.68).
+
 Registry: `cybench_<crop>` = full dataset (too large for the in-loop evaluator,
 which embeds the whole train split every eval interval); `cybench_<crop>_eval`
 = the `oep_eval` subset, like `lfmc_woody` vs `lfmc_woody_eval`.

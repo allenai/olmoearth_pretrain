@@ -100,20 +100,79 @@ def stratified_sample(
 
 
 def _tag_window(args: tuple) -> bool:
-    """Add the tag to one window's metadata.json (returns False if missing)."""
-    meta_path, tag = args
+    """Set ``options[tag] = value`` in one window's metadata.json (False if missing)."""
+    meta_path, tag, value = args[0], args[1], (args[2] if len(args) > 2 else "")
     p = Path(meta_path)
     if not p.exists():
         return False
     meta = json.loads(p.read_text())
     opts = meta.setdefault("options", {})
-    if tag in opts:
+    if opts.get(tag) == value:
         return True
-    opts[tag] = ""
+    opts[tag] = value
     tmp = p.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(meta))
     os.replace(tmp, p)
     return True
+
+
+def tag_last_year_out(
+    labels_root: Path,
+    ds_path: Path,
+    crops: list[str],
+    countries: list[str],
+    n_train: int,
+    tag: str,
+    min_year: int,
+    rng: np.random.Generator,
+    workers: int,
+) -> pd.DataFrame:
+    """Per (crop, country): hold out the LAST label year, train on the others.
+
+    Writes ``options[tag] = "test"`` on every window of the country's last
+    harvest year and ``options[tag] = "train"`` on a stratified (year x region)
+    sample of ``n_train`` windows from the earlier years. The
+    ``cybench_<crop>_<CC>_lyo_eval`` registry entries filter on
+    ``{country_code: CC, <tag>: train|test}``; the held-out year is what the
+    probe reports (as the ``val`` split), mirroring one fold of CY-Bench's
+    leave-one-year-out protocol for the most recent year.
+    """
+    rows = []
+    for crop in crops:
+        cands = candidate_windows(labels_root, crop, min_year)
+        for cc in countries:
+            pool = cands[cands["cc"] == cc]
+            if pool.empty:
+                logger.warning("%s/%s: no candidate windows", crop, cc)
+                continue
+            with ThreadPoolExecutor(workers) as ex:
+                exists = list(
+                    ex.map(
+                        lambda n: (
+                            ds_path / "windows" / crop / n / "metadata.json"
+                        ).exists(),
+                        pool["name"],
+                    )
+                )
+            pool = pool[np.array(exists, dtype=bool)]
+            last = int(pool["year"].max())
+            test = pool[pool["year"] == last].assign(**{tag: "test"})
+            train = stratified_sample(pool[pool["year"] < last], n_train, rng).assign(
+                **{tag: "train"}
+            )
+            logger.info(
+                "%s/%s: held-out year %d -> %d test windows; train %d of %d (years %d-%d)",
+                crop,
+                cc,
+                last,
+                len(test),
+                len(train),
+                int((pool["year"] < last).sum()),
+                int(pool["year"].min()),
+                last - 1,
+            )
+            rows.append(pd.concat([test, train]).assign(crop=crop))
+    return pd.concat(rows, ignore_index=True)
 
 
 def main() -> None:
@@ -131,12 +190,52 @@ def main() -> None:
     ap.add_argument("--min-year", type=int, default=2000)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=32)
+    ap.add_argument(
+        "--per-country",
+        nargs="*",
+        default=None,
+        help="instead of the pooled subset: last-year-out tags for these country codes",
+    )
+    ap.add_argument("--lyo-tag", default="loyo_split")
     args = ap.parse_args()
 
     ds_path = Path(args.ds_path)
     labels_root = Path(args.labels_root)
-    budgets = {"train": args.n_train, "val": args.n_val, "test": args.n_test}
     rng = np.random.default_rng(args.seed)
+    meta_dir = ds_path.parent / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.per_country:
+        chosen_df = tag_last_year_out(
+            labels_root,
+            ds_path,
+            args.crops,
+            args.per_country,
+            args.n_train,
+            args.lyo_tag,
+            args.min_year,
+            rng,
+            args.workers,
+        )
+        jobs = [
+            (
+                str(ds_path / "windows" / r.crop / r.name / "metadata.json"),
+                args.lyo_tag,
+                getattr(r, args.lyo_tag),
+            )
+            for r in chosen_df.itertuples()
+        ]
+        with ThreadPoolExecutor(args.workers) as ex:
+            ok = list(ex.map(_tag_window, jobs))
+        logger.info("tagged %d / %d windows with %r", sum(ok), len(ok), args.lyo_tag)
+        chosen_df.to_csv(meta_dir / f"eval_subset_{args.lyo_tag}.csv", index=False)
+        idx = ds_path / ".rslearn_dataset_index"
+        if idx.exists():
+            shutil.rmtree(idx)
+            logger.info("removed stale index %s", idx)
+        return
+
+    budgets = {"train": args.n_train, "val": args.n_val, "test": args.n_test}
     chosen_all = []
     for crop in args.crops:
         cands = candidate_windows(labels_root, crop, args.min_year)
@@ -168,15 +267,13 @@ def main() -> None:
     chosen_df = pd.concat(chosen_all, ignore_index=True)
 
     jobs = [
-        (str(ds_path / "windows" / r.crop / r.name / "metadata.json"), args.tag)
+        (str(ds_path / "windows" / r.crop / r.name / "metadata.json"), args.tag, "")
         for r in chosen_df.itertuples()
     ]
     with ThreadPoolExecutor(args.workers) as ex:
         ok = list(ex.map(_tag_window, jobs))
     logger.info("tagged %d / %d windows with %r", sum(ok), len(ok), args.tag)
 
-    meta_dir = ds_path.parent / "meta"
-    meta_dir.mkdir(parents=True, exist_ok=True)
     chosen_df.to_csv(meta_dir / f"eval_subset_{args.tag}.csv", index=False)
 
     # Any cached rslearn window index predates the new tag; drop it so the

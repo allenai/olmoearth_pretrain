@@ -98,6 +98,108 @@
       },
       "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
     },
+    "cybench_maize_AR_lyo_eval": {
+      "groups": [
+        "maize"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_maize_era5d.yaml",
+      "notes": "CY-Bench maize yield (t/ha), Argentina only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "AR",
+        "loyo_split": "train"
+      },
+      "target_mean": 4.542719,
+      "target_std": 3.242293,
+      "task_type": "regression",
+      "test_groups": [
+        "maize"
+      ],
+      "test_tags": {
+        "country_code": "AR",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "maize"
+      ],
+      "val_tags": {
+        "country_code": "AR",
+        "loyo_split": "test"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_maize_DE_lyo_eval": {
+      "groups": [
+        "maize"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_maize_era5d.yaml",
+      "notes": "CY-Bench maize yield (t/ha), Germany only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "DE",
+        "loyo_split": "train"
+      },
+      "target_mean": 4.542719,
+      "target_std": 3.242293,
+      "task_type": "regression",
+      "test_groups": [
+        "maize"
+      ],
+      "test_tags": {
+        "country_code": "DE",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "maize"
+      ],
+      "val_tags": {
+        "country_code": "DE",
+        "loyo_split": "test"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_maize_US_lyo_eval": {
+      "groups": [
+        "maize"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_maize_era5d.yaml",
+      "notes": "CY-Bench maize yield (t/ha), United States only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "US",
+        "loyo_split": "train"
+      },
+      "target_mean": 4.542719,
+      "target_std": 3.242293,
+      "task_type": "regression",
+      "test_groups": [
+        "maize"
+      ],
+      "test_tags": {
+        "country_code": "US",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "maize"
+      ],
+      "val_tags": {
+        "country_code": "US",
+        "loyo_split": "test"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
     "cybench_maize_eval": {
       "groups": [
         "maize"
@@ -160,6 +262,108 @@
       ],
       "val_tags": {
         "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_wheat_AR_lyo_eval": {
+      "groups": [
+        "wheat"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
+      "notes": "CY-Bench wheat yield (t/ha), Argentina only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "AR",
+        "loyo_split": "train"
+      },
+      "target_mean": 3.410384,
+      "target_std": 1.917725,
+      "task_type": "regression",
+      "test_groups": [
+        "wheat"
+      ],
+      "test_tags": {
+        "country_code": "AR",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "wheat"
+      ],
+      "val_tags": {
+        "country_code": "AR",
+        "loyo_split": "test"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_wheat_DE_lyo_eval": {
+      "groups": [
+        "wheat"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
+      "notes": "CY-Bench wheat yield (t/ha), Germany only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "DE",
+        "loyo_split": "train"
+      },
+      "target_mean": 3.410384,
+      "target_std": 1.917725,
+      "task_type": "regression",
+      "test_groups": [
+        "wheat"
+      ],
+      "test_tags": {
+        "country_code": "DE",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "wheat"
+      ],
+      "val_tags": {
+        "country_code": "DE",
+        "loyo_split": "test"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_wheat_US_lyo_eval": {
+      "groups": [
+        "wheat"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
+      "notes": "CY-Bench wheat yield (t/ha), United States only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "country_code": "US",
+        "loyo_split": "train"
+      },
+      "target_mean": 3.410384,
+      "target_std": 1.917725,
+      "task_type": "regression",
+      "test_groups": [
+        "wheat"
+      ],
+      "test_tags": {
+        "country_code": "US",
+        "loyo_split": "test"
+      },
+      "val_groups": [
+        "wheat"
+      ],
+      "val_tags": {
+        "country_code": "US",
+        "loyo_split": "test"
       },
       "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
     },
