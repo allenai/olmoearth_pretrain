@@ -602,6 +602,7 @@ def _resolve_eval_task_configs(
                 val_tags=entry.val_tags or None,
                 test_groups=entry.test_groups,
                 test_tags=entry.test_tags or None,
+                has_test=entry.has_test,
                 probe_lr=(
                     common.eval_probe_lr_override
                     if common.eval_probe_lr_override is not None

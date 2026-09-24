@@ -70,6 +70,9 @@ class DirectRslearnTaskEntry(BaseModel):
         test_groups: rslearn window groups for the test split. ``None`` defers
             to the ``test_config`` in ``model.yaml``.
         test_tags: Optional rslearn tag filter for the test split.
+        has_test: Whether this ERA5 task has a test split. False skips test
+            loading even when test evaluation is enabled for the run. True
+            preserves the model.yaml fallback for omitted test filters.
         probe_lr: Per-task linear-probe learning rate for downstream eval.
             ``None`` defers to the run-level ``common.eval_probe_lr`` default.
             Set per eval task since the best probe LR differs by task.
@@ -102,6 +105,7 @@ class DirectRslearnTaskEntry(BaseModel):
     val_tags: dict[str, str] = Field(default_factory=dict)
     test_groups: list[str] | None = None
     test_tags: dict[str, str] = Field(default_factory=dict)
+    has_test: bool = True
     probe_lr: float | None = None
     norm_stats_from_pretrained: bool = True
     max_samples: int | None = None

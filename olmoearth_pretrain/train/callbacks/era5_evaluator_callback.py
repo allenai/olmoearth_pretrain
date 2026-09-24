@@ -82,6 +82,8 @@ class Era5LinearProbeTaskConfig:
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     max_eval_samples: int | None = None
     height_width: int | None = None
+    # ERA5-specific opt-out; omitted test filters otherwise defer to the YAML.
+    has_test: bool = True
 
 
 def _build_eval_dataset(
@@ -389,12 +391,20 @@ class Era5DownstreamEvaluatorCallback(Callback):
         )
 
         test_batches: list[Any] | None = None
-        if self.run_on_test:
+        if self.run_on_test and task.has_test:
             try:
                 test_ds = _build_eval_dataset(task, "test", self.max_sequence_length)
-                test_batches = _materialize_batches(
-                    test_ds, task.embedding_batch_size, self.num_workers
-                )
+                if len(test_ds) > 0:
+                    test_batches = (
+                        _materialize_batches(
+                            test_ds, task.embedding_batch_size, self.num_workers
+                        )
+                        or None
+                    )
+                if test_batches is None:
+                    logger.warning(
+                        "Empty test split for %s, skipping test eval.", task.name
+                    )
             except Exception:
                 logger.warning(
                     "Test split unavailable for %s, skipping test eval.", task.name
