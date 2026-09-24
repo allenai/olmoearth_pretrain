@@ -26,6 +26,39 @@ def test_open_set_window_is_not_split_into_subtiles(tmp_path: Path) -> None:
     assert converter.pixel_coord_windows
 
 
+def test_load_sample_static_non_spatial_is_a_vector(tmp_path: Path) -> None:
+    """A 1x1 static non-spatial raster (open_set_change_boundary) loads as (c,)."""
+    import rasterio
+    from rasterio.crs import CRS
+    from rasterio.transform import from_origin
+
+    from olmoearth_pretrain.dataset.parse import ModalityTile
+
+    modality = Modality.OPEN_SET_CHANGE_BOUNDARY
+    band_set = modality.band_sets[0]
+    fname = UPath(tmp_path) / "boundary.tif"
+    with rasterio.open(
+        fname,
+        "w",
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=3,
+        dtype="int32",
+        crs=CRS.from_epsg(32610),
+        transform=from_origin(0, 0, 1280, 1280),
+    ) as dst:
+        dst.write(np.array([1, 3, 2021], dtype=np.int32).reshape(3, 1, 1))
+
+    tile = ModalityTile.__new__(ModalityTile)
+    tile.modality = modality
+    tile.band_sets = {band_set: fname}
+
+    loaded = ConvertToH5py.load_sample(tile, sample=None, image_tile_size=128)  # type: ignore[arg-type]
+    assert loaded.shape == (3,)
+    np.testing.assert_array_equal(loaded, [1, 3, 2021])
+
+
 @pytest.fixture
 def sample_timestamps_dict() -> dict[ModalitySpec, np.ndarray]:
     """Create a sample timestamps dictionary for testing."""

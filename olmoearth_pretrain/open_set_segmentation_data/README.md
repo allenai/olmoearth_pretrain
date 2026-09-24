@@ -17,9 +17,10 @@ It differs from the grid-based pretraining pipeline in `dataset_creation/`:
 > Requires the newest `rslearn` (`window.data` / `PerLayerStorageFactory` /
 > `data_factory`). Single-window classification and regression training are implemented.
 > Paired pre/post change samples are materialized as two windows per sample (one per
-> observation range) that are merged into one example at conversion time;
-> change-specific training (probing on the pre/post difference) remains a separate
-> follow-up.
+> observation range) that are merged into one example at conversion time, plus an
+> `open_set_change_boundary` split date that training uses to always show the model at
+> least one image from each side. Probing on an explicit pre/post difference (rather
+> than the register grid) remains a separate follow-up.
 
 ## Background
 
@@ -159,6 +160,18 @@ Paired pre/post change windows (which share an `example_id`) are merged here: ea
 period mosaics are concatenated chronologically (pre then post) into ONE multitemporal
 series per example.
 
+Paired examples additionally get the static **`open_set_change_boundary`** modality: the
+pre/post boundary date (the windows' shared `time` option) as a `[day, month, year]`
+vector in the `timestamps` convention (0-based month), written as a 1x1 pixel raster. At
+train time a timestep is "after" iff its timestamp is on or after this boundary; the
+loader, masking and probe use it to guarantee both sides are seen (step 8). Non-paired
+examples get nothing (the modality is missing-filled for them):
+
+```bash
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.open_set_imagery \
+    --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH --modality open_set_change_boundary
+```
+
 Static raster modalities reuse their existing converters, selecting the open-set group
 explicitly. For paired change samples they process only the pair's primary (post) window,
 so each example is emitted exactly once:
@@ -199,7 +212,7 @@ for m in sentinel2_l2a sentinel1 landsat; do
     --olmoearth_path $OLMOEARTH_PATH --modality $m --time_span year
 done
 
-for m in worldcover srtm cdl worldcereal wri_canopy_height_map openstreetmap open_set open_set_regression; do
+for m in worldcover srtm cdl worldcereal wri_canopy_height_map openstreetmap open_set open_set_regression open_set_change_boundary; do
   python -m olmoearth_pretrain.dataset_creation.make_meta_summary \
     --olmoearth_path $OLMOEARTH_PATH --modality $m
 done
@@ -230,7 +243,7 @@ grid pipeline in two ways that require extra flags:
 ```bash
 python -m olmoearth_pretrain.internal.run_h5_conversion \
     --tile_path=$OLMOEARTH_PATH \
-  --supported_modality_names='[cdl,landsat,open_set,open_set_regression,openstreetmap_raster,sentinel1,sentinel2_l2a,srtm,worldcereal,worldcover,wri_canopy_height_map]' \
+  --supported_modality_names='[cdl,landsat,open_set,open_set_change_boundary,open_set_regression,openstreetmap_raster,sentinel1,sentinel2_l2a,srtm,worldcereal,worldcover,wri_canopy_height_map]' \
     --compression=zstd --compression_opts=3 \
     --tile_size=128 --image_tile_size=128 --pixel_coord_windows=true
 ```
@@ -243,21 +256,33 @@ samples are handled without any training-side change.
 
 ### 8. Train
 
-The supervised probe pools visible online-encoder tokens by spatial patch. Classification
-labels are majority-pooled to that patch grid and use exact cross-entropy over the source
-dataset's allowed classes; presence-only overlap conflicts are excluded as target-specific
-negatives. Regression labels use the valid-pixel patch mean and a dataset-specific linear
-head. Label modalities are loaded as supervision but are never tokenized by the encoder.
+The supervised probe reads the v1.3 Perceiver register grid (one embedding per spatial
+cell, time/modality already collapsed). Classification labels are majority-pooled to that
+grid and use exact cross-entropy over the source dataset's allowed classes; presence-only
+overlap conflicts are excluded as target-specific negatives. Regression labels use the
+valid-pixel cell mean and a dataset-specific linear head. Per-cell losses are averaged
+within each sample and then across labeled samples. Label modalities are loaded as
+supervision but are never tokenized by the encoder.
 
-Two official launch paths are provided:
+Paired change samples (with `open_set_change_boundary`) always keep at least one pre and
+one post timestep in the temporal crop and in the time-masked encoder input; their labels
+are only supervised when the encoder saw both sides.
+
+Three official launch paths are provided (see `scripts/official/v1_3/README.md`):
 
 ```bash
-# Open-set dataset only.
-python scripts/official/v1_2/open_set_only.py launch open_set_only ai2/jupiter \
+# v1.3 from scratch, open-set dataset only.
+python scripts/official/v1_3/open_set_only.py launch open_set_only ai2/jupiter \
     --launch.num_gpus=8
 
-# Existing osm_sampling corpus plus the open-set corpus, sampled by dataset length.
-python scripts/official/v1_2/open_set_osm.py launch open_set_osm ai2/jupiter \
+# v1.3 from scratch, osm_sampling corpus plus the open-set corpus, sampled by dataset length.
+python scripts/official/v1_3/open_set_osm.py launch open_set_osm ai2/jupiter \
+    --launch.num_gpus=8
+
+# The v1.3 base checkpoint post-trained on osm_sampling + open-set: probe-only phase
+# (backbone frozen), then backbone phase (probe frozen). Needs the converted checkpoint
+# weights; see the script docstring.
+python scripts/official/v1_3/open_set_post_train.py launch open_set_post_train ai2/jupiter \
     --launch.num_gpus=8
 ```
 

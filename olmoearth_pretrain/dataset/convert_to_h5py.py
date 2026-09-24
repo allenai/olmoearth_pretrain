@@ -597,8 +597,18 @@ class ConvertToH5py:
         elif image.ndim == 3:
             modality_data = rearrange(image, "c h w -> h w c")
         elif image.ndim == 2:
-            # It is already in the correct shape (t, c)
-            modality_data = image
+            if sample_modality.modality.is_static_in_space_and_time:
+                # Non-spatial static modalities (e.g. open_set_change_boundary) are
+                # read as (1, c); the sample format is a plain (c,) vector.
+                if image.shape[0] != 1:
+                    raise ValueError(
+                        f"Expected a single timestep for static modality "
+                        f"{sample_modality.modality.name}, got shape {image.shape}"
+                    )
+                modality_data = image[0]
+            else:
+                # It is already in the correct shape (t, c)
+                modality_data = image
         else:
             raise ValueError(
                 f"Unexpected image shape {image.shape} for modality {sample_modality.modality.name}"

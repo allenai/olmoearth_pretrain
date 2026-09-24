@@ -113,6 +113,11 @@ class OlmoEarthSample(NamedTuple):
     # open_set_regression is a supervision label layer: band 0 = 1-based regression
     # dataset id (0 = no label), band 1 = value remapped to [1, 65535] (0 = nodata).
     open_set_regression: ArrayTensor | None = None  # [B, H, W, 1, 2]
+    # open_set_change_boundary marks paired pre/post change samples: the date
+    # (same [day, month, year] convention as timestamps) at which "before" ends and
+    # "after" begins; a timestep is post-change iff timestamp >= boundary.
+    # Missing-filled (-99999) for non-change samples.
+    open_set_change_boundary: ArrayTensor | None = None  # [B, 3]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -406,6 +411,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     open_set_mask: Tensor | None = None
     open_set_regression: Tensor | None = None
     open_set_regression_mask: Tensor | None = None
+    open_set_change_boundary: Tensor | None = None
+    open_set_change_boundary_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.

@@ -120,6 +120,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        init_weights_path: str | None = None,
+        init_weights_allow_missing: list[str] | None = None,
     ):
         """Initialize the training module.
 
@@ -145,6 +147,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            init_weights_path: Optional ``weights.pth`` to initialize the model from
+                (see :class:`OlmoEarthTrainModuleConfig`).
+            init_weights_allow_missing: Parameter-name prefixes that may be absent
+                from ``init_weights_path`` (see :class:`OlmoEarthTrainModuleConfig`).
         """
         super().__init__(
             model=model,
@@ -161,6 +167,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
             find_unused_parameters=find_unused_parameters,
+            init_weights_path=init_weights_path,
+            init_weights_allow_missing=init_weights_allow_missing,
         )
         self.start_ema, self.end_ema = ema_decay
         self.token_exit_cfg = token_exit_cfg

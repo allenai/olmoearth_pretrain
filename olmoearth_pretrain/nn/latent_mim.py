@@ -114,6 +114,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
         self.register_distillation_head = register_distillation_head
+        # The register grid [B, n_h, n_w, D] from the most recent forward (None when
+        # the encoder has no Perceiver); see forward().
+        self.last_register_grid: torch.Tensor | None = None
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -168,8 +171,12 @@ class LatentMIM(nn.Module, DistributedMixins):
         )
 
         # The encoder hands back the register grid as [B, n_h, n_w, D]; it is
-        # otherwise visible only inside decoder_kwargs.
+        # otherwise visible only inside decoder_kwargs. Stash it so heads that live
+        # outside this forward (the open-set probe, see
+        # olmoearth_pretrain.nn.open_set_latent_mim) can read the grid the decoder
+        # and supervision heads just consumed.
         registers = decoder_kwargs.get("registers")
+        self.last_register_grid = registers
         supervision_preds = None
         if self.supervision_head is not None:
             if registers is None:

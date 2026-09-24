@@ -5,11 +5,17 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 from pyproj import Transformer
 
-from olmoearth_pretrain.data.constants import BandSet, Modality, ModalitySpec
+from olmoearth_pretrain.data.constants import (
+    MISSING_VALUE,
+    BandSet,
+    Modality,
+    ModalitySpec,
+)
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthSample,
     _get_max_t_within_token_budget,
@@ -330,6 +336,101 @@ def test_supervision_modalities_can_be_excluded_from_token_budget() -> None:
     assert subsetted_sample.time == 2
     assert subsetted_sample.open_set is not None
     assert subsetted_sample.open_set_regression is not None
+
+
+def _change_sample(t: int = 12) -> tuple[OlmoEarthSample, dict[str, np.ndarray]]:
+    """A change sample whose first 6 timesteps are pre and last 6 post."""
+    h, w = 16, 16
+    # Monthly timestamps Jan..Dec 2021 in the [day, month0, year] convention.
+    timestamps = torch.tensor([[1, m, 2021] for m in range(t)], dtype=torch.int64)
+    boundary = torch.tensor([1, 6, 2021], dtype=torch.int64)  # July 1st
+    sample = OlmoEarthSample(
+        sentinel2_l2a=torch.ones((h, w, t, OlmoEarthSample.num_bands("sentinel2_l2a"))),
+        open_set=torch.ones((h, w, 1, OlmoEarthSample.num_bands("open_set"))),
+        open_set_change_boundary=boundary,
+        timestamps=timestamps,
+    )
+    masks = {"sentinel2_l2a": np.ones(t, dtype=bool)}
+    return sample, masks
+
+
+@pytest.mark.parametrize("subset_fn", [subset_sample_default, subset_sample_cutmix])
+def test_change_sample_crop_straddles_boundary(subset_fn: Callable) -> None:
+    """A change sample's temporal crop always keeps a pre and a post timestep."""
+    sample, masks = _change_sample()
+    boundary_key = 2021 * 10_000 + 6 * 100 + 1
+    for _ in range(30):
+        subsetted = subset_fn(
+            sample,
+            patch_size=4,
+            max_tokens_per_instance=10_000,
+            sampled_hw_p=4,
+            current_length=12,
+            missing_timesteps_masks=masks,
+            target_t=2,
+            budget_exclude_modalities=frozenset(
+                {"open_set", "open_set_change_boundary"}
+            ),
+        )
+        assert subsetted.time == 2
+        ts = subsetted.timestamps
+        keys = ts[:, 2] * 10_000 + ts[:, 1] * 100 + ts[:, 0]
+        assert (keys < boundary_key).any() and (keys >= boundary_key).any()
+        # The static boundary vector passes through the crop untouched.
+        assert torch.equal(
+            subsetted.open_set_change_boundary, torch.tensor([1, 6, 2021])
+        )
+
+
+def test_change_sample_single_timestep_crop_is_unconstrained() -> None:
+    """With max_t == 1 there is nothing to straddle; any start is allowed."""
+    sample, masks = _change_sample()
+    starts = set()
+    for _ in range(60):
+        subsetted = subset_sample_default(
+            sample,
+            patch_size=4,
+            max_tokens_per_instance=10_000,
+            sampled_hw_p=4,
+            current_length=12,
+            missing_timesteps_masks=masks,
+            target_t=1,
+            budget_exclude_modalities=frozenset(
+                {"open_set", "open_set_change_boundary"}
+            ),
+        )
+        assert subsetted.timestamps is not None
+        starts.add(int(subsetted.timestamps[0, 1]))
+    assert min(starts) < 6 and max(starts) >= 6
+
+
+def test_non_change_sample_missing_boundary_is_ignored() -> None:
+    """A missing-filled boundary imposes no constraint on the crop start."""
+    sample, masks = _change_sample()
+    sample = OlmoEarthSample(
+        **{
+            **sample.as_dict(),
+            "open_set_change_boundary": torch.full((3,), MISSING_VALUE),
+        }
+    )
+    starts = set()
+    for _ in range(60):
+        subsetted = subset_sample_default(
+            sample,
+            patch_size=4,
+            max_tokens_per_instance=10_000,
+            sampled_hw_p=4,
+            current_length=12,
+            missing_timesteps_masks=masks,
+            target_t=2,
+            budget_exclude_modalities=frozenset(
+                {"open_set", "open_set_change_boundary"}
+            ),
+        )
+        assert subsetted.timestamps is not None
+        starts.add(int(subsetted.timestamps[0, 1]))
+    # Starts other than the single straddling start (5) occur.
+    assert starts - {5}
 
 
 def test_subsetting_with_tokenization_config() -> None:

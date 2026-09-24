@@ -1,14 +1,33 @@
-"""Contrastive latent-MIM train module with a supervised open-set probe.
+"""Latent-MIM train module with a supervised open-set probe.
 
-Extends :class:`ContrastiveLatentMIMTrainModule` by adding a supervised
-segmentation + regression loss (see
+Extends :class:`LatentMIMTrainModule` (the single-forward recipe used by the v1.3
+Perceiver runs) by adding a supervised segmentation + regression loss (see
 :class:`olmoearth_pretrain.train.open_set_probe.OpenSetProbe`) on top of the
-self-supervised objective. The probe reads the *online* encoder output, so the
-supervised gradient flows back into the encoder.
+self-supervised objective. The probe reads the encoder's *register grid* (the
+Perceiver output, ``[B, n_h, n_w, D]``), so the supervised gradient flows back
+into the Perceiver and the encoder.
 
 The probe itself lives inside the model
 (:class:`olmoearth_pretrain.nn.open_set_latent_mim.OpenSetLatentMIM`) so that the
-DDP gradient all-reduce and the optimizer cover its parameters.
+DDP gradient all-reduce and the optimizer cover its parameters. Its loss is a
+per-rank mean over labeled samples and its metrics ride on ``extra_metrics``,
+exactly like the v1.3 map supervision heads.
+
+Post-training schedule
+----------------------
+
+With ``freeze_backbone_until_step = N > 0`` the module runs a single-run,
+two-phase schedule for continuing from a pretrained checkpoint whose model lacks
+the probe:
+
+1. ``global_step < N`` (linear-probe phase): every parameter except the probe is
+   frozen. Only the encoder runs (under ``no_grad``) to produce the register grid;
+   the decoder / target encoder / map supervision / student losses are skipped
+   since none of them can produce a gradient.
+2. ``global_step >= N`` (fine-tune phase): the backbone unfreezes and the probe is
+   frozen (``freeze_probe_after_unfreeze``). The full v1.3 forward runs (latent-MIM
+   + map supervision + student distillation) plus the supervised loss, whose
+   gradient now reaches the backbone through the fixed probe.
 """
 
 from dataclasses import dataclass
@@ -16,133 +35,167 @@ from logging import getLogger
 from typing import Any
 
 import torch
-import torch.distributed as dist
-from olmo_core.distributed.utils import get_world_size
 
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, TokensAndMasks
-from olmoearth_pretrain.train.train_module.contrastive_latentmim import (
-    ContrastiveLatentMIMTrainModule,
-    ContrastiveLatentMIMTrainModuleConfig,
+from olmoearth_pretrain.nn.utils import unpack_encoder_output
+from olmoearth_pretrain.train.train_module.latent_mim import (
+    LatentMIMTrainModule,
+    LatentMIMTrainModuleConfig,
 )
 
 logger = getLogger(__name__)
 
 
-class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
-    """Contrastive latent-MIM plus a supervised open-set probe loss."""
+class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
+    """Latent-MIM plus a supervised open-set probe loss on the register grid."""
 
-    _NUM_AUGMENTED_VIEWS = 2
-
-    def __init__(self, *args: Any, sup_loss_weight: float = 1.0, **kwargs: Any) -> None:
-        """Initialize, extracting the supervised loss weight.
+    def __init__(
+        self,
+        *args: Any,
+        sup_loss_weight: float = 1.0,
+        freeze_backbone_until_step: int = 0,
+        freeze_probe_after_unfreeze: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize, extracting the supervised loss weight and freeze schedule.
 
         Args:
             *args: Positional arguments forwarded to the base train module.
             sup_loss_weight: Scalar weight applied to the combined supervised
                 (CE + MSE) loss when added to the self-supervised objective.
+            freeze_backbone_until_step: If > 0, train ONLY the open-set probe
+                until this global step, then unfreeze the rest of the model (the
+                linear-probe phase of the post-training recipe, for runs
+                initialized from a pretrained checkpoint via ``init_weights_path``).
+            freeze_probe_after_unfreeze: If True (and the schedule is active), the
+                probe is frozen once the backbone unfreezes, so the second phase
+                trains the backbone against a fixed probe.
             **kwargs: Keyword arguments forwarded to the base train module.
         """
         super().__init__(*args, **kwargs)
         self.sup_loss_weight = sup_loss_weight
-        self._supervised_metrics: dict[str, tuple[float, int]] | None = None
+        self.freeze_backbone_until_step = freeze_backbone_until_step
+        self.freeze_probe_after_unfreeze = freeze_probe_after_unfreeze
+        self.total_loss_name = f"{self.total_loss_name}+open_set"
+        # Params frozen at init (e.g. FrozenTargetProjection copies) must never
+        # be flipped trainable by the freeze schedule.
+        self._always_frozen_param_ids = {
+            id(p) for p in self.model.parameters() if not p.requires_grad
+        }
+        self._backbone_frozen: bool | None = None
+
+    # ------------------------------------------------------------------
+    # Freeze schedule
+    # ------------------------------------------------------------------
+    @property
+    def backbone_frozen(self) -> bool:
+        """Whether the current step is in the probe-only phase."""
+        return bool(self._backbone_frozen)
+
+    def _apply_freeze_schedule(self) -> None:
+        """Freeze/unfreeze the backbone and probe based on the global step.
+
+        Before ``freeze_backbone_until_step`` only the open-set probe trains;
+        afterwards the backbone trains and (with ``freeze_probe_after_unfreeze``)
+        the probe is frozen. ``requires_grad`` is toggled lazily AFTER the optimizer
+        was built, so every param remains in the optimizer throughout and simply
+        resumes/stops updating on the flip (AdamW, fused included, skips params
+        whose ``grad`` is ``None``). The flip is keyed on the global step, so all
+        DP ranks toggle together and the replicated-DDP gradient all-reduce sees
+        identical grad sets on every rank. Params that were already frozen at init
+        (the projection-only target copies) are never unfrozen.
+        """
+        if self.freeze_backbone_until_step <= 0:
+            return
+        freeze = self.trainer.global_step < self.freeze_backbone_until_step
+        if freeze == self._backbone_frozen:
+            return
+        probe_trainable = freeze or not self.freeze_probe_after_unfreeze
+        probe_param_ids = {id(p) for p in self.model.open_set_probe.parameters()}
+        num_toggled = 0
+        for p in self.model.parameters():
+            if id(p) in self._always_frozen_param_ids:
+                continue
+            if id(p) in probe_param_ids:
+                p.requires_grad_(probe_trainable)
+                continue
+            p.requires_grad_(not freeze)
+            num_toggled += 1
+        self._backbone_frozen = freeze
+        logger.info(
+            "open-set freeze schedule: %s %d backbone params at step %d "
+            "(freeze_backbone_until_step=%d, probe %s)",
+            "froze" if freeze else "unfroze",
+            num_toggled,
+            self.trainer.global_step,
+            self.freeze_backbone_until_step,
+            "trainable" if probe_trainable else "frozen",
+        )
 
     def train_batch(
         self,
-        batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
+        batch: tuple[int, MaskedOlmoEarthSample],
         dry_run: bool = False,
     ) -> None:
-        """Train a batch and record supervised metrics once for the full batch."""
-        self._supervised_metrics = {}
-        try:
-            super().train_batch(batch, dry_run=dry_run)
-            if not dry_run:
-                self._flush_supervised_metrics()
-        finally:
-            self._supervised_metrics = None
+        """Apply the freeze schedule, then train the batch."""
+        self._apply_freeze_schedule()
+        super().train_batch(batch, dry_run=dry_run)
 
-    def _accumulate_supervised_metrics(self, metrics: dict[str, float]) -> None:
-        """Accumulate metrics emitted by each view and microbatch forward."""
-        if self._supervised_metrics is None:
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+    def _probe_loss(
+        self, register_grid: torch.Tensor | None, batch: MaskedOlmoEarthSample
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
+        """Run the probe on the register grid; return its weighted loss + metrics."""
+        if register_grid is None:
             raise RuntimeError(
-                "supervised metrics can only be recorded during train_batch"
+                "OpenSetLatentMIMTrainModule requires the encoder Perceiver: the "
+                "open-set probe reads the register grid (set "
+                "encoder_config.perceiver_config)"
             )
-        for key in ("open_set_ce", "open_set_mse"):
-            value = metrics.get(key, 0.0)
-            patch_count = metrics.get(f"{key}_patches", 0.0)
-            total, count = self._supervised_metrics.get(key, (0.0, 0))
-            self._supervised_metrics[key] = (
-                total + value * patch_count,
-                count + 1,
-            )
-            patch_key = f"{key}_patches"
-            patch_total, patch_count_entries = self._supervised_metrics.get(
-                patch_key, (0.0, 0)
-            )
-            self._supervised_metrics[patch_key] = (
-                patch_total + patch_count,
-                patch_count_entries + 1,
-            )
-
-    def _flush_supervised_metrics(self) -> None:
-        """Log globally patch-weighted metrics once for the full batch."""
-        if not self._supervised_metrics:
-            return
-        totals = torch.tensor(
-            [
-                self._supervised_metrics["open_set_ce"][0],
-                self._supervised_metrics["open_set_ce_patches"][0],
-                self._supervised_metrics["open_set_mse"][0],
-                self._supervised_metrics["open_set_mse_patches"][0],
-            ],
-            dtype=torch.float64,
-            device=self.device,
-        )
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(totals, group=self.dp_process_group)
-        ce_sum, ce_count, mse_sum, mse_count = totals.tolist()
-        metrics = {
-            "open_set_ce": ce_sum / ce_count if ce_count else 0.0,
-            "open_set_ce_patches": ce_count / self._NUM_AUGMENTED_VIEWS,
-            "open_set_mse": mse_sum / mse_count if mse_count else 0.0,
-            "open_set_mse_patches": mse_count / self._NUM_AUGMENTED_VIEWS,
+        # The probe lives inside the model so DDP/optimizer cover its params. It
+        # always returns a probe-connected loss (a zero-touch term when a rank has no
+        # labeled patches) so every rank produces gradients for the probe params each
+        # step. Production DDP uses bf16 autocast, and the probe's fp32 parameters
+        # must be autocast together with the encoder's bf16 register grid.
+        with self._model_forward_context():
+            sup_loss, sup_metrics = self.model.open_set_probe(register_grid, batch)
+        # Logged as open_set/{ce,ce_samples,ce_patches,mse,...}; the base train_batch
+        # averages each key over the microbatches that reported it, so the counts are
+        # per-microbatch means and the losses are means over labeled microbatches.
+        metrics: dict[str, Any] = {
+            f"open_set/{key.removeprefix('open_set_')}": value
+            for key, value in sup_metrics.items()
         }
-        self.log_extra_metrics(
-            {f"train/{key}": value for key, value in metrics.items()},
-            reduce_type=None,
-        )
+        metrics["open_set/backbone_frozen"] = float(self.backbone_frozen)
+        return self.sup_loss_weight * sup_loss, metrics
 
-    def _global_patch_counts(self, metrics: dict[str, float]) -> dict[str, float]:
-        """Sum valid classification and regression patch counts across DP ranks."""
-        counts = torch.tensor(
-            [
-                metrics.get("open_set_ce_patches", 0.0),
-                metrics.get("open_set_mse_patches", 0.0),
-            ],
-            dtype=torch.float64,
-            device=self.device,
-        )
-        if dist.is_available() and dist.is_initialized():
-            dist.all_reduce(counts, group=self.dp_process_group)
-        return {
-            "open_set_ce": float(counts[0]),
-            "open_set_mse": float(counts[1]),
-        }
-
-    def _combine_supervised_losses(
+    def _probe_only_forward(
         self,
-        losses: dict[str, torch.Tensor],
-        metrics: dict[str, float],
-    ) -> torch.Tensor:
-        """Combine local means so DP gradient averaging yields global patch means."""
-        loss = losses["zero_touch"]
-        global_counts = self._global_patch_counts(metrics)
-        world_size = get_world_size(self.dp_process_group)
-        for key in ("open_set_ce", "open_set_mse"):
-            local_count = metrics.get(f"{key}_patches", 0.0)
-            global_count = global_counts[key]
-            if key in losses and global_count > 0:
-                loss = loss + losses[key] * local_count * world_size / global_count
-        return loss
+        batch: MaskedOlmoEarthSample,
+        patch_size: int,
+    ) -> tuple[
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, Any] | None,
+    ]:
+        """Linear-probe phase forward: frozen encoder -> registers -> probe loss.
+
+        Everything but the probe is frozen, so the decoder, target encoder, map
+        supervision and student losses cannot produce gradients and are skipped.
+        The ``latent`` slot of the return tuple is the encoder output (so the
+        regularizer hook still has something to look at); the ``decoded`` and
+        ``target`` slots reuse it, as there is no decoder pass.
+        """
+        with self._model_forward_context(), torch.no_grad():
+            output_dict = self.model.encoder(batch, patch_size=patch_size)
+        register_grid = output_dict.get("registers")
+        latent, _, _ = unpack_encoder_output(output_dict)
+        loss, metrics = self._probe_loss(register_grid, batch)
+        return loss, latent, latent, latent, metrics
 
     def model_forward(
         self,
@@ -150,32 +203,35 @@ class OpenSetLatentMIMTrainModule(ContrastiveLatentMIMTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
+        torch.Tensor,
+        TokensAndMasks,
+        TokensAndMasks,
+        TokensAndMasks,
+        dict[str, Any] | None,
     ]:
         """Run the base forward, then add the supervised probe loss."""
-        loss, latent, decoded, target_output, pooled = super().model_forward(
+        if self.backbone_frozen:
+            return self._probe_only_forward(batch, patch_size)
+
+        loss, latent, decoded, target_output, extra_metrics = super().model_forward(
             batch, patch_size, token_exit_cfg
         )
-        # The probe lives inside the model so DDP/optimizer cover its params. It always
-        # returns a probe-connected loss (a zero-touch term when a rank has no labeled
-        # patches) so every rank produces gradients for the probe params each step.
-        # Re-enter the model forward context because the base method has already exited
-        # it. Production DDP uses bf16 autocast, and the probe's fp32 parameters must be
-        # autocast together with the encoder's bf16 latent representations.
-        with self._model_forward_context():
-            sup_losses, sup_metrics = self.model.open_set_probe(latent, batch)
-        sup_loss = self._combine_supervised_losses(sup_losses, sup_metrics)
-        loss = loss + self.sup_loss_weight * sup_loss
-        if sup_metrics:
-            self._accumulate_supervised_metrics(sup_metrics)
-        return loss, latent, decoded, target_output, pooled
+        # The probe reads the encoder's register grid, which the model forward
+        # stashes on the model.
+        sup_loss, sup_metrics = self._probe_loss(
+            getattr(self.model, "last_register_grid", None), batch
+        )
+        extra_metrics = {**(extra_metrics or {}), **sup_metrics}
+        return loss + sup_loss, latent, decoded, target_output, extra_metrics
 
 
 @dataclass
-class OpenSetLatentMIMTrainModuleConfig(ContrastiveLatentMIMTrainModuleConfig):
+class OpenSetLatentMIMTrainModuleConfig(LatentMIMTrainModuleConfig):
     """Configuration for :class:`OpenSetLatentMIMTrainModule`."""
 
     sup_loss_weight: float = 1.0
+    freeze_backbone_until_step: int = 0
+    freeze_probe_after_unfreeze: bool = True
 
     def build(
         self,

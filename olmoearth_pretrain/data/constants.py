@@ -598,6 +598,23 @@ class Modality:
         skip_normalization=True,
     )
 
+    # Open-set change boundary: for paired pre/post change samples, the date that
+    # separates the "before" timesteps from the "after" timesteps, stored in the same
+    # [day, month (0-based), year] convention as ``timestamps`` so a timestep is
+    # post-change iff its timestamp >= this boundary. Static in space and time (one
+    # 3-vector per sample, materialized as a 1x1 pixel raster like era5_10);
+    # missing-filled for non-change samples. Not an encoder input.
+    OPEN_SET_CHANGE_BOUNDARY = ModalitySpec(
+        name="open_set_change_boundary",
+        tile_resolution_factor=16,
+        # 128 px window at 10 m -> one 1280 m pixel (resolution factor 2048).
+        band_sets=[BandSet(["day", "month", "year"], 2048)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+        skip_normalization=True,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
