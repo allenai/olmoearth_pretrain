@@ -17,6 +17,7 @@ from logging import getLogger
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from upath import UPath
 
@@ -91,6 +92,7 @@ class CopernicusFMWrapper(nn.Module):
         load_directory: str,
         model_size: str = "base",
         kernel_size: int = 16,
+        image_resolution: int = 224,
         use_pretrained_normalizer: bool = True,
     ) -> None:
         """Load a pretrained Copernicus-FM ViT from ``load_directory``.
@@ -99,10 +101,24 @@ class CopernicusFMWrapper(nn.Module):
             load_directory: directory holding the CopernicusFM_ViT_*.pth weights.
             model_size: "base" or "large".
             kernel_size: patch-embedding kernel the hypernetwork generates for.
+            image_resolution: side length each frame is bilinearly resized to
+                before encoding; defaults to the 224x224 pretraining size.
             use_pretrained_normalizer: use the model's own band statistics.
         """
         super().__init__()
         self.kernel_size = kernel_size
+        # The evaluator reads model.patch_size to build the token -> label
+        # mapping (evaluator_callback.py: `if hasattr(model, "patch_size")`),
+        # falling back to the task's patch_size when absent. Copernicus-FM
+        # emits one token per kernel_size x kernel_size tile, so without this
+        # the evaluator assumed the task's per-pixel patch_size=1 while the
+        # model actually returns a (kernel_size)-strided grid.
+        self.patch_size = kernel_size
+        # Copernicus-FM was pretrained at 224x224 (model_vit.py img_size=224),
+        # and its positional embeddings are interpolated from that 14x14 grid.
+        # Following the house convention (croma/panopticon/clay), every frame is
+        # bilinearly resized to the pretraining resolution before encoding.
+        self.image_resolution = image_resolution
         self.use_pretrained_normalizer = use_pretrained_normalizer
 
         # imported lazily: the upstream repo is vendored on weka, not installed
@@ -170,6 +186,16 @@ class CopernicusFMWrapper(nn.Module):
             num_timesteps = data.shape[3]
             for i in range(num_timesteps):
                 frame = rearrange(data[:, :, :, i, :], "b h w c -> b c h w")
+                original_height = frame.shape[-2]
+                new_height = (
+                    self.kernel_size if original_height == 1 else self.image_resolution
+                )
+                frame = F.interpolate(
+                    frame,
+                    size=(new_height, new_height),
+                    mode="bilinear",
+                    align_corners=False,
+                )
                 meta_info = torch.full(
                     (frame.shape[0], 4), float("nan"), device=frame.device
                 )  # lon/lat/time/area unknown -> model falls back to learned tokens
@@ -205,6 +231,7 @@ class CopernicusFMConfig(Config):
     load_directory: str = "/weka/dfive-default/helios/models/copernicusfm"
     model_size: str = "base"
     kernel_size: int = 16
+    image_resolution: int = 224
     use_pretrained_normalizer: bool = True
     _unused: list[str] = field(default_factory=list)
 
@@ -214,5 +241,6 @@ class CopernicusFMConfig(Config):
             load_directory=self.load_directory,
             model_size=self.model_size,
             kernel_size=self.kernel_size,
+            image_resolution=self.image_resolution,
             use_pretrained_normalizer=self.use_pretrained_normalizer,
         )
