@@ -4,7 +4,7 @@
 latent count grows with the sample's pixel area and its sampler has to cap samples at
 64 pixels a side. This arm instead draws the latent STRIDE per training forward pass
 (``random_latent_stride=True``): uniformly among the divisors of the batch's patch
-size whose latent count fits a budget of 4,096 latents per sample, with the patch
+size whose latent count fits a budget of 2,048 latents per sample, with the patch
 stride always allowed. Stride 1 is one latent per pixel, stride ``patch_size`` one per
 patch, so one run trains every output resolution in between, and large grids get a
 coarser stride instead of being excluded -- the 64-pixel cap is gone and the sampler
@@ -58,8 +58,9 @@ MODULE_PATH = (
     "scripts/official/v1_3/ablations/pure_perceiver_joint_latentread_rstride.py"
 )
 
-# Per-sample latent budget: the pixel-latent arm's worst case (64 x 64 pixels).
-MAX_LATENTS = 4096
+# Per-sample latent budget. 4,096 OOMed at microbatch 32 (step 12); 2,048 matches the
+# pixel-latent arm's 45-pixel cap and keeps 96-pixel windows trainable at stride 2.
+MAX_LATENTS = 2048
 # The sampler's default tile extent, i.e. no pixel-side cap beyond the stored tiles.
 TILE_SIZE = OlmoEarthDataLoaderConfig.__dataclass_fields__["tile_size"].default
 
