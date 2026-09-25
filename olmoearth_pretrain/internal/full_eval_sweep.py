@@ -1346,6 +1346,13 @@ PRECOMPUTED_MODEL_TO_MODALITY = {
         Modality.TESSERA_V2.name,
         "tessera_v2",
     ),
+    # OlmoEarth's published large-scale embeddings, baked from the geozarr
+    # store (scripts/tools/bake_olmoearth_zarr_embeddings.py). They are int8 at
+    # source and dequantized on bake, like AEF, so they are not re-quantized.
+    BaselineModelName.OLMOEARTH_PRECOMPUTED: (
+        Modality.OLMOEARTH_EMB.name,
+        "olmoearth_emb",
+    ),
 }
 
 

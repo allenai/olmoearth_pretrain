@@ -3637,6 +3637,149 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_year_aligned",
       "window_size": 128
     },
+    "pastis_year_aligned_oe13zarr": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "config_json_sha256": "33fc4897785d913193e3855a5b2a1d93e3ec7517bfa11ac15fb79d1885165022",
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_year_aligned_oe13zarr",
+      "end_time": "2019-12-31",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "olmoearth_emb"
+      ],
+      "name": "pastis_year_aligned_oe13zarr",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 27.872779846191406,
+            "mean": -16.02337369866134,
+            "min": -100.0,
+            "std": 3.080131654169802
+          },
+          "vv": {
+            "max": 33.129364013671875,
+            "mean": -9.604016077013526,
+            "min": -100.0,
+            "std": 3.165719098446274
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21157.0,
+            "mean": 784.2738241824436,
+            "min": 0.0,
+            "std": 1544.1036539609636
+          },
+          "B02": {
+            "max": 19968.0,
+            "mean": 881.5961787046429,
+            "min": 0.0,
+            "std": 1498.8845419293707
+          },
+          "B03": {
+            "max": 18640.0,
+            "mean": 1116.1583144888693,
+            "min": 0.0,
+            "std": 1401.5208394908234
+          },
+          "B04": {
+            "max": 18208.0,
+            "mean": 1111.6713900065554,
+            "min": 0.0,
+            "std": 1421.3531674753967
+          },
+          "B05": {
+            "max": 17561.0,
+            "mean": 1569.5472217651143,
+            "min": 0.0,
+            "std": 1400.6298460291775
+          },
+          "B06": {
+            "max": 17187.0,
+            "mean": 2590.4877040575,
+            "min": 0.0,
+            "std": 1345.0333006218086
+          },
+          "B07": {
+            "max": 16975.0,
+            "mean": 2955.1939492691067,
+            "min": 0.0,
+            "std": 1402.08745826338
+          },
+          "B08": {
+            "max": 16752.0,
+            "mean": 3142.2713949017325,
+            "min": 0.0,
+            "std": 1468.758604106172
+          },
+          "B09": {
+            "max": 16524.0,
+            "mean": 3396.5326188510735,
+            "min": 0.0,
+            "std": 1971.960176798226
+          },
+          "B11": {
+            "max": 15440.0,
+            "mean": 2329.726577224872,
+            "min": 0.0,
+            "std": 1098.5923089707687
+          },
+          "B12": {
+            "max": 15229.0,
+            "mean": 1600.2374255213729,
+            "min": 0.0,
+            "std": 1051.4129049656106
+          },
+          "B8A": {
+            "max": 16661.0,
+            "mean": 3172.980303853915,
+            "min": 0.0,
+            "std": 1393.5464844886317
+          }
+        }
+      },
+      "num_classes": 19,
+      "num_timesteps": 212,
+      "source_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_year_aligned_oe13zarr",
+      "split_stats": {
+        "test": {
+          "count": 496
+        },
+        "train": {
+          "count": 1455
+        },
+        "val": {
+          "count": 482
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2019-01-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_year_aligned_oe13zarr",
+      "window_size": 128
+    },
     "small_landsat_vessel_length": {
       "classes": [
         "0"

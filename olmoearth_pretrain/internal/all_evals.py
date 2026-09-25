@@ -1575,6 +1575,19 @@ EMBEDDING_EVAL_TASKS.update(
     }
 )
 
+# pastis_year_aligned_oe13zarr: the pastis_year_aligned windows, splits and
+# labels (restricted to the windows that carry gse, i.e. exactly the windows
+# every model is scored on there) plus OlmoEarth's published large-scale
+# embeddings as the olmoearth_emb layer, baked from the geozarr store by
+# scripts/tools/bake_olmoearth_zarr_embeddings.py. It is a separate dataset so
+# the shared pastis_year_aligned config.json (whose hash eval jobs verify)
+# stays untouched. Only --model=olmoearth_precomputed runs it.
+EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"] = replace(
+    EMBEDDING_EVAL_TASKS["pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat"],
+    dataset="pastis_year_aligned_oe13zarr",
+    input_modalities=[Modality.OLMOEARTH_EMB.name],
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

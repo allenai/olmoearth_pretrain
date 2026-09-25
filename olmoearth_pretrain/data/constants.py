@@ -529,6 +529,23 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # OlmoEarth's own published large-scale embeddings (128-dim, int8 at
+    # source), read back from the released geozarr store by
+    # scripts/tools/bake_olmoearth_zarr_embeddings.py. Scoring these checks the
+    # production inference pipeline against the forward-pass evals.
+    OLMOEARTH_EMB = ModalitySpec(
+        name="olmoearth_emb",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"E{idx:03d}" for idx in range(128)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     CDL = ModalitySpec(
         name="cdl",
         tile_resolution_factor=16,
@@ -604,6 +621,7 @@ EMBEDDING_PRODUCT_MODALITIES = frozenset(
     {
         Modality.GSE.name,
         Modality.TESSERA_V2.name,
+        Modality.OLMOEARTH_EMB.name,
     }
 )
 

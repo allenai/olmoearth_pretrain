@@ -499,6 +499,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict[Modality.TESSERA_V2.name] = mock_tessera_v2
+        if Modality.OLMOEARTH_EMB.name in self.dataset.training_modalities:
+            mock_olmoearth_emb = rng.random(
+                (standard_hw, standard_hw, 1, Modality.OLMOEARTH_EMB.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.OLMOEARTH_EMB.name] = mock_olmoearth_emb
         if Modality.CDL.name in self.dataset.training_modalities:
             mock_cdl = rng.random(
                 (standard_hw, standard_hw, 1, Modality.CDL.num_bands), dtype=np.float32

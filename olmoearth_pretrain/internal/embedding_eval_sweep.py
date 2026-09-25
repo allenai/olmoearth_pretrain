@@ -10,7 +10,7 @@ all_evals.py) and differs from the full sweep in that:
 - only the probe LR is swept, and only for the linear-probe tasks — the KNN
   twins have no hyperparameters and run once in their own job;
 - only OlmoEarth checkpoints and the precomputed embedding products (aef,
-  tessera_v2_precomputed) are supported.
+  tessera_v2_precomputed, olmoearth_precomputed) are supported.
 
 e.g.
   # OlmoEarth checkpoint
@@ -33,6 +33,7 @@ import subprocess  # nosec
 import uuid
 from logging import getLogger
 
+from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
 from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
 from olmoearth_pretrain.evals.models import BaselineModelName, get_launch_script_path
@@ -76,6 +77,13 @@ def _task_arg(task_name: str, field_name: str, value: object) -> str:
     )
 
 
+def _reads_imagery(task_name: str) -> bool:
+    """Whether a task reads any modality that is not a precomputed product."""
+    return not set(EMBEDDING_EVAL_TASKS[task_name].input_modalities) <= (
+        EMBEDDING_PRODUCT_MODALITIES
+    )
+
+
 def _capable_tasks(task_names: list[str], modality: str) -> list[str]:
     """Task names whose dataset carries the given precomputed modality.
 
@@ -100,7 +108,12 @@ def _model_task_names(
 ) -> tuple[list[str], list[str]]:
     """(LP, KNN) task names the given model can run; fail fast on zero tasks."""
     if model is None:
-        return LP_TASK_NAMES, KNN_TASK_NAMES
+        # A forward pass needs imagery, so skip tasks that only read a
+        # precomputed product (e.g. pastis_year_aligned_oe13zarr).
+        return (
+            [n for n in LP_TASK_NAMES if _reads_imagery(n)],
+            [n for n in KNN_TASK_NAMES if _reads_imagery(n)],
+        )
     modality, product = PRECOMPUTED_MODEL_TO_MODALITY[model]
     lp = _capable_tasks(LP_TASK_NAMES, modality)
     knn = _capable_tasks(KNN_TASK_NAMES, modality)

@@ -159,6 +159,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         # dataset export/inference script (tessera_v2).
         Modality.GSE.name,
         Modality.TESSERA_V2.name,
+        Modality.OLMOEARTH_EMB.name,
     }
 
     def __init__(
