@@ -423,6 +423,19 @@ DATASET_TO_CONFIG = {
     # PastisRawTimeSeriesDataset, so it must live here rather than in
     # registry.json (dataset_to_config checks this dict first).
     # 8 crop classes; void (255) is remapped to SEGMENTATION_IGNORE_LABEL.
+    # Tessera live-encoder raw S1+S2 view (not registry-backed).
+    "pastis2_drom_raw_s1s2": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=8,
+        is_multilabel=False,
+        height_width=128,
+        supported_modalities=[
+            Modality.SENTINEL1.name,
+            Modality.SENTINEL2_L2A.name,
+        ],
+        timeseries=True,
+    ),
     "pastis2_drom_raw_s2": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],

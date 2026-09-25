@@ -374,7 +374,13 @@ class DownstreamEvaluator:
             # export directly) but it does tile 128x128 patches into window_size
             # windows itself, so window_size is meaningful for it.
             if not (
-                task.dataset in ("pastis", "pastis128", "pastis2_drom_raw_s2")
+                task.dataset
+                in (
+                    "pastis",
+                    "pastis128",
+                    "pastis2_drom_raw_s2",
+                    "pastis2_drom_raw_s1s2",
+                )
                 or self._is_registry_dataset
             ):
                 raise ValueError(

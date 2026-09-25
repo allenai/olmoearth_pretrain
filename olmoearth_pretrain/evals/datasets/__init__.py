@@ -17,6 +17,7 @@ from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
 from .pastis_raw_dataset import PastisRawTimeSeriesDataset
+from .pastis_raw_s1s2_dataset import PastisRawS1S2Dataset
 from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
@@ -114,6 +115,19 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+        )
+    elif eval_dataset == "pastis2_drom_raw_s1s2":
+        # Tessera live-encoder only: raw dated S1+S2 on a shared union time
+        # axis. Separate class from the AnySat S2-only view on purpose -- the
+        # two sensors have different dates/counts, so the axis is built
+        # differently. See pastis_raw_s1s2_dataset.PastisRawS1S2Dataset.
+        return PastisRawS1S2Dataset(
+            path_to_pastis=paths.PASTIS_DROM_RAW_DIR,
+            split=split,
+            input_modalities=input_modalities or None,
+            window_size=kwargs.get("window_size", 16),
+            max_timesteps=kwargs.get("max_timesteps", 120),
+            date_range=kwargs.get("date_range", (20190101, 20191231)),
         )
     elif eval_dataset == "pastis2_drom_raw_s2":
         # AnySat-only: raw dated Sentinel-2 acquisitions straight from the

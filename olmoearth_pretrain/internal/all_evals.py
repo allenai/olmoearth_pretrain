@@ -3826,6 +3826,46 @@ EVAL_TASKS["planteur_2019_probe_sentinel2"] = _pastis_ps1_task(
     dataset="pastis2_drom_bg8void_2019_s2",
 )
 
+
+# Tessera live-encoder raw-acquisition tasks (S1+S2, shared union time axis,
+# calendar 2019, capped at 120 slots). tile_samples is False because
+# PastisRawS1S2Dataset tiles internally. ft_batch_size is overridden well below
+# FT_BATCH_SIZE: a 128x128 x 120-step x 14-band sample is ~11x the data of a
+# 12-step monthly-mosaic sample, so batch 16 would not fit.
+_TESSERA_RAW_DATASET = "pastis2_drom_raw_s1s2"
+
+EVAL_TASKS["planteur_tessera_raw_probe_sentinel1_sentinel2"] = DownstreamTaskConfig(
+    dataset=_TESSERA_RAW_DATASET,
+    embedding_batch_size=16,
+    probe_batch_size=8,
+    num_workers=2,
+    pooling_type=PoolingType.MEAN,
+    norm_stats_from_pretrained=True,
+    probe_lr=0.1,
+    eval_interval=Duration.epochs(50),
+    input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    epochs=50,
+    eval_mode=EvalMode.LINEAR_PROBE,
+    primary_metric=EvalMetric.MIOU,
+    window_size=16,
+    patch_size=1,
+    tile_samples=False,
+)
+
+FT_EVAL_TASKS["planteur_tessera_raw_ft_sentinel1_sentinel2"] = DownstreamTaskConfig(
+    dataset=_TESSERA_RAW_DATASET,
+    ft_batch_size=4,
+    num_workers=8,
+    pooling_type=PoolingType.MEAN,
+    norm_stats_from_pretrained=True,
+    epochs=FT_EPOCHS,
+    input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+    primary_metric=EvalMetric.MIOU,
+    window_size=FT_WINDOW_SIZE,
+    patch_size=FT_PATCH_SIZE,
+    tile_samples=False,
+)
+
 if __name__ == "__main__":
     module_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if module_path is None:
