@@ -369,8 +369,13 @@ class DownstreamEvaluator:
                     "tile_samples and label_at_center_pixel are mutually exclusive"
                 )
         if self.window_size is not None:
+            # pastis2_drom_raw_s2 is the AnySat raw-acquisition view: it is not
+            # registry-backed (PastisRawTimeSeriesDataset reads the PASTIS-format
+            # export directly) but it does tile 128x128 patches into window_size
+            # windows itself, so window_size is meaningful for it.
             if not (
-                task.dataset in ("pastis", "pastis128") or self._is_registry_dataset
+                task.dataset in ("pastis", "pastis128", "pastis2_drom_raw_s2")
+                or self._is_registry_dataset
             ):
                 raise ValueError(
                     f"window_size is only supported for pastis and registry "
