@@ -420,3 +420,51 @@ def test_supervision_head_spatial_unfold_override() -> None:
     assert SupervisionHeadConfig().build(32, 4).max_patch_size == 4
     with pytest.raises(ValueError, match="spatial_unfold"):
         SupervisionHeadConfig(spatial_unfold=0)
+
+
+def test_latent_stride_equal_to_patch_size_is_the_patch_grid() -> None:
+    """Latents every ``patch_size`` pixels reproduce the patch-latent model exactly."""
+    torch.manual_seed(0)
+    patch_model = _joint_encoder(joint_depth=2, latent_reads_all=True).eval()
+    torch.manual_seed(0)
+    strided = _joint_encoder(
+        joint_depth=2, latent_reads_all=True, pixel_latents=True, eval_latent_stride=2
+    ).eval()
+    strided.load_state_dict(patch_model.state_dict())
+    sample = _sample()
+    with torch.no_grad():
+        a = patch_model(sample, patch_size=2, input_res=10)
+        b = strided(sample, patch_size=2, input_res=10)
+    torch.testing.assert_close(a["registers"], b["registers"])
+    torch.testing.assert_close(a["register_positions"], b["register_positions"])
+
+
+def test_random_latent_stride_respects_divisors_and_budget() -> None:
+    """Training draws only divisors of the patch size within the latent budget.
+
+    The patch stride is always allowed, and evaluation uses the fixed eval stride.
+    """
+    encoder = _joint_encoder(
+        joint_depth=1,
+        latent_reads_all=True,
+        pixel_latents=True,
+        random_latent_stride=True,
+        max_latents=64,
+    )
+    module = encoder.perceiver
+    assert isinstance(module, JointLatentTransformer)
+    module.train()
+    torch.manual_seed(0)
+    # 4x4 patches at ps4: stride 1 -> 256 latents (over budget), 2 -> 64, 4 -> 16.
+    assert {module.choose_latent_stride((4, 4), 4) for _ in range(200)} == {2, 4}
+    # ps3: divisors 1 and 3; 2x2 patches at stride 1 = 36 latents, within budget.
+    assert {module.choose_latent_stride((2, 2), 3) for _ in range(200)} == {1, 3}
+    # A grid too large for any sub-patch stride still gets the patch stride.
+    assert {module.choose_latent_stride((16, 16), 2) for _ in range(50)} == {2}
+    module.eval()
+    assert module.choose_latent_stride((4, 4), 4) == 1
+    with torch.no_grad():
+        out = encoder(_sample(), patch_size=2, input_res=10)
+    assert out["registers"].shape == (2, 8, 8, 32)  # eval stride 1 = per pixel
+    with pytest.raises(ValueError, match="max_latents"):
+        _joint_encoder(pixel_latents=True, random_latent_stride=True)

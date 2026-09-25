@@ -124,14 +124,16 @@ def build_pixel_latent_positions(
     patch_size: int,
     patch_spacing: float,
     device: torch.device,
+    stride: int = 1,
 ) -> Tensor:
-    """Pixel-centre latent coordinates in the patch RoPE frame.
+    """Sub-patch latent centre coordinates in the patch RoPE frame.
 
-    Patch ``i`` sits at ``i * patch_spacing``, so pixel ``p`` of an axis -- pixel
-    ``p % patch_size`` of patch ``p // patch_size`` -- has its centre at
-    ``((p + 0.5) / patch_size - 0.5) * patch_spacing``. At ``patch_size = 1`` this is
-    exactly the patch coordinates. Same convention as the pixel registers of
-    ``favyen/20260917-pixreg-v1_3``.
+    Patch ``i`` sits at ``i * patch_spacing``. With latents every ``stride`` pixels,
+    latent ``k`` of an axis covers pixels ``[k * stride, (k + 1) * stride)`` and has its
+    centre at ``((k + 0.5) * stride / patch_size - 0.5) * patch_spacing``. At
+    ``stride = 1`` these are pixel centres (the convention of the pixel registers of
+    ``favyen/20260917-pixreg-v1_3``); at ``stride = patch_size`` they are exactly the
+    patch coordinates.
 
     Returns:
         ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
@@ -139,8 +141,8 @@ def build_pixel_latent_positions(
     lat_h, lat_w = latent_grid
 
     def axis(n: int) -> Tensor:
-        pix = torch.arange(n, device=device, dtype=torch.float32)
-        return ((pix + 0.5) / patch_size - 0.5) * patch_spacing
+        k = torch.arange(n, device=device, dtype=torch.float32)
+        return ((k + 0.5) * stride / patch_size - 0.5) * patch_spacing
 
     grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
     grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
@@ -194,6 +196,9 @@ class JointLatentTransformer(nn.Module):
         latent_reads_all: bool = False,
         sort_by_cell: bool = True,
         pixel_latents: bool = False,
+        random_latent_stride: bool = False,
+        max_latents: int | None = None,
+        eval_latent_stride: int = 1,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -245,6 +250,16 @@ class JointLatentTransformer(nn.Module):
                 token with ``latent_reads_all``), and a token sees every latent. At
                 patch size 1 this is exactly the patch-grid model. Follows the
                 pixel-register positions of ``favyen/20260917-pixreg-v1_3``.
+            random_latent_stride: With ``pixel_latents``, draw the latent STRIDE (pixels
+                per latent along each side) per training forward pass, uniformly among
+                the divisors of the batch's patch size whose latent count fits
+                ``max_latents`` (the patch stride always qualifies). Stride 1 is one
+                latent per pixel, stride ``patch_size`` one per patch, so a single run
+                trains every output resolution in between.
+            max_latents: Latent budget per sample for ``random_latent_stride``: large
+                grids fall back to coarser strides instead of being excluded.
+            eval_latent_stride: Stride used outside training (evals, inference); must
+                divide the patch size. 1 = per-pixel embeddings.
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -269,6 +284,13 @@ class JointLatentTransformer(nn.Module):
         self.latent_reads_all = latent_reads_all
         self.sort_by_cell = sort_by_cell
         self.pixel_latents = pixel_latents
+        if (random_latent_stride or eval_latent_stride != 1) and not pixel_latents:
+            raise ValueError("latent strides require pixel_latents=True")
+        if random_latent_stride and (max_latents is None or max_latents < 1):
+            raise ValueError("random_latent_stride needs a positive max_latents budget")
+        self.random_latent_stride = random_latent_stride
+        self.max_latents = max_latents
+        self.eval_latent_stride = eval_latent_stride
         self.register = nn.Parameter(torch.empty(1, embedding_size))
         nn.init.trunc_normal_(self.register, std=0.02)
         block_kwargs: dict[str, Any] = dict(
@@ -347,6 +369,38 @@ class JointLatentTransformer(nn.Module):
             torch.gather(valid_tokens, 1, order),
             torch.gather(cell_ids, 1, order),
         )
+
+    def choose_latent_stride(
+        self, spatial_grid: tuple[int, int], patch_size: int
+    ) -> int:
+        """Latent stride for this forward pass (pixel-latent mode).
+
+        Training with ``random_latent_stride``: uniform over the divisors of
+        ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
+        ``max_latents``; the patch stride is always allowed so every grid has an option.
+        Otherwise: ``eval_latent_stride`` outside training, 1 in training.
+        """
+        if not self.training:
+            if patch_size % self.eval_latent_stride != 0:
+                raise ValueError(
+                    f"eval_latent_stride {self.eval_latent_stride} does not divide "
+                    f"patch_size {patch_size}"
+                )
+            return self.eval_latent_stride
+        if not self.random_latent_stride:
+            return 1
+        n_h, n_w = spatial_grid
+        assert self.max_latents is not None
+        allowed = [
+            s
+            for s in range(1, patch_size + 1)
+            if patch_size % s == 0
+            and (
+                s == patch_size
+                or (n_h * patch_size // s) * (n_w * patch_size // s) <= self.max_latents
+            )
+        ]
+        return allowed[int(torch.randint(len(allowed), (1,)).item())]
 
     def _attention_masks(
         self, cell_id: Tensor, is_latent: Tensor, valid: Tensor
@@ -449,10 +503,12 @@ class JointLatentTransformer(nn.Module):
         device = patch_tokens.device
         n_h, n_w = spatial_grid
         n_cells = n_h * n_w
+        stride = patch_size
         if self.pixel_latents:
             if patch_spacing is None:
                 raise ValueError("pixel_latents requires patch_spacing")
-            lat_h, lat_w = n_h * patch_size, n_w * patch_size
+            stride = self.choose_latent_stride(spatial_grid, patch_size)
+            lat_h, lat_w = n_h * patch_size // stride, n_w * patch_size // stride
         else:
             lat_h, lat_w = n_h, n_w
         n_latents = lat_h * lat_w
@@ -477,7 +533,7 @@ class JointLatentTransformer(nn.Module):
         if self.pixel_latents:
             assert patch_spacing is not None
             latent_positions_2d = build_pixel_latent_positions(
-                batch_size, (lat_h, lat_w), patch_size, patch_spacing, device
+                batch_size, (lat_h, lat_w), patch_size, patch_spacing, device, stride
             )
         else:
             latent_positions_2d = build_register_grid_positions(
@@ -519,8 +575,8 @@ class JointLatentTransformer(nn.Module):
         rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
         if self.pixel_latents:
             # Each pixel latent belongs to the patch cell that contains it.
-            rows = torch.arange(lat_h, device=device) // patch_size
-            cols = torch.arange(lat_w, device=device) // patch_size
+            rows = torch.arange(lat_h, device=device) * stride // patch_size
+            cols = torch.arange(lat_w, device=device) * stride // patch_size
             latent_cell_ids = (rows[:, None] * n_w + cols[None, :]).reshape(1, -1)
             latent_cell_ids = latent_cell_ids.expand(batch_size, -1)
         else:
@@ -582,6 +638,10 @@ class JointLatentConfig(Config):
         pixel_latents: One latent per pixel instead of per patch (see
             :class:`JointLatentTransformer`); the register grid is then at pixel
             resolution, so pair it with ``SupervisionHeadConfig.spatial_unfold = 1``.
+        random_latent_stride / max_latents / eval_latent_stride: Train every latent
+            resolution from one latent per pixel to one per patch under a per-sample
+            latent budget; see :class:`JointLatentTransformer`. Leave the supervision
+            heads at the default unfold (``max_patch_size``) so they fit any stride.
     """
 
     register_dim: int
@@ -594,6 +654,9 @@ class JointLatentConfig(Config):
     latent_reads_all: bool = False
     sort_by_cell: bool = True
     pixel_latents: bool = False
+    random_latent_stride: bool = False
+    max_latents: int | None = None
+    eval_latent_stride: int = 1
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -669,4 +732,7 @@ class JointLatentConfig(Config):
             latent_reads_all=self.latent_reads_all,
             sort_by_cell=self.sort_by_cell,
             pixel_latents=self.pixel_latents,
+            random_latent_stride=self.random_latent_stride,
+            max_latents=self.max_latents,
+            eval_latent_stride=self.eval_latent_stride,
         )
