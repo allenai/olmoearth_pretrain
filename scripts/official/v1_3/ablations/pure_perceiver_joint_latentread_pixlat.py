@@ -102,10 +102,14 @@ def build_train_module_config(common: CommonComponents):
     return config
 
 
-def build_trainer_config(common: CommonComponents):
-    """Student evals at patch size 1, plus the d128 student at patch size 4."""
+def build_trainer_config(common: CommonComponents, module_path: str = MODULE_PATH):
+    """Student evals at patch size 1, plus the d128 student at patch size 4.
+
+    ``module_path`` is what the eval jobs re-import to rebuild the model; sibling arms
+    MUST pass their own path, or their evals silently score this arm's architecture.
+    """
     trainer_config = set_student_loop_evals(
-        _v1_2_build_trainer_config(common), MODULE_PATH
+        _v1_2_build_trainer_config(common), module_path
     )
     evaluator = trainer_config.callbacks["downstream_evaluator"]
     for name, task in aeftrial_loop_eval_tasks(
