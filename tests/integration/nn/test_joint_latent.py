@@ -1,5 +1,7 @@
 """Tests for the joint latent-token transformer (``nn/joint_latent.py``)."""
 
+from typing import Any
+
 import pytest
 import torch
 
@@ -259,7 +261,7 @@ def test_latent_reads_all_opens_only_the_latent_rows() -> None:
     assert not base[n_tokens:, 8].any()
 
 
-def _joint_module(**overrides) -> JointLatentTransformer:
+def _joint_module(**overrides: Any) -> JointLatentTransformer:
     kwargs: dict = dict(
         embedding_size=32,
         num_heads=4,
@@ -278,7 +280,9 @@ def _joint_module(**overrides) -> JointLatentTransformer:
     return JointLatentTransformer(**kwargs).eval()
 
 
-def _encoder_order_inputs(B: int, n_h: int, n_w: int, T: int, n_mod: int):
+def _encoder_order_inputs(
+    B: int, n_h: int, n_w: int, T: int, n_mod: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """Tokens in the encoder's collapsed order: per modality ``(h, w, t)``, then concat."""
     cells_one = torch.arange(n_h * n_w).repeat_interleave(T)
     cells = cells_one.repeat(n_mod).expand(B, -1)
@@ -351,3 +355,68 @@ def test_latent_reads_all_changes_registers_only_through_latent_rows() -> None:
         qk_norm=False,
     )
     assert built.latent_reads_all is True and built.sort_by_cell is False
+
+
+def test_pixel_latents_at_patch_size_one_equal_patch_latents() -> None:
+    """At patch size 1 a pixel is a patch, so pixel latents reproduce the patch grid."""
+    torch.manual_seed(0)
+    patch_model = _joint_encoder(joint_depth=2, latent_reads_all=True).eval()
+    torch.manual_seed(0)
+    pixel_model = _joint_encoder(
+        joint_depth=2, latent_reads_all=True, pixel_latents=True
+    ).eval()
+    pixel_model.load_state_dict(patch_model.state_dict())
+    sample = _sample()
+    with torch.no_grad():
+        a = patch_model(sample, patch_size=1, input_res=10)
+        b = pixel_model(sample, patch_size=1, input_res=10)
+    torch.testing.assert_close(a["registers"], b["registers"])
+    torch.testing.assert_close(a["register_positions"], b["register_positions"])
+
+
+@pytest.mark.parametrize("latent_reads_all", [False, True])
+def test_pixel_latents_grid_positions_and_cells(latent_reads_all: bool) -> None:
+    """Above patch size 1 the grid is at pixel resolution, centred inside its patch.
+
+    Each pixel latent carries the cell id of its containing patch, so without
+    ``latent_reads_all`` it reads only that patch's tokens.
+    """
+    torch.manual_seed(0)
+    encoder = _joint_encoder(
+        joint_depth=2, latent_reads_all=latent_reads_all, pixel_latents=True
+    ).eval()
+    sample = _sample()  # 8x8 pixels
+    captured: dict[str, torch.Tensor] = {}
+    original = encoder.perceiver._attention_masks
+
+    def spy(
+        cell_id: torch.Tensor, is_latent: torch.Tensor, valid: torch.Tensor
+    ) -> dict[str, Any]:
+        captured["cell_id"], captured["is_latent"] = cell_id, is_latent
+        return original(cell_id, is_latent, valid)
+
+    encoder.perceiver._attention_masks = spy  # type: ignore[method-assign]
+    with torch.no_grad():
+        out = encoder(sample, patch_size=2, input_res=10)
+    assert out["registers"].shape == (2, 8, 8, 32)
+    assert out["register_positions"].shape == (2, 64, 2)
+    assert torch.isfinite(out["registers"]).all()
+    # Pixel centres: patch i sits at i * spacing, its two pixels at (i -/+ 0.25) * s.
+    rows = out["register_positions"][0, ::8, 0]
+    spacing = rows[2] - rows[0]  # two pixels = one patch
+    torch.testing.assert_close(rows[1] - rows[0], spacing / 2)
+    torch.testing.assert_close(rows[0], -0.25 * spacing)
+    # Latent cell ids: the 4x4 patch grid, each id repeated over its 2x2 pixels.
+    latent_cells = captured["cell_id"][0][captured["is_latent"][0]].reshape(8, 8)
+    expected = (torch.arange(8)[:, None] // 2) * 4 + torch.arange(8)[None, :] // 2
+    assert torch.equal(latent_cells, expected)
+
+
+def test_supervision_head_spatial_unfold_override() -> None:
+    """spatial_unfold replaces max_patch_size as the per-cell unfold factor."""
+    from olmoearth_pretrain.nn.supervision_head import SupervisionHeadConfig
+
+    assert SupervisionHeadConfig(spatial_unfold=1).build(32, 4).max_patch_size == 1
+    assert SupervisionHeadConfig().build(32, 4).max_patch_size == 4
+    with pytest.raises(ValueError, match="spatial_unfold"):
+        SupervisionHeadConfig(spatial_unfold=0)

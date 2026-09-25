@@ -118,6 +118,35 @@ def build_register_grid_positions(
     return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
 
 
+def build_pixel_latent_positions(
+    batch_size: int,
+    latent_grid: tuple[int, int],
+    patch_size: int,
+    patch_spacing: float,
+    device: torch.device,
+) -> Tensor:
+    """Pixel-centre latent coordinates in the patch RoPE frame.
+
+    Patch ``i`` sits at ``i * patch_spacing``, so pixel ``p`` of an axis -- pixel
+    ``p % patch_size`` of patch ``p // patch_size`` -- has its centre at
+    ``((p + 0.5) / patch_size - 0.5) * patch_spacing``. At ``patch_size = 1`` this is
+    exactly the patch coordinates. Same convention as the pixel registers of
+    ``favyen/20260917-pixreg-v1_3``.
+
+    Returns:
+        ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
+    """
+    lat_h, lat_w = latent_grid
+
+    def axis(n: int) -> Tensor:
+        pix = torch.arange(n, device=device, dtype=torch.float32)
+        return ((pix + 0.5) / patch_size - 0.5) * patch_spacing
+
+    grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
+    grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+    return grid.unsqueeze(0).expand(batch_size, -1, -1)
+
+
 def joint_attention_allowed(
     cell_id: Tensor, is_latent: Tensor, valid: Tensor, latent_reads_all: bool = False
 ) -> Tensor:
@@ -164,6 +193,7 @@ class JointLatentTransformer(nn.Module):
         latent_time_range: bool = False,
         latent_reads_all: bool = False,
         sort_by_cell: bool = True,
+        pixel_latents: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -207,6 +237,14 @@ class JointLatentTransformer(nn.Module):
                 returned, so this changes nothing numerically; it only makes the
                 FlexAttention block mask sparser (whole 128-blocks off the cell
                 diagonal are skipped instead of computed).
+            pixel_latents: If True, the latent grid is laid at PIXEL resolution -- one
+                latent per pixel, ``patch_size**2`` per patch cell -- instead of one per
+                patch. Each latent sits at its pixel centre inside the patch frame and
+                carries the cell id of the patch that contains it, so the cell-local
+                rule is unchanged: a pixel latent reads its own patch's tokens (or every
+                token with ``latent_reads_all``), and a token sees every latent. At
+                patch size 1 this is exactly the patch-grid model. Follows the
+                pixel-register positions of ``favyen/20260917-pixreg-v1_3``.
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -230,6 +268,7 @@ class JointLatentTransformer(nn.Module):
         self.latent_time_range = latent_time_range
         self.latent_reads_all = latent_reads_all
         self.sort_by_cell = sort_by_cell
+        self.pixel_latents = pixel_latents
         self.register = nn.Parameter(torch.empty(1, embedding_size))
         nn.init.trunc_normal_(self.register, std=0.02)
         block_kwargs: dict[str, Any] = dict(
@@ -375,6 +414,8 @@ class JointLatentTransformer(nn.Module):
         cell_ids: Tensor,
         spatial_grid: tuple[int, int],
         grid_extent_positions: Tensor | None = None,
+        patch_size: int = 1,
+        patch_spacing: float | None = None,
     ) -> tuple[Tensor, Tensor]:
         """Run the joint blocks and return the latent grid.
 
@@ -393,16 +434,28 @@ class JointLatentTransformer(nn.Module):
                 laid over. Defaults to ``patch_positions``; pass the unmasked positions so
                 a masking pattern that hides a whole edge row/column of cells cannot
                 shrink the grid off the cells.
+            patch_size: Patch size of this forward pass (pixel-latent mode only).
+            patch_spacing: Distance between adjacent patch centres in the RoPE frame
+                (the GSD ratio times ``rope_coordinate_scale``); required in pixel-latent
+                mode to place the pixel centres.
 
         Returns:
-            registers: ``[B, n_h, n_w, D]`` latent grid after the final norm.
+            registers: ``[B, n_h, n_w, D]`` latent grid after the final norm, or
+                ``[B, n_h * patch_size, n_w * patch_size, D]`` with pixel latents.
             register_positions: ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` for the
                 decoder's cross-attention.
         """
         batch_size, n_tokens, _ = patch_tokens.shape
         device = patch_tokens.device
         n_h, n_w = spatial_grid
-        n_latents = n_h * n_w
+        n_cells = n_h * n_w
+        if self.pixel_latents:
+            if patch_spacing is None:
+                raise ValueError("pixel_latents requires patch_spacing")
+            lat_h, lat_w = n_h * patch_size, n_w * patch_size
+        else:
+            lat_h, lat_w = n_h, n_w
+        n_latents = lat_h * lat_w
         valid_tokens = (
             visible_mask.bool()
             if visible_mask is not None
@@ -411,7 +464,7 @@ class JointLatentTransformer(nn.Module):
         cell_ids = cell_ids.long()
         if self.sort_by_cell:
             patch_tokens, patch_positions, valid_tokens, cell_ids = self._sort_by_cell(
-                patch_tokens, patch_positions, valid_tokens, cell_ids, n_latents
+                patch_tokens, patch_positions, valid_tokens, cell_ids, n_cells
             )
 
         # Latents: one vector cloned to the grid; identity comes from RoPE.
@@ -421,9 +474,15 @@ class JointLatentTransformer(nn.Module):
             if grid_extent_positions is not None
             else patch_positions
         )
-        latent_positions_2d = build_register_grid_positions(
-            extent_source[..., -2:], spatial_grid
-        )
+        if self.pixel_latents:
+            assert patch_spacing is not None
+            latent_positions_2d = build_pixel_latent_positions(
+                batch_size, (lat_h, lat_w), patch_size, patch_spacing, device
+            )
+        else:
+            latent_positions_2d = build_register_grid_positions(
+                extent_source[..., -2:], spatial_grid
+            )
         rope_extent: Tensor | None = None
         if self.is_3d:
             t = patch_positions[..., 0]
@@ -458,7 +517,16 @@ class JointLatentTransformer(nn.Module):
 
         x = torch.cat([patch_tokens, latents.to(patch_tokens.dtype)], dim=1)
         rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
-        latent_cell_ids = torch.arange(n_latents, device=device).expand(batch_size, -1)
+        if self.pixel_latents:
+            # Each pixel latent belongs to the patch cell that contains it.
+            rows = torch.arange(lat_h, device=device) // patch_size
+            cols = torch.arange(lat_w, device=device) // patch_size
+            latent_cell_ids = (rows[:, None] * n_w + cols[None, :]).reshape(1, -1)
+            latent_cell_ids = latent_cell_ids.expand(batch_size, -1)
+        else:
+            latent_cell_ids = torch.arange(n_latents, device=device).expand(
+                batch_size, -1
+            )
         cell_id = torch.cat([cell_ids, latent_cell_ids], dim=1)
         is_latent = torch.cat(
             [
@@ -484,7 +552,7 @@ class JointLatentTransformer(nn.Module):
         for blk in self.latent_blocks:
             latents = blk(x=latents, rope_positions=latent_positions_2d)
         out = self.norm(latents)
-        out = rearrange(out, "b (h w) d -> b h w d", h=n_h, w=n_w)
+        out = rearrange(out, "b (h w) d -> b h w d", h=lat_h, w=lat_w)
         return out, latent_positions_2d
 
 
@@ -511,6 +579,9 @@ class JointLatentConfig(Config):
             own cell (tokens unchanged). See :class:`JointLatentTransformer`.
         sort_by_cell: Cell-contiguous token layout inside the joint blocks. Numerically
             a no-op; makes the FlexAttention block mask sparser. Default True.
+        pixel_latents: One latent per pixel instead of per patch (see
+            :class:`JointLatentTransformer`); the register grid is then at pixel
+            resolution, so pair it with ``SupervisionHeadConfig.spatial_unfold = 1``.
     """
 
     register_dim: int
@@ -522,6 +593,7 @@ class JointLatentConfig(Config):
     student_output_norm: bool = False
     latent_reads_all: bool = False
     sort_by_cell: bool = True
+    pixel_latents: bool = False
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -596,4 +668,5 @@ class JointLatentConfig(Config):
             latent_time_range=self.latent_time_range,
             latent_reads_all=self.latent_reads_all,
             sort_by_cell=self.sort_by_cell,
+            pixel_latents=self.pixel_latents,
         )

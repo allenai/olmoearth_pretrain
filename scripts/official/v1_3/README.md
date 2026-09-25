@@ -21,6 +21,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_shared_kv.py` | the pure Perceiver with one K/V projection shared by all 12 reads (`share_read_kv`) |
 | `ablations/pure_perceiver_joint.py` | no ViT, no reads: 12 joint blocks over `[tokens ; latents]` with cell-restricted token attention (`JointLatentConfig`) |
 | `ablations/pure_perceiver_joint_range.py` | the joint arm with interval latents: sinc-gated RoPE over the window (`latent_time_range`) |
+| `ablations/pure_perceiver_joint_latentread_pixlat.py` | joint latentread with one latent per pixel on patch-size <= 4 tokens (`pixel_latents`, Favyen's pixel-register shapes) |
 
 ## Conventions
 

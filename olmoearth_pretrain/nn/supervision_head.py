@@ -93,9 +93,15 @@ class SupervisionHeadConfig(Config):
 
     Args:
         modality_configs: Mapping from modality name to its supervision config.
+        spatial_unfold: Override for the spatial heads' sub-cell unfold factor (the
+            ``max_patch_size**2`` grid each register cell predicts). With a
+            PIXEL-resolution register grid the cells already sit at target resolution,
+            so set it to 1 (one value per cell). None keeps ``max_patch_size``. Same
+            field as on ``favyen/20260917-pixreg-v1_3``.
     """
 
     modality_configs: dict[str, SupervisionModalityConfig] = field(default_factory=dict)
+    spatial_unfold: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts in modality_configs to SupervisionModalityConfig instances."""
@@ -103,6 +109,8 @@ class SupervisionHeadConfig(Config):
             name: SupervisionModalityConfig(**cfg) if isinstance(cfg, dict) else cfg
             for name, cfg in self.modality_configs.items()
         }
+        if self.spatial_unfold is not None and self.spatial_unfold < 1:
+            raise ValueError(f"spatial_unfold must be >= 1, got {self.spatial_unfold}")
 
     def build(self, embedding_dim: int, max_patch_size: int) -> SupervisionHead:
         """Build the supervision head.
@@ -116,7 +124,11 @@ class SupervisionHeadConfig(Config):
         return SupervisionHead(
             modality_configs=self.modality_configs,
             embedding_dim=embedding_dim,
-            max_patch_size=max_patch_size,
+            max_patch_size=(
+                self.spatial_unfold
+                if self.spatial_unfold is not None
+                else max_patch_size
+            ),
         )
 
 

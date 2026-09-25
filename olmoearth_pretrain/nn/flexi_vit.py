@@ -2702,6 +2702,11 @@ class Encoder(FlexiVitBase):
                     cell_ids=cell_ids[..., 0],
                     spatial_grid=spatial_grid,
                     grid_extent_positions=register_kv_positions,
+                    patch_size=patch_size,
+                    patch_spacing=CompositeEncodings.calculate_gsd_ratio(
+                        input_res, patch_size
+                    )
+                    * self.rope_coordinate_scale,
                 )
             else:
                 registers, register_positions = self.perceiver(
