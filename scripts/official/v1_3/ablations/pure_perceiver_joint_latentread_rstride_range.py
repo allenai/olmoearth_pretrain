@@ -7,7 +7,7 @@ latent budget, sampler, microbatch and evals as the point-latent random-stride a
 so the two differ by that one flag.
 
 W&B project ``20260921_perceiver_shapes``; trained as
-``v1_3_vit0_rstride_latentread_rangerope_joint12``.
+``v1_3_vit0_rstride_ps8_latentread_rangerope_joint12``.
 """
 
 import logging

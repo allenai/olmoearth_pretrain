@@ -1,25 +1,26 @@
 """Joint latentread trained at RANDOM latent strides, from one latent per pixel to one per patch.
 
-``pure_perceiver_joint_latentread_pixlat.py`` always lays one latent per pixel, so its
-latent count grows with the sample's pixel area and its sampler has to cap samples at
-64 pixels a side. This arm instead draws the latent STRIDE per training forward pass
-(``random_latent_stride=True``): uniformly among the divisors of the batch's patch
-size whose latent count fits a budget of 2,048 latents per sample, with the patch
-stride always allowed. Stride 1 is one latent per pixel, stride ``patch_size`` one per
-patch, so one run trains every output resolution in between, and large grids get a
-coarser stride instead of being excluded -- the 64-pixel cap is gone and the sampler
-is back to Favyen's grids of up to 24 patches (96 pixels a side at patch size 4).
+The latent STRIDE (pixels per latent along each side) is drawn per training forward pass
+(``random_latent_stride=True``): uniformly among the divisors of the batch's patch size
+whose latent count fits a budget of 2,048 latents per sample, with the patch stride
+always allowed. Stride 1 is one latent per pixel, stride ``patch_size`` one per patch,
+so one run trains every output resolution in between, and large grids get a coarser
+stride instead of being excluded (no pixel-side cap).
 
-Evaluation and inference use stride 1 (``eval_latent_stride``): per-pixel embeddings,
-as in the pixel-latent arm. The supervision heads keep the default unfold of the
-maximum patch size (4) with the existing bilinear resize, which fits any stride.
+Shapes are the NORMAL v1.3 pretraining ones: patch embed base 8, patch sizes 1..8,
+grids up to 32 patches, token budget 3,072. (A first version at patch sizes 1..4 on
+Favyen's pixel-register shapes was stopped at step ~1.3k to move here; at 2,048 latents
+and microbatch 32 it peaked at 55 GiB with no OOM.) Under this sampler about 23% of
+batches get sub-patch per-pixel latents, concentrated at small patch sizes: the budget
+rules out stride 1 for 71% of patch-size-8 batches.
 
-Everything else is ``pure_perceiver_joint_latentread_pixlat.py``: point latents,
-latentread, patch embed base 4, patch sizes 1..4, microbatch 32, and its evals (the
-student at ps1 plus d128 at ps4).
+Evaluation and inference use stride 1 (``eval_latent_stride``): per-pixel embeddings.
+The supervision heads keep the default unfold of the maximum patch size with the
+existing bilinear resize, which fits any stride. Evals: the student at ps1 plus d128
+at ps4, as in ``pure_perceiver_joint_latentread_pixlat.py``.
 
 W&B project ``20260921_perceiver_shapes``; trained as
-``v1_3_vit0_rstride_latentread_joint12``.
+``v1_3_vit0_rstride_ps8_latentread_joint12``.
 """
 
 import logging
@@ -29,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from base import SAMPLED_HW_P_LIST as V1_3_SAMPLED_HW_P_LIST  # noqa: E402
 from base import (  # noqa: E402
     build_common_components,
     build_dataset_config,
@@ -63,6 +65,10 @@ MODULE_PATH = (
 MAX_LATENTS = 2048
 # The sampler's default tile extent, i.e. no pixel-side cap beyond the stored tiles.
 TILE_SIZE = OlmoEarthDataLoaderConfig.__dataclass_fields__["tile_size"].default
+# Normal v1.3 pretraining shapes: patch embed base 8 (also the dataloader's max patch
+# size) and grids up to 32 patches.
+MAX_PATCH_SIZE = 8
+SAMPLED_HW_P_LIST = list(V1_3_SAMPLED_HW_P_LIST)
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -73,6 +79,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     perceiver.random_latent_stride = True
     perceiver.max_latents = MAX_LATENTS
     perceiver.eval_latent_stride = 1
+    config.encoder_config.max_patch_size = MAX_PATCH_SIZE
     assert config.supervision_head_config is not None
     # Default unfold (max_patch_size) + bilinear resize fits every stride.
     config.supervision_head_config.spatial_unfold = None
@@ -80,9 +87,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """The pixel-latent sampler WITHOUT its 64-pixel cap; the latent budget bounds cost."""
+    """v1.3 pretraining shapes (patch sizes 1..8, grids <= 32), no pixel-side cap."""
     config = _pixlat_dataloader_config(common)
     config.tile_size = TILE_SIZE
+    config.max_patch_size = MAX_PATCH_SIZE
+    config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     return config
 
 

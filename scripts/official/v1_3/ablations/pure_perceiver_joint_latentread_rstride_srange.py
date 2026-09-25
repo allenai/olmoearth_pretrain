@@ -8,7 +8,7 @@ latents -- so a latent can tell whether it summarises 1 pixel or a whole patch.
 Tokens stay spatial points. Everything else (budget of 2,048 latents, sampler,
 microbatch, evals at stride 1) is ``pure_perceiver_joint_latentread_rstride.py``, so the two differ by that one flag.
 
-W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_rstride_srange_latentread_joint12``.
+W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_rstride_ps8_srange_latentread_joint12``.
 """
 
 import logging
