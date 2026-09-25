@@ -25,6 +25,8 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_joint_latentread_pixlat_range.py` | the pixel-latent latentread arm with interval latents (`latent_time_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride.py` | pixel-latent latentread at random latent strides (pixel to patch) under a 2,048-latent budget; no pixel-side cap |
 | `ablations/pure_perceiver_joint_latentread_rstride_range.py` | the random-stride latentread arm with interval latents (`latent_time_range`) |
+| `ablations/pure_perceiver_joint_latentread_rstride_srange.py` | the random-stride latentread arm with footprint-aware latents: spatial sinc gate over each latent's stride x stride pixels (`latent_spatial_range`) |
+| `ablations/pure_perceiver_joint_latentread_rstride_range_srange.py` | the same with interval latents in time as well |
 
 ## Conventions
 

@@ -333,6 +333,8 @@ class Attention(nn.Module):
         block_mask: Any | None = None,
         rope_extent: torch.Tensor | None = None,
         rope_extent_y: torch.Tensor | None = None,
+        rope_spatial_extent: torch.Tensor | None = None,
+        rope_spatial_extent_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -346,6 +348,12 @@ class Attention(nn.Module):
                 valid with ``position_encoding == MIXED_3D_ROPE``.
             rope_extent_y: The same for the keys (``y`` in cross-attention; defaults to
                 ``rope_extent`` in self-attention).
+            rope_spatial_extent: Optional per-query side length ``(B, N)`` of a square
+                spatial footprint (RoPE row/col units) for mixed 3D RoPE: the rotation is
+                averaged over the square, i.e. each pair is sinc-gated on its row and
+                col frequencies. Only valid with ``MIXED_3D_ROPE``.
+            rope_spatial_extent_y: The same for the keys (defaults to
+                ``rope_spatial_extent`` in self-attention).
             kv: Optional precomputed ``(k, v)`` projections of ``y``, each
                 ``(B, Nk, attn_dim)``, for cross-attention whose K/V projection is
                 shared across several blocks (computed once by the caller). ``self.k``
@@ -395,7 +403,10 @@ class Attention(nn.Module):
 
         q, k = self.q_norm(q), self.k_norm(k)
         if (
-            rope_extent is not None or rope_extent_y is not None
+            rope_extent is not None
+            or rope_extent_y is not None
+            or rope_spatial_extent is not None
+            or rope_spatial_extent_y is not None
         ) and self.position_encoding != PositionEncoding.MIXED_3D_ROPE:
             raise ValueError(
                 "rope_extent (interval-valued RoPE) is only implemented for "
@@ -432,11 +443,22 @@ class Attention(nn.Module):
                 )
             else:
                 k_extent = rope_extent_y if y is not None else rope_extent
+                k_spatial = (
+                    rope_spatial_extent_y if y is not None else rope_spatial_extent
+                )
                 q = apply_3d_mixed_rope(
-                    q, rope_positions, self.rope_mixed_freqs, extent=rope_extent
+                    q,
+                    rope_positions,
+                    self.rope_mixed_freqs,
+                    extent=rope_extent,
+                    spatial_extent=rope_spatial_extent,
                 )
                 k = apply_3d_mixed_rope(
-                    k, k_positions, self.rope_mixed_freqs, extent=k_extent
+                    k,
+                    k_positions,
+                    self.rope_mixed_freqs,
+                    extent=k_extent,
+                    spatial_extent=k_spatial,
                 )
         x = self.sdpa(
             q,
@@ -728,6 +750,8 @@ class Block(nn.Module):
         kv: tuple[torch.Tensor, torch.Tensor] | None = None,
         rope_extent: torch.Tensor | None = None,
         rope_extent_y: torch.Tensor | None = None,
+        rope_spatial_extent: torch.Tensor | None = None,
+        rope_spatial_extent_y: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -737,6 +761,9 @@ class Block(nn.Module):
             rope_extent: Optional per-query temporal interval widths (see
                 :meth:`Attention.forward`).
             rope_extent_y: The same for the keys.
+            rope_spatial_extent: Optional per-query square spatial footprint side (see
+                :meth:`Attention.forward`).
+            rope_spatial_extent_y: The same for the keys.
             kv: Optional precomputed ``(k, v)`` projections of ``y`` (see
                 :meth:`Attention.forward`); the block's own K/V layers are skipped.
             attn_mask: Optional attention mask tensor
@@ -771,6 +798,8 @@ class Block(nn.Module):
                     kv=kv,
                     rope_extent=rope_extent,
                     rope_extent_y=rope_extent_y,
+                    rope_spatial_extent=rope_spatial_extent,
+                    rope_spatial_extent_y=rope_spatial_extent_y,
                 )
             )
         )

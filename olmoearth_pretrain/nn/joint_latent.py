@@ -199,6 +199,7 @@ class JointLatentTransformer(nn.Module):
         random_latent_stride: bool = False,
         max_latents: int | None = None,
         eval_latent_stride: int = 1,
+        latent_spatial_range: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -260,6 +261,12 @@ class JointLatentTransformer(nn.Module):
                 grids fall back to coarser strides instead of being excluded.
             eval_latent_stride: Stride used outside training (evals, inference); must
                 divide the patch size. 1 = per-pixel embeddings.
+            latent_spatial_range: With ``pixel_latents``, encode every latent as the
+                SQUARE of pixels it stands for (side = its stride) rather than a point:
+                its RoPE pairs are sinc-gated on their row and col frequencies by the
+                footprint, the spatial counterpart of ``latent_time_range``. Tells the
+                latents their own resolution when the stride varies. Requires the
+                ``rope_3d_mixed`` position encoding.
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -291,6 +298,14 @@ class JointLatentTransformer(nn.Module):
         self.random_latent_stride = random_latent_stride
         self.max_latents = max_latents
         self.eval_latent_stride = eval_latent_stride
+        if latent_spatial_range and (
+            not pixel_latents or position_encoding != PositionEncoding.MIXED_3D_ROPE
+        ):
+            raise ValueError(
+                "latent_spatial_range needs pixel_latents and the rope_3d_mixed "
+                "position encoding"
+            )
+        self.latent_spatial_range = latent_spatial_range
         self.register = nn.Parameter(torch.empty(1, embedding_size))
         nn.init.trunc_normal_(self.register, std=0.02)
         block_kwargs: dict[str, Any] = dict(
@@ -438,6 +453,7 @@ class JointLatentTransformer(nn.Module):
         rope_positions: Tensor,
         attn_kwargs: dict[str, Any],
         rope_extent: Tensor | None = None,
+        rope_spatial_extent: Tensor | None = None,
     ) -> Tensor:
         """One joint block.
 
@@ -450,6 +466,7 @@ class JointLatentTransformer(nn.Module):
                     x=blk.norm1(x),
                     rope_positions=rope_positions,
                     rope_extent=rope_extent,
+                    rope_spatial_extent=rope_spatial_extent,
                     **attn_kwargs,
                 )
             )
@@ -599,10 +616,29 @@ class JointLatentTransformer(nn.Module):
             dim=1,
         )
         attn_kwargs = self._attention_masks(cell_id, is_latent, valid)
+        rope_spatial_extent: Tensor | None = None
+        if self.latent_spatial_range:
+            assert patch_spacing is not None
+            # Each latent stands for a stride x stride pixel square; in RoPE units a
+            # pixel is patch_spacing / patch_size. Tokens stay spatial points.
+            side = stride * patch_spacing / patch_size
+            rope_spatial_extent = torch.cat(
+                [
+                    torch.zeros(batch_size, n_tokens, device=device),
+                    torch.full((batch_size, n_latents), side, device=device),
+                ],
+                dim=1,
+            )
 
         for blk in self.joint_blocks:
             x = self._joint_block(
-                blk, x, n_tokens, rope_positions, attn_kwargs, rope_extent=rope_extent
+                blk,
+                x,
+                n_tokens,
+                rope_positions,
+                attn_kwargs,
+                rope_extent=rope_extent,
+                rope_spatial_extent=rope_spatial_extent,
             )
         latents = x[:, n_tokens:]
         for blk in self.latent_blocks:
@@ -642,6 +678,8 @@ class JointLatentConfig(Config):
             resolution from one latent per pixel to one per patch under a per-sample
             latent budget; see :class:`JointLatentTransformer`. Leave the supervision
             heads at the default unfold (``max_patch_size``) so they fit any stride.
+        latent_spatial_range: Encode each pixel latent's square footprint in its RoPE
+            (sinc-gated row/col pairs), so latents know their stride.
     """
 
     register_dim: int
@@ -657,6 +695,7 @@ class JointLatentConfig(Config):
     random_latent_stride: bool = False
     max_latents: int | None = None
     eval_latent_stride: int = 1
+    latent_spatial_range: bool = False
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -735,4 +774,5 @@ class JointLatentConfig(Config):
             random_latent_stride=self.random_latent_stride,
             max_latents=self.max_latents,
             eval_latent_stride=self.eval_latent_stride,
+            latent_spatial_range=self.latent_spatial_range,
         )

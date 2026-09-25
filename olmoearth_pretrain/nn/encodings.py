@@ -459,6 +459,7 @@ def apply_3d_mixed_rope(
     positions: torch.Tensor,
     freqs: torch.Tensor,
     extent: torch.Tensor | None = None,
+    spatial_extent: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Apply RoPE-Mixed (learnable 3D frequencies) to attention q/k.
 
@@ -484,6 +485,11 @@ def apply_3d_mixed_rope(
         freqs: Learnable 3D frequencies of shape ``(3, H, D // 2)``.
         extent: Optional temporal interval width per token, ``(B, N)`` or packed
             ``(N,)``, in the same units as ``t``. ``None`` or zeros = point tokens.
+        spatial_extent: Optional side length of a square SPATIAL footprint per token,
+            same shape as ``extent``, in the RoPE ``(row, col)`` units. Averaging the
+            rotation over the square factorises per axis, so each pair is further
+            scaled by ``sinc(theta_row * side / 2) * sinc(theta_col * side / 2)``.
+            ``None`` or zeros = spatial points.
     """
     head_dim = x.shape[-1]
     if head_dim % 2 != 0:
@@ -552,27 +558,39 @@ def apply_3d_mixed_rope(
     cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
     sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
     out = (x * cos) + (rotate_half(x) * sin)
-    if extent is None:
+    if extent is None and spatial_extent is None:
         return out
-    extent = extent.to(device=x.device, dtype=torch.float32)
-    if x.ndim == 4:
-        if extent.shape != positions.shape[:2]:
+
+    def _half_angle(width: torch.Tensor, freq: torch.Tensor, name: str) -> torch.Tensor:
+        width = width.to(device=x.device, dtype=torch.float32)
+        if x.ndim == 4:
+            if width.shape != positions.shape[:2]:
+                raise ValueError(
+                    f"{name} must have shape (B, N)={tuple(positions.shape[:2])}, got "
+                    f"{tuple(width.shape)}"
+                )
+            return width[:, None, :, None] * freq[None, :, None, :] / 2
+        if width.shape != positions.shape[:1]:
             raise ValueError(
-                f"extent must have shape (B, N)={tuple(positions.shape[:2])}, got "
-                f"{tuple(extent.shape)}"
+                f"{name} must have shape (N,)={tuple(positions.shape[:1])}, got "
+                f"{tuple(width.shape)}"
             )
-        half_turns = extent[:, None, :, None] * freqs_t[None, :, None, :] / 2
-    else:
-        if extent.shape != positions.shape[:1]:
-            raise ValueError(
-                f"extent must have shape (N,)={tuple(positions.shape[:1])}, got "
-                f"{tuple(extent.shape)}"
-            )
-        half_turns = extent[:, None, None] * freqs_t[None, :, :] / 2
+        return width[:, None, None] * freq[None, :, :] / 2
+
     # Mean of exp(i*theta*p) over p uniform in an interval of this width around the
-    # centre = exp(i*theta*c) * sin(a)/a with a = theta*width/2. torch.sinc is the
-    # normalised sin(pi x)/(pi x), hence the division by pi.
-    gate = torch.sinc(half_turns / math.pi)
+    # centre = exp(i*theta*c) * sin(a)/a with a = theta*width/2; over a square the mean
+    # factorises per axis. torch.sinc is the normalised sin(pi x)/(pi x), hence / pi.
+    gate: torch.Tensor | None = None
+    if extent is not None:
+        gate = torch.sinc(_half_angle(extent, freqs_t, "extent") / math.pi)
+    if spatial_extent is not None:
+        spatial_gate = torch.sinc(
+            _half_angle(spatial_extent, freqs_row, "spatial_extent") / math.pi
+        ) * torch.sinc(
+            _half_angle(spatial_extent, freqs_col, "spatial_extent") / math.pi
+        )
+        gate = spatial_gate if gate is None else gate * spatial_gate
+    assert gate is not None
     gate = torch.repeat_interleave(gate, repeats=2, dim=-1).to(dtype=dtype)
     return out * gate
 
