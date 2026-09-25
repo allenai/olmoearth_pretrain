@@ -27,6 +27,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_joint_latentread_rstride_range.py` | the random-stride latentread arm with interval latents (`latent_time_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_srange.py` | the random-stride latentread arm with footprint-aware latents: spatial sinc gate over each latent's stride x stride pixels (`latent_spatial_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange.py` | the same with interval latents in time as well |
+| `ablations/pure_perceiver_joint_latentread_rstride_range_fast.py` | speed copy of the interval arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange_fast.py` | speed copy of the interval + footprint arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_tmlp1.py` | `pure_perceiver_joint_latentread_rstride.py` with a light token MLP (ratio 1; latents keep ratio 4), CoLT5-style |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_tmlp1.py` | `pure_perceiver_joint_latentread_rstride_range.py` with a light token MLP (ratio 1; latents keep ratio 4), CoLT5-style |
