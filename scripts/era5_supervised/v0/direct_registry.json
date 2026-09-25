@@ -108,7 +108,7 @@
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield (t/ha), Argentina only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.1,
       "tags": {
         "country_code": "AR",
         "loyo_split": "train"
@@ -142,7 +142,7 @@
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield (t/ha), Germany only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.1,
       "tags": {
         "country_code": "DE",
         "loyo_split": "train"
@@ -176,7 +176,7 @@
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield (t/ha), United States only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled maize stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.001,
       "tags": {
         "country_code": "US",
         "loyo_split": "train"
@@ -210,7 +210,7 @@
       "model_yaml_path": "configs/cybench_maize_era5d.yaml",
       "notes": "CY-Bench maize yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_maize. Same windows/splits/target stats as the full entry.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.1,
       "tags": {
         "oep_eval": "",
         "split": "train"
@@ -275,7 +275,7 @@
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield (t/ha), Argentina only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
       "tags": {
         "country_code": "AR",
         "loyo_split": "train"
@@ -309,7 +309,7 @@
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield (t/ha), Germany only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.0003,
       "tags": {
         "country_code": "DE",
         "loyo_split": "train"
@@ -343,7 +343,7 @@
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield (t/ha), United States only, last-year-out: the probe trains on a 3k stratified (year x region) sample of harvest years < last and is scored on EVERY window of the country's last label year (reported as val). One fold of CY-Bench's leave-one-year-out protocol, for the most recent year. Tags written by tag_eval_subset --per-country. target_mean/std are the pooled wheat stats (the probe re-normalizes targets from its own train split).",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.1,
       "tags": {
         "country_code": "US",
         "loyo_split": "train"
@@ -377,7 +377,7 @@
       "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
       "notes": "CY-Bench wheat yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_wheat. Same windows/splits/target stats as the full entry.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.1,
       "tags": {
         "oep_eval": "",
         "split": "train"
