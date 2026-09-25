@@ -3823,11 +3823,25 @@ FT_EVAL_TASKS["pastis2_drom_bg8void_2019_ft_ws16_ps1_sentinel1_sentinel2"] = (
         dataset="pastis2_drom_bg8void_2019_s1s2",
     )
 )
-EVAL_TASKS["planteur_2019_probe_sentinel2"] = _pastis_ps1_task(
+_PLANTEUR_2019_PROBE = _pastis_ps1_task(
     [Modality.SENTINEL2_L2A.name],
     window_size=16,
     dataset="pastis2_drom_bg8void_2019_s2",
 )
+EVAL_TASKS["planteur_2019_probe_sentinel2"] = _PLANTEUR_2019_PROBE
+
+# OlmoEarth v1.3 is read out three ways (paper Table 4): the base task above
+# probes the full d768 register grid, and these duplicates probe a Matryoshka
+# prefix of the detached linear student at each shipped width. Same windows,
+# labels and splits -- only the readout changes -- so the three rows are
+# directly comparable. Mirrors PASTIS_PROJ_EMBEDDING_LOOP_EVAL_TASKS in
+# scripts/official/v1_2/regbtl_v1_2_proj_common.py.
+for _proj_dim in (128, 64):
+    EVAL_TASKS[f"planteur_2019_probe_sentinel2_proj{_proj_dim}"] = replace(
+        _PLANTEUR_2019_PROBE,
+        eval_on_projected_registers=True,
+        eval_projection_dim=_proj_dim,
+    )
 
 
 # Tessera live-encoder raw-acquisition tasks (S1+S2, shared union time axis,
