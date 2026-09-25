@@ -2888,14 +2888,22 @@ EMBED_DIAG_TASKS = {
 # Batch 64 cuts that to 1,896 steps/epoch (8x fewer), keeping the full 50
 # epochs affordable. A100-80GB has ample headroom at 16x16 windows.
 FT_EPOCHS = 50
-FT_BATCH_SIZE = 64
+# Fine-tune geometry: full 128x128 patches at patch size 4 instead of 16x16
+# tiles at ps1. Each 128x128 patch is now ONE sample rather than 64 tiles, so an
+# epoch is 1,896 samples instead of 121,344 -- 64x fewer steps. Tokens per sample
+# rise 4x (32x32=1024 vs 16x16=256), so batch 16 keeps tokens-per-step identical
+# to the previous batch 64 at ws16 while cutting steps/epoch from 1,896 to ~119.
+# Drop to ws64 / smaller batch if this OOMs.
+FT_WINDOW_SIZE = 128
+FT_PATCH_SIZE = 4
+FT_BATCH_SIZE = 16
 
 
 def _pastis_ft_task(
     input_modalities: list[str],
     dataset: str = "pastis2_drom_bg8",
-    window_size: int = 16,
-    patch_size: int = 1,
+    window_size: int = FT_WINDOW_SIZE,
+    patch_size: int = FT_PATCH_SIZE,
 ) -> DownstreamTaskConfig:
     """PASTIS2-DROM fine-tune task (encoder unfrozen, trained end-to-end).
 
@@ -3792,8 +3800,8 @@ FT_EVAL_TASKS["planteur_anysat_raw_ft_sentinel2"] = DownstreamTaskConfig(
     epochs=FT_EPOCHS,
     input_modalities=[Modality.SENTINEL2_L2A.name],
     primary_metric=EvalMetric.MIOU,
-    window_size=16,
-    patch_size=1,
+    window_size=FT_WINDOW_SIZE,
+    patch_size=FT_PATCH_SIZE,
     tile_samples=False,
 )
 
