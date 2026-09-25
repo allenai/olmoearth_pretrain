@@ -151,13 +151,17 @@ class Tessera(nn.Module):
             ]
         )
 
-        # Get cumulative days for the given month
-        # month is 1-based (Jan=1), so subtract 1 for indexing
-        month_idx = month.long() - 1
+        # Get cumulative days for the given month. OlmoEarth timestamps store
+        # month 0-indexed (Jan=0) -- see MaskedOlmoEarthSample.timestamps and
+        # rslearn_dataset.get_timestamps -- so month indexes cum_days directly.
+        # Previously this subtracted 1 from an already-0-indexed month, wrapping
+        # January to cum_days[-1] (334, December) and shifting every date back
+        # one month.
+        month_idx = month.long()
         cum_days_for_month = cum_days[month_idx]
 
-        # Add 1 if leap year and month > 2
-        leap_day = (is_leap & (month > 2)).long()
+        # Add 1 if leap year and the date is on/after March (0-indexed: 2)
+        leap_day = (is_leap & (month >= 2)).long()
 
         doy = cum_days_for_month + day + leap_day
         return doy
