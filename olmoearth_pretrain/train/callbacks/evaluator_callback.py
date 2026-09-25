@@ -630,7 +630,17 @@ class DownstreamEvaluator:
         extra_kwargs: dict[str, Any] = {}
         if self.tile_size is not None:
             extra_kwargs["tile_size"] = self.tile_size
-        if self.dataset in ("pastis", "pastis128") and self.window_size is not None:
+        # The raw PASTIS-format views tile internally, so window_size must be
+        # forwarded to them as well -- they are not registry-backed, and without
+        # this they silently fall back to their own default (16) while the task
+        # asks for 128, giving 64x the samples per epoch.
+        RAW_WINDOW_SIZE_DATASETS = (
+            "pastis",
+            "pastis128",
+            "pastis2_drom_raw_s2",
+            "pastis2_drom_raw_s1s2",
+        )
+        if self.dataset in RAW_WINDOW_SIZE_DATASETS and self.window_size is not None:
             extra_kwargs["window_size"] = self.window_size
         if self._is_registry_dataset:
             if self.window_size is not None:

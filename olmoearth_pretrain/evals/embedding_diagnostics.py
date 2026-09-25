@@ -45,13 +45,38 @@ def _subsample(embeddings: Tensor, max_samples: int) -> Tensor:
     return embeddings[idx.to(embeddings.device)]
 
 
+def _finite_rows(embeddings: Tensor) -> Tensor:
+    """Drop rows holding any non-finite value.
+
+    Diagnostics must never fail a run: torch.linalg.svdvals raises _LinAlgError
+    on non-finite input, which previously killed completed embedding passes
+    (e.g. Tessera v1/v1.1, whose published int8 x scales product carries NaN
+    scales on nodata pixels). Dropping the affected rows keeps the metric
+    meaningful for the rest and lets the probe proceed.
+    """
+    if embeddings.ndim < 2:
+        return embeddings
+    keep = torch.isfinite(embeddings).all(dim=-1)
+    if bool(keep.all()):
+        return embeddings
+    dropped = int((~keep).sum())
+    logger.warning(
+        "embedding diagnostics: dropping %d/%d rows with non-finite values",
+        dropped,
+        embeddings.shape[0],
+    )
+    return embeddings[keep]
+
+
 def effective_rank(embeddings: Tensor) -> float:
     """Effective rank via Shannon entropy of singular values.
 
     Returns a value between 1 (full collapse) and min(N, D) (maximally spread).
     Roy & Bhattacharyya (2007).
     """
-    embeddings = _subsample(embeddings, MAX_SVD_SAMPLES)
+    embeddings = _finite_rows(_subsample(embeddings, MAX_SVD_SAMPLES))
+    if embeddings.shape[0] == 0:
+        return 0.0
     S = torch.linalg.svdvals(embeddings.float())
     S = S[S > 0]
     if S.numel() == 0:
@@ -63,8 +88,10 @@ def effective_rank(embeddings: Tensor) -> float:
 
 def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
     """Uniformity metric (Wang & Isola 2020). More negative = more uniform."""
-    z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
+    z = torch.nn.functional.normalize(_finite_rows(embeddings).float(), dim=-1)
     z = _subsample(z, MAX_PAIRWISE_SAMPLES)
+    if z.shape[0] < 2:
+        return float("nan")
     n = z.shape[0]
     sq_dists = torch.cdist(z, z, p=2).pow(2)
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
@@ -104,7 +131,9 @@ def anisotropy_stats(embeddings: Tensor) -> dict[str, float]:
     anisotropy summary, where a large value means one direction dominates whatever
     variation survives.
     """
-    e = embeddings.float()
+    e = _finite_rows(embeddings).float()
+    if e.shape[0] == 0:
+        return {}
     mean = e.mean(dim=0)
     mean_norm = mean.norm().item()
     avg_norm = e.norm(dim=-1).mean().item()
@@ -115,7 +144,7 @@ def anisotropy_stats(embeddings: Tensor) -> dict[str, float]:
         "centered_effective_rank": effective_rank(centered),
     }
 
-    S = torch.linalg.svdvals(_subsample(centered, MAX_SVD_SAMPLES))
+    S = torch.linalg.svdvals(_finite_rows(_subsample(centered, MAX_SVD_SAMPLES)))
     total = S.pow(2).sum()
     if total > 0:
         metrics["top1_var_share"] = (S[0].pow(2) / total).item()
