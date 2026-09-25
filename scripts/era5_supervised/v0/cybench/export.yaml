@@ -1,0 +1,98 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: CY-Bench ERA5-Land export — weights, streamed Zarr aggregation, rslearn windows (0 GPU, resumable)
+tasks:
+- name: cybench_export
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  envVars:
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: EARTHDATAHUB_TOKEN
+    secret: RSLEARN_EARTHDATAHUB_TOKEN
+  - name: HELIOS_REF
+    value: __HELIOS_REF__
+  # Aggregation shard of this job (extra shard jobs: SHARD=k NUM_SHARDS=n RUN_WINDOWS=0).
+  - name: SHARD
+    value: "0"
+  - name: NUM_SHARDS
+    value: "1"
+  - name: RUN_WINDOWS
+    value: "1"
+  - name: WORKERS
+    value: "16"
+  command:
+  - bash
+  - -c
+  - |
+    set -euo pipefail
+    ROOT=/weka/dfive-default/helios/dataset/cybench
+    conda install gh --channel conda-forge -y -q
+    gh auth status
+    gh repo clone allenai/helios .
+    git checkout "$HELIOS_REF"
+    git submodule update --init --recursive
+    pip install -q uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    # zarr is not in the lock (the EarthDataHub source needs xarray's zarr engine).
+    uv pip install zarr
+    python -c "import zarr, xarray, geopandas, rasterio, scipy; print('deps ok', zarr.__version__)"
+
+    # WorldCereal crop area-fraction images ship in the CY-Bench repo.
+    git clone --depth 1 -q https://github.com/WUR-AI/AgML-CY-Bench /tmp/cybench_repo
+    AFI=/tmp/cybench_repo/data_preparation/global_crop_AFIs_ESA_WC
+    ls -la "$AFI"/*.tif
+
+    echo "== stage 1: weights"
+    if [ ! -f "$ROOT/meta/weights.parquet" ]; then
+      python -m olmoearth_pretrain.dataset_creation.cybench.build_weights \
+        --polygons-root "$ROOT/raw/polygons/polygons" --afi-dir "$AFI" \
+        --labels-root "$ROOT/raw/cybench-data/cybench-data" --out-dir "$ROOT/meta" --workers 8
+    else
+      echo "weights exist, skipping"
+    fi
+
+    echo "== stage 2: aggregate (shard $SHARD/$NUM_SHARDS)"
+    python -m olmoearth_pretrain.dataset_creation.cybench.aggregate_era5 \
+      --meta-dir "$ROOT/meta" --out-dir "$ROOT/agg" \
+      --start 1998-09-01 --end 2025-07-01 --limit-to-label-years \
+      --workers "$WORKERS" --shard "$SHARD" --num-shards "$NUM_SHARDS" 2>&1 | tee -a /outputs/aggregate.log
+
+    if [ "$RUN_WINDOWS" != "1" ]; then echo "RUN_WINDOWS=0, done"; exit 0; fi
+
+    echo "== waiting for all shards"
+    until python -m olmoearth_pretrain.dataset_creation.cybench.aggregate_era5 \
+        --meta-dir "$ROOT/meta" --out-dir "$ROOT/agg" --start 1998-09-01 --end 2025-07-01 \
+        --limit-to-label-years --check-complete; do
+      sleep 300
+    done
+
+    echo "== stage 3: series + windows"
+    python -m olmoearth_pretrain.dataset_creation.cybench.write_windows all \
+      --agg-dir "$ROOT/agg" --labels-root "$ROOT/raw/cybench-data/cybench-data" \
+      --ds-path "$ROOT/rslearn_dataset" --variant crop --min-year 2000 --workers "$WORKERS" 2>&1 | tee /outputs/windows.log
+    cp "$ROOT"/meta/windows_summary_crop.csv "$ROOT"/meta/label_stats_crop.json /outputs/ || true
+    echo DONE
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    cpuCount: 16
+    memory: 128 GiB
+  context:
+    # Preemptible on purpose: every stage is resumable (partials / completed
+    # windows are skipped on rerun), and non-preemptible 0-GPU tasks can sit
+    # pending for a long time.
+    priority: high
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+    - ai2/ceres
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default

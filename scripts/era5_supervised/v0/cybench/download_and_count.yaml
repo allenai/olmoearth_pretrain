@@ -1,0 +1,107 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: Download CY-Bench v1.10 (Zenodo record 17279151, concept 11502142) to weka and count how many yield labels have a full 448-day ERA5 window inside the era5enc_pretrain tile store (2016-01-01+). 0 GPU.
+tasks:
+- name: cybench_download_and_count
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  command:
+  - bash
+  - -c
+  - |
+    set -uo pipefail
+    OUT=/weka/dfive-default/helios/dataset/cybench
+    mkdir -p "$OUT/raw" "$OUT/meta"
+    cd "$OUT/raw"
+    # Stale 14 KB HTML "zips" from the first attempt (wrong record id) -- remove.
+    for f in cybench-data.zip polygons.zip; do [ -f "$f" ] && [ $(stat -c %s "$f") -lt 1000000 ] && rm -f "$f" "$f.done"; done
+    for f in cybench-data.zip polygons.zip centroids.zip; do
+      if [ ! -f "$f.done" ]; then
+        echo "downloading $f"
+        URL="https://zenodo.org/api/records/17279151/files/$f/content"
+        WANT=$(curl -sI -A "Mozilla/5.0 (X11; Linux x86_64)" "$URL" | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}')
+        echo "expected bytes: $WANT"
+        ok=0
+        for attempt in $(seq 1 40); do
+          curl -sSL --retry 3 --retry-delay 10 -C - -A "Mozilla/5.0 (X11; Linux x86_64)" -o "$f" "$URL" && { ok=1; break; }
+          HAVE=$(stat -c %s "$f" 2>/dev/null || echo 0)
+          echo "attempt $attempt: transfer interrupted at $HAVE / $WANT bytes; resuming in 30s"
+          [ -n "$WANT" ] && [ "$HAVE" -ge "$WANT" ] && { ok=1; break; }
+          sleep 30
+        done
+        HAVE=$(stat -c %s "$f" 2>/dev/null || echo 0)
+        [ "$ok" = 1 ] && [ -z "$WANT" -o "$HAVE" -eq "$WANT" ] || { echo "FATAL: download $f incomplete ($HAVE / $WANT)"; exit 1; }
+        ls -la "$f"
+        python -c "import zipfile,sys; assert zipfile.is_zipfile(sys.argv[1]), 'not a zip'; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$f" "$OUT/raw/${f%.zip}" \
+          || { echo "FATAL: $f is not a zip:"; head -c 400 "$f"; exit 1; }
+        touch "$f.done"
+      fi
+    done
+    echo "== tree"; find "$OUT/raw" -maxdepth 3 -type d | head -40
+    echo "== yield files"; find "$OUT/raw" -name "yield_*.csv" | wc -l
+    find "$OUT/raw" -name "yield_*.csv" | head -3 | while read f; do echo "-- $f"; head -3 "$f"; done
+    find "$OUT/raw" -name "crop_calendar_*.csv" | head -1 | while read f; do echo "-- $f"; head -3 "$f"; done
+    pip list 2>/dev/null | grep -i "^pandas" || pip install -q pandas
+    cat > /tmp/count.py <<'PY'
+    import glob, os, sys
+    import pandas as pd
+    ROOT = os.environ["OUT"] + "/raw"
+    STORE_START = pd.Timestamp("2016-01-01"); STORE_END = pd.Timestamp("2026-05-31")
+    WIN = pd.Timedelta(days=448)
+    rows = []
+    for yf in sorted(glob.glob(f"{ROOT}/**/yield_*.csv", recursive=True)):
+        base = os.path.basename(yf)[len("yield_"):-4]
+        crop, cc = base.rsplit("_", 1)
+        cf = os.path.join(os.path.dirname(yf), f"crop_calendar_{base}.csv")
+        y = pd.read_csv(yf)
+        y = y.rename(columns={"harvest_year": "year"})[["adm_id", "year", "yield"]].dropna()
+        y = y[y["yield"] > 0]
+        if y.empty:
+            rows.append(dict(crop=crop, cc=cc, n_adm=0, min_year=None, max_year=None, n_labels=0, n_year_ge_2016=0,
+                             n_full_window=0, n_adm_full_window=0, n_no_calendar=0, note="empty after yield>0 filter"))
+            continue
+        if not os.path.exists(cf):
+            rows.append(dict(crop=crop, cc=cc, n_adm=y.adm_id.nunique(), min_year=y.year.min(), max_year=y.year.max(),
+                             n_labels=len(y), n_year_ge_2016=int((y.year >= 2016).sum()), n_full_window=None, n_adm_full_window=None, note="no crop_calendar"))
+            continue
+        cal = pd.read_csv(cf)[["adm_id", "sos", "eos"]].dropna(); cal["sos"] = cal.sos.round().clip(1, 366).astype(int); cal["eos"] = cal.eos.round().clip(1, 366).astype(int)
+        m = y.merge(cal, on="adm_id", how="left")
+        has_cal = m.eos.notna()
+        eos_date = pd.to_datetime((m.year * 1000 + m.eos.fillna(1).astype(int)).astype(int).astype(str), format="%Y%j", errors="coerce")
+        start = eos_date - WIN
+        full = has_cal & (start >= STORE_START) & (eos_date <= STORE_END)
+        rows.append(dict(crop=crop, cc=cc, n_adm=y.adm_id.nunique(), min_year=int(y.year.min()), max_year=int(y.year.max()),
+                         n_labels=len(y), n_year_ge_2016=int((y.year >= 2016).sum()),
+                         n_full_window=int(full.sum()), n_adm_full_window=int(m.loc[full, "adm_id"].nunique()),
+                         n_no_calendar=int((~has_cal).sum()), note=""))
+    df = pd.DataFrame(rows)
+    pd.set_option("display.width", 250); pd.set_option("display.max_rows", 200)
+    print(df.to_string(index=False))
+    for crop, g in df.groupby("crop"):
+        print(f"\n== {crop}: countries={len(g)} countries_with_full_window={(g.n_full_window.fillna(0) > 0).sum()} adm={g.n_adm.sum()} labels={g.n_labels.sum()} "
+              f"year>=2016={g.n_year_ge_2016.sum()} full_448d_window_in_store={g.n_full_window.fillna(0).sum():.0f} "
+              f"adm_with_any_full_window={g.n_adm_full_window.fillna(0).sum():.0f}")
+    print(f"\n== TOTAL labels={df.n_labels.sum()} full_window={df.n_full_window.fillna(0).sum():.0f}")
+    os.makedirs(os.environ["OUT"] + "/meta", exist_ok=True)
+    df.to_csv(os.environ["OUT"] + "/meta/label_coverage_vs_era5_store.csv", index=False)
+    df.to_csv("/outputs/label_coverage_vs_era5_store.csv", index=False)
+    PY
+    OUT="$OUT" python /tmp/count.py 2>&1 | tee /outputs/count.log
+    echo; du -sh "$OUT/raw"; echo DONE
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    cpuCount: 2
+    memory: 16 GiB
+  context:
+    priority: high
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+    - ai2/ceres
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
