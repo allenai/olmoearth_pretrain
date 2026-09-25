@@ -418,6 +418,20 @@ DATASET_TO_CONFIG = {
         ],
         timeseries=True,
     ),
+    # AnySat-only raw-acquisition PLANTEUR view. Not registry-backed: the
+    # imagery comes straight from the PASTIS-format export via
+    # PastisRawTimeSeriesDataset, so it must live here rather than in
+    # registry.json (dataset_to_config checks this dict first).
+    # 8 crop classes; void (255) is remapped to SEGMENTATION_IGNORE_LABEL.
+    "pastis2_drom_raw_s2": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=8,
+        is_multilabel=False,
+        height_width=128,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        timeseries=True,
+    ),
     "pastis128": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
