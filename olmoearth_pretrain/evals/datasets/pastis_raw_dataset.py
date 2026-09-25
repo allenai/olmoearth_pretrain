@@ -73,6 +73,7 @@ class PastisRawTimeSeriesDataset(Dataset):
         input_modalities: list[str] | None = None,
         window_size: int | None = 16,
         max_timesteps: int | None = None,
+        date_range: tuple[int, int] | None = None,
         label_key: str = "ANNOTATIONS",
         label_prefix: str = "TARGET",
         void_value: int = 255,
@@ -89,6 +90,9 @@ class PastisRawTimeSeriesDataset(Dataset):
                 windows, matching the rslearn eval convention. None keeps 128.
             max_timesteps: pad/truncate every sequence to this length. If None,
                 the maximum sequence length over the split is used.
+            date_range: inclusive (YYYYMMDD, YYYYMMDD) bounds; acquisitions
+                outside are dropped before padding. None keeps the full
+                2018-09..2019-12 export.
             label_key: subdirectory holding the label arrays.
             label_prefix: filename prefix of the label arrays.
             void_value: on-disk value for void pixels; remapped to
@@ -122,16 +126,31 @@ class PastisRawTimeSeriesDataset(Dataset):
         meta = json.loads((self.root / "metadata.geojson").read_text())
         self.patch_ids: list[int] = []
         self.dates: dict[int, list[int]] = {}
+        self.keep_positions: dict[int, list[int]] = {}
         for feat in meta["features"]:
             props = feat["properties"]
             if FOLD_TO_SPLIT.get(props.get("Fold")) != split:
                 continue
             pid = int(props["ID_PATCH"])
-            self.patch_ids.append(pid)
             raw_dates = props["dates-S2"]
             # dates-S2 is a {"0": YYYYMMDD, ...} map keyed by string position.
-            ordered = [raw_dates[k] for k in sorted(raw_dates, key=int)]
-            self.dates[pid] = [int(d) for d in ordered]
+            ordered = [int(raw_dates[k]) for k in sorted(raw_dates, key=int)]
+            # Keep the original positions alongside the dates so the imagery
+            # axis and the timestamps are indexed identically after filtering.
+            positions = list(range(len(ordered)))
+            if date_range is not None:
+                lo, hi = date_range
+                pairs = [(i, d) for i, d in zip(positions, ordered) if lo <= d <= hi]
+                if not pairs:
+                    logger.warning(
+                        "patch %d has no acquisitions in %s", pid, date_range
+                    )
+                    continue
+                positions = [i for i, _ in pairs]
+                ordered = [d for _, d in pairs]
+            self.patch_ids.append(pid)
+            self.keep_positions[pid] = positions
+            self.dates[pid] = ordered
 
         if not self.patch_ids:
             raise ValueError(f"no patches found for split {split!r}")
@@ -171,7 +190,10 @@ class PastisRawTimeSeriesDataset(Dataset):
     def _load_s2(self, pid: int) -> tuple[np.ndarray, int]:
         """Load one patch as (H, W, T_pad, C) plus its true sequence length."""
         arr = np.load(self.root / "DATA_S2" / f"S2_{pid}.npy")  # (T, C, H, W)
-        keep = self._select_indices(arr.shape[0])
+        # Restrict to the date-filtered acquisitions, then subsample those.
+        positions = np.asarray(self.keep_positions[pid], dtype=int)
+        sel = self._select_indices(len(positions))
+        keep = positions[sel]
         t_real = len(keep)
         arr = arr[keep].astype(np.float32)
         arr = np.transpose(arr, (2, 3, 0, 1))  # (H, W, T, C_pastis)

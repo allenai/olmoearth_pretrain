@@ -125,6 +125,10 @@ def get_eval_dataset(
             input_modalities=input_modalities or None,
             window_size=kwargs.get("window_size", 16),
             max_timesteps=kwargs.get("max_timesteps", 96),
+            # Calendar year 2019: the labels are for the 2019 season, and the
+            # raw export otherwise runs 2018-09..2019-12, which would hand
+            # AnySat a 16-month window no other model sees.
+            date_range=kwargs.get("date_range", (20190101, 20191231)),
         )
     elif eval_dataset in ("pastis", "pastis128"):
         pastis_kwargs = {
