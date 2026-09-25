@@ -14,6 +14,7 @@ _DEFAULTS = {
     "PASTIS_DIR": "/weka/dfive-default/presto_eval_sets/pastis_r",
     "PASTIS_DIR_ORIG": "/weka/dfive-default/presto_eval_sets/pastis_r_origsize",
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
+    "PASTIS_DROM_RAW_DIR": "/weka/dfive-default/piperw/pastis2_drom_pastis_format",
     "FIFTY_CITIES_DIR": "/weka/dfive-default/presto_eval_sets/fifty_cities",
 }
 
@@ -24,6 +25,9 @@ MADOS_DIR = UPath(os.getenv("MADOS_DIR", _DEFAULTS["MADOS_DIR"]))
 FLOODS_DIR = UPath(os.getenv("FLOODS_DIR", _DEFAULTS["FLOODS_DIR"]))
 PASTIS_DIR = UPath(os.getenv("PASTIS_DIR", _DEFAULTS["PASTIS_DIR"]))
 PASTIS_DIR_ORIG = UPath(os.getenv("PASTIS_DIR_ORIG", _DEFAULTS["PASTIS_DIR_ORIG"]))
+PASTIS_DROM_RAW_DIR = UPath(
+    os.getenv("PASTIS_DROM_RAW_DIR", _DEFAULTS["PASTIS_DROM_RAW_DIR"])
+)
 PASTIS_DIR_PARTITION = UPath(
     os.getenv("PASTIS_DIR_PARTITION", _DEFAULTS["PASTIS_DIR_PARTITION"])
 )

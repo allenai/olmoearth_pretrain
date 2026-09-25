@@ -97,6 +97,9 @@ class PastisRawTimeSeriesDataset(Dataset):
         Raises:
             ValueError: if the split is unknown or a modality is unsupported.
         """
+        # The eval stack uses "valid" for some datasets and "val" for
+        # others; normalize so either spelling resolves to Fold 4.
+        split = "val" if split == "valid" else split
         if split not in ("train", "val", "test"):
             raise ValueError(f"split must be train/val/test, got {split!r}")
         self.input_modalities = input_modalities or [Modality.SENTINEL2_L2A.name]

@@ -16,6 +16,7 @@ from .geobench_v2_dataset import GeobenchV2Dataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
+from .pastis_raw_dataset import PastisRawTimeSeriesDataset
 from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 
@@ -113,6 +114,17 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+        )
+    elif eval_dataset == "pastis2_drom_raw_s2":
+        # AnySat-only: raw dated Sentinel-2 acquisitions straight from the
+        # PASTIS-format export, instead of the 12 monthly mosaics the rslearn
+        # datasets expose. See pastis_raw_dataset.PastisRawTimeSeriesDataset.
+        return PastisRawTimeSeriesDataset(
+            path_to_pastis=paths.PASTIS_DROM_RAW_DIR,
+            split=split,
+            input_modalities=input_modalities or None,
+            window_size=kwargs.get("window_size", 16),
+            max_timesteps=kwargs.get("max_timesteps", 96),
         )
     elif eval_dataset in ("pastis", "pastis128"):
         pastis_kwargs = {

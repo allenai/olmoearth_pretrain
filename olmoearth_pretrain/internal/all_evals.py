@@ -3741,6 +3741,53 @@ EVAL_TASKS.update(
 )
 
 
+# ---------------------------------------------------------------------------
+# AnySat raw-acquisition tasks.
+#
+# Every other PLANTEUR task reads the rslearn export, whose S2 axis is twelve
+# monthly mosaics with the day pinned to the 1st. AnySat is built for raw dated
+# time series, so these two tasks read the PASTIS-format source directly
+# (~40-150 acquisitions per patch, true overpass dates, spanning 2018-09 to
+# 2019-12 rather than the mosaics' 2018-09..2019-08).
+#
+# tile_samples is False because PastisRawTimeSeriesDataset already tiles each
+# 128x128 patch into window_size windows itself; leaving it True would tile twice.
+# max_timesteps=96 caps the sequence, subsampled uniformly so the full time span
+# is preserved (head truncation would have ended 124 train patches at 2019-06).
+_ANYSAT_RAW_DATASET = "pastis2_drom_raw_s2"
+
+EVAL_TASKS["planteur_anysat_raw_probe_sentinel2"] = DownstreamTaskConfig(
+    dataset=_ANYSAT_RAW_DATASET,
+    embedding_batch_size=64,
+    probe_batch_size=8,
+    num_workers=2,
+    pooling_type=PoolingType.MEAN,
+    norm_stats_from_pretrained=True,
+    probe_lr=0.1,
+    eval_interval=Duration.epochs(50),
+    input_modalities=[Modality.SENTINEL2_L2A.name],
+    epochs=50,
+    eval_mode=EvalMode.LINEAR_PROBE,
+    primary_metric=EvalMetric.MIOU,
+    window_size=16,
+    patch_size=1,
+    tile_samples=False,
+)
+
+FT_EVAL_TASKS["planteur_anysat_raw_ft_sentinel2"] = DownstreamTaskConfig(
+    dataset=_ANYSAT_RAW_DATASET,
+    ft_batch_size=8,
+    num_workers=8,
+    pooling_type=PoolingType.MEAN,
+    norm_stats_from_pretrained=True,
+    epochs=50,
+    input_modalities=[Modality.SENTINEL2_L2A.name],
+    primary_metric=EvalMetric.MIOU,
+    window_size=16,
+    patch_size=1,
+    tile_samples=False,
+)
+
 if __name__ == "__main__":
     module_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if module_path is None:
