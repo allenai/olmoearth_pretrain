@@ -3843,6 +3843,42 @@ for _proj_dim in (128, 64):
         eval_projection_dim=_proj_dim,
     )
 
+# ---------------------------------------------------------------------------
+# Calendar-2019 leave-one-island-out and temporal-ablation tasks. Both families
+# read the SAME materialized 2019 dataset as the main table; a registry entry
+# picks the variant. LOIO swaps split_tag_key to loio_<island> (every 2019
+# window already carries all five tags), and the mo{N} entries reuse the
+# existing mo{N} config dirs, which list exactly N monthly layers. So neither
+# family needs a re-ingest. Each probe gets the same three v1.3 readouts as the
+# main table; the fine-tune rows are for v1.2.
+_LOIO_ISLANDS = ("reunion", "guadeloupe", "martinique", "guyane", "mayotte")
+
+
+def _register_2019_variant(task_key: str, dataset: str) -> None:
+    """Register the probe (three readouts) and fine-tune tasks for one variant."""
+    probe = _pastis_ps1_task(
+        [Modality.SENTINEL2_L2A.name], window_size=16, dataset=dataset
+    )
+    EVAL_TASKS[f"planteur_2019_{task_key}_probe_sentinel2"] = probe
+    for dim in (128, 64):
+        EVAL_TASKS[f"planteur_2019_{task_key}_probe_sentinel2_proj{dim}"] = replace(
+            probe, eval_on_projected_registers=True, eval_projection_dim=dim
+        )
+    FT_EVAL_TASKS[f"planteur_2019_{task_key}_ft_sentinel2"] = _pastis_ft_task(
+        [Modality.SENTINEL2_L2A.name], dataset=dataset
+    )
+
+
+for _island in _LOIO_ISLANDS:
+    _register_2019_variant(
+        f"loio_{_island}", f"pastis2_drom_bg8void_2019_loio_{_island}"
+    )
+
+for _n_months in range(1, 12):
+    _register_2019_variant(
+        f"mo{_n_months:02d}", f"pastis2_drom_bg8void_2019_mo{_n_months:02d}"
+    )
+
 
 # Tessera live-encoder raw-acquisition tasks (S1+S2, shared union time axis,
 # calendar 2019, capped at 120 slots). tile_samples is False because
