@@ -3797,6 +3797,27 @@ FT_EVAL_TASKS["planteur_anysat_raw_ft_sentinel2"] = DownstreamTaskConfig(
     tile_samples=False,
 )
 
+
+# ---------------------------------------------------------------------------
+# Calendar-2019 fine-tune tasks. Same windows/labels/splits as the bg8void
+# tasks above, but the twelve Sentinel-2/1 monthly mosaics span 2019-01..2019-12
+# instead of 2018-09..2019-08 (the monthly layers are 30d offsets from each
+# window's time_range, so the shift comes from the window, not the layer config).
+FT_EVAL_TASKS["pastis2_drom_bg8void_2019_ft_ws16_ps1_sentinel2"] = _pastis_ft_task(
+    [Modality.SENTINEL2_L2A.name], dataset="pastis2_drom_bg8void_2019_s2"
+)
+FT_EVAL_TASKS["pastis2_drom_bg8void_2019_ft_ws16_ps1_sentinel1_sentinel2"] = (
+    _pastis_ft_task(
+        [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        dataset="pastis2_drom_bg8void_2019_s1s2",
+    )
+)
+EVAL_TASKS["planteur_2019_probe_sentinel2"] = _pastis_ps1_task(
+    [Modality.SENTINEL2_L2A.name],
+    window_size=16,
+    dataset="pastis2_drom_bg8void_2019_s2",
+)
+
 if __name__ == "__main__":
     module_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if module_path is None:
