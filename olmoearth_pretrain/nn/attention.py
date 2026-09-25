@@ -335,6 +335,7 @@ class Attention(nn.Module):
         rope_extent_y: torch.Tensor | None = None,
         rope_spatial_extent: torch.Tensor | None = None,
         rope_spatial_extent_y: torch.Tensor | None = None,
+        rope_extent_start: int = 0,
     ) -> torch.Tensor:
         """Forward pass.
 
@@ -354,6 +355,9 @@ class Attention(nn.Module):
                 col frequencies. Only valid with ``MIXED_3D_ROPE``.
             rope_spatial_extent_y: The same for the keys (defaults to
                 ``rope_spatial_extent`` in self-attention).
+            rope_extent_start: Sequence index from which the extents apply (earlier
+                positions are zero-width points and are not gated). Applied to the
+                queries, and to the keys in self-attention.
             kv: Optional precomputed ``(k, v)`` projections of ``y``, each
                 ``(B, Nk, attn_dim)``, for cross-attention whose K/V projection is
                 shared across several blocks (computed once by the caller). ``self.k``
@@ -452,6 +456,7 @@ class Attention(nn.Module):
                     self.rope_mixed_freqs,
                     extent=rope_extent,
                     spatial_extent=rope_spatial_extent,
+                    extent_start=rope_extent_start,
                 )
                 k = apply_3d_mixed_rope(
                     k,
@@ -459,6 +464,7 @@ class Attention(nn.Module):
                     self.rope_mixed_freqs,
                     extent=k_extent,
                     spatial_extent=k_spatial,
+                    extent_start=rope_extent_start if y is None else 0,
                 )
         x = self.sdpa(
             q,

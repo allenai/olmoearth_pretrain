@@ -35,7 +35,7 @@ from einops import rearrange
 from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.attention import Block, Mlp
 from olmoearth_pretrain.nn.encodings import PositionEncoding
 
 logger = logging.getLogger(__name__)
@@ -200,6 +200,7 @@ class JointLatentTransformer(nn.Module):
         max_latents: int | None = None,
         eval_latent_stride: int = 1,
         latent_spatial_range: bool = False,
+        token_mlp_ratio: float | None = None,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -267,6 +268,12 @@ class JointLatentTransformer(nn.Module):
                 footprint, the spatial counterpart of ``latent_time_range``. Tells the
                 latents their own resolution when the stride varies. Requires the
                 ``rope_3d_mixed`` position encoding.
+            token_mlp_ratio: If set (with ``token_mlp``), tokens get their OWN MLP of
+                this hidden ratio -- with their own pre-norm -- in every joint block,
+                while latents keep the block's ``mlp_ratio`` MLP. A light branch for the
+                many tokens and a heavy one for the few latents, as in CoLT5 (Ainslie et
+                al. 2023). At ratio 1 a token's per-block linear cost drops from
+                ``12 d^2`` to ``6 d^2``. None = one shared MLP for everything.
         """
         super().__init__()
         if not PositionEncoding.is_rope(position_encoding):
@@ -281,6 +288,12 @@ class JointLatentTransformer(nn.Module):
         self.register_dim = embedding_size
         self.embedding_size = embedding_size
         self.token_mlp = token_mlp
+        if token_mlp_ratio is not None and (not token_mlp or token_mlp_ratio <= 0):
+            raise ValueError(
+                "token_mlp_ratio needs token_mlp=True and a positive ratio, got "
+                f"token_mlp={token_mlp}, token_mlp_ratio={token_mlp_ratio}"
+            )
+        self.token_mlp_ratio = token_mlp_ratio
         self.position_encoding = position_encoding
         if latent_time_range and position_encoding != PositionEncoding.MIXED_3D_ROPE:
             raise ValueError(
@@ -331,6 +344,23 @@ class JointLatentTransformer(nn.Module):
                 for _ in range(joint_depth)
             ]
         )
+        # Light per-token MLP branch (CoLT5-style): the latents use each block's own
+        # norm2 + mlp, the tokens these.
+        self.token_norms: nn.ModuleList | None = None
+        self.token_mlps: nn.ModuleList | None = None
+        if token_mlp_ratio is not None:
+            self.token_norms = nn.ModuleList(
+                [nn.LayerNorm(embedding_size) for _ in range(joint_depth)]
+            )
+            self.token_mlps = nn.ModuleList(
+                [
+                    Mlp(
+                        in_features=embedding_size,
+                        hidden_features=int(embedding_size * token_mlp_ratio),
+                    )
+                    for _ in range(joint_depth)
+                ]
+            )
         # The latent grid is purely spatial, so the latent-only tail rotates over
         # (row, col) like the Perceiver's latent blocks.
         self.latent_blocks = nn.ModuleList(
@@ -454,11 +484,13 @@ class JointLatentTransformer(nn.Module):
         attn_kwargs: dict[str, Any],
         rope_extent: Tensor | None = None,
         rope_spatial_extent: Tensor | None = None,
+        block_index: int = 0,
     ) -> Tensor:
         """One joint block.
 
-        Masked attention over the whole sequence, then the MLP on all of it or on the
-        latents only.
+        Masked attention over the whole sequence, then the MLP on all of it, on the
+        latents only, or (``token_mlp_ratio``) a light MLP on the tokens and the block's
+        own MLP on the latents.
         """
         x = x + blk.drop_path(
             blk.ls1(
@@ -467,10 +499,20 @@ class JointLatentTransformer(nn.Module):
                     rope_positions=rope_positions,
                     rope_extent=rope_extent,
                     rope_spatial_extent=rope_spatial_extent,
+                    # Tokens are zero-width: gate the latents only.
+                    rope_extent_start=n_tokens,
                     **attn_kwargs,
                 )
             )
         )
+        if self.token_mlps is not None:
+            assert self.token_norms is not None
+            tokens, latents = x[:, :n_tokens], x[:, n_tokens:]
+            tokens = tokens + blk.drop_path(
+                self.token_mlps[block_index](self.token_norms[block_index](tokens))
+            )
+            latents = latents + blk.drop_path(blk.ls2(blk.mlp(blk.norm2(latents))))
+            return torch.cat([tokens, latents], dim=1)
         if self.token_mlp:
             return x + blk.drop_path(blk.ls2(blk.mlp(blk.norm2(x))))
         latents = x[:, n_tokens:]
@@ -630,7 +672,7 @@ class JointLatentTransformer(nn.Module):
                 dim=1,
             )
 
-        for blk in self.joint_blocks:
+        for block_index, blk in enumerate(self.joint_blocks):
             x = self._joint_block(
                 blk,
                 x,
@@ -639,6 +681,7 @@ class JointLatentTransformer(nn.Module):
                 attn_kwargs,
                 rope_extent=rope_extent,
                 rope_spatial_extent=rope_spatial_extent,
+                block_index=block_index,
             )
         latents = x[:, n_tokens:]
         for blk in self.latent_blocks:
@@ -680,6 +723,8 @@ class JointLatentConfig(Config):
             heads at the default unfold (``max_patch_size``) so they fit any stride.
         latent_spatial_range: Encode each pixel latent's square footprint in its RoPE
             (sinc-gated row/col pairs), so latents know their stride.
+        token_mlp_ratio: A separate, lighter MLP for the tokens (CoLT5-style); the
+            latents keep the full ``mlp_ratio`` MLP. None = shared MLP.
     """
 
     register_dim: int
@@ -696,6 +741,7 @@ class JointLatentConfig(Config):
     max_latents: int | None = None
     eval_latent_stride: int = 1
     latent_spatial_range: bool = False
+    token_mlp_ratio: float | None = None
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -775,4 +821,5 @@ class JointLatentConfig(Config):
             max_latents=self.max_latents,
             eval_latent_stride=self.eval_latent_stride,
             latent_spatial_range=self.latent_spatial_range,
+            token_mlp_ratio=self.token_mlp_ratio,
         )

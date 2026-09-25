@@ -468,3 +468,39 @@ def test_random_latent_stride_respects_divisors_and_budget() -> None:
     assert out["registers"].shape == (2, 8, 8, 32)  # eval stride 1 = per pixel
     with pytest.raises(ValueError, match="max_latents"):
         _joint_encoder(pixel_latents=True, random_latent_stride=True)
+
+
+def test_token_mlp_ratio_gives_tokens_their_own_light_mlp() -> None:
+    """Tokens get a separate MLP of the given width.
+
+    With weights copied from the shared MLP at the same width it reproduces the
+    shared-MLP model exactly.
+    """
+    torch.manual_seed(0)
+    shared = _joint_encoder(joint_depth=2, latent_reads_all=True).eval()
+    torch.manual_seed(0)
+    split = _joint_encoder(
+        joint_depth=2, latent_reads_all=True, token_mlp_ratio=2.0
+    ).eval()
+    module = split.perceiver
+    assert isinstance(module, JointLatentTransformer)
+    assert module.token_mlps is not None and module.token_norms is not None
+    # 32-d embedding, ratio 2 -> hidden 64 for tokens; latents keep the block's 2.0 * 32.
+    assert module.token_mlps[0].fc1.out_features == 64
+    split.load_state_dict(shared.state_dict(), strict=False)
+    with torch.no_grad():
+        for blk, norm, mlp in zip(
+            module.joint_blocks, module.token_norms, module.token_mlps
+        ):
+            norm.load_state_dict(blk.norm2.state_dict())
+            mlp.load_state_dict(blk.mlp.state_dict())
+    sample = _sample()
+    with torch.no_grad():
+        a = shared(sample, patch_size=2, input_res=10)["registers"]
+        b = split(sample, patch_size=2, input_res=10)["registers"]
+    torch.testing.assert_close(a, b)
+    light = _joint_encoder(joint_depth=1, token_mlp_ratio=0.5).perceiver
+    assert isinstance(light, JointLatentTransformer) and light.token_mlps is not None
+    assert light.token_mlps[0].fc1.out_features == 16
+    with pytest.raises(ValueError, match="token_mlp_ratio"):
+        _joint_encoder(joint_depth=1, token_mlp=False, token_mlp_ratio=1.0)

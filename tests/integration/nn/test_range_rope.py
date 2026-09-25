@@ -279,3 +279,27 @@ def test_joint_latent_spatial_range_changes_strided_latents_only() -> None:
             rope_base=10000.0,
             qk_norm=False,
         )
+
+
+def test_extent_start_skips_zero_width_positions_exactly() -> None:
+    """Gating only from ``extent_start`` is exact.
+
+    It equals gating everything with zero widths before the start, for temporal and
+    spatial extents alike.
+    """
+    torch.manual_seed(0)
+    B, H, N, D, start = 2, 3, 9, 16, 5
+    freqs = init_3d_mixed_rope_freqs(D, H, base=100.0)
+    x = torch.randn(B, H, N, D)
+    pos = torch.rand(B, N, 3) * 4
+    t_w = torch.rand(B, N)
+    s_w = torch.rand(B, N)
+    t_w[:, :start] = 0
+    s_w[:, :start] = 0
+    full = apply_3d_mixed_rope(x, pos, freqs, extent=t_w, spatial_extent=s_w)
+    sliced = apply_3d_mixed_rope(
+        x, pos, freqs, extent=t_w, spatial_extent=s_w, extent_start=start
+    )
+    torch.testing.assert_close(full, sliced)
+    with pytest.raises(ValueError, match="extent_start"):
+        apply_3d_mixed_rope(x, pos, freqs, extent=t_w, extent_start=N + 1)

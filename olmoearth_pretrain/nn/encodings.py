@@ -460,6 +460,7 @@ def apply_3d_mixed_rope(
     freqs: torch.Tensor,
     extent: torch.Tensor | None = None,
     spatial_extent: torch.Tensor | None = None,
+    extent_start: int = 0,
 ) -> torch.Tensor:
     """Apply RoPE-Mixed (learnable 3D frequencies) to attention q/k.
 
@@ -490,6 +491,10 @@ def apply_3d_mixed_rope(
             rotation over the square factorises per axis, so each pair is further
             scaled by ``sinc(theta_row * side / 2) * sinc(theta_col * side / 2)``.
             ``None`` or zeros = spatial points.
+        extent_start: Sequence index from which the extents apply. Positions before it
+            are treated as points (their gate is exactly 1), so the gate is neither
+            computed nor stored for them -- e.g. the tokens of a joint sequence whose
+            interval-valued latents come last. Must only skip zero-width positions.
     """
     head_dim = x.shape[-1]
     if head_dim % 2 != 0:
@@ -561,6 +566,11 @@ def apply_3d_mixed_rope(
     if extent is None and spatial_extent is None:
         return out
 
+    seq_dim = 2 if x.ndim == 4 else 0
+    n_seq = positions.shape[1] if x.ndim == 4 else positions.shape[0]
+    if not 0 <= extent_start <= n_seq:
+        raise ValueError(f"extent_start {extent_start} outside [0, {n_seq}]")
+
     def _half_angle(width: torch.Tensor, freq: torch.Tensor, name: str) -> torch.Tensor:
         width = width.to(device=x.device, dtype=torch.float32)
         if x.ndim == 4:
@@ -569,12 +579,14 @@ def apply_3d_mixed_rope(
                     f"{name} must have shape (B, N)={tuple(positions.shape[:2])}, got "
                     f"{tuple(width.shape)}"
                 )
+            width = width[:, extent_start:]
             return width[:, None, :, None] * freq[None, :, None, :] / 2
         if width.shape != positions.shape[:1]:
             raise ValueError(
                 f"{name} must have shape (N,)={tuple(positions.shape[:1])}, got "
                 f"{tuple(width.shape)}"
             )
+        width = width[extent_start:]
         return width[:, None, None] * freq[None, :, :] / 2
 
     # Mean of exp(i*theta*p) over p uniform in an interval of this width around the
@@ -592,7 +604,10 @@ def apply_3d_mixed_rope(
         gate = spatial_gate if gate is None else gate * spatial_gate
     assert gate is not None
     gate = torch.repeat_interleave(gate, repeats=2, dim=-1).to(dtype=dtype)
-    return out * gate
+    if extent_start == 0:
+        return out * gate
+    head, tail = out.split([extent_start, n_seq - extent_start], dim=seq_dim)
+    return torch.cat([head, tail * gate], dim=seq_dim)
 
 
 def init_2d_mixed_rope_freqs(
