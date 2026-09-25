@@ -23,7 +23,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_joint_range.py` | the joint arm with interval latents: sinc-gated RoPE over the window (`latent_time_range`) |
 | `ablations/pure_perceiver_joint_latentread_pixlat.py` | joint latentread with one latent per pixel on patch-size <= 4 tokens (`pixel_latents`, Favyen's pixel-register shapes) |
 | `ablations/pure_perceiver_joint_latentread_pixlat_range.py` | the pixel-latent latentread arm with interval latents (`latent_time_range`) |
-| `ablations/pure_perceiver_joint_latentread_rstride.py` | latentread at random latent strides (pixel to patch) under a 2,048-latent budget, on the normal v1.3 shapes (patch sizes 1..8, grids <= 32) |
+| `ablations/pure_perceiver_joint_latentread_rstride.py` | latentread at random latent strides (pixel to patch) under a 512-latent budget at microbatch 64, on the normal v1.3 shapes (patch sizes 1..8, grids <= 32) |
 | `ablations/pure_perceiver_joint_latentread_rstride_range.py` | the random-stride latentread arm with interval latents (`latent_time_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_srange.py` | the random-stride latentread arm with footprint-aware latents: spatial sinc gate over each latent's stride x stride pixels (`latent_spatial_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange.py` | the same with interval latents in time as well |

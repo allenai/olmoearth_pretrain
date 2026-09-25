@@ -5,10 +5,10 @@ square of pixels it stands for (side = the stride the batch drew) instead of a p
 Its RoPE pairs are scaled by ``sinc(theta_row * side / 2) * sinc(theta_col * side / 2)``,
 the rotation averaged over the footprint -- the spatial counterpart of the interval
 latents -- so a latent can tell whether it summarises 1 pixel or a whole patch.
-Tokens stay spatial points. Everything else (budget of 2,048 latents, sampler,
+Tokens stay spatial points. Everything else (budget of 512 latents, sampler,
 microbatch, evals at stride 1) is ``pure_perceiver_joint_latentread_rstride_range.py``, so the two differ by that one flag.
 
-W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_rstride_ps8_srange_latentread_rangerope_joint12``.
+W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_rstride_ps8_lb512_srange_latentread_rangerope_joint12``.
 """
 
 import logging

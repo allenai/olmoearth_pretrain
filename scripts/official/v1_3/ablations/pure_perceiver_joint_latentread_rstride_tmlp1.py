@@ -24,10 +24,12 @@ from base import (  # noqa: E402
 )
 from pure_perceiver_joint_latentread_rstride import (  # noqa: E402
     build_dataloader_config,
-    build_train_module_config,
 )
 from pure_perceiver_joint_latentread_rstride import (  # noqa: E402
     build_model_config as _base_arm_model_config,
+)
+from pure_perceiver_joint_latentread_rstride import (  # noqa: E402
+    build_train_module_config as _base_arm_train_module_config,
 )
 from pure_perceiver_joint_latentread_rstride import (  # noqa: E402
     build_trainer_config as _rstride_trainer_config,
@@ -44,6 +46,9 @@ MODULE_PATH = (
 )
 
 TOKEN_MLP_RATIO = 1.0
+# Pinned to what these arms trained with (the base arms moved to 512 / microbatch 64).
+MAX_LATENTS = 2048
+RANK_MICROBATCH_SIZE = 32
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -52,6 +57,14 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     perceiver = config.encoder_config.perceiver_config
     assert isinstance(perceiver, JointLatentConfig) and perceiver.token_mlp
     perceiver.token_mlp_ratio = TOKEN_MLP_RATIO
+    perceiver.max_latents = MAX_LATENTS
+    return config
+
+
+def build_train_module_config(common: CommonComponents):
+    """The base arm's train module at the microbatch these arms trained with."""
+    config = _base_arm_train_module_config(common)
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     return config
 
 
