@@ -3791,9 +3791,12 @@ EVAL_TASKS["planteur_anysat_raw_probe_sentinel2"] = DownstreamTaskConfig(
     tile_samples=False,
 )
 
+# ft_batch_size is 2, not FT_BATCH_SIZE (16): at ws128 a raw sample carries 96
+# timesteps vs the monthly tasks' 12, and batch 16 OOMed trying to allocate
+# 36 GiB on an 80 GiB A100. Scaled down by roughly the timestep ratio.
 FT_EVAL_TASKS["planteur_anysat_raw_ft_sentinel2"] = DownstreamTaskConfig(
     dataset=_ANYSAT_RAW_DATASET,
-    ft_batch_size=FT_BATCH_SIZE,
+    ft_batch_size=2,
     num_workers=8,
     pooling_type=PoolingType.MEAN,
     norm_stats_from_pretrained=True,
@@ -3854,7 +3857,7 @@ EVAL_TASKS["planteur_tessera_raw_probe_sentinel1_sentinel2"] = DownstreamTaskCon
 
 FT_EVAL_TASKS["planteur_tessera_raw_ft_sentinel1_sentinel2"] = DownstreamTaskConfig(
     dataset=_TESSERA_RAW_DATASET,
-    ft_batch_size=4,
+    ft_batch_size=1,
     num_workers=8,
     pooling_type=PoolingType.MEAN,
     norm_stats_from_pretrained=True,
