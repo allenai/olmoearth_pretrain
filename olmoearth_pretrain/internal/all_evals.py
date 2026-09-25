@@ -2882,6 +2882,15 @@ EMBED_DIAG_TASKS = {
 }
 
 
+# Fine-tune cost knobs. Each 128x128 patch is tiled into 64 windows, so an
+# "epoch" is a pass over 1896 * 64 = 121,344 samples: at batch 8 that was 15,168
+# steps (~7.9h/epoch measured on an A100), making 50 epochs ~2 weeks per model.
+# Batch 64 cuts that to 1,896 steps/epoch (8x fewer), keeping the full 50
+# epochs affordable. A100-80GB has ample headroom at 16x16 windows.
+FT_EPOCHS = 50
+FT_BATCH_SIZE = 64
+
+
 def _pastis_ft_task(
     input_modalities: list[str],
     dataset: str = "pastis2_drom_bg8",
@@ -2898,11 +2907,11 @@ def _pastis_ft_task(
     """
     return DownstreamTaskConfig(
         dataset=dataset,
-        ft_batch_size=8,
+        ft_batch_size=FT_BATCH_SIZE,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
         norm_stats_from_pretrained=True,
-        epochs=50,
+        epochs=FT_EPOCHS,
         input_modalities=input_modalities,
         primary_metric=EvalMetric.MIOU,
         window_size=window_size,
@@ -3776,11 +3785,11 @@ EVAL_TASKS["planteur_anysat_raw_probe_sentinel2"] = DownstreamTaskConfig(
 
 FT_EVAL_TASKS["planteur_anysat_raw_ft_sentinel2"] = DownstreamTaskConfig(
     dataset=_ANYSAT_RAW_DATASET,
-    ft_batch_size=8,
+    ft_batch_size=FT_BATCH_SIZE,
     num_workers=8,
     pooling_type=PoolingType.MEAN,
     norm_stats_from_pretrained=True,
-    epochs=50,
+    epochs=FT_EPOCHS,
     input_modalities=[Modality.SENTINEL2_L2A.name],
     primary_metric=EvalMetric.MIOU,
     window_size=16,
