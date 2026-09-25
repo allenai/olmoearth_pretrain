@@ -1,5 +1,7 @@
 """The sync-free rewrites and the compiled RoPE reproduce the code they replace."""
 
+from typing import Any
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -184,3 +186,53 @@ def test_compiled_mixed_rope_matches_eager(with_extents: bool) -> None:
     # compare it relative to its norm (fp32 reassociation of a long sum).
     rel = (freqs.grad - gf).norm() / gf.norm()
     assert rel < 1e-4, f"frequency gradient differs by {rel:.2e} of its norm"
+
+
+def test_compiled_mixed_rope_does_not_recompile_per_latent_count() -> None:
+    """Random latent strides vary BOTH lengths every batch; the compiled op must hold.
+
+    The first compiled version guarded the latent count (sequence length after
+    ``extent_start``) to a constant, recompiled per count and fell back to eager at
+    ``recompile_limit``. Replay a mix of (tokens, latents) shapes like the rstride
+    sampler's and fail if dynamo needs more than a couple of graphs per function.
+    """
+    import torch._dynamo
+
+    torch._dynamo.reset()
+    B, H, D = 2, 3, 16
+    freqs = encodings.init_3d_mixed_rope_freqs(D, H, base=100.0).requires_grad_(True)
+    shapes = [(36, 4), (196, 16), (64, 36), (256, 64), (100, 196), (144, 256), (49, 9)]
+    old_limit = torch._dynamo.config.recompile_limit
+    old_fail = torch._dynamo.config.fail_on_recompile_limit_hit
+    try:
+        torch._dynamo.config.recompile_limit = 2
+        torch._dynamo.config.fail_on_recompile_limit_hit = True
+        encodings.use_compiled_mixed_rope(True)
+        for n_tok, n_lat in shapes:
+            n = n_tok + n_lat
+            x = torch.randn(B, H, n, D, requires_grad=True)
+            pos = torch.rand(B, n, 3) * 5
+            t_w, s_w = torch.rand(B, n), torch.rand(B, n)
+            t_w[:, :n_tok] = 0
+            s_w[:, :n_tok] = 0
+            variants: list[dict[str, Any]] = [
+                {},
+                dict(extent=t_w, extent_start=n_tok),
+                dict(extent=t_w, spatial_extent=s_w, extent_start=n_tok),
+            ]
+            for kwargs in variants:
+                try:
+                    out = encodings.apply_3d_mixed_rope(x, pos, freqs, **kwargs)
+                except torch._dynamo.exc.FailOnRecompileLimitHit:
+                    raise
+                except Exception as e:  # pragma: no cover - no working compiler
+                    pytest.skip(
+                        f"torch.compile unavailable here: {type(e).__name__}: {e}"
+                    )
+                ref = encodings._apply_3d_mixed_rope_eager(x, pos, freqs, **kwargs)
+                torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+                out.sum().backward()
+    finally:
+        encodings.use_compiled_mixed_rope(False)
+        torch._dynamo.config.recompile_limit = old_limit
+        torch._dynamo.config.fail_on_recompile_limit_hit = old_fail

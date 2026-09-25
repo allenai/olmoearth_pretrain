@@ -12,7 +12,8 @@ essentially identically to ``v1_3_vit0_rstride_ps8_lb512_latentread_rangerope_jo
 curves that separate beyond run-to-run noise would point at the compiled op.
 
 W&B project ``20260921_perceiver_shapes``; trained as
-``v1_3_vit0_rstride_ps8_lb512_fast_latentread_rangerope_joint12``.
+``v1_3_vit0_rstride_ps8_lb512_fast2_latentread_rangerope_joint12``
+(``fast`` hit ``recompile_limit`` and ran eager).
 """
 
 import logging

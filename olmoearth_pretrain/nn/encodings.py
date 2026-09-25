@@ -466,48 +466,10 @@ def init_3d_mixed_rope_freqs(
     return torch.stack(freqs_per_axis, dim=0)  # (3, H, D/2)
 
 
-def _apply_3d_mixed_rope_eager(
-    x: torch.Tensor,
-    positions: torch.Tensor,
-    freqs: torch.Tensor,
-    extent: torch.Tensor | None = None,
-    spatial_extent: torch.Tensor | None = None,
-    extent_start: int = 0,
+def _mixed_rope_rotate(
+    x: torch.Tensor, positions: torch.Tensor, freqs: torch.Tensor
 ) -> torch.Tensor:
-    """Apply RoPE-Mixed (learnable 3D frequencies) to attention q/k.
-
-    Each complex feature pair is rotated by an angle of the form
-    ``theta_t * t + theta_row * row + theta_col * col``, where the
-    3-vector ``(theta_t, theta_row, theta_col)`` is a learnable per-head,
-    per-pair frequency.
-
-    With ``extent`` a token is encoded as a temporal INTERVAL of that width centred
-    on its ``t`` rather than as a point: the rotation is averaged over the interval,
-    which is exactly the centre rotation scaled per pair by
-    ``sinc(theta_t * extent / 2)`` (``sin(a) / a``). Pairs whose temporal frequency
-    completes a turn or more across the interval are attenuated to ~0, pairs coarser
-    than the interval pass unchanged, so the token's attention kernel over time
-    becomes a soft box of width ``extent`` instead of a point. Integrated positional
-    encoding (mip-NeRF) applied to RoPE. Zero extent is the plain rotation.
-
-    Args:
-        x: Attention tensor with shape ``(B, H, N, D)`` or packed
-            ``(N, H, D)``.
-        positions: Coordinates with shape ``(B, N, 3)`` or packed ``(N, 3)``.
-            Last dim is ``(t, row, col)``.
-        freqs: Learnable 3D frequencies of shape ``(3, H, D // 2)``.
-        extent: Optional temporal interval width per token, ``(B, N)`` or packed
-            ``(N,)``, in the same units as ``t``. ``None`` or zeros = point tokens.
-        spatial_extent: Optional side length of a square SPATIAL footprint per token,
-            same shape as ``extent``, in the RoPE ``(row, col)`` units. Averaging the
-            rotation over the square factorises per axis, so each pair is further
-            scaled by ``sinc(theta_row * side / 2) * sinc(theta_col * side / 2)``.
-            ``None`` or zeros = spatial points.
-        extent_start: Sequence index from which the extents apply. Positions before it
-            are treated as points (their gate is exactly 1), so the gate is neither
-            computed nor stored for them -- e.g. the tokens of a joint sequence whose
-            interval-valued latents come last. Must only skip zero-width positions.
-    """
+    """The point rotation of :func:`_apply_3d_mixed_rope_eager` (no extents)."""
     head_dim = x.shape[-1]
     if head_dim % 2 != 0:
         raise ValueError(f"RoPE head dimension must be even, got {head_dim}")
@@ -575,55 +537,148 @@ def _apply_3d_mixed_rope_eager(
     cos = torch.repeat_interleave(torch.cos(angles), repeats=2, dim=-1).to(dtype=dtype)
     sin = torch.repeat_interleave(torch.sin(angles), repeats=2, dim=-1).to(dtype=dtype)
     out = (x * cos) + (rotate_half(x) * sin)
+    return out
+
+
+def _mixed_rope_gate(
+    freqs: torch.Tensor,
+    extent: torch.Tensor | None,
+    spatial_extent: torch.Tensor | None,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Per-pair interval gain for the extent-valued positions only.
+
+    ``extent`` / ``spatial_extent`` are already sliced to those positions: ``(B, L)``
+    for unpacked attention (gate ``(B, H, L, D)``) or ``(L,)`` packed (``(L, H, D)``).
+
+    Mean of exp(i*theta*p) over p uniform in an interval of this width around the
+    centre = exp(i*theta*c) * sin(a)/a with a = theta*width/2; over a square the mean
+    factorises per axis. torch.sinc is the normalised sin(pi x)/(pi x), hence / pi.
+    """
+    ref = extent if extent is not None else spatial_extent
+    assert ref is not None
+    freqs = freqs.to(device=ref.device, dtype=torch.float32)
+
+    def _half_angle(width: torch.Tensor, freq: torch.Tensor) -> torch.Tensor:
+        width = width.to(dtype=torch.float32)
+        if width.ndim == 2:
+            return width[:, None, :, None] * freq[None, :, None, :] / 2
+        return width[:, None, None] * freq[None, :, :] / 2
+
+    gate: torch.Tensor | None = None
+    if extent is not None:
+        gate = torch.sinc(_half_angle(extent, freqs[0]) / math.pi)
+    if spatial_extent is not None:
+        spatial_gate = torch.sinc(
+            _half_angle(spatial_extent, freqs[1]) / math.pi
+        ) * torch.sinc(_half_angle(spatial_extent, freqs[2]) / math.pi)
+        gate = spatial_gate if gate is None else gate * spatial_gate
+    assert gate is not None
+    return torch.repeat_interleave(gate, repeats=2, dim=-1).to(dtype=dtype)
+
+
+def _compose_mixed_rope(
+    rotate: Any,
+    gate_fn: Any,
+    x: torch.Tensor,
+    positions: torch.Tensor,
+    freqs: torch.Tensor,
+    extent: torch.Tensor | None,
+    spatial_extent: torch.Tensor | None,
+    extent_start: int,
+) -> torch.Tensor:
+    """Rotation over the whole sequence, gain over its extent-valued tail.
+
+    The ``extent_start`` slicing and the split/cat live HERE, outside ``rotate`` and
+    ``gate_fn``, so a compiled ``rotate`` / ``gate_fn`` each sees tensors whose only
+    varying sizes are the batch and ONE sequence length. With the slicing inside the
+    compiled region dynamo guarded the tail length to a constant and recompiled for
+    every new latent count until it hit ``recompile_limit`` and fell back to eager.
+    """
+    out = rotate(x, positions, freqs)
     if extent is None and spatial_extent is None:
         return out
-
     seq_dim = 2 if x.ndim == 4 else 0
     n_seq = positions.shape[1] if x.ndim == 4 else positions.shape[0]
     if not 0 <= extent_start <= n_seq:
         raise ValueError(f"extent_start {extent_start} outside [0, {n_seq}]")
-
-    def _half_angle(width: torch.Tensor, freq: torch.Tensor, name: str) -> torch.Tensor:
-        width = width.to(device=x.device, dtype=torch.float32)
-        if x.ndim == 4:
-            if width.shape != positions.shape[:2]:
-                raise ValueError(
-                    f"{name} must have shape (B, N)={tuple(positions.shape[:2])}, got "
-                    f"{tuple(width.shape)}"
-                )
-            width = width[:, extent_start:]
-            return width[:, None, :, None] * freq[None, :, None, :] / 2
-        if width.shape != positions.shape[:1]:
+    for name, width in (("extent", extent), ("spatial_extent", spatial_extent)):
+        if width is not None and width.shape != positions.shape[:-1]:
             raise ValueError(
-                f"{name} must have shape (N,)={tuple(positions.shape[:1])}, got "
+                f"{name} must have shape {tuple(positions.shape[:-1])}, got "
                 f"{tuple(width.shape)}"
             )
-        width = width[extent_start:]
-        return width[:, None, None] * freq[None, :, :] / 2
 
-    # Mean of exp(i*theta*p) over p uniform in an interval of this width around the
-    # centre = exp(i*theta*c) * sin(a)/a with a = theta*width/2; over a square the mean
-    # factorises per axis. torch.sinc is the normalised sin(pi x)/(pi x), hence / pi.
-    gate: torch.Tensor | None = None
-    if extent is not None:
-        gate = torch.sinc(_half_angle(extent, freqs_t, "extent") / math.pi)
-    if spatial_extent is not None:
-        spatial_gate = torch.sinc(
-            _half_angle(spatial_extent, freqs_row, "spatial_extent") / math.pi
-        ) * torch.sinc(
-            _half_angle(spatial_extent, freqs_col, "spatial_extent") / math.pi
-        )
-        gate = spatial_gate if gate is None else gate * spatial_gate
-    assert gate is not None
-    gate = torch.repeat_interleave(gate, repeats=2, dim=-1).to(dtype=dtype)
+    def _tail(width: torch.Tensor | None) -> torch.Tensor | None:
+        if width is None:
+            return None
+        width = width.to(device=x.device)
+        return width[:, extent_start:] if x.ndim == 4 else width[extent_start:]
+
+    gate = gate_fn(freqs, _tail(extent), _tail(spatial_extent), x.dtype)
     if extent_start == 0:
         return out * gate
     head, tail = out.split([extent_start, n_seq - extent_start], dim=seq_dim)
     return torch.cat([head, tail * gate], dim=seq_dim)
 
 
+def _apply_3d_mixed_rope_eager(
+    x: torch.Tensor,
+    positions: torch.Tensor,
+    freqs: torch.Tensor,
+    extent: torch.Tensor | None = None,
+    spatial_extent: torch.Tensor | None = None,
+    extent_start: int = 0,
+) -> torch.Tensor:
+    """Apply RoPE-Mixed (learnable 3D frequencies) to attention q/k.
+
+    Each complex feature pair is rotated by an angle of the form
+    ``theta_t * t + theta_row * row + theta_col * col``, where the
+    3-vector ``(theta_t, theta_row, theta_col)`` is a learnable per-head,
+    per-pair frequency.
+
+    With ``extent`` a token is encoded as a temporal INTERVAL of that width centred
+    on its ``t`` rather than as a point: the rotation is averaged over the interval,
+    which is exactly the centre rotation scaled per pair by
+    ``sinc(theta_t * extent / 2)`` (``sin(a) / a``). Pairs whose temporal frequency
+    completes a turn or more across the interval are attenuated to ~0, pairs coarser
+    than the interval pass unchanged, so the token's attention kernel over time
+    becomes a soft box of width ``extent`` instead of a point. Integrated positional
+    encoding (mip-NeRF) applied to RoPE. Zero extent is the plain rotation.
+
+    Args:
+        x: Attention tensor with shape ``(B, H, N, D)`` or packed
+            ``(N, H, D)``.
+        positions: Coordinates with shape ``(B, N, 3)`` or packed ``(N, 3)``.
+            Last dim is ``(t, row, col)``.
+        freqs: Learnable 3D frequencies of shape ``(3, H, D // 2)``.
+        extent: Optional temporal interval width per token, ``(B, N)`` or packed
+            ``(N,)``, in the same units as ``t``. ``None`` or zeros = point tokens.
+        spatial_extent: Optional side length of a square SPATIAL footprint per token,
+            same shape as ``extent``, in the RoPE ``(row, col)`` units. Averaging the
+            rotation over the square factorises per axis, so each pair is further
+            scaled by ``sinc(theta_row * side / 2) * sinc(theta_col * side / 2)``.
+            ``None`` or zeros = spatial points.
+        extent_start: Sequence index from which the extents apply. Positions before it
+            are treated as points (their gate is exactly 1), so the gate is neither
+            computed nor stored for them -- e.g. the tokens of a joint sequence whose
+            interval-valued latents come last. Must only skip zero-width positions.
+    """
+    return _compose_mixed_rope(
+        _mixed_rope_rotate,
+        _mixed_rope_gate,
+        x,
+        positions,
+        freqs,
+        extent,
+        spatial_extent,
+        extent_start,
+    )
+
+
 _USE_COMPILED_MIXED_ROPE = False
-_COMPILED_MIXED_ROPE: Any = None
+_COMPILED_ROTATE: Any = None
+_COMPILED_GATE: Any = None
 
 
 def use_compiled_mixed_rope(enabled: bool = True) -> None:
@@ -632,15 +687,17 @@ def use_compiled_mixed_rope(enabled: bool = True) -> None:
     The eager op is dozens of small elementwise kernels per call (fp32 angles, cos,
     sin, repeat-interleave, casts, rotation, range gates) run for every query and key
     in every block; profiling put that at roughly half of the joint arms' GPU time and
-    most of their kernel launches. Compiling this ONE pure function fuses them, with
-    dynamic shapes so the varying sequence lengths do not recompile per batch. Opt-in
-    because the whole-model compile once hurt training; the model otherwise runs
-    eagerly.
+    most of their kernel launches. Compiling the rotation and the gate -- two pure
+    functions, each over one varying sequence length (see
+    :func:`_compose_mixed_rope`) -- fuses them, with dynamic shapes so the varying
+    lengths do not recompile per batch. Opt-in because the whole-model compile once
+    hurt training; the model otherwise runs eagerly.
     """
-    global _USE_COMPILED_MIXED_ROPE, _COMPILED_MIXED_ROPE
+    global _USE_COMPILED_MIXED_ROPE, _COMPILED_ROTATE, _COMPILED_GATE
     _USE_COMPILED_MIXED_ROPE = enabled
-    if enabled and _COMPILED_MIXED_ROPE is None:
-        _COMPILED_MIXED_ROPE = torch.compile(_apply_3d_mixed_rope_eager, dynamic=True)
+    if enabled and _COMPILED_ROTATE is None:
+        _COMPILED_ROTATE = torch.compile(_mixed_rope_rotate, dynamic=True)
+        _COMPILED_GATE = torch.compile(_mixed_rope_gate, dynamic=True)
 
 
 def apply_3d_mixed_rope(
@@ -653,18 +710,21 @@ def apply_3d_mixed_rope(
 ) -> torch.Tensor:
     """Apply RoPE-Mixed; see :func:`_apply_3d_mixed_rope_eager` for the semantics.
 
-    Dispatches to the compiled version when :func:`use_compiled_mixed_rope` is on.
+    Dispatches to the compiled pieces when :func:`use_compiled_mixed_rope` is on.
     """
-    fn = (
-        _COMPILED_MIXED_ROPE if _USE_COMPILED_MIXED_ROPE else _apply_3d_mixed_rope_eager
-    )
-    return fn(
+    if not _USE_COMPILED_MIXED_ROPE:
+        return _apply_3d_mixed_rope_eager(
+            x, positions, freqs, extent, spatial_extent, extent_start
+        )
+    return _compose_mixed_rope(
+        _COMPILED_ROTATE,
+        _COMPILED_GATE,
         x,
         positions,
         freqs,
-        extent=extent,
-        spatial_extent=spatial_extent,
-        extent_start=extent_start,
+        extent,
+        spatial_extent,
+        extent_start,
     )
 
 
