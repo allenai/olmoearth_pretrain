@@ -39,8 +39,6 @@ from olmoearth_pretrain.internal.full_eval_sweep import (
     LAUNCH_OVERRIDES,
     MAX_DURATION_OVERRIDE,
     PRECOMPUTED_MODEL_TO_MODALITY,
-    QUANTIZE_AT_EVAL_MODALITIES,
-    QUANTIZE_SCHEME_BY_MODALITY,
     LP_LRs,
     _get_base_run_name,
     _get_checkpoint_args,
@@ -146,9 +144,8 @@ def _model_args(
     consumed exactly as stored — no re-normalization, reading the embedding
     modality instead of imagery.
 
-    Quantization is per-product: a downloaded product is already int8 at
-    source, so it is not re-quantized; see ``QUANTIZE_AT_EVAL_MODALITIES`` in
-    full_eval_sweep for the rule.
+    A precomputed product is not re-quantized: it is already int8 at source,
+    so its stored values carry that loss.
 
     ``quantization`` overrides the OlmoEarth side of that convention, so the
     round trip itself can be measured rather than assumed: "none" scores the
@@ -164,23 +161,12 @@ def _model_args(
             args.append(task_arg(task_name, "quantize_embeddings", str(quantize)))
         return " ".join(args)
     modality, _ = PRECOMPUTED_MODEL_TO_MODALITY[model]
-    quantize = modality in QUANTIZE_AT_EVAL_MODALITIES
     args = [" --trainer.no_checkpoints=True"]
     for task_name in task_names:
         args.append(task_arg(task_name, "norm_stats_from_pretrained", "False"))
         args.append(task_arg(task_name, "norm_method", "NormMethod.NO_NORM"))
         args.append(task_arg(task_name, "input_modalities", f"[{modality}]"))
-        args.append(task_arg(task_name, "quantize_embeddings", str(quantize)))
-        if quantize:
-            args.append(
-                task_arg(
-                    task_name,
-                    "quantization_scheme",
-                    # StrEnum interpolates to its VALUE ("tessera_per_vector"),
-                    # which OmegaConf rejects -- it parses enums by member NAME.
-                    f"QuantizationScheme.{QUANTIZE_SCHEME_BY_MODALITY[modality].name}",
-                )
-            )
+        args.append(task_arg(task_name, "quantize_embeddings", "False"))
     return " ".join(args)
 
 

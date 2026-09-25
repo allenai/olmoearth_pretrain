@@ -12,7 +12,6 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalizer,
-    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     quantize_embeddings,
@@ -31,7 +30,6 @@ def normalize_and_quantize(
     quantize_bits: int | None = None,
     quantile_config: dict | None = None,
     diagnostics_out: dict[str, float] | None = None,
-    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER,
 ) -> torch.Tensor:
     """Normalize then (optionally) quantize one split's embeddings.
 
@@ -51,7 +49,6 @@ def normalize_and_quantize(
         diagnostics_out: If provided, filled with geometry diagnostics for each
             stage of the pipeline (a bounded row subsample, so the cost does not
             scale with the split size).
-        quantization_scheme: Which int8 scheme to apply.
 
     Returns:
         The transformed embeddings: int8 codes if quantizing (for a caller-side
@@ -126,7 +123,6 @@ def get_embeddings(
     | None = None,
     normalizer: EmbeddingNormalizer | None = None,
     diagnostics_out: dict[str, float] | None = None,
-    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader.
 
@@ -151,7 +147,6 @@ def get_embeddings(
             precomputed constants); None keeps the model's raw output.
         diagnostics_out: If provided, filled with per-stage geometry diagnostics
             for this split (see ``normalize_and_quantize``).
-        quantization_scheme: Which int8 scheme to apply when quantizing.
 
     Returns:
         Tuple of (embeddings, labels). If quantize=True, embeddings are int8
@@ -198,6 +193,5 @@ def get_embeddings(
         quantize_bits=quantize_bits,
         quantile_config=quantile_config,
         diagnostics_out=diagnostics_out,
-        quantization_scheme=quantization_scheme,
     )
     return embeddings, labels

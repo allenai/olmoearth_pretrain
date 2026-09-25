@@ -40,7 +40,6 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalization,
     EmbeddingNormalizer,
-    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
@@ -176,8 +175,6 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
-    # Which int8 scheme quantize_embeddings applies (see QuantizationScheme).
-    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
     # Normalize the extracted embeddings before the int8 round-trip and the
     # probe. Nothing in pretraining pins an embedding head's output geometry
     # (see EmbeddingNormalization), and three consumers care: the int8 power
@@ -321,7 +318,6 @@ class DownstreamEvaluator:
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
-        self.quantization_scheme = task.quantization_scheme
         self.quantile_config_path = task.quantile_config_path
         # Load quantile config if path is provided
         self.quantile_config: dict | None = None
@@ -559,7 +555,6 @@ class DownstreamEvaluator:
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
             sample_transform=sample_transform,
-            quantization_scheme=self.quantization_scheme,
             normalizer=normalizer,
             diagnostics_out=diagnostics_out,
         )

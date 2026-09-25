@@ -61,18 +61,6 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     return dequantized
 
 
-class QuantizationScheme(StrEnum):
-    """Which int8 scheme ``quantize_embeddings=True`` applies.
-
-    Per-product, because the point of the embedding-eval convention is to score
-    each arm at the precision it actually ships.
-    """
-
-    # AlphaEarth's published scheme (POWER/SCALE above). The default, and the
-    # right choice for AEF-geometry (unit-L2) embeddings.
-    AEF_POWER = "aef_power"
-
-
 # === Normalization ===
 
 
