@@ -219,6 +219,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
+        # Count of microbatches with a non-finite loss, kept on device (a Python check
+        # here synchronised every microbatch) and logged with the other metrics.
+        total_nonfinite = torch.zeros([], device=self.device)
         accumulated_extra_metrics: dict[str, Any] = {}
         extra_metric_counts: dict[str, int] = {}
         patch_size = batch[0]
@@ -257,12 +260,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 loss_val = get_local_tensor(loss.detach())
                 total_batch_loss += loss_val
 
-                # Skip bad batches
-                if torch.isnan(loss).any() or torch.isinf(loss).any():
-                    logger.warning(
-                        f"NaN or Inf detected in loss at microbatch {microbatch_idx}, stopping training for this batch."
-                    )
-                    print(f"rank {get_local_rank()} has nan or inf")
+                total_nonfinite += (~torch.isfinite(loss.detach())).any().float()
 
                 loss.backward()
 
@@ -273,6 +271,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             f"train/{self.total_loss_name}",
             total_batch_loss,
             ReduceType.mean,
+        )
+        self.trainer.record_metric(
+            "train/nonfinite_loss_microbatches", total_nonfinite, ReduceType.sum
         )
         self.log_accumulated_extra_metrics(
             accumulated_extra_metrics, extra_metric_counts

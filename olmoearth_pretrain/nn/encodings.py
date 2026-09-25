@@ -12,6 +12,7 @@ They cover the following:
 import math
 import warnings
 from enum import StrEnum
+from typing import Any
 
 import numpy as np
 import torch
@@ -91,6 +92,17 @@ _DAYS_BEFORE_MONTH = torch.tensor(
     [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334],
     dtype=torch.float32,
 )
+# Per-device copies: re-copying the table host->device on every call was a pageable
+# copy that synchronised the stream once per forward.
+_DAYS_BEFORE_MONTH_BY_DEVICE: dict[torch.device, torch.Tensor] = {}
+
+
+def _days_before_month(device: torch.device) -> torch.Tensor:
+    table = _DAYS_BEFORE_MONTH_BY_DEVICE.get(device)
+    if table is None:
+        table = _DAYS_BEFORE_MONTH.to(device)
+        _DAYS_BEFORE_MONTH_BY_DEVICE[device] = table
+    return table
 
 
 def timestamps_to_days(
@@ -121,7 +133,7 @@ def timestamps_to_days(
     day = timestamps[..., 0].to(torch.float32)
     month = timestamps[..., 1].to(torch.long)
     year = timestamps[..., 2].to(torch.float32)
-    offsets = _DAYS_BEFORE_MONTH.to(timestamps.device)[month]
+    offsets = _days_before_month(timestamps.device)[month]
     return (year - anchor_year) * 365.25 + offsets + (day - 1.0)
 
 
@@ -454,7 +466,7 @@ def init_3d_mixed_rope_freqs(
     return torch.stack(freqs_per_axis, dim=0)  # (3, H, D/2)
 
 
-def apply_3d_mixed_rope(
+def _apply_3d_mixed_rope_eager(
     x: torch.Tensor,
     positions: torch.Tensor,
     freqs: torch.Tensor,
@@ -608,6 +620,52 @@ def apply_3d_mixed_rope(
         return out * gate
     head, tail = out.split([extent_start, n_seq - extent_start], dim=seq_dim)
     return torch.cat([head, tail * gate], dim=seq_dim)
+
+
+_USE_COMPILED_MIXED_ROPE = False
+_COMPILED_MIXED_ROPE: Any = None
+
+
+def use_compiled_mixed_rope(enabled: bool = True) -> None:
+    """Route :func:`apply_3d_mixed_rope` through ``torch.compile`` (process-wide).
+
+    The eager op is dozens of small elementwise kernels per call (fp32 angles, cos,
+    sin, repeat-interleave, casts, rotation, range gates) run for every query and key
+    in every block; profiling put that at roughly half of the joint arms' GPU time and
+    most of their kernel launches. Compiling this ONE pure function fuses them, with
+    dynamic shapes so the varying sequence lengths do not recompile per batch. Opt-in
+    because the whole-model compile once hurt training; the model otherwise runs
+    eagerly.
+    """
+    global _USE_COMPILED_MIXED_ROPE, _COMPILED_MIXED_ROPE
+    _USE_COMPILED_MIXED_ROPE = enabled
+    if enabled and _COMPILED_MIXED_ROPE is None:
+        _COMPILED_MIXED_ROPE = torch.compile(_apply_3d_mixed_rope_eager, dynamic=True)
+
+
+def apply_3d_mixed_rope(
+    x: torch.Tensor,
+    positions: torch.Tensor,
+    freqs: torch.Tensor,
+    extent: torch.Tensor | None = None,
+    spatial_extent: torch.Tensor | None = None,
+    extent_start: int = 0,
+) -> torch.Tensor:
+    """Apply RoPE-Mixed; see :func:`_apply_3d_mixed_rope_eager` for the semantics.
+
+    Dispatches to the compiled version when :func:`use_compiled_mixed_rope` is on.
+    """
+    fn = (
+        _COMPILED_MIXED_ROPE if _USE_COMPILED_MIXED_ROPE else _apply_3d_mixed_rope_eager
+    )
+    return fn(
+        x,
+        positions,
+        freqs,
+        extent=extent,
+        spatial_extent=spatial_extent,
+        extent_start=extent_start,
+    )
 
 
 def init_2d_mixed_rope_freqs(

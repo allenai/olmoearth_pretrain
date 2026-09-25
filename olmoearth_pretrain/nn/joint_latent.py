@@ -36,7 +36,7 @@ from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.nn.attention import Block, Mlp
-from olmoearth_pretrain.nn.encodings import PositionEncoding
+from olmoearth_pretrain.nn.encodings import PositionEncoding, use_compiled_mixed_rope
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +201,7 @@ class JointLatentTransformer(nn.Module):
         eval_latent_stride: int = 1,
         latent_spatial_range: bool = False,
         token_mlp_ratio: float | None = None,
+        compile_rope: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -274,8 +275,16 @@ class JointLatentTransformer(nn.Module):
                 many tokens and a heavy one for the few latents, as in CoLT5 (Ainslie et
                 al. 2023). At ratio 1 a token's per-block linear cost drops from
                 ``12 d^2`` to ``6 d^2``. None = one shared MLP for everything.
+            compile_rope: Route the mixed-RoPE op through ``torch.compile``
+                (:func:`~olmoearth_pretrain.nn.encodings.use_compiled_mixed_rope`); a
+                process-wide switch, set when this module is built. Fuses the many
+                small rotary kernels per attention call; numerics unchanged up to
+                floating-point reassociation.
         """
         super().__init__()
+        if compile_rope:
+            use_compiled_mixed_rope(True)
+        self.compile_rope = compile_rope
         if not PositionEncoding.is_rope(position_encoding):
             raise ValueError(
                 "JointLatentTransformer needs a RoPE position_encoding: latents are "
@@ -725,6 +734,7 @@ class JointLatentConfig(Config):
             (sinc-gated row/col pairs), so latents know their stride.
         token_mlp_ratio: A separate, lighter MLP for the tokens (CoLT5-style); the
             latents keep the full ``mlp_ratio`` MLP. None = shared MLP.
+        compile_rope: ``torch.compile`` the mixed-RoPE op (process-wide switch).
     """
 
     register_dim: int
@@ -742,6 +752,7 @@ class JointLatentConfig(Config):
     eval_latent_stride: int = 1
     latent_spatial_range: bool = False
     token_mlp_ratio: float | None = None
+    compile_rope: bool = False
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -822,4 +833,5 @@ class JointLatentConfig(Config):
             eval_latent_stride=self.eval_latent_stride,
             latent_spatial_range=self.latent_spatial_range,
             token_mlp_ratio=self.token_mlp_ratio,
+            compile_rope=self.compile_rope,
         )

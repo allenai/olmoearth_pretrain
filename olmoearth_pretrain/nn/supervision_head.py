@@ -272,11 +272,10 @@ def _compute_per_modality_losses(
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
             continue
 
+        # No early exit on an all-missing target (that needed a host sync): the losses
+        # below are masked means, which give 0 with zero gradients when nothing is
+        # valid -- the same value and gradient as the old ``0 * pred.sum()``.
         valid_mask = _build_valid_mask(raw_target)
-
-        if not valid_mask.any():
-            per_modality_losses[name] = (0 * pred.sum()).to(dtype)
-            continue
 
         if cfg.task_type == SupervisionTaskType.CLASSIFICATION:
             class_values = supervision_head.get_class_values(name)
@@ -333,6 +332,18 @@ def compute_supervision_loss(
     return total_loss, per_modality_losses
 
 
+def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
+    """Mean of ``values`` over ``mask`` (same shape) without boolean indexing.
+
+    Equal to ``values[mask].mean()`` up to summation order, and 0 (not NaN) when the
+    mask is empty. Masked-out entries are zeroed with ``where`` first so a non-finite
+    value there cannot leak into the sum or the gradient.
+    """
+    maskf = mask.to(values.dtype)
+    total = torch.where(mask, values, torch.zeros_like(values)).sum()
+    return total / maskf.sum().clamp(min=1.0)
+
+
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
@@ -355,9 +366,13 @@ def _classification_loss(
     distances = (target_vals.unsqueeze(-1) - class_values).abs()
     target_indices = distances.argmin(dim=-1)  # [B, H, W]
 
-    pred_flat = pred[valid_mask]  # [N, num_classes]
-    target_flat = target_indices[valid_mask]  # [N]
-    return F.cross_entropy(pred_flat.float(), target_flat).to(pred.dtype)
+    num_classes = pred.shape[-1]
+    per_pixel = F.cross_entropy(
+        pred.float().reshape(-1, num_classes),
+        target_indices.reshape(-1),
+        reduction="none",
+    ).reshape(target_indices.shape)
+    return _masked_mean(per_pixel, valid_mask).to(pred.dtype)
 
 
 def _binary_classification_loss(
@@ -376,13 +391,19 @@ def _binary_classification_loss(
     """
     # pred, raw_target: [B, H, W, T, C]; valid_mask: [B, H, W, T]
     valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
+    # Missing targets are zeroed before the loss so they stay finite; they are then
+    # excluded by the masked mean.
+    safe_target = torch.where(
+        valid_expanded,
+        raw_target.float(),
+        torch.zeros_like(raw_target, dtype=torch.float32),
+    )
 
     if not pos_weight:
-        pred_flat = pred[valid_expanded]
-        target_flat = raw_target[valid_expanded]
-        return F.binary_cross_entropy_with_logits(
-            pred_flat.float(), target_flat.float()
-        ).to(pred.dtype)
+        elementwise = F.binary_cross_entropy_with_logits(
+            pred.float(), safe_target, reduction="none"
+        )
+        return _masked_mean(elementwise, valid_expanded).to(pred.dtype)
 
     # Per-channel positive rate from the batch's valid pixels.
     valid_mask_f = valid_mask.float().unsqueeze(-1)  # [B, H, W, T, 1]
@@ -393,11 +414,11 @@ def _binary_classification_loss(
 
     elementwise_loss = F.binary_cross_entropy_with_logits(
         pred.float(),
-        raw_target.float(),
+        safe_target,
         pos_weight=pos_weight_tensor,
         reduction="none",
     )  # [B, H, W, T, C]
-    return elementwise_loss[valid_expanded].mean().to(pred.dtype)
+    return _masked_mean(elementwise_loss, valid_expanded).to(pred.dtype)
 
 
 def _regression_loss(
@@ -422,10 +443,14 @@ def _regression_loss(
     """
     if not norm_pix_loss:
         valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
-        pred_flat = pred[valid_expanded]
-        target_flat = raw_target[valid_expanded]
+        safe_target = torch.where(
+            valid_expanded,
+            raw_target.float(),
+            torch.zeros_like(raw_target, dtype=torch.float32),
+        )
         loss_fn = F.l1_loss if regression_loss_type == "l1" else F.mse_loss
-        return loss_fn(pred_flat.float(), target_flat.float()).to(pred.dtype)
+        elementwise = loss_fn(pred.float(), safe_target, reduction="none")
+        return _masked_mean(elementwise, valid_expanded).to(pred.dtype)
 
     b, h, w, t, c = pred.shape
     mps = max_patch_size
@@ -455,4 +480,4 @@ def _regression_loss(
     valid_full = valid_p_c.expand_as(pred_p)
     diff = pred_p.float() - target_normalized
     elementwise = diff.abs() if regression_loss_type == "l1" else diff * diff
-    return elementwise[valid_full].mean().to(pred.dtype)
+    return _masked_mean(elementwise, valid_full).to(pred.dtype)

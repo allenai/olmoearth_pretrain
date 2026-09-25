@@ -388,10 +388,9 @@ class MultiModalPatchEmbeddings(nn.Module):
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
                     if self.random_band_dropout:
-                        rate = (
-                            torch.rand(1, device=inp_data.device).item()
-                            * self.band_dropout_rate
-                        )
+                        # Drawn on the CPU: a GPU draw + .item() synchronised the
+                        # stream once per band set per forward.
+                        rate = torch.rand(1).item() * self.band_dropout_rate
                     else:
                         rate = self.band_dropout_rate
                     inp_data = self._apply_band_dropout(inp_data, rate)
@@ -2393,8 +2392,11 @@ class Encoder(FlexiVitBase):
         )
         # can't set value on leaf variable
         out = masked_tokens.clone()
-        # put tokens in full masked tensor (at the first N positions in every row)
-        out[full_mask] = x[mask]
+        # Put the kept tokens at the first N positions of every row: those positions
+        # are exactly where ``full_mask`` is True, so a slice + where is the boolean
+        # assignment ``out[full_mask] = x[mask]`` without its host sync.
+        n_kept = x.shape[1]
+        out[:, :n_kept] = torch.where(mask.unsqueeze(-1), x, out[:, :n_kept])
         # then move them to their original positions
         out = out.scatter(1, indices[:, :, None].expand_as(out), out)
         full_mask = full_mask.scatter(1, indices.expand_as(full_mask), full_mask)
