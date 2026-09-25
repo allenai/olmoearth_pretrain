@@ -85,9 +85,9 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     return config
 
 
-def build_trainer_config(common: CommonComponents):
-    """The pixel-latent arm's evals, re-importing THIS module."""
-    return _pixlat_trainer_config(common, module_path=MODULE_PATH)
+def build_trainer_config(common: CommonComponents, module_path: str = MODULE_PATH):
+    """The pixel-latent arm's evals; sibling arms pass their own ``module_path``."""
+    return _pixlat_trainer_config(common, module_path=module_path)
 
 
 def run() -> None:
