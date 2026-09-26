@@ -23,18 +23,19 @@ Beaker launch:
 """
 
 import gc
+import importlib.util
 import logging
 import os
 import re
 import sys
 import time
 from functools import partial
+from pathlib import Path
 from types import ModuleType
 from typing import Any, cast
 
 import torch
 from beaker.types import BeakerWorkload
-from olmo_core.distributed.checkpoint import load_model_and_optim_state
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train import prepare_training_environment, teardown_training_environment
 from olmo_core.train.callbacks import (
@@ -98,6 +99,25 @@ def discover_checkpoints(
     return step_dirs
 
 
+def load_checkpoint_weights(step_path: str, model: torch.nn.Module) -> None:
+    """Load a step dir's weights into ``model``, under current or legacy names.
+
+    Delegates to the v1.3 converter's loader, which looks every parameter up
+    under its current name or the ``gabi/perceiver`` training-branch name it was
+    saved under, so the raw v1.3 training checkpoints load without converting
+    each step on disk first.
+    """
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "scripts/official/v1_3/convert_legacy_checkpoint.py"
+    )
+    spec = importlib.util.spec_from_file_location("convert_legacy_checkpoint", path)
+    assert spec is not None and spec.loader is not None
+    converter = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(converter)
+    converter._load_weights(Path(step_path), model)
+
+
 def evaluate_checkpoints(
     config: OlmoEarthEvaluateConfig,
     checkpoint_dir: str,
@@ -154,9 +174,7 @@ def evaluate_checkpoints(
     for step_num, step_path in checkpoints:
         logger.info(f"=== Evaluating checkpoint step {step_num}: {step_path} ===")
 
-        # Load model weights from the distributed checkpoint
-        train_module_dir = os.path.join(step_path, "model_and_optim")
-        load_model_and_optim_state(train_module_dir, model)
+        load_checkpoint_weights(step_path, model)
         model.to(device)
 
         for evaluator in eval_callback.evaluators:

@@ -19,6 +19,7 @@ from .pastis_dataset import PASTISRDataset
 from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
 from .sbd_dataset import SBDDataset
+from .swisscrop_dataset import SwissCropDataset
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,18 @@ def get_eval_dataset(
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+        )
+    elif eval_dataset.startswith("swisscrop"):
+        # "swisscrop" = 64x64 quadrants, "swisscrop128" = whole cubes; LOYO fold via kwargs (default S5).
+        return SwissCropDataset(
+            path_to_processed=paths.SWISSCROP_DIR,
+            split=split,
+            fold=kwargs.get("fold", "S5"),
+            tile_size=128 if "128" in eval_dataset else 64,
+            label_fraction=label_fraction,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            input_modalities=input_modalities,
         )
     elif eval_dataset in ("pastis", "pastis128"):
         pastis_kwargs = {
