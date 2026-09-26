@@ -206,6 +206,10 @@ def build_launch_config(
                 name="LOAD_ARCH_FROM_CHECKPOINT", value=load_arch_from_checkpoint
             )
         )
+    # Propagate the checkpoint-sweep results dir to the experiment if set
+    sweep_results_dir = os.environ.get("SWEEP_RESULTS_DIR")
+    if sweep_results_dir is not None:
+        env_vars.append(BeakerEnvVar(name="SWEEP_RESULTS_DIR", value=sweep_results_dir))
     # Propagate the embedding-evals flag to the experiment if set
     embedding_evals = os.environ.get("EMBEDDING_EVALS")
     if embedding_evals is not None:

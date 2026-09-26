@@ -24,6 +24,7 @@ Beaker launch:
 
 import gc
 import importlib.util
+import json
 import logging
 import os
 import re
@@ -171,6 +172,11 @@ def evaluate_checkpoints(
     if not isinstance(eval_callback, DownstreamEvaluatorCallback):
         raise ValueError("downstream_evaluator callback not found or disabled")
 
+    # With SWEEP_RESULTS_DIR set, each (task, step) result is also written to
+    # {dir}/step{N}/{task}.json, and tasks that already have one are skipped, so a
+    # preempted or relaunched job only redoes the task it was on.
+    results_dir = os.environ.get("SWEEP_RESULTS_DIR")
+
     for step_num, step_path in checkpoints:
         logger.info(f"=== Evaluating checkpoint step {step_num}: {step_path} ===")
 
@@ -188,6 +194,16 @@ def evaluate_checkpoints(
                     f"  Skipping {evaluator.evaluation_name} (input requirements)"
                 )
                 continue
+            result_path = None
+            if results_dir is not None:
+                result_path = os.path.join(
+                    results_dir, f"step{step_num}", f"{evaluator.evaluation_name}.json"
+                )
+                if os.path.exists(result_path):
+                    logger.info(
+                        f"  Skipping {evaluator.evaluation_name} (done: {result_path})"
+                    )
+                    continue
 
             start_time = time.monotonic()
             result = evaluator.val()
@@ -232,6 +248,12 @@ def evaluate_checkpoints(
                 f"test={test_result.primary if test_result else 'N/A'} "
                 f"({eval_time:.1f}s)"
             )
+
+            if result_path is not None and get_rank() == 0:
+                os.makedirs(os.path.dirname(result_path), exist_ok=True)
+                with open(result_path + ".tmp", "w") as f:
+                    json.dump(metrics, f, default=float)
+                os.replace(result_path + ".tmp", result_path)
 
             if wandb_callback.enabled and get_rank() == 0:
                 wandb_callback.wandb.log(metrics)

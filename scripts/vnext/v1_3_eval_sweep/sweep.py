@@ -11,14 +11,14 @@ The model, train module and launch config are the release recipe
 harness can read the task set from it (``OE_LOOP_EVAL_FROM_TRAIN_CONFIG=1``); each
 Beaker job then picks its bundle with ``downstream_evaluator.tasks_to_run``.
 
-The task set is the union of every frozen-embedding catalog (``EVAL_TASKS``,
-``EMBEDDING_EVAL_TASKS``, ``EMBED_DIAG_TASKS``), the catalog tasks that are commented
-out or were removed (``REVIVED_TASKS``), and evals ported from unmerged branches
-(``PORTED_TASKS``). Every task probes the full 128-d student (the shipped
-embedding) and keeps its own hyperparameters; ``EVAL_TASKS`` additionally get
-``norm_stats_from_pretrained=True``, as ``full_eval_sweep.py`` passes for OlmoEarth
-checkpoint sweeps. Fine-tuning tasks are excluded: they train the encoder, so there
-is no fixed embedding to read.
+Every task runs the way the in-loop evals do: its own catalog config (patch size,
+normalization, probe), read from the full 128-d student (the shipped embedding). The
+task set is ``EVAL_TASKS`` + ``EMBED_DIAG_TASKS``, the catalog tasks that are
+commented out or were removed but still work (``REVIVED_TASKS``), the ported
+SwissCrop25 eval, and ``SIBLING_TASKS``: the datasets that only have per-pixel
+(patch size 1) embedding-product tasks (``EMBEDDING_EVAL_TASKS``), run instead with
+the config of their catalog sibling. Excluded: fine-tuning tasks (no fixed
+embedding to read) and burnrisk_8d_nbac (scores 0.0; disabled on main as failing).
 """
 
 import sys
@@ -40,10 +40,9 @@ from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod  # noqa: E402
 from olmoearth_pretrain.evals.metrics import EvalMetric  # noqa: E402
 from olmoearth_pretrain.internal.all_evals import (  # noqa: E402
+    AEF_SUPPLEMENTAL_DATASETS,
     EMBED_DIAG_TASKS,
-    EMBEDDING_EVAL_TASKS,
     EVAL_TASKS,
-    _pastis_ps1_task,
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents  # noqa: E402
 from olmoearth_pretrain.nn.pooling import PoolingType  # noqa: E402
@@ -57,25 +56,6 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (  # noqa: E40
 
 # Catalog tasks disabled on main, restored with their last committed configs.
 REVIVED_TASKS = {
-    # Commented out in all_evals.py ("Remove failing eval", a77e4d2f9).
-    "burnrisk_8d_nbac": DownstreamTaskConfig(
-        dataset="burnrisk_8d_nbac",
-        embedding_batch_size=32,
-        probe_batch_size=16,
-        patch_size=5,
-        num_workers=4,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
-        probe_lr=0.0001,
-        eval_interval=Duration.epochs(10),
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        eval_mode=EvalMode.LINEAR_PROBE,
-        use_dice_loss=True,
-        primary_metric=EvalMetric.CLASS_F1,
-        primary_metric_class=1,
-    ),
     # Commented out in all_evals.py for OOMs (4bdaeb598).
     "oil_spill_detection": DownstreamTaskConfig(
         dataset="oil_spill_detection",
@@ -159,38 +139,55 @@ PORTED_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
-    # PLANTEUR (PASTIS2 on the French overseas territories), calendar-2019 S2 probe:
-    # the v1.3 report's Table 4 task (piperw/bg8void-eval-v2, 20e949f4).
-    "planteur_2019_probe_sentinel2": replace(
-        _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=16),
-        dataset="pastis2_drom_bg8void_2019_s2",
+}
+
+_S1_S2_LANDSAT = [
+    Modality.SENTINEL1.name,
+    Modality.SENTINEL2_L2A.name,
+    Modality.LANDSAT.name,
+]
+# Datasets whose only tasks are the per-pixel embedding-product ones, each run with
+# the catalog config of the dataset it re-exports (same native size, patch size 4).
+SIBLING_TASKS = {
+    # Year-aligned re-exports of the AEF datasets (split-7): S1+S2+Landsat, calendar year.
+    **{
+        f"{name}_year_aligned_sentinel1_sentinel2_landsat": replace(
+            EVAL_TASKS[name],
+            dataset=f"{name}_year_aligned",
+            input_modalities=_S1_S2_LANDSAT,
+        )
+        for name in AEF_SUPPLEMENTAL_DATASETS
+    },
+    # PASTIS re-exported to mirror the pretraining data (split-5).
+    "pastis_rslearn_sentinel2": replace(
+        EVAL_TASKS["pastis128_sentinel2"], dataset="pastis_rslearn"
+    ),
+    "pastis_rslearn_sentinel1_sentinel2": replace(
+        EVAL_TASKS["pastis128_sentinel1_sentinel2"], dataset="pastis_rslearn"
+    ),
+    "pastis_year_aligned_sentinel1_sentinel2_landsat": replace(
+        EVAL_TASKS["pastis128_sentinel1_sentinel2"],
+        dataset="pastis_year_aligned",
+        input_modalities=_S1_S2_LANDSAT,
+    ),
+    # PLANTEUR (PASTIS2 on the French overseas territories), calendar-2019 S2: the
+    # v1.3 report's Table 4 dataset (piperw/bg8void-eval-v2, 20e949f4).
+    "planteur_2019_sentinel2": replace(
+        EVAL_TASKS["pastis128_sentinel2"], dataset="pastis2_drom_bg8void_2019_s2"
     ),
 }
 
-
-def _student128(tasks: dict, pretrained_norm: bool) -> dict:
-    """Read every task from the full 128-d student, optionally with pretrain norm."""
-    out = {}
-    for name, task in tasks.items():
-        task = replace(task, eval_on_student_registers=True, eval_student_dim=None)
-        if pretrained_norm:
-            task = replace(task, norm_stats_from_pretrained=True)
-        out[name] = task
-    return out
-
-
-_CATALOGS = [
-    _student128(EVAL_TASKS, pretrained_norm=True),
-    _student128(EMBEDDING_EVAL_TASKS, pretrained_norm=False),
-    _student128(EMBED_DIAG_TASKS, pretrained_norm=False),
-    _student128(REVIVED_TASKS, pretrained_norm=False),
-    _student128(PORTED_TASKS, pretrained_norm=False),
-]
+_CATALOGS = [EVAL_TASKS, EMBED_DIAG_TASKS, REVIVED_TASKS, PORTED_TASKS, SIBLING_TASKS]
 SWEEP_TASKS: dict[str, DownstreamTaskConfig] = {}
 for _catalog in _CATALOGS:
     _clash = SWEEP_TASKS.keys() & _catalog.keys()
     assert not _clash, f"task names defined twice: {sorted(_clash)}"
-    SWEEP_TASKS.update(_catalog)
+    SWEEP_TASKS.update(
+        {
+            name: replace(task, eval_on_student_registers=True, eval_student_dim=None)
+            for name, task in _catalog.items()
+        }
+    )
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
