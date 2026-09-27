@@ -8,7 +8,9 @@ skipped on restart, and ``publish.py`` merges every result into one W&B run.
 Bundles are packed longest-first to about ``BUNDLE_SECONDS`` from the runtimes
 measured on step 640000 (``phase_a_seconds.json``; guesses for the rest). Tasks
 with no clean run on record get bundles of their own, so a crash in one of them
-cannot stop the tested tasks.
+cannot stop the tested tasks. ``HEAVY_TASKS`` (about half the per-checkpoint cost)
+run on a coarser step grid than the rest (joer, 2026-09-27): launch them with
+``--group heavy``, everything else with ``--group light``.
 
     python scripts/vnext/v1_3_eval_sweep/launch.py --steps 640000 --state-dir DIR --dry-run
 
@@ -32,8 +34,22 @@ CHECKPOINT_DIR = (
 RESULTS_DIR = "/weka/dfive-default/olmoearth_pretrain/checkpoints/joer/v13_eval_sweep"
 MODULE_PATH = "scripts/vnext/v1_3_eval_sweep/sweep.py"
 RUN_PREFIX = "v13evals"
-BUNDLE_SECONDS = 4 * 3600
+BUNDLE_SECONDS = (
+    8 * 3600
+)  # packed from mostly cold-read times; warm runs are far shorter
 DEFAULT_SECONDS = 1800
+HEAVY_TASKS = {
+    "gb2_flair2",
+    "pretrain_cdl_probe_sentinel2_l2a",
+    "pretrain_cdl_probe_geo_sentinel2_l2a",
+    "descals",
+    "pastis_year_aligned_sentinel1_sentinel2_landsat",
+    "lfmc_woody_3k_s1_s2",
+    "us_trees",
+    "glance_year_aligned_sentinel1_sentinel2_landsat",
+    "lcmap_lu_year_aligned_sentinel1_sentinel2_landsat",
+    "us_trees_year_aligned_sentinel1_sentinel2_landsat",
+}
 MEASURED_SECONDS = json.loads(
     (Path(__file__).resolve().parent / "phase_a_seconds.json").read_text()
 )
@@ -89,6 +105,7 @@ def main() -> None:
     """Pack bundles and launch every (bundle, step) job not yet in the ledger."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--steps", required=True, help="comma-separated steps")
+    parser.add_argument("--group", choices=["light", "heavy", "all"], required=True)
     parser.add_argument("--bundles", default=None, help="comma-separated bundle ids")
     parser.add_argument("--clusters", default="ai2/saturn", help="comma-separated")
     parser.add_argument("--priority", default="high")
@@ -102,11 +119,17 @@ def main() -> None:
     from olmoearth_pretrain.internal.all_evals import load_user_module
 
     tasks = sorted(load_user_module(MODULE_PATH).SWEEP_TASKS)
+    assert HEAVY_TASKS <= set(tasks), sorted(HEAVY_TASKS - set(tasks))
+    if args.group != "all":
+        tasks = [t for t in tasks if (t in HEAVY_TASKS) == (args.group == "heavy")]
+    prefix = {"light": "l", "heavy": "h", "all": "b"}[args.group]
     bundles = {
-        **pack([t for t in tasks if t in MEASURED_SECONDS], "b"),
-        **pack([t for t in tasks if t not in MEASURED_SECONDS], "u"),
+        **pack([t for t in tasks if t in MEASURED_SECONDS], prefix),
+        **pack([t for t in tasks if t not in MEASURED_SECONDS], "u" + prefix),
     }
-    (args.state_dir / "bundles.json").write_text(json.dumps(bundles, indent=1) + "\n")
+    (args.state_dir / f"bundles_{args.group}.json").write_text(
+        json.dumps(bundles, indent=1) + "\n"
+    )
     total = 0
     for name, names in bundles.items():
         seconds = sum(MEASURED_SECONDS.get(t, DEFAULT_SECONDS) for t in names)
