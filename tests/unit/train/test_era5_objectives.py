@@ -8,11 +8,16 @@ Covers:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
+import sys
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import torch
@@ -23,7 +28,11 @@ from torch import Tensor, nn
 import olmoearth_pretrain.nn.era5_encoder as era5_encoder_mod
 import olmoearth_pretrain.train.train_module.era5_multiobjective as era5_multiobjective
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
-from olmoearth_pretrain.data.multi_task_era5_dataset import Era5SupervisedBatch
+from olmoearth_pretrain.data.multi_task_era5_dataset import (
+    Era5SslBatch,
+    Era5SupervisedBatch,
+)
+from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
@@ -42,6 +51,7 @@ from olmoearth_pretrain.train.train_module.era5_multiobjective import (
     ReconstructionObjectiveConfig,
     SupervisedObjectiveConfig,
     SupervisedTaskConfig,
+    _instance_infonce,
     _parse_recon_mode,
 )
 
@@ -622,6 +632,172 @@ class TestMaskingInvariants:
         assert (masks.raw_loss_mask & ~band_any).sum() == 0
         assert masks.raw_loss_mask.sum() < band_any.sum()
 
+    @pytest.mark.parametrize(
+        "policy",
+        [
+            SwtHaloSpanMaskPolicy(),
+            # halo75: the v1.3.4 visibility-matched rung.
+            SwtHaloSpanMaskPolicy(
+                num_spans=(4, 10), span_days=(30, 120), num_variables=(9, 14)
+            ),
+        ],
+    )
+    def test_halo_span_inside_matches_reference_loop(self, policy):
+        """Vectorized "inside" sampler matches the original loop in distribution."""
+        n = 512
+        torch.manual_seed(0)
+        masks = corrupt_era5_swt(
+            n,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("cpu"),
+            policy,
+        )
+        torch.manual_seed(0)
+        ref_band, ref_raw = _reference_halo_span_loop(
+            n, T, V, self.SUPPORTS, SWT_BUFFER, policy
+        )
+        band4d = masks.band_mask.view(n, T, V, self.N_BANDS)
+        got_raw = masks.raw_loss_mask[:, SWT_BUFFER:].float().mean()
+        ref_raw_frac = ref_raw[:, SWT_BUFFER:].float().mean()
+        assert abs(got_raw - ref_raw_frac) < 0.02
+        # Per-band fractions (halo ordering) match the loop too.
+        torch.testing.assert_close(
+            band4d[:, SWT_BUFFER:].float().mean(dim=(0, 1, 2)),
+            ref_band[:, SWT_BUFFER:].float().mean(dim=(0, 1, 2)),
+            atol=0.02,
+            rtol=0,
+        )
+
+    @pytest.mark.parametrize("placement", ["inside", "pin"])
+    def test_halo_span_has_no_host_sync(self, placement):
+        """Sampling runs on the meta device, so no value is read back to host."""
+        masks = corrupt_era5_swt(
+            B,
+            T,
+            V,
+            self.N_BANDS,
+            self.SUPPORTS,
+            SWT_BUFFER,
+            torch.device("meta"),
+            SwtHaloSpanMaskPolicy(placement=placement),
+        )
+        assert masks.band_mask.shape == (B, T, V * self.N_BANDS)
+        assert masks.raw_loss_mask.shape == (B, T, V)
+
+    @pytest.mark.parametrize("target_start", [0, SWT_BUFFER])
+    def test_halo_span_pin_keeps_full_contiguous_length(self, target_start):
+        """Pinned spans are one contiguous run of exactly L days in the window."""
+        span = 60
+        torch.manual_seed(0)
+        masks = corrupt_era5_swt(
+            2000,
+            T,
+            1,
+            self.N_BANDS,
+            self.SUPPORTS,
+            target_start,
+            torch.device("cpu"),
+            SwtHaloSpanMaskPolicy(
+                num_spans=(1, 1),
+                span_days=(span, span),
+                num_variables=(1, 1),
+                placement="pin",
+            ),
+        )
+        raw = masks.raw_loss_mask[:, :, 0]  # [N, T]
+        assert (raw.sum(dim=1) == span).all()
+        assert not raw[:, :target_start].any()
+        rising = (raw[:, 1:] & ~raw[:, :-1]).sum(dim=1) + raw[:, 0].long()
+        assert (rising == 1).all()
+        # Both edges are reached: flush-left and flush-right spans occur.
+        assert raw[:, target_start].any() and raw[:, -1].any()
+
+    def test_halo_span_pin_coverage_profile(self):
+        """Pin: edge days match interior coverage, with a <2x bump L days wide.
+
+        One span of length L on ``[0, T)`` with starts uniform over
+        ``[-L+1, T-1]`` (N = T + L - 1 draws): each edge-flush position gets L
+        draws, so every day is covered with probability L/N except days just
+        inside an edge, which peak at (2L - 1)/N one span length in. "inside"
+        instead covers the edge day with probability 1/(T - L + 1).
+        """
+        span, n = 60, 40_000
+
+        def coverage(placement: str) -> Tensor:
+            torch.manual_seed(0)
+            masks = corrupt_era5_swt(
+                n,
+                T,
+                1,
+                self.N_BANDS,
+                self.SUPPORTS,
+                0,
+                torch.device("cpu"),
+                SwtHaloSpanMaskPolicy(
+                    num_spans=(1, 1),
+                    span_days=(span, span),
+                    num_variables=(1, 1),
+                    placement=placement,
+                ),
+            )
+            return masks.raw_loss_mask[:, :, 0].float().mean(dim=0)
+
+        pin = coverage("pin")
+        interior = pin[2 * span : T - 2 * span].mean()
+        assert abs(interior - span / (T + span - 1)) < 0.005
+        for day in (0, T - 1):
+            assert abs(pin[day] / interior - 1) < 0.1
+        for day in (span - 1, T - span):
+            assert abs(pin[day] / interior - (2 * span - 1) / span) < 0.1
+        inside = coverage("inside")
+        assert inside[0] / inside[2 * span : T - 2 * span].mean() < 0.05
+
+    def test_halo_span_invalid_placement_raises(self):
+        with pytest.raises(ValueError, match="placement"):
+            corrupt_era5_swt(
+                B,
+                T,
+                V,
+                self.N_BANDS,
+                self.SUPPORTS,
+                SWT_BUFFER,
+                torch.device("cpu"),
+                SwtHaloSpanMaskPolicy(placement="clip"),
+            )
+
+
+def _reference_halo_span_loop(
+    b: int,
+    t: int,
+    v: int,
+    supports: list[int],
+    target_start: int,
+    policy: SwtHaloSpanMaskPolicy,
+) -> tuple[Tensor, Tensor]:
+    """Original per-sample, per-span "inside" sampler, kept as a distribution oracle."""
+
+    def randint(lo: int, hi: int) -> int:
+        return lo if hi <= lo else int(torch.randint(lo, hi + 1, (1,)))
+
+    band4d = torch.zeros(b, t, v, len(supports), dtype=torch.bool)
+    raw = torch.zeros(b, t, v, dtype=torch.bool)
+    window = t - target_start
+    nvar_hi = min(policy.num_variables[1], v)
+    for i in range(b):
+        for _ in range(randint(*policy.num_spans)):
+            length = min(randint(*policy.span_days), window)
+            start = randint(target_start, t - length)
+            end = start + length
+            var_idx = torch.randperm(v)[: randint(policy.num_variables[0], nvar_hi)]
+            raw[i, start:end][:, var_idx] = True
+            for s, support in enumerate(supports):
+                band4d[i, start : min(end + support - 1, t)][:, var_idx, s] = True
+    return band4d, raw
+
 
 class TestReconstructionConfigMerge:
     """The objective config must survive ``Config.merge`` (the launch path).
@@ -668,6 +844,17 @@ class TestReconstructionConfigMerge:
         assert policy.num_spans == (4, 10)
         assert policy.span_days == (30, 120)
         assert policy.num_variables == (9, 14)
+        assert policy.placement == "inside"
+        assert merged.model.reconstruction_objective.mask_buffer is False
+        merged = merged.merge(
+            [
+                "model.reconstruction_objective.span_placement=pin",
+                "model.reconstruction_objective.mask_buffer=True",
+            ]
+        )
+        recon = merged.model.reconstruction_objective
+        assert recon.build_mask_policy().placement == "pin"
+        assert recon.build().mask_buffer is True
 
     def test_merge_group_recon_mode_override(self):
         """Per-group loss gating is overridable from the CLI without code changes."""
@@ -1217,3 +1404,471 @@ class TestSwtInputNoDataHandling:
             if p.grad is not None
         )
         assert enc_grads > 0
+
+
+# ===================================================================
+# Pooled instance contrastive objective
+# ===================================================================
+
+
+def _contrastive_model(
+    *, supervised: bool = False, pooling: str = "mean", **overrides: Any
+) -> era5_multiobjective.Era5MultiObjectiveModel:
+    settings: dict[str, Any] = dict(
+        decoder=_small_decoder_cfg(),
+        raw_lambda=1.0,
+        swt_lambda=0.0,
+        mask_policy="swt_halo_span",
+        contrastive_lambda=0.1,
+        contrastive_projector_hidden_dim=D,
+        contrastive_projector_output_dim=16,
+    )
+    settings.update(overrides)
+    return Era5MultiObjectiveModelConfig(
+        encoder_config=_small_encoder_cfg(
+            is_swt_input=True, swt_input_stats_path=SWT_STATS_REL, pooling=pooling
+        ),
+        reconstruction_objective=ReconstructionObjectiveConfig(**settings),
+        supervised_objective=(
+            SupervisedObjectiveConfig(
+                tasks=[
+                    SupervisedTaskConfig(
+                        name="smoke_task", task_type="classification", num_classes=2
+                    )
+                ]
+            )
+            if supervised
+            else None
+        ),
+    ).build()
+
+
+class TestInstanceInfoNCE:
+    """Verify loss semantics, both gradient branches, and FP32 computation."""
+
+    def test_symmetric_reference_and_gradients(self):
+        from olmoearth_pretrain.train.loss import InfoNCELoss
+
+        a = torch.randn(B, 16, requires_grad=True)
+        b = torch.randn(B, 16, requires_grad=True)
+        loss, metrics = _instance_infonce(a, b, 0.2)
+        reference = InfoNCELoss(tau=0.2)
+        expected = (reference.compute(a, b) + reference.compute(b, a)) / 2
+        torch.testing.assert_close(loss, expected)
+        torch.testing.assert_close(loss, _instance_infonce(b, a, 0.2)[0])
+        loss.backward()
+        for x in (a, b):
+            assert torch.isfinite(x.grad).all() and x.grad.abs().sum() > 0
+        assert all(not value.requires_grad for value in metrics.values())
+        assert metrics["contrastive_batch_size"] == B
+
+    def test_pairing_and_uniform_logits(self):
+        embeddings = torch.eye(B)
+        paired, metrics = _instance_infonce(embeddings, embeddings, 0.1)
+        shuffled, _ = _instance_infonce(embeddings, embeddings.roll(1, 0), 0.1)
+        assert paired < shuffled
+        assert metrics["contrastive_accuracy"] == 1
+        uniform, _ = _instance_infonce(torch.ones(B, 8), torch.ones(B, 8), 0.1)
+        torch.testing.assert_close(uniform, torch.tensor(math.log(B)))
+
+    def test_autocast_and_zero_vectors(self):
+        a = torch.zeros(B, 16, dtype=torch.bfloat16, requires_grad=True)
+        b = torch.randn(B, 16, dtype=torch.bfloat16, requires_grad=True)
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            loss, metrics = _instance_infonce(a, b, 0.1)
+        expected, _ = _instance_infonce(a.float(), b.float(), 0.1)
+        assert loss.dtype == torch.float32
+        torch.testing.assert_close(loss, expected, rtol=0, atol=0)
+        assert all(torch.isfinite(value) for value in metrics.values())
+        loss.backward()
+        assert torch.isfinite(a.grad).all() and torch.isfinite(b.grad).all()
+
+
+class TestContrastiveConfiguration:
+    """Validate launch overrides and preserve disabled model compatibility."""
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"contrastive_lambda": -0.1},
+            {"contrastive_lambda": float("nan")},
+            {"contrastive_lambda": float("inf")},
+            {"contrastive_temperature": 0},
+            {"contrastive_temperature": float("nan")},
+            {"contrastive_temperature": float("inf")},
+            {"num_views": 0},
+            {"num_views": 3},
+            {"num_views": True},
+            {"contrastive_lambda": 0.1, "num_views": 1},
+            {"contrastive_lambda": 0.1, "contrastive_projector_hidden_dim": 0},
+            {"contrastive_lambda": 0.1, "contrastive_projector_output_dim": -1},
+        ],
+    )
+    def test_invalid_settings(self, settings):
+        with pytest.raises(ValueError):
+            ReconstructionObjectiveConfig(**settings).validate()
+
+    @pytest.mark.parametrize(
+        "pooling,pooled_dim", [("mean", D), ("cls_mean_concat", 2 * D)]
+    )
+    def test_projector_dimensions_registration_and_checkpoint(
+        self, pooling, pooled_dim
+    ):
+        model = _contrastive_model(pooling=pooling)
+        projector = model.objectives["reconstruction"].projector
+        assert isinstance(projector, Mlp)
+        assert projector.fc1.in_features == pooled_dim
+        assert projector.fc1.out_features == D
+        assert projector.fc2.out_features == 16
+        assert projector.drop1.p == projector.drop2.p == 0
+        optimizer = torch.optim.AdamW(model.parameters())
+        optimizer_params = {
+            id(p) for group in optimizer.param_groups for p in group["params"]
+        }
+        assert all(id(p) in optimizer_params for p in projector.parameters())
+        restored = _contrastive_model(pooling=pooling)
+        restored.load_state_dict(model.state_dict(), strict=True)
+        model.eval()
+        restored.eval()
+        batch = _make_batch()
+        with torch.no_grad():
+            first = model.encoder(batch.era5, batch.timestamps)["pooled"]
+            second = restored.encoder(batch.era5, batch.timestamps)["pooled"]
+        assert first.shape == (B, pooled_dim)
+        torch.testing.assert_close(first, second, atol=0, rtol=0)
+        torch.testing.assert_close(
+            projector(first), restored.objectives["reconstruction"].projector(second)
+        )
+
+    def test_zero_lambda_preserves_state_and_rng(self):
+        torch.manual_seed(97)
+        model = _contrastive_model(contrastive_lambda=0)
+        after_build = torch.get_rng_state()
+        torch.manual_seed(97)
+        direct = _contrastive_model(
+            contrastive_lambda=0, contrastive_use_projector=False
+        )
+        assert torch.equal(after_build, torch.get_rng_state())
+        direct.load_state_dict(model.state_dict(), strict=True)
+        assert not any("projector" in name for name in model.state_dict())
+        obj = model.objective_list[0]
+        assert obj.num_views == 1 and obj._module.projector is None
+        batch = _make_batch()
+        rng = torch.get_rng_state()
+        loss, metrics = obj.compute(model.encoder, batch)
+        loss.backward()
+        after_forward = torch.get_rng_state()
+        torch.set_rng_state(rng)
+        expected, original_metrics, _ = direct.objective_list[0]._compute_view(
+            direct.encoder, batch
+        )
+        expected.backward()
+        torch.testing.assert_close(loss, expected, rtol=0, atol=0)
+        assert torch.equal(after_forward, torch.get_rng_state())
+        for name, value in original_metrics.items():
+            torch.testing.assert_close(metrics[name], value, rtol=0, atol=0)
+        for (_, param), (_, reference) in zip(
+            model.named_parameters(), direct.named_parameters()
+        ):
+            torch.testing.assert_close(param.grad, reference.grad, rtol=0, atol=0)
+        assert not any("contrastive" in key for key in metrics)
+
+
+class TestContrastiveReconstruction:
+    """Shared two-view forwards, reconstruction averaging, and combined training."""
+
+    @pytest.mark.parametrize("coefficient,views", [(0.0, None), (0.0, 2), (0.1, None)])
+    def test_forward_counts_and_masks(self, monkeypatch, coefficient, views):
+        model = _contrastive_model(contrastive_lambda=coefficient, num_views=views)
+        obj = model.objective_list[0]
+        masker = Mock(wraps=era5_multiobjective.corrupt_era5_swt)
+        monkeypatch.setattr(era5_multiobjective, "corrupt_era5_swt", masker)
+        masks, decoder_calls = [], []
+        model.encoder.register_forward_pre_hook(
+            lambda module, args, kwargs: masks.append(
+                kwargs["corruption_mask"].clone()
+            ),
+            with_kwargs=True,
+        )
+        obj._module.decoder.register_forward_hook(lambda *args: decoder_calls.append(1))
+        _, metrics = obj.compute(model.encoder, _make_batch())
+        expected_views = 2 if coefficient > 0 or views == 2 else 1
+        assert masker.call_count == len(masks) == len(decoder_calls) == expected_views
+        assert metrics["reconstruction/num_views"] == expected_views
+        if expected_views == 2:
+            assert not torch.equal(masks[0], masks[1])
+        if coefficient == 0:
+            assert obj._module.projector is None
+
+    @pytest.mark.parametrize("coefficient", [0.0, 0.1, 0.7])
+    def test_loss_and_metric_averaging(self, monkeypatch, coefficient):
+        model = _contrastive_model(
+            contrastive_lambda=coefficient, contrastive_use_projector=False, num_views=2
+        )
+        obj = model.objective_list[0]
+        a, b = (
+            torch.randn(B, D, requires_grad=True),
+            torch.randn(B, D, requires_grad=True),
+        )
+        outputs = iter(
+            [
+                (
+                    torch.tensor(2.0),
+                    {"reconstruction/raw_loss": torch.tensor(2.0)},
+                    {"pooled": a},
+                ),
+                (
+                    torch.tensor(6.0),
+                    {"reconstruction/raw_loss": torch.tensor(6.0)},
+                    {"pooled": b},
+                ),
+            ]
+        )
+        monkeypatch.setattr(obj, "_compute_view", lambda *args: next(outputs))
+        loss, metrics = obj.compute(model.encoder, _make_batch())
+        info, _ = _instance_infonce(a, b, obj.contrastive_temperature)
+        torch.testing.assert_close(loss, 4 + coefficient * info)
+        assert (
+            metrics["reconstruction/raw_loss"]
+            == metrics["reconstruction/recon_loss"]
+            == 4
+        )
+        if coefficient:
+            torch.testing.assert_close(
+                metrics["reconstruction/contrastive_weighted_loss"], coefficient * info
+            )
+
+    @pytest.mark.parametrize("supervised", [False, True])
+    @pytest.mark.parametrize("projector", [False, True])
+    def test_training_backward(self, supervised, projector):
+        # Turn reconstruction weights off to isolate InfoNCE's encoder gradients.
+        model = _contrastive_model(
+            supervised=supervised,
+            contrastive_use_projector=projector,
+            raw_lambda=0,
+            swt_lambda=0,
+        )
+        batch = _make_batch()
+        if not supervised:
+            batch = Era5SslBatch(
+                era5=batch.era5,
+                timestamps=batch.timestamps,
+                valid_mask=batch.valid_mask,
+                task_name="ssl",
+            )
+        pooled_outputs, input_masks = [], []
+
+        def record_output(module, args, kwargs, output):
+            output["pooled"].retain_grad()
+            pooled_outputs.append(output["pooled"])
+            input_masks.append(kwargs.get("corruption_mask"))
+
+        handle = model.encoder.register_forward_hook(record_output, with_kwargs=True)
+        obj = model.objective_list[-1]
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            loss, metrics = obj.compute(model.encoder, batch)
+        assert loss.dtype == torch.float32 and torch.isfinite(loss)
+        loss.backward()
+        for pooled in pooled_outputs:
+            assert pooled.grad is not None and torch.isfinite(pooled.grad).all()
+            assert pooled.grad.abs().sum() > 0
+        assert any(
+            p.grad is not None and p.grad.abs().sum() > 0
+            for p in model.encoder.parameters()
+        )
+        if projector:
+            assert all(
+                p.grad is not None
+                and torch.isfinite(p.grad).all()
+                and p.grad.abs().sum() > 0
+                for p in obj._module.projector.parameters()
+            )
+        assert all(
+            torch.isfinite(value) and not value.requires_grad
+            for value in metrics.values()
+        )
+        # Exercise the normal combined A+B backward and A's clean-input pass.
+        if supervised:
+            model.zero_grad(set_to_none=True)
+            a_loss, _ = model.objective_list[0].compute(model.encoder, batch)
+            assert input_masks[-1] is None
+            b_loss, _ = obj.compute(model.encoder, batch)
+            (a_loss + b_loss * obj.weight).backward()
+        handle.remove()
+
+    def test_single_sample_rejected_before_forward(self, monkeypatch):
+        model = _contrastive_model()
+        obj = model.objective_list[0]
+        forward = Mock()
+        monkeypatch.setattr(obj, "_compute_view", forward)
+        with pytest.raises(ValueError, match="at least two samples"):
+            obj.compute(model.encoder, _make_batch().microbatch(0, 1))
+        forward.assert_not_called()
+
+    def test_train_batch_microbatch_weighting(self):
+        model = _contrastive_model(weight=2.5)
+        obj = model.objective_list[0]
+        batch = _make_batch()
+        record_metric = Mock()
+        harness = SimpleNamespace(
+            model=model,
+            objectives=[obj],
+            device=torch.device("cpu"),
+            _split_batch=lambda batch: [batch.microbatch(0, 2), batch.microbatch(2, 4)],
+            _to_device=lambda batch: batch,
+            _train_microbatch_context=lambda *args: nullcontext(),
+            _model_forward_context=nullcontext,
+            trainer=SimpleNamespace(record_metric=record_metric),
+        )
+        rng = torch.get_rng_state()
+        era5_multiobjective.MultiObjectiveEra5TrainModule.train_batch(harness, batch)
+        recorded = {call.args[0]: call.args[1] for call in record_metric.call_args_list}
+        assert recorded["train/reconstruction/contrastive_batch_size"] == 2
+        assert recorded["train/reconstruction/num_views"] == 2
+        torch.testing.assert_close(
+            recorded["train/reconstruction/loss"],
+            2.5
+            * (
+                recorded["train/reconstruction/recon_loss"]
+                + recorded["train/reconstruction/contrastive_weighted_loss"]
+            ),
+        )
+        # The train loop must scale the whole B loss once and average gradients.
+        actual_grads = {
+            name: p.grad.clone()
+            for name, p in model.named_parameters()
+            if p.grad is not None
+        }
+        model.zero_grad(set_to_none=True)
+        torch.set_rng_state(rng)
+        for microbatch in harness._split_batch(batch):
+            loss, _ = obj.compute(model.encoder, microbatch)
+            (loss * 2.5 / 2).backward()
+        for name, param in model.named_parameters():
+            if name in actual_grads:
+                torch.testing.assert_close(
+                    param.grad, actual_grads[name], atol=0, rtol=0
+                )
+
+    def test_compile_projector_and_loss(self, monkeypatch):
+        model = _contrastive_model()
+        module = model.objectives["reconstruction"]
+        decoder_compile, projector_compile = Mock(), Mock()
+        with monkeypatch.context() as patch:
+            patch.setattr(module.decoder, "apply_compile", decoder_compile)
+            patch.setattr(module.projector, "compile", projector_compile)
+            module.apply_compile()
+        decoder_compile.assert_called_once_with()
+        projector_compile.assert_called_once_with(dynamic=True)
+        # CPU Dynamo smoke; production CUDA/Inductor is exercised on the cluster.
+        module.projector.compile(backend="eager", dynamic=True)
+        compiled_loss = torch.compile(_instance_infonce, backend="eager")
+        a, b = module.projector(torch.randn(B, D)), module.projector(torch.randn(B, D))
+        eager, _ = _instance_infonce(a, b, 0.1)
+        traced, _ = compiled_loss(a, b, 0.1)
+        torch.testing.assert_close(eager, traced)
+        traced.backward()
+
+
+class TestBufferMasking:
+    """``mask_buffer`` moves the mask start to day 0 but never the loss start."""
+
+    @pytest.mark.parametrize("mask_buffer", [False, True])
+    def test_mask_start_and_metric(self, monkeypatch, mask_buffer):
+        model = _contrastive_model(contrastive_lambda=0.0, mask_buffer=mask_buffer)
+        obj = model.objective_list[0]
+        masker = Mock(wraps=era5_multiobjective.corrupt_era5_swt)
+        monkeypatch.setattr(era5_multiobjective, "corrupt_era5_swt", masker)
+        _, metrics = obj.compute(model.encoder, _make_batch())
+        assert masker.call_args.args[5] == (0 if mask_buffer else SWT_BUFFER)
+        key = "reconstruction/buffer_band_masked_fraction"
+        assert (key in metrics) is mask_buffer
+
+    def test_buffer_masks_are_never_scored(self, monkeypatch):
+        buffer_only = torch.zeros(B, T, V, dtype=torch.bool)
+        buffer_only[:, 10:SWT_BUFFER, :] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5_swt",
+            lambda *args: Era5CorruptionMasks(
+                band_mask=buffer_only.repeat_interleave(7, dim=-1),
+                raw_loss_mask=buffer_only,
+            ),
+        )
+        model = _contrastive_model(contrastive_lambda=0.0, mask_buffer=True)
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        assert metrics["reconstruction/raw_loss"] == 0
+        assert metrics["reconstruction/masked_fraction"] == 0
+        assert metrics["reconstruction/buffer_band_masked_fraction"] > 0
+
+
+@pytest.fixture
+def era5_launch_script(monkeypatch):
+    """Import the actual launcher without resolving datasets or submitting jobs."""
+    directory = _REPO_ROOT / "scripts/era5_supervised/v0"
+    monkeypatch.syspath_prepend(str(directory))
+    spec = importlib.util.spec_from_file_location(
+        "era5_launch_test", directory / "script.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_resolve_task_specs", lambda common: [])
+    return module
+
+
+class TestContrastiveLauncher:
+    """Exercise real common knobs through OmegaConf and the model builder."""
+
+    def test_merge_and_wiring(self, era5_launch_script):
+        script = era5_launch_script
+        common = script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        )
+        common = common.merge(
+            [
+                "recon_contrastive_lambda=0.25",
+                "recon_contrastive_temperature=0.3",
+                "recon_contrastive_use_projector=False",
+                "recon_contrastive_projector_hidden_dim=48",
+                "recon_contrastive_projector_output_dim=24",
+                "recon_num_views=2",
+                "recon_mask_policy=swt_halo_span",
+                "recon_span_placement=pin",
+                "recon_mask_buffer=True",
+            ]
+        )
+        cfg = script.build_model_config(common).merge([])
+        recon = cfg.reconstruction_objective
+        assert recon.mask_buffer is True
+        assert recon.build_mask_policy().placement == "pin"
+        assert recon.contrastive_lambda == 0.25
+        assert recon.contrastive_temperature == 0.3
+        assert recon.contrastive_use_projector is False
+        assert recon.contrastive_projector_hidden_dim == 48
+        assert recon.contrastive_projector_output_dim == 24
+        assert recon.num_views == 2
+        cfg = cfg.merge(["reconstruction_objective.contrastive_use_projector=True"])
+        assert cfg.reconstruction_objective.contrastive_use_projector is True
+
+    @pytest.mark.parametrize("reconstruction,microbatch", [(False, 4), (True, 1)])
+    def test_invalid_launcher_combination(
+        self, era5_launch_script, reconstruction, microbatch
+    ):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=reconstruction,
+            recon_contrastive_lambda=0.1,
+            rank_microbatch_size=microbatch,
+        )
+        with pytest.raises(
+            ValueError, match="enable_reconstruction|rank_microbatch_size"
+        ):
+            era5_launch_script.build_model_config(common)

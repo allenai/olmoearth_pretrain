@@ -11,7 +11,8 @@ Objectives implemented:
   regression over pooled encoder embeddings.
 * **B — Reconstruction** (`ReconstructionObjective`): corrupt the raw ERA5
   input, encode, decode via time-query cross-attention, and supervise with
-  Huber + band-normalized undecimated-SWT multiscale loss.
+  Huber + band-normalized undecimated-SWT multiscale loss, optionally combined
+  with pooled instance InfoNCE over two independently masked views.
 
 Each training step runs *all* objectives whose `applies_to(batch)` returns
 True, accumulates their weighted losses, and does a single backward pass.
@@ -20,6 +21,7 @@ True, accumulates their weighted losses, and does a single backward pass.
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,6 +43,7 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import (
     Era5SupervisedBatch,
 )
 from olmoearth_pretrain.data.transform import TransformConfig
+from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.era5_decoder import (
     Era5TimeQueryDecoder,
     Era5TimeQueryDecoderConfig,
@@ -48,6 +51,7 @@ from olmoearth_pretrain.nn.era5_decoder import (
 from olmoearth_pretrain.nn.era5_encoder import (
     Era5DailyEncoder,
     Era5DailyEncoderConfig,
+    Era5Pooling,
 )
 from olmoearth_pretrain.nn.era5_heads import SupervisedHeadRegistry, build_head
 from olmoearth_pretrain.nn.transforms.era5_corruption import (
@@ -331,17 +335,23 @@ class SupervisedObjective(_Objective):
 
 
 class _ReconstructionModule(nn.Module):
-    """Container holding the decoder and SWT so both are device-tracked."""
+    """Container holding the decoder, SWT and projector so all are device-tracked."""
 
     def __init__(
-        self, decoder: Era5TimeQueryDecoder, swt: StationaryWaveletTransform1d
+        self,
+        decoder: Era5TimeQueryDecoder,
+        swt: StationaryWaveletTransform1d,
+        projector: Mlp | None = None,
     ) -> None:
         super().__init__()
         self.decoder = decoder
         self.swt = swt
+        self.projector = projector
 
     def apply_compile(self) -> None:
         self.decoder.apply_compile()
+        if self.projector is not None:
+            self.projector.compile(dynamic=True)
 
 
 @dataclass
@@ -366,6 +376,14 @@ class ReconstructionObjectiveConfig(Config):
         span_days: ``swt_halo_span`` only — inclusive ``[lo, hi]`` span length.
         span_num_variables: ``swt_halo_span`` only — inclusive ``[lo, hi]``
             number of variables per span.
+        span_placement: ``swt_halo_span`` only — ``"inside"`` (spans fully
+            inside the maskable window; edges rarely masked) or ``"pin"``
+            (overhanging draws shifted flush with the edge at full length;
+            near-uniform coverage with a mild bump ``span_days`` wide inside
+            each edge). See :class:`SwtHaloSpanMaskPolicy`.
+        mask_buffer: If True, masks may also fall in the first
+            ``swt_buffer_days`` (encoder context only; losses still start at
+            ``swt_buffer_days``), so the buffer is not always visible.
         variable_groups: Mapping from group name to list of band indices.
         huber_delta: Delta for the raw Huber loss.
         raw_loss_on_masked_only: If True, compute raw Huber only over
@@ -378,6 +396,16 @@ class ReconstructionObjectiveConfig(Config):
             :data:`~olmoearth_pretrain.nn.transforms.era5_corruption.GROUP_RECON_MODE`).
             Controls how each variable group's reconstruction loss is
             weighted across raw vs. wavelet bands.
+        contrastive_lambda: Relative weight of symmetric pooled InfoNCE. Zero
+            disables InfoNCE and does not instantiate a projector.
+        contrastive_temperature: Positive cosine-similarity temperature.
+        contrastive_use_projector: Apply an MLP to pooled embeddings for InfoNCE.
+        contrastive_projector_hidden_dim: MLP hidden width.
+        contrastive_projector_output_dim: MLP output width.
+        num_views: One or two reconstruction views. None selects two when
+            InfoNCE is enabled, otherwise one. Set two with lambda zero for a
+            reconstruction-only control. Negatives stay within each rank's
+            microbatch; accumulation does not enlarge the negative set.
     """
 
     name: str = "reconstruction"
@@ -391,6 +419,8 @@ class ReconstructionObjectiveConfig(Config):
     span_num_spans: list[int] = field(default_factory=lambda: [1, 5])
     span_days: list[int] = field(default_factory=lambda: [7, 60])
     span_num_variables: list[int] = field(default_factory=lambda: [1, 14])
+    span_placement: str = "inside"
+    mask_buffer: bool = False
     variable_groups: dict[str, list[int]] = field(
         default_factory=lambda: dict(DEFAULT_VARIABLE_GROUPS)
     )
@@ -403,6 +433,37 @@ class ReconstructionObjectiveConfig(Config):
     group_recon_mode: dict[str, str] = field(
         default_factory=lambda: dict(GROUP_RECON_MODE)
     )
+    contrastive_lambda: float = 0.0
+    contrastive_temperature: float = 0.1
+    contrastive_use_projector: bool = True
+    contrastive_projector_hidden_dim: int = 384
+    contrastive_projector_output_dim: int = 128
+    num_views: int | None = None
+
+    def validate(self) -> None:
+        """Validate contrastive settings before constructing any parameters."""
+        if not math.isfinite(self.contrastive_lambda) or self.contrastive_lambda < 0:
+            raise ValueError("contrastive_lambda must be finite and nonnegative")
+        if (
+            not math.isfinite(self.contrastive_temperature)
+            or self.contrastive_temperature <= 0
+        ):
+            raise ValueError("contrastive_temperature must be finite and positive")
+        if self.num_views is not None and (
+            type(self.num_views) is not int or self.num_views not in (1, 2)
+        ):
+            raise ValueError("num_views must be None, 1, or 2")
+        if self.contrastive_lambda > 0:
+            if self.num_views == 1:
+                raise ValueError("InfoNCE requires two reconstruction views")
+            if self.contrastive_use_projector:
+                for name in (
+                    "contrastive_projector_hidden_dim",
+                    "contrastive_projector_output_dim",
+                ):
+                    value = getattr(self, name)
+                    if type(value) is not int or value <= 0:
+                        raise ValueError(f"{name} must be a positive integer")
 
     def build_mask_policy(self) -> MaskPolicy:
         """Construct the masking-policy dataclass from the flat config knobs."""
@@ -416,14 +477,19 @@ class ReconstructionObjectiveConfig(Config):
                 num_spans=_pair(self.span_num_spans, "span_num_spans"),
                 span_days=_pair(self.span_days, "span_days"),
                 num_variables=_pair(self.span_num_variables, "span_num_variables"),
+                placement=self.span_placement,
             )
         raise ValueError(
             f"Unknown mask_policy {self.mask_policy!r}; expected 'swt_naive' or "
             "'swt_halo_span'"
         )
 
-    def build(self) -> ReconstructionObjective:
-        """Instantiate decoder, SWT, and the objective."""
+    def build(self, pooled_dim: int | None = None) -> ReconstructionObjective:
+        """Build the objective; an active projector requires the pooled width."""
+        self.validate()
+        use_projector = self.contrastive_lambda > 0 and self.contrastive_use_projector
+        if use_projector and (pooled_dim is None or pooled_dim <= 0):
+            raise ValueError("pooled_dim must be positive when building a projector")
         decoder = self.decoder.build()
         num_channels = self.decoder.num_output_channels
         max_level = max(self.swt_levels) + 1 if self.swt_levels else 1
@@ -431,7 +497,16 @@ class ReconstructionObjectiveConfig(Config):
             num_channels=num_channels,
             max_levels=max_level,
         )
-        module = _ReconstructionModule(decoder=decoder, swt=swt)
+        projector = None
+        if use_projector:
+            assert pooled_dim is not None
+            projector = Mlp(
+                in_features=pooled_dim,
+                hidden_features=self.contrastive_projector_hidden_dim,
+                out_features=self.contrastive_projector_output_dim,
+                drop=0.0,
+            )
+        module = _ReconstructionModule(decoder=decoder, swt=swt, projector=projector)
         return ReconstructionObjective(
             name=self.name,
             weight=self.weight,
@@ -445,7 +520,48 @@ class ReconstructionObjectiveConfig(Config):
             swt_lambda=self.swt_lambda,
             swt_levels=self.swt_levels,
             swt_buffer_days=self.swt_buffer_days,
+            mask_buffer=self.mask_buffer,
+            contrastive_lambda=self.contrastive_lambda,
+            contrastive_temperature=self.contrastive_temperature,
+            num_views=(
+                self.num_views
+                if self.num_views is not None
+                else (2 if self.contrastive_lambda > 0 else 1)
+            ),
         )
+
+
+def _instance_infonce(
+    projected_a: Tensor, projected_b: Tensor, temperature: float
+) -> tuple[Tensor, dict[str, Tensor]]:
+    """Symmetric cross-view InfoNCE, with negatives local to the microbatch.
+
+    The diagonal is positive and remains in each denominator. Both views get
+    gradients. Explicitly disable autocast for normalization, logits and CE.
+    """
+    if projected_a.ndim != 2 or projected_a.shape != projected_b.shape:
+        raise ValueError("InfoNCE requires matching [batch, features] tensors")
+    if projected_a.shape[0] < 2:
+        raise ValueError("InfoNCE requires at least two samples per microbatch")
+    with torch.autocast(device_type=projected_a.device.type, enabled=False):
+        a = F.normalize(projected_a.float(), dim=-1)
+        b = F.normalize(projected_b.float(), dim=-1)
+        logits = (a @ b.T) / temperature
+        labels = torch.arange(a.shape[0], device=a.device)
+        loss = (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
+        with torch.no_grad():
+            accuracy = (
+                (logits.argmax(dim=1) == labels).float().mean()
+                + (logits.argmax(dim=0) == labels).float().mean()
+            ) / 2
+            projected_std = (
+                a.std(dim=0, correction=0).mean() + b.std(dim=0, correction=0).mean()
+            ) / 2
+    return loss, {
+        "contrastive_accuracy": accuracy,
+        "contrastive_batch_size": loss.new_tensor(a.shape[0]),
+        "projected_std": projected_std,
+    }
 
 
 def _pair(values: list[int], name: str) -> tuple[int, int]:
@@ -478,7 +594,11 @@ def _parse_recon_mode(
 
 
 class ReconstructionObjective(_Objective):
-    """ERA5 reconstruction: corrupt → encode → decode → Huber + SWT loss."""
+    """ERA5 reconstruction objective.
+
+    Corrupt → encode → decode → Huber + SWT loss, plus optional pooled
+    two-view instance InfoNCE.
+    """
 
     def __init__(
         self,
@@ -494,6 +614,10 @@ class ReconstructionObjective(_Objective):
         swt_lambda: float = 0.1,
         swt_levels: list[int] | None = None,
         swt_buffer_days: int = 83,
+        mask_buffer: bool = False,
+        contrastive_lambda: float = 0.0,
+        contrastive_temperature: float = 0.1,
+        num_views: int = 1,
     ) -> None:
         """Initialize the reconstruction objective."""
         self.name = name
@@ -508,6 +632,10 @@ class ReconstructionObjective(_Objective):
         self.swt_lambda = swt_lambda
         self.swt_levels = swt_levels or [0, 1, 2, 3, 4, 5]
         self.swt_buffer_days = swt_buffer_days
+        self.mask_buffer = mask_buffer
+        self.contrastive_lambda = contrastive_lambda
+        self.contrastive_temperature = contrastive_temperature
+        self.num_views = num_views
         # Static variable-count weights for loss averaging. Each (group, scale)
         # term is weighted by the number of variables in the group
         self._raw_weight, self._swt_weight = self._compute_loss_weights()
@@ -565,6 +693,62 @@ class ReconstructionObjective(_Objective):
         encoder: Era5DailyEncoder,
         batch: Era5Batch,
     ) -> tuple[Tensor, dict[str, Tensor]]:
+        """Average reconstruction across views and add weighted pooled InfoNCE."""
+        if self.contrastive_lambda > 0 and batch.era5.shape[0] < 2:
+            raise ValueError("InfoNCE requires at least two samples per microbatch")
+        recon_loss, metrics, out_a = self._compute_view(encoder, batch)
+        out_b: dict[str, Tensor] | None = None
+        if self.num_views == 2:
+            recon_loss_b, metrics_b, out_b = self._compute_view(encoder, batch)
+            recon_loss = (recon_loss + recon_loss_b) / 2
+            metrics = {
+                key: (value + metrics_b[key]) / 2 for key, value in metrics.items()
+            }
+        metrics[f"{self.name}/recon_loss"] = recon_loss.detach()
+        metrics[f"{self.name}/num_views"] = recon_loss.new_tensor(self.num_views)
+
+        total_loss = recon_loss
+        if self.contrastive_lambda > 0:
+            assert out_b is not None
+            pooled_a, pooled_b = out_a["pooled"], out_b["pooled"]
+            projector = self._module.projector
+            projected_a = projector(pooled_a) if projector is not None else pooled_a
+            projected_b = projector(pooled_b) if projector is not None else pooled_b
+            cont_loss, contrastive_metrics = _instance_infonce(
+                projected_a, projected_b, self.contrastive_temperature
+            )
+            w_cont_loss = self.contrastive_lambda * cont_loss
+            total_loss = recon_loss + w_cont_loss
+            with (
+                torch.no_grad(),
+                torch.autocast(device_type=pooled_a.device.type, enabled=False),
+            ):
+                pooled_std = (
+                    F.normalize(pooled_a.float(), dim=-1)
+                    .std(dim=0, correction=0)
+                    .mean()
+                    + F.normalize(pooled_b.float(), dim=-1)
+                    .std(dim=0, correction=0)
+                    .mean()
+                ) / 2
+            contrastive_metrics.update(
+                contrastive_loss=cont_loss.detach(),
+                contrastive_weighted_loss=w_cont_loss.detach(),
+                pooled_std=pooled_std,
+            )
+            metrics.update(
+                {
+                    f"{self.name}/{key}": value
+                    for key, value in contrastive_metrics.items()
+                }
+            )
+        return total_loss, metrics
+
+    def _compute_view(
+        self,
+        encoder: Era5DailyEncoder,
+        batch: Era5Batch,
+    ) -> tuple[Tensor, dict[str, Tensor], dict[str, Tensor]]:
         """Corrupt → encode → decode → per-group loss.
 
         Loss terms are gated per variable group by ``group_recon_mode``.
@@ -587,7 +771,8 @@ class ReconstructionObjective(_Objective):
         # var_valid is only used to gate the loss.
         var_valid = valid.all(dim=1)  # [B, V] True if variable fully valid
 
-        # 1. Generate corruption mask (only target window is masked).
+        # 1. Generate corruption mask (target window only, unless mask_buffer:
+        # then the buffer too; losses below still start at ts either way).
         # Masking operates in wavelet space: ``band_mask`` is band-space
         # ``[B, T, V*n_bands]`` (fed to the encoder) and ``raw_loss_mask`` is
         # the raw ``[B, T, V]`` mask of genuinely-hidden positions to supervise.
@@ -607,21 +792,21 @@ class ReconstructionObjective(_Objective):
             v,
             n_bands,
             band_supports,
-            ts,
+            0 if self.mask_buffer else ts,
             x.device,
             self.mask_policy,
         )
-        # Raw reconstruction targets: genuinely-hidden positions only; never
+        # Effective raw-space loss mask: genuinely-hidden positions only; never
         # target no-data cells. No-data band 0-fill is handled inside the
         # encoder (universal across objectives).
-        mask = masks.raw_loss_mask & valid
-        corruption_mask = masks.band_mask
+        eff_raw_mask = masks.raw_loss_mask & valid
 
-        # 2. Encode with corruption mask (encoder 0-fills no-data bands via valid)
+        # 2. Encode with the SWT band-space mask (encoder 0-fills no-data bands
+        # via valid)
         out = encoder(
             era5=x,
             timestamps=batch.timestamps,
-            corruption_mask=corruption_mask,
+            corruption_mask=masks.band_mask,
             valid_mask=valid,
         )
 
@@ -647,7 +832,7 @@ class ReconstructionObjective(_Objective):
         # Slice to target window for raw loss
         x_hat_tgt = x_hat[:, ts:, :]
         x_tgt = x[:, ts:, :]
-        mask_tgt = mask[:, ts:, :]
+        eff_raw_mask_tgt = eff_raw_mask[:, ts:, :]
         valid_tgt = valid[:, ts:, :]  # [B, T_win, V]
         is_swt_input = getattr(encoder, "is_swt_input", False)
 
@@ -677,7 +862,7 @@ class ReconstructionObjective(_Objective):
             if is_swt_input:
                 g_valid = g_valid & var_valid[:, bi].unsqueeze(1)
             g_mask = (
-                mask_tgt[:, :, bi] & g_valid
+                eff_raw_mask_tgt[:, :, bi] & g_valid
                 if self.raw_loss_on_masked_only
                 else g_valid
             )
@@ -699,9 +884,11 @@ class ReconstructionObjective(_Objective):
                 # too when scoring masked-only.
                 gvar_valid_vt = var_valid[:, bi].unsqueeze(-1)  # [B, |bi|, 1]
                 if self.raw_loss_on_masked_only:
-                    g_mask_vt = mask_tgt[:, :, bi].transpose(1, 2) & gvar_valid_vt
+                    g_mask_vt = (
+                        eff_raw_mask_tgt[:, :, bi].transpose(1, 2) & gvar_valid_vt
+                    )
                 else:
-                    g_mask_vt = gvar_valid_vt.expand(-1, -1, mask_tgt.shape[1])
+                    g_mask_vt = gvar_valid_vt.expand(-1, -1, eff_raw_mask_tgt.shape[1])
                 deepest_allowed = max(allowed_levels)
                 for level_idx, level in enumerate(self.swt_levels):
                     if level not in allowed_levels:
@@ -759,13 +946,17 @@ class ReconstructionObjective(_Objective):
         metrics: dict[str, Tensor] = {
             f"{self.name}/raw_loss": raw_loss.detach(),
             f"{self.name}/swt_loss": swt_loss.detach(),
-            f"{self.name}/masked_fraction": mask_tgt.float().mean().detach(),
+            f"{self.name}/masked_fraction": eff_raw_mask_tgt.float().mean().detach(),
             f"{self.name}/nodata_fraction": (~valid).float().mean().detach(),
         }
         if masks.band_mask is not None:
             metrics[f"{self.name}/band_masked_fraction"] = (
                 masks.band_mask[:, ts:, :].float().mean().detach()
             )
+            if self.mask_buffer and ts > 0:
+                metrics[f"{self.name}/buffer_band_masked_fraction"] = (
+                    masks.band_mask[:, :ts, :].float().mean().detach()
+                )
         for level in self.swt_levels:
             cnt = level_loss_counts.get(level, 0)
             if cnt > 0:
@@ -782,7 +973,7 @@ class ReconstructionObjective(_Objective):
                 level_loss_sums[-1].detach() / approx_cnt
             )
 
-        return total_loss, metrics
+        return total_loss, metrics, out
 
 
 # ---------------------------------------------------------------------------
@@ -812,7 +1003,12 @@ class Era5MultiObjectiveModelConfig(Config):
         if self.supervised_objective is not None:
             objectives.append(self.supervised_objective.build())
         if self.reconstruction_objective is not None:
-            objectives.append(self.reconstruction_objective.build())
+            pooled_dim = self.encoder_config.embedding_size
+            if self.encoder_config.pooling == Era5Pooling.CLS_MEAN_CONCAT:
+                pooled_dim *= 2
+            objectives.append(
+                self.reconstruction_objective.build(pooled_dim=pooled_dim)
+            )
         if not objectives:
             raise ValueError(
                 "Era5MultiObjectiveModelConfig requires at least one "

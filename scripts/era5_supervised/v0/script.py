@@ -5,7 +5,7 @@ plan.  It supports three modes via ``enable_supervised`` /
 ``enable_reconstruction``:
 
 * **A-only** (default): multi-task supervised objective.
-* **B-only**: ERA5 reconstruction (corrupt → encode → decode → loss).
+* **B-only**: ERA5 reconstruction with optional pooled instance InfoNCE.
 * **A+B**: both objectives run on every batch.
 
 Tasks are referenced by nickname via `common.tasks=[burnrisk_canada_nbac,...]`.
@@ -196,6 +196,16 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_raw_lambda: float = 0.0
     recon_swt_lambda: float = 1.0
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
+    # Pooled InfoNCE over independently masked views, local to each microbatch.
+    # Zero lambda retains the single-view path without allocating a projector.
+    recon_contrastive_lambda: float = 0.0
+    recon_contrastive_temperature: float = 0.1
+    recon_contrastive_use_projector: bool = True
+    recon_contrastive_projector_hidden_dim: int = 384
+    recon_contrastive_projector_output_dim: int = 128
+    # None selects two views iff InfoNCE is enabled; explicit 2 with lambda=0
+    # is the two-view reconstruction-only control.
+    recon_num_views: int | None = None
     # ------------------------------------------------------------------
     # SWT-input reconstruction masking (reconstruction requires an
     # is_swt_input encoder).  ``recon_mask_policy`` selects the masker:
@@ -214,6 +224,12 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_span_num_spans: list[int] = field(default_factory=lambda: [1, 5])
     recon_span_days: list[int] = field(default_factory=lambda: [7, 60])
     recon_span_num_variables: list[int] = field(default_factory=lambda: [1, 14])
+    # "inside" (default, spans stay in the window: edges rarely masked) or
+    # "pin" (overhangs shifted flush with the edge at full length: near-uniform
+    # coverage). recon_mask_buffer=True lets masks fall in the first 83 buffer
+    # days too (context only; losses still start after the buffer).
+    recon_span_placement: str = "inside"
+    recon_mask_buffer: bool = False
     # ------------------------------------------------------------------
     # Mask-embedding visualization.
     # ------------------------------------------------------------------
@@ -633,6 +649,8 @@ def build_model_config(
     common: Era5SupervisedCommonComponents,
 ) -> Era5MultiObjectiveModelConfig:
     """Build the ERA5 encoder + objective head(s)."""
+    if common.recon_contrastive_lambda != 0 and not common.enable_reconstruction:
+        raise ValueError("recon_contrastive_lambda requires enable_reconstruction=True")
     specs = _resolve_task_specs(common)
 
     # -- Objective A (supervised) --
@@ -685,12 +703,23 @@ def build_model_config(
             raw_lambda=common.recon_raw_lambda,
             swt_lambda=common.recon_swt_lambda,
             swt_levels=common.recon_swt_levels,
+            contrastive_lambda=common.recon_contrastive_lambda,
+            contrastive_temperature=common.recon_contrastive_temperature,
+            contrastive_use_projector=common.recon_contrastive_use_projector,
+            contrastive_projector_hidden_dim=common.recon_contrastive_projector_hidden_dim,
+            contrastive_projector_output_dim=common.recon_contrastive_projector_output_dim,
+            num_views=common.recon_num_views,
             mask_policy=common.recon_mask_policy,
             swt_naive_budget=common.recon_swt_naive_budget,
             span_num_spans=list(common.recon_span_num_spans),
             span_days=list(common.recon_span_days),
             span_num_variables=list(common.recon_span_num_variables),
+            span_placement=common.recon_span_placement,
+            mask_buffer=common.recon_mask_buffer,
         )
+        reconstruction_objective.validate()
+        if common.recon_contrastive_lambda > 0 and common.rank_microbatch_size < 2:
+            raise ValueError("InfoNCE requires rank_microbatch_size >= 2")
 
     if not common.enable_supervised and not common.enable_reconstruction:
         raise ValueError(

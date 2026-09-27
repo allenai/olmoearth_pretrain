@@ -33,7 +33,9 @@ loss is supervised only on the raw days inside each span — the
 Note: ERA5L_DAY_10 has one timestep per day, so span lengths expressed in
 *days* map directly onto timesteps.  Everything is applied on-the-fly on the
 GPU and only timesteps at index ``target_start`` and beyond are eligible for
-masking; the causal buffer ``[:target_start]`` is never corrupted.
+masking; ``[:target_start]`` is never corrupted. (The reconstruction
+objective's ``mask_buffer`` option passes ``target_start=0`` so the SWT buffer
+can be masked too, while losses still start after it.)
 
 :func:`corrupt_era5_swt` returns an :class:`Era5CorruptionMasks` with both the
 band-space corruption mask (fed to the encoder's learned ``mask_embed``) and
@@ -183,11 +185,22 @@ class SwtHaloSpanMaskPolicy:
     span is expanded across bands with a per-band causal right halo of
     ``support_s - 1`` days so the span's raw days are genuinely hidden from
     every scale.  The loss is supervised only on the raw span days.
+
+    ``placement`` controls where a span of length ``L`` can land in the
+    maskable window ``[lo, t)``:
+
+    * ``"inside"`` — start uniform over ``[lo, t - L]``. Days within ``L`` of
+      either edge are rarely covered (coverage ramps from ~1/L at the edge).
+    * ``"pin"`` — start uniform over ``[lo - L + 1, t - 1]``, then shifted
+      inside so the span stays contiguous at full length (flush with the
+      edge). Edge days get interior coverage; days just inside each edge get
+      up to ~2x for a single span (a mild bump ``L`` days wide).
     """
 
     num_spans: tuple[int, int] = (1, 5)
     span_days: tuple[int, int] = (7, 60)
     num_variables: tuple[int, int] = (1, 14)
+    placement: str = "inside"
 
 
 MaskPolicy = SwtNaiveMaskPolicy | SwtHaloSpanMaskPolicy
@@ -299,44 +312,74 @@ def _corrupt_swt_halo_span(
     device: torch.device,
     policy: SwtHaloSpanMaskPolicy,
 ) -> Era5CorruptionMasks:
-    """Halo-corrected contiguous-span masking (no-leak)."""
+    """Halo-corrected contiguous-span masking (no-leak).
+
+    Vectorized over samples and spans: every draw stays on ``device`` (no
+    host syncs) and each mask is the union over spans of day-range x
+    variable-subset boxes. Samples draw ``n_spans`` of ``max(num_spans)`` span
+    slots; the remaining slots are inactive.
+    """
     if len(band_supports) != n_bands:
         raise ValueError(
             f"band_supports has {len(band_supports)} entries, expected "
             f"n_bands={n_bands}"
         )
-    band4d = torch.zeros(b, t, v, n_bands, dtype=torch.bool, device=device)
-    raw_loss_mask = torch.zeros(b, t, v, dtype=torch.bool, device=device)
+    if policy.placement not in ("inside", "pin"):
+        raise ValueError(
+            f"placement must be 'inside' or 'pin', got {policy.placement!r}"
+        )
     window = t - target_start
     if window <= 0:
         return Era5CorruptionMasks(
-            band_mask=band4d.reshape(b, t, v * n_bands),
-            raw_loss_mask=raw_loss_mask,
+            band_mask=torch.zeros(b, t, v * n_bands, dtype=torch.bool, device=device),
+            raw_loss_mask=torch.zeros(b, t, v, dtype=torch.bool, device=device),
         )
 
     span_lo, span_hi = int(policy.span_days[0]), int(policy.span_days[1])
     nspan_lo, nspan_hi = int(policy.num_spans[0]), int(policy.num_spans[1])
     nvar_lo, nvar_hi = int(policy.num_variables[0]), int(policy.num_variables[1])
     nvar_hi = min(nvar_hi, v)
+    k = max(nspan_lo, nspan_hi)
 
-    for i in range(b):
-        n_spans = _randint(nspan_lo, nspan_hi, device)
-        for _ in range(n_spans):
-            length = min(_randint(span_lo, span_hi, device), window)
-            max_start = t - length
-            start = _randint(target_start, max_start, device)
-            end = start + length
+    n_spans = _randint_tensor(nspan_lo, nspan_hi, (b, 1), device)
+    active = torch.arange(k, device=device) < n_spans  # [B, K]
+    length = _randint_tensor(span_lo, span_hi, (b, k), device).clamp(max=window)
 
-            n_vars = _randint(nvar_lo, nvar_hi, device)
-            var_idx = torch.randperm(v, device=device)[:n_vars]
+    # Start drawn uniformly over [low, high] (inclusive): "inside" keeps the
+    # span in the window; "pin" lets it overhang either edge by up to L - 1
+    # days, then the clamp below shifts it flush with that edge at full length.
+    if policy.placement == "inside":
+        low = torch.full_like(length, target_start)
+        high = t - length
+    else:
+        low = target_start - length + 1
+        high = torch.full_like(length, t - 1)
+    num_starts = high - low + 1
+    offset = (torch.rand(b, k, device=device) * num_starts).long()
+    start = low + torch.minimum(offset, num_starts - 1)
+    start = torch.minimum(start.clamp(min=target_start), t - length)
+    end = start + length
 
-            # Supervise only the genuinely-hidden raw span days.
-            raw_loss_mask[i, start:end][:, var_idx] = True
+    # Uniform random subset of n_vars variables per span: ranks of iid keys
+    # form a uniform permutation, and ranks below n_vars pick the subset.
+    n_vars = _randint_tensor(nvar_lo, nvar_hi, (b, k, 1), device)
+    ranks = torch.rand(b, k, v, device=device).argsort(dim=-1).argsort(dim=-1)
+    var_sel = (ranks < n_vars) & active.unsqueeze(-1)  # [B, K, V]
 
-            # Hide each band over the span plus its causal right halo.
-            for s, support in enumerate(band_supports):
-                halo_end = min(end + int(support) - 1, t)
-                band4d[i, start:halo_end][:, var_idx, s] = True
+    day = torch.arange(t, device=device)
+    after_start = day >= start.unsqueeze(-1)  # [B, K, T]
+
+    def cover(stop: Tensor) -> Tensor:
+        """Union over spans of days ``[start, stop)`` x selected variables."""
+        in_range = after_start & (day < stop.unsqueeze(-1))  # [B, K, T]
+        return (in_range.unsqueeze(-1) & var_sel.unsqueeze(2)).any(dim=1)
+
+    # Supervise only the genuinely-hidden raw span days; hide each band over
+    # the span plus its causal right halo (days past t simply do not exist).
+    raw_loss_mask = cover(end)
+    band4d = torch.stack(
+        [cover(end + int(support) - 1) for support in band_supports], dim=-1
+    )
 
     return Era5CorruptionMasks(
         band_mask=band4d.reshape(b, t, v * n_bands),
@@ -349,8 +392,10 @@ def _corrupt_swt_halo_span(
 # ---------------------------------------------------------------------------
 
 
-def _randint(lo: int, hi: int, device: torch.device) -> int:
-    """Uniform integer in ``[lo, hi]`` (inclusive)."""
+def _randint_tensor(
+    lo: int, hi: int, shape: tuple[int, ...], device: torch.device
+) -> Tensor:
+    """Uniform integers in ``[lo, hi]`` (inclusive); constant ``lo`` if ``hi <= lo``."""
     if hi <= lo:
-        return int(lo)
-    return int(torch.randint(int(lo), int(hi) + 1, (1,), device=device))
+        return torch.full(shape, int(lo), dtype=torch.long, device=device)
+    return torch.randint(int(lo), int(hi) + 1, shape, device=device)
