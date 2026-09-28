@@ -169,6 +169,71 @@ def compute_eval_metrics(
     return EvalTaskResult(val_result=val_result, test_result=test_result)
 
 
+def _train_class_weights(train_loader, num_classes, mode, device, ignore_index=-1):
+    """Inverse train-frequency class weights, normalised to mean 1.
+
+    Mirrors utae-paps: w_c = (sum of scored counts)/count_c, optionally
+    square-rooted, divided by its mean over scored classes. A class with no
+    train pixels gets weight 0 -- there is no gradient signal for it and 1/0
+    would otherwise swamp the loss.
+    """
+    counts = torch.zeros(num_classes, dtype=torch.float64)
+    for _batch, label in train_loader:
+        y = label.reshape(-1)
+        y = y[y != ignore_index]
+        if y.numel():
+            counts += torch.bincount(
+                y.to(torch.int64).cpu(), minlength=num_classes
+            ).double()[:num_classes]
+    scored = counts > 0
+    w = torch.zeros(num_classes, dtype=torch.float64)
+    if scored.any():
+        inv = counts[scored].sum() / counts[scored]
+        if mode == "invsqrt":
+            inv = inv.sqrt()
+        w[scored] = inv / inv.mean()
+    logger.info(
+        "class weights (%s): %s",
+        mode,
+        ", ".join(f"{c}:{w[c].item():.3f}" for c in range(num_classes)),
+    )
+    return w.float().to(device)
+
+
+class _FocalCE(nn.Module):
+    """Cross-entropy scaled by (1-p_t)^gamma, composing with class weights.
+
+    p_t comes from the logits rather than exp(-ce) so the focal factor does not
+    inherit the class weighting. Ignored pixels get ce == 0 from
+    reduction="none" and are excluded from the normaliser.
+
+    NOTE on the normaliser: this divides by the number of scored pixels, while
+    nn.CrossEntropyLoss(weight=...) divides by the SUM OF WEIGHTS. So the focal
+    arms are scaled slightly differently from the plain weighted arms. That is
+    deliberate -- utae-paps does the same, and matching it is what makes the
+    loss-ablation table comparable across model families. It only rescales the
+    loss, not its argmin, so it does not change what the run optimises.
+    """
+
+    def __init__(self, weight, gamma, ignore_index=-1):
+        super().__init__()
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.ce = nn.CrossEntropyLoss(
+            weight=weight, ignore_index=ignore_index, reduction="none"
+        )
+
+    def forward(self, out, y):
+        ce = self.ce(out, y)
+        valid = y != self.ignore_index
+        with torch.no_grad():
+            # y == ignore_index is not a valid gather index; clamp then mask
+            safe = y.clamp(min=0).unsqueeze(1)
+            pt = torch.softmax(out, dim=1).gather(1, safe).squeeze(1)
+        loss = ((1.0 - pt) ** self.gamma) * ce
+        return loss.sum() / valid.sum().clamp(min=1)
+
+
 def run_finetune_eval(
     task_name: str,
     task_config: EvalDatasetConfig,
@@ -275,7 +340,17 @@ def run_finetune_eval(
         num_classes = task_config.num_classes
         loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
-        loss_fn = nn.CrossEntropyLoss(ignore_index=-1)
+        _cw = getattr(task_config, "ft_class_weighting", "none")
+        _gamma = float(getattr(task_config, "ft_focal_gamma", 0.0))
+        _weight = None
+        if _cw and _cw != "none":
+            _weight = _train_class_weights(
+                train_loader, task_config.num_classes, _cw, device
+            )
+        if _gamma > 0:
+            loss_fn = _FocalCE(_weight, _gamma, ignore_index=-1).to(device)
+        else:
+            loss_fn = nn.CrossEntropyLoss(weight=_weight, ignore_index=-1)
 
     best_state = snapshot_state_dict(ft)
     best_val_metric = float("-inf") if higher_is_better else float("inf")

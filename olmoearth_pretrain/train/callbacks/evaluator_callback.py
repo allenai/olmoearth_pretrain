@@ -257,6 +257,11 @@ class DownstreamTaskConfig:
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
     use_dice_loss: bool = False
+    # Loss-ablation knobs for the fine-tune path. Defaults reproduce plain
+    # CrossEntropyLoss, so existing runs are unaffected. Definitions match
+    # utae-paps so the two model families are comparable.
+    ft_class_weighting: str = "none"  # "none" | "inv" | "invsqrt"
+    ft_focal_gamma: float = 0.0  # 0 disables; composes with weighting
     # Additionally run the AlphaEarth Foundations balanced-trial protocol on the
     # embeddings this task materializes: a class-balanced draw of
     # min(cap, least class) points per class from the pooled splits, a
