@@ -41,6 +41,8 @@ from olmoearth_pretrain.nn.joint_latent import (
     JointLatentConfig,
     JointLatentTransformer,
     build_register_grid_positions,
+    sort_tokens_by_cell,
+    token_mix_attention_kwargs,
 )
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
@@ -1535,6 +1537,10 @@ class Perceiver(nn.Module):
         temporal_rope_dim_frac: float = 0.25,
         rope_temporal_base: float | None = None,
         read_time_range: bool = False,
+        token_mix_layout: str | None = None,
+        token_mix_radius: int = 1,
+        token_mix_dim: int | None = None,
+        token_mix_num_heads: int | None = None,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1596,6 +1602,22 @@ class Perceiver(nn.Module):
                 tokens' time range (sinc-gated RoPE, see :func:`apply_3d_mixed_rope`)
                 instead of points at the window centre, so a read attends over its
                 window as a soft box rather than a peak at the centre.
+            token_mix_layout: If set, the layer schedule as a string over ``M`` (a
+                token-mixing block), ``R`` (a read + its paired latent block, exactly
+                the default layer) and ``L`` (a latent-only block), run left to right;
+                e.g. ``"MRMRMRMRMRMRLLLLLL"``. The number of ``R`` must equal
+                ``latent_transformer_depth``. A token-mixing block is self-attention
+                over the patch tokens restricted to a spatial neighbourhood of cells
+                (all timesteps and modalities of the cells within ``token_mix_radius``
+                in row and column), so each read sees tokens refined by the mixing
+                blocks before it. Mixing runs on a Perceiver-internal copy: the
+                encoder's returned tokens (and the MIM target) are unchanged. Needs
+                ``time_rope_encoding == MIXED_3D_ROPE`` and ``cell_ids`` at forward.
+            token_mix_radius: Neighbourhood radius in cells (1 = 3x3, 0 = own cell).
+            token_mix_dim: Width of the token-mixing stream. None mixes at the encoder
+                width; a smaller value linearly projects the tokens down first, and the
+                reads then consume the narrow tokens.
+            token_mix_num_heads: Heads of the token-mixing blocks (None = ``num_heads``).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1623,8 +1645,49 @@ class Perceiver(nn.Module):
             )
         self.register = nn.Parameter(torch.empty(1, register_dim))
         nn.init.trunc_normal_(self.register, std=0.02)
-        # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         num_read_blocks = latent_transformer_depth
+        self.token_mix_layout = token_mix_layout
+        self.token_mix_radius = token_mix_radius
+        n_mix = n_extra_latent = 0
+        if token_mix_layout is not None:
+            if set(token_mix_layout) - set("MRL"):
+                raise ValueError(
+                    f"token_mix_layout may only contain M, R and L, got {token_mix_layout}"
+                )
+            if token_mix_layout.count("R") != num_read_blocks:
+                raise ValueError(
+                    f"token_mix_layout has {token_mix_layout.count('R')} reads but "
+                    f"latent_transformer_depth is {num_read_blocks}"
+                )
+            if time_rope_encoding != PositionEncoding.MIXED_3D_ROPE:
+                raise ValueError(
+                    "token mixing needs time_rope_encoding == MIXED_3D_ROPE (the mixing "
+                    f"blocks rotate over the tokens' (t, row, col)), got {time_rope_encoding}"
+                )
+            if share_read_kv:
+                raise ValueError(
+                    "share_read_kv projects the read source once, but token mixing "
+                    "changes the tokens between reads"
+                )
+            if token_mix_radius < 0:
+                raise ValueError(
+                    f"token_mix_radius must be >= 0, got {token_mix_radius}"
+                )
+            n_mix = token_mix_layout.count("M")
+            n_extra_latent = token_mix_layout.count("L")
+        # With token mixing the reads consume the (possibly narrower) mixing stream.
+        token_dim = (
+            token_mix_dim
+            if token_mix_layout is not None and token_mix_dim is not None
+            else encoder_embedding_size
+        )
+        self.token_mix_in: nn.Module | None = (
+            nn.Linear(encoder_embedding_size, token_dim)
+            if token_dim != encoder_embedding_size
+            else None
+        )
+        read_src_dim = token_dim
+        # The read + latent transformer run on small unpacked [B, N, D] tensors with an
         self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
         if self.per_depth_read_proj and share_read_kv:
             raise ValueError(
@@ -1634,24 +1697,24 @@ class Perceiver(nn.Module):
         if self.per_depth_read_proj:
             # One norm + projection per read block.
             self.input_norms = nn.ModuleList(
-                [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
+                [nn.LayerNorm(read_src_dim) for _ in range(num_read_blocks)]
             )
             self.kv_projs = nn.ModuleList(
                 [
                     (
                         nn.Identity()
                         if attn_dim is not None
-                        else nn.Linear(encoder_embedding_size, register_dim)
+                        else nn.Linear(read_src_dim, register_dim)
                     )
                     for _ in range(num_read_blocks)
                 ]
             )
         else:
-            self.input_norm = nn.LayerNorm(encoder_embedding_size)
+            self.input_norm = nn.LayerNorm(read_src_dim)
             self.kv_proj: nn.Module = (
                 nn.Identity()
                 if attn_dim is not None
-                else nn.Linear(encoder_embedding_size, register_dim)
+                else nn.Linear(read_src_dim, register_dim)
             )
         # The register grid is a purely spatial map, so the latent self-attention
         # rotates over (row, col) only. The reads do too unless ``time_rope_encoding``
@@ -1680,33 +1743,56 @@ class Perceiver(nn.Module):
                     temporal_rope_dim_frac=temporal_rope_dim_frac,
                     rope_temporal_base=rope_temporal_base,
                     attn_dim=attn_dim,
-                    kv_in_dim=(
-                        encoder_embedding_size if attn_dim is not None else None
-                    ),
+                    kv_in_dim=(read_src_dim if attn_dim is not None else None),
                 )
                 for i in range(num_read_blocks)
             ]
         )
+
+        def latent_block() -> Block:
+            return Block(
+                register_dim,
+                num_heads,
+                mlp_ratio,
+                qkv_bias=True,
+                qk_norm=qk_norm,
+                cross_attn=False,
+                use_flash_attn=False,
+                position_encoding=(
+                    PositionEncoding.AXIAL_2D_ROPE
+                    if use_2d_rope
+                    else PositionEncoding.ABSOLUTE
+                ),
+                rope_base=rope_base,
+                attn_dim=attn_dim,
+            )
+
         self.latent_blocks = nn.ModuleList(
+            [latent_block() for _ in range(latent_transformer_depth)]
+        )
+        # Token-mixing blocks: self-attention over the tokens of neighbouring cells,
+        # rotating over the tokens' (t, row, col) like the time-aware reads.
+        self.token_mix_blocks = nn.ModuleList(
             [
                 Block(
-                    register_dim,
-                    num_heads,
+                    token_dim,
+                    token_mix_num_heads or num_heads,
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
                     cross_attn=False,
                     use_flash_attn=False,
-                    position_encoding=(
-                        PositionEncoding.AXIAL_2D_ROPE
-                        if use_2d_rope
-                        else PositionEncoding.ABSOLUTE
-                    ),
+                    position_encoding=PositionEncoding.MIXED_3D_ROPE,
                     rope_base=rope_base,
-                    attn_dim=attn_dim,
+                    rope_mixed_base=rope_mixed_base,
+                    temporal_rope_dim_frac=temporal_rope_dim_frac,
+                    rope_temporal_base=rope_temporal_base,
                 )
-                for _ in range(latent_transformer_depth)
+                for _ in range(n_mix)
             ]
+        )
+        self.extra_latent_blocks = nn.ModuleList(
+            [latent_block() for _ in range(n_extra_latent)]
         )
         if share_read_kv:
             # One K and one V projection for all reads, sized like the per-block layers
@@ -1743,6 +1829,7 @@ class Perceiver(nn.Module):
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
         grid_extent_positions: Tensor | None = None,
+        cell_ids: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1758,6 +1845,9 @@ class Perceiver(nn.Module):
                 over. Defaults to ``patch_positions``. Pass the unmasked positions when
                 ``patch_tokens`` is the compact visible-only sequence, so a masking
                 pattern that hides an edge row/column of cells cannot shrink the grid.
+            cell_ids: ``[B, N]`` row-major patch-cell index per token (``-1`` for
+                non-spatial tokens), in the same order as ``patch_tokens``. Required
+                with ``token_mix_layout``; ignored otherwise.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
@@ -1767,7 +1857,27 @@ class Perceiver(nn.Module):
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
                 ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
         """
-        if self.per_depth_read_proj:
+        if self.token_mix_layout is not None:
+            if cell_ids is None:
+                raise ValueError("token_mix_layout needs per-token cell_ids")
+            # Cell-contiguous token order, so a neighbourhood's tokens fall in few
+            # attention blocks. Reads are permutation-invariant over their keys
+            # (positions and the key mask move with the tokens), so this changes
+            # nothing but speed.
+            valid = (
+                visible_mask.bool()
+                if visible_mask is not None
+                else torch.ones(
+                    cell_ids.shape, dtype=torch.bool, device=cell_ids.device
+                )
+            )
+            patch_tokens, patch_positions, valid, cell_ids = sort_tokens_by_cell(
+                patch_tokens, patch_positions, valid, cell_ids
+            )
+            visible_mask = valid
+        if self.token_mix_layout is not None:
+            kv_per_read = []  # built lazily, from the tokens as mixed so far
+        elif self.per_depth_read_proj:
             kv_per_read = [
                 proj(norm(patch_tokens))
                 for norm, proj in zip(self.input_norms, self.kv_projs)
@@ -1866,12 +1976,47 @@ class Perceiver(nn.Module):
             )
             return out
 
-        for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
-            registers = read(registers, i, read_blk, kv)
-            registers = self.latent_blocks[i](
-                x=registers,
-                rope_positions=register_positions,
+        if self.token_mix_layout is None:
+            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
+                registers = read(registers, i, read_blk, kv)
+                registers = self.latent_blocks[i](
+                    x=registers,
+                    rope_positions=register_positions,
+                )
+        else:
+            assert cell_ids is not None and patch_positions is not None
+            tokens = (
+                self.token_mix_in(patch_tokens)
+                if self.token_mix_in is not None
+                else patch_tokens
             )
+            mix_kwargs = token_mix_attention_kwargs(
+                cell_ids, read_attn_mask, spatial_grid[1], self.token_mix_radius
+            )
+            i_mix = i_read = i_latent = 0
+            for layer in self.token_mix_layout:
+                if layer == "M":
+                    tokens = self.token_mix_blocks[i_mix](
+                        x=tokens, rope_positions=patch_positions, **mix_kwargs
+                    )
+                    i_mix += 1
+                elif layer == "R":
+                    if self.per_depth_read_proj:
+                        norm, proj = self.input_norms[i_read], self.kv_projs[i_read]
+                    else:
+                        norm, proj = self.input_norm, self.kv_proj
+                    registers = read(
+                        registers, i_read, self.read_blocks[i_read], proj(norm(tokens))
+                    )
+                    registers = self.latent_blocks[i_read](
+                        x=registers, rope_positions=register_positions
+                    )
+                    i_read += 1
+                else:
+                    registers = self.extra_latent_blocks[i_latent](
+                        x=registers, rope_positions=register_positions
+                    )
+                    i_latent += 1
         out = self.norm(registers)
         out = rearrange(
             out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
@@ -1938,6 +2083,17 @@ class PerceiverConfig(Config):
             slice.
             The heads that distil the teacher into the student are configured
             separately (``LatentMIMConfig.register_distillation_head_config``).
+        token_mix_layout: Layer schedule over ``M`` (token mixing within a spatial
+            neighbourhood of cells), ``R`` (read + paired latent block) and ``L``
+            (latent-only block), e.g. ``"MRMRMRMRMRMRLLLLLL"``; the ``R`` count must
+            equal ``latent_depth``. Needs ``read_time_rope`` on a ``rope_3d_mixed``
+            encoder. None (default) keeps the plain ``[read -> self-attend]`` stack.
+            See :class:`Perceiver`.
+        token_mix_radius: Neighbourhood radius in cells for the mixing blocks (1 =
+            3x3, 0 = own cell only). None means 1.
+        token_mix_dim: Width of the token-mixing stream (the tokens are linearly
+            projected down to it and the reads consume it). None = encoder width.
+        token_mix_num_heads: Heads of the mixing blocks. None = the bottleneck's.
     """
 
     register_dim: int
@@ -1950,6 +2106,12 @@ class PerceiverConfig(Config):
     read_time_range: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
+    # None defaults: ``as_config_dict`` drops None fields, so checkpoints saved before
+    # these existed round-trip unchanged.
+    token_mix_layout: str | None = None
+    token_mix_radius: int | None = None
+    token_mix_dim: int | None = None
+    token_mix_num_heads: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2001,6 +2163,38 @@ class PerceiverConfig(Config):
                 "share_read_kv and per_depth_read_proj are mutually exclusive: a shared "
                 "K/V projection needs one shared read source"
             )
+        if self.token_mix_layout is not None:
+            if not (
+                self.read_time_rope
+                and position_encoding == PositionEncoding.MIXED_3D_ROPE
+            ):
+                raise ValueError(
+                    "token_mix_layout requires read_time_rope on a rope_3d_mixed encoder"
+                )
+            if self.token_mix_layout.count("R") != self.latent_depth:
+                raise ValueError(
+                    f"token_mix_layout has {self.token_mix_layout.count('R')} reads, "
+                    f"latent_depth is {self.latent_depth}"
+                )
+            if self.share_read_kv:
+                raise ValueError(
+                    "token_mix_layout cannot be combined with share_read_kv"
+                )
+            mix_heads = self.token_mix_num_heads or heads
+            if self.token_mix_dim is not None and self.token_mix_dim % mix_heads != 0:
+                raise ValueError(
+                    f"token_mix_dim {self.token_mix_dim} must be divisible by "
+                    f"{mix_heads} mixing heads"
+                )
+        elif any(
+            v is not None
+            for v in (
+                self.token_mix_radius,
+                self.token_mix_dim,
+                self.token_mix_num_heads,
+            )
+        ):
+            raise ValueError("token_mix_* settings need token_mix_layout")
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2045,6 +2239,12 @@ class PerceiverConfig(Config):
             temporal_rope_dim_frac=temporal_rope_dim_frac,
             rope_temporal_base=rope_temporal_base,
             read_time_range=self.read_time_range,
+            token_mix_layout=self.token_mix_layout,
+            token_mix_radius=(
+                self.token_mix_radius if self.token_mix_radius is not None else 1
+            ),
+            token_mix_dim=self.token_mix_dim,
+            token_mix_num_heads=self.token_mix_num_heads,
         )
 
 
@@ -2577,8 +2777,12 @@ class Encoder(FlexiVitBase):
         # Joint latent-token attention needs each token's patch cell (row-major index
         # in the patch grid) to restrict token<->token attention to one cell. Built in
         # the same collapsed order as the tokens and reduced alongside them below.
+        # A token-mixing Perceiver needs them too, for its neighbourhood of cells.
         cell_ids: Tensor | None = None
-        if isinstance(self.perceiver, JointLatentTransformer):
+        if isinstance(self.perceiver, JointLatentTransformer) or (
+            isinstance(self.perceiver, Perceiver)
+            and self.perceiver.token_mix_layout is not None
+        ):
             cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
         # Full (pre-masking) positions in collapsed order, kept for the register
         # bottleneck read so registers attend over the encoded *visible* patch tokens
@@ -2717,6 +2921,7 @@ class Encoder(FlexiVitBase):
                     visible_mask=new_mask,
                     spatial_grid=spatial_grid,
                     grid_extent_positions=register_kv_positions,
+                    cell_ids=cell_ids[..., 0] if cell_ids is not None else None,
                 )
             register_output = {
                 "registers": registers,

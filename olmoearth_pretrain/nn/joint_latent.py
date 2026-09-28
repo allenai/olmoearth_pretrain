@@ -169,6 +169,89 @@ def joint_attention_allowed(
     return valid[:, None, :] & allowed
 
 
+def neighbourhood_attention_allowed(
+    cell_ids: Tensor, valid: Tensor, n_w: int, radius: int
+) -> Tensor:
+    """Dense ``[B, L, L]`` mask for token mixing within a spatial neighbourhood of cells.
+
+    ``allowed[b, q, kv]`` is true when ``kv`` is a valid key whose cell lies within
+    ``radius`` cells of ``q``'s in both row and column (every timestep and modality of
+    those cells), or -- for non-spatial tokens (cell ``-1``) -- when both are
+    non-spatial. A token always sees itself, so no row is empty (padding rows included,
+    whose outputs nothing reads). Reference / CPU path; CUDA builds the same predicate
+    as a FlexAttention block mask (:func:`token_mix_attention_kwargs`).
+    """
+    row, col = cell_ids // n_w, cell_ids % n_w
+    spatial = cell_ids >= 0
+    near = ((row[:, :, None] - row[:, None, :]).abs() <= radius) & (
+        (col[:, :, None] - col[:, None, :]).abs() <= radius
+    )
+    both_spatial = spatial[:, :, None] & spatial[:, None, :]
+    both_flat = ~spatial[:, :, None] & ~spatial[:, None, :]
+    allowed = valid[:, None, :] & ((both_spatial & near) | both_flat)
+    eye = torch.eye(cell_ids.shape[1], dtype=torch.bool, device=cell_ids.device)
+    return allowed | eye[None]
+
+
+def token_mix_attention_kwargs(
+    cell_ids: Tensor, valid: Tensor | None, n_w: int, radius: int
+) -> dict[str, Any]:
+    """Attention-mask kwargs for the neighbourhood token-mixing blocks.
+
+    A FlexAttention block mask on CUDA, a dense ``[B, 1, L, L]`` SDPA mask elsewhere;
+    both implement :func:`neighbourhood_attention_allowed`.
+    """
+    key_valid = (
+        valid if valid is not None else torch.ones_like(cell_ids, dtype=torch.bool)
+    )
+    if cell_ids.is_cuda:
+        row, col = cell_ids // n_w, cell_ids % n_w
+        spatial = cell_ids >= 0
+
+        def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+            near = ((row[b, q] - row[b, kv]).abs() <= radius) & (
+                (col[b, q] - col[b, kv]).abs() <= radius
+            )
+            same_kind = (spatial[b, q] & spatial[b, kv] & near) | (
+                ~spatial[b, q] & ~spatial[b, kv]
+            )
+            return (key_valid[b, kv] & same_kind) | (q == kv)
+
+        batch, length = cell_ids.shape
+        return {
+            "block_mask": create_block_mask_cuda(
+                mask_mod, batch, length, cell_ids.device
+            )
+        }
+    return {
+        "attn_mask": neighbourhood_attention_allowed(cell_ids, key_valid, n_w, radius)[
+            :, None
+        ]
+    }
+
+
+def sort_tokens_by_cell(
+    tokens: Tensor, positions: Tensor, valid: Tensor, cell_ids: Tensor
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Permute the token axis so each cell's tokens are contiguous (row-major cells).
+
+    Stable, so the within-cell modality / time order is kept; non-spatial tokens
+    (cell ``-1``) sort first and invalid (padding) tokens last. Everything that is
+    indexed by token moves together.
+    """
+    sort_key = cell_ids.masked_fill(~valid, torch.iinfo(cell_ids.dtype).max)
+    order = torch.argsort(sort_key, dim=1, stable=True)
+    gather_d = lambda x: torch.gather(  # noqa: E731
+        x, 1, order[..., None].expand(-1, -1, x.shape[-1])
+    )
+    return (
+        gather_d(tokens),
+        gather_d(positions),
+        torch.gather(valid, 1, order),
+        torch.gather(cell_ids, 1, order),
+    )
+
+
 class JointLatentTransformer(nn.Module):
     """Latent grid + patch tokens under one structured attention (see module doc).
 
