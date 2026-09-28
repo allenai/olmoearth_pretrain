@@ -32,6 +32,16 @@ logger = logging.getLogger(__name__)
 PROFILE_TARGETS = {
     "prof_tmlp1": "pure_perceiver_joint_latentread_rstride_tmlp1",
     "prof_latentread": "pure_perceiver_joint_latentread",
+    # Token-mixing window size: the same arm at 3x3 (as trained) and 5x5.
+    "prof_mix6r1": "pure_perceiver_mix6_read6",
+    "prof_mix6r2": "pure_perceiver_mix6_read6",
+    "prof_mix6d128r1": "pure_perceiver_mix6_read6_d128",
+    "prof_mix6d128r2": "pure_perceiver_mix6_read6_d128",
+}
+# Perceiver-config overrides per prefix, applied on top of the arm's model.
+PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
+    "prof_mix6r2": {"token_mix_radius": 2},
+    "prof_mix6d128r2": {"token_mix_radius": 2},
 }
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.
 GLOBAL_BATCH_SIZE = 64
@@ -41,18 +51,26 @@ PROFILE_ACTIVE = 10
 MAX_STEPS = PROFILE_SKIP + 1 + PROFILE_WARMUP + PROFILE_ACTIVE + 5
 
 
-def _target(common: CommonComponents):
-    for prefix, module in PROFILE_TARGETS.items():
+def _prefix(common: CommonComponents) -> str:
+    # Longest match first, so no prefix can shadow a longer one.
+    for prefix in sorted(PROFILE_TARGETS, key=len, reverse=True):
         if common.run_name.startswith(prefix):
-            return importlib.import_module(module)
+            return prefix
     raise ValueError(
         f"run name {common.run_name!r} must start with one of {list(PROFILE_TARGETS)}"
     )
 
 
+def _target(common: CommonComponents):
+    return importlib.import_module(PROFILE_TARGETS[_prefix(common)])
+
+
 def build_model_config(common: CommonComponents):
-    """The target arm's model."""
-    return _target(common).build_model_config(common)
+    """The target arm's model (plus any per-prefix Perceiver overrides)."""
+    config = _target(common).build_model_config(common)
+    for field, value in PROFILE_PERCEIVER_OVERRIDES.get(_prefix(common), {}).items():
+        setattr(config.encoder_config.perceiver_config, field, value)
+    return config
 
 
 def build_train_module_config(common: CommonComponents):
