@@ -2,6 +2,7 @@
 
 import pytest
 import torch
+import torch.nn.functional as F
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import (
@@ -269,3 +270,30 @@ def test_bad_token_mix_configs_are_rejected(bad: dict, message: str) -> None:
             rope_base=10000.0,
             qk_norm=False,
         )
+
+
+def test_mixing_block_runs_through_the_block_mask_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The CUDA call path (``block_mask`` via ``Block``) matches the dense path.
+
+    FlexAttention needs CUDA, so the kernel is swapped for dense SDPA over a boolean
+    mask passed in the ``block_mask`` slot; what this pins is the kwarg plumbing that
+    the GPU path uses and the CPU path never touches (it once raised
+    ``Block.forward() got an unexpected keyword argument 'block_mask'``).
+    """
+    import olmoearth_pretrain.nn.joint_latent as jl
+
+    def dense_flex(q, k, v, block_mask):  # type: ignore[no-untyped-def]
+        return F.scaled_dot_product_attention(q, k, v, attn_mask=block_mask)
+
+    monkeypatch.setattr(jl, "flex_attention_cuda", dense_flex)
+    torch.manual_seed(0)
+    blk = _mixing_perceiver().token_mix_blocks[0]
+    tokens, positions, cells = _grid_inputs()
+    dense = token_mix_attention_kwargs(cells, None, n_w=4, radius=1)
+    via_dense = blk(x=tokens, rope_positions=positions, **dense)
+    via_block_mask = blk(
+        x=tokens, rope_positions=positions, block_mask=dense["attn_mask"]
+    )
+    torch.testing.assert_close(via_block_mask, via_dense)

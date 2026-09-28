@@ -758,12 +758,14 @@ class Block(nn.Module):
         rope_extent_y: torch.Tensor | None = None,
         rope_spatial_extent: torch.Tensor | None = None,
         rope_spatial_extent_y: torch.Tensor | None = None,
+        block_mask: Any | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
+            block_mask: Optional FlexAttention block mask (see :meth:`Attention.sdpa`).
             rope_extent: Optional per-query temporal interval widths (see
                 :meth:`Attention.forward`).
             rope_extent_y: The same for the keys.
@@ -806,6 +808,7 @@ class Block(nn.Module):
                     rope_extent_y=rope_extent_y,
                     rope_spatial_extent=rope_spatial_extent,
                     rope_spatial_extent_y=rope_spatial_extent_y,
+                    block_mask=block_mask,
                 )
             )
         )
