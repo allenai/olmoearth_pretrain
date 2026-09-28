@@ -67,6 +67,74 @@
       ],
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/wildfire/canada_nbac_test"
     },
+    "cybench_maize_eval": {
+      "groups": [
+        "maize"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_maize_era5d.yaml",
+      "notes": "CY-Bench maize yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_maize. Same windows/splits/target stats as the full entry.",
+      "num_classes": 1,
+      "probe_lr": 0.1,
+      "tags": {
+        "oep_eval": "",
+        "split": "train"
+      },
+      "target_mean": 4.542719,
+      "target_std": 3.242293,
+      "task_type": "regression",
+      "test_groups": [
+        "maize"
+      ],
+      "test_tags": {
+        "oep_eval": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "maize"
+      ],
+      "val_tags": {
+        "oep_eval": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
+    "cybench_wheat_eval": {
+      "groups": [
+        "wheat"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/cybench_wheat_era5d.yaml",
+      "notes": "CY-Bench wheat yield (t/ha) regression on the oep_eval-tagged stratified subset (3k train / 1k val / 1k test, stratified by country x harvest year, seed 0; see olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset) of cybench_wheat. Same windows/splits/target stats as the full entry.",
+      "num_classes": 1,
+      "probe_lr": 0.1,
+      "tags": {
+        "oep_eval": "",
+        "split": "train"
+      },
+      "target_mean": 3.410384,
+      "target_std": 1.917725,
+      "task_type": "regression",
+      "test_groups": [
+        "wheat"
+      ],
+      "test_tags": {
+        "oep_eval": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "wheat"
+      ],
+      "val_tags": {
+        "oep_eval": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/helios/dataset/cybench/rslearn_dataset"
+    },
     "dfmc1000h": {
       "groups": [
         "spatial_split"
@@ -107,7 +175,7 @@
       "model_yaml_path": "configs/dfmc1000h_era5d.yaml",
       "notes": "1000-hour DFMC gravimetric linear-probe benchmark. Complete 448-day histories only; 1845 train and 907 merged original val/test labels. No test split.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.03,
       "tags": {
         "era5_448d_complete": "complete",
         "method": "Gravimetric",

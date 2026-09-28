@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import math
+import pickle
 import sys
 from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
@@ -29,8 +30,11 @@ import olmoearth_pretrain.nn.era5_encoder as era5_encoder_mod
 import olmoearth_pretrain.train.train_module.era5_multiobjective as era5_multiobjective
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
 from olmoearth_pretrain.data.multi_task_era5_dataset import (
+    LABEL_EXTRACTORS,
     Era5SslBatch,
     Era5SupervisedBatch,
+    Era5TaskSpec,
+    make_regression_extractor,
 )
 from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
@@ -1872,3 +1876,21 @@ class TestContrastiveLauncher:
             ValueError, match="enable_reconstruction|rank_microbatch_size"
         ):
             era5_launch_script.build_model_config(common)
+
+
+def test_regression_label_extractor_is_picklable() -> None:
+    """Spawned eval DataLoader workers must be able to pickle the dataset's extractor.
+
+    Regression: the closure returned by ``make_regression_extractor`` failed with
+    ``Can't pickle local object`` the first time a window-level RegressionTask
+    (CY-Bench yield) ran through the eval callback on Beaker.
+    """
+    spec = Era5TaskSpec(name="t", task_type="regression", num_classes=1)
+    for fn in (
+        spec.get_label_extractor(),
+        make_regression_extractor("value"),
+        LABEL_EXTRACTORS["default_regression"],
+    ):
+        restored = pickle.loads(pickle.dumps(fn))
+        out = restored({"value": torch.tensor(3.5), "valid": torch.tensor(1.0)})
+        assert float(out) == 3.5 and out.shape == ()
