@@ -3,7 +3,6 @@
 import logging
 import os
 from dataclasses import dataclass
-from itertools import product
 
 import numpy as np
 import torch
@@ -216,14 +215,17 @@ class Tessera(nn.Module):
         s2_x, s1_x = self.prepare_input(masked_olmoearth_sample)
         b, h, w, _, _ = s2_x.shape
         # Create an output tensor with the same shape as s2_x except the last dim, and set the last dim to the latent dim
-        output_shape = tuple([b, h, w, self.model.latent_dim])
-        output_features = torch.zeros(*output_shape, device=s2_x.device)
 
-        for i, j in product(range(h), range(w)):
-            s2_x_ij = s2_x[:, i, j, :, :]
-            s1_x_ij = s1_x[:, i, j, :, :]
-            output_features_ij = self.model(s2_x_ij, s1_x_ij)
-            output_features[:, i, j, :] = output_features_ij
+        # Pixels are independent: the encoder maps (N, T, C) -> (N, D) with no
+        # batch-coupled ops (no BatchNorm anywhere in this module), so h and w
+        # fold into the batch dimension and the whole grid is one call instead
+        # of h*w sequential ones. At ws16 that is 256 calls collapsed into 1.
+        # Ordering is preserved: reshape is b-major then h then w, matching the
+        # product(range(h), range(w)) write order of the loop it replaces.
+        n = b * h * w
+        s2_flat = s2_x.reshape(n, s2_x.shape[-2], s2_x.shape[-1])
+        s1_flat = s1_x.reshape(n, s1_x.shape[-2], s1_x.shape[-1])
+        output_features = self.model(s2_flat, s1_flat).reshape(b, h, w, -1)
 
         if not spatial_pool:
             output_features = reduce(output_features, "b ... d -> b d", pooling)
