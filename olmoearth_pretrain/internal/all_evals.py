@@ -3874,7 +3874,7 @@ for _island in _LOIO_ISLANDS:
         f"loio_{_island}", f"pastis2_drom_bg8void_2019_loio_{_island}"
     )
 
-for _n_months in range(1, 12):
+for _n_months in range(1, 13):
     _register_2019_variant(
         f"mo{_n_months:02d}", f"pastis2_drom_bg8void_2019_mo{_n_months:02d}"
     )
