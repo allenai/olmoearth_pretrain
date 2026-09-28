@@ -71,19 +71,26 @@ def interleaved_layout(n_mix: int, n_read: int) -> str:
 def build_mix_model_config(
     common: CommonComponents,
     *,
-    n_mix: int,
-    n_read: int,
+    n_mix: int = 0,
+    n_read: int = 0,
     radius: int = 1,
     mix_dim: int | None = None,
     mix_heads: int | None = None,
+    layout: str | None = None,
 ) -> LatentMIMConfig:
-    """``trope_ld12`` with ``n_mix`` neighbourhood-mixing blocks and ``n_read`` reads."""
+    """``trope_ld12`` with ``n_mix`` neighbourhood-mixing blocks and ``n_read`` reads.
+
+    ``layout`` overrides the interleaved default with an explicit schedule (its ``R``
+    count sets the number of reads, and the total latent depth is whatever it holds).
+    """
     config = _pure_perceiver_model_config(common)
     perceiver = config.encoder_config.perceiver_config
     assert isinstance(perceiver, PerceiverConfig) and perceiver.read_time_rope
     assert not perceiver.read_time_range  # point reads, as in trope_ld12
-    perceiver.latent_depth = n_read
-    perceiver.token_mix_layout = interleaved_layout(n_mix, n_read)
+    if layout is None:
+        layout = interleaved_layout(n_mix, n_read)
+    perceiver.latent_depth = layout.count("R")
+    perceiver.token_mix_layout = layout
     perceiver.token_mix_radius = radius
     perceiver.token_mix_dim = mix_dim
     perceiver.token_mix_num_heads = mix_heads

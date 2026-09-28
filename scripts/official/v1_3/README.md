@@ -31,6 +31,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_mix6_read6.py` | 6 mixing blocks (3x3 cells, all timesteps + modalities) interleaved with 6 reads, + 6 latent-only blocks |
 | `ablations/pure_perceiver_mix6c_read6.py` | the same with own-cell mixing only (`token_mix_radius=0`) |
 | `ablations/pure_perceiver_mix8_read5.py` | 8 mixing blocks interleaved with 5 reads, + 7 latent-only blocks |
+| `ablations/pure_perceiver_mix5pre_read4.py` | 5 mixing blocks first, then 4 [read -> latent] pairs (`MMMMMRRRR`, the RC's Perceiver shape; 4 latent blocks) |
 | `ablations/pure_perceiver_mix6_read6_d128.py` | `mix6_read6` with a 128-dim mixing stream (2 heads); trained as `v1_3_vit0_mix6d128_read6` |
 | `ablations/pure_perceiver_joint_latentread_rstride_fast.py` | speed copy of the point-latent random-stride arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_fast.py` | speed copy of the interval arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
