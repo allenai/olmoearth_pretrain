@@ -446,7 +446,7 @@ class Era5DownstreamEvaluatorCallback(Callback):
         # Spatial probes (segmentation / regression) expect (N, H, W, D)
         # embeddings and (N, H, W) labels.  Classification uses a flat
         # LinearProbe that needs (N, D) — don't unsqueeze for it.
-        _spatial = task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION)
+        _spatial = task_type in (TaskType.SEGMENTATION, TaskType.PER_PIXEL_REGRESSION)
         if _spatial and train_embeddings.ndim == 2:
             train_embeddings = train_embeddings.unsqueeze(1).unsqueeze(1)
             val_embeddings = val_embeddings.unsqueeze(1).unsqueeze(1)

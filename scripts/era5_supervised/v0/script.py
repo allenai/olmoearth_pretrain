@@ -296,7 +296,7 @@ def _task_type_from_str(value: str) -> TaskType:
 
 def _require_supervised_task_type(task_type: TaskType, who: str) -> None:
     """Reject task types the supervised objective cannot consume."""
-    if task_type not in (TaskType.CLASSIFICATION, TaskType.REGRESSION):
+    if task_type not in (TaskType.CLASSIFICATION, TaskType.PER_PIXEL_REGRESSION):
         raise ValueError(
             f"{who}: task_type={task_type!r} is unsupported for ERA5 "
             "supervised pretraining v0 (only classification / regression "
@@ -347,7 +347,7 @@ def _auto_label_extractor(
         )
         return None
 
-    if task_type == TaskType.REGRESSION:
+    if task_type == TaskType.PER_PIXEL_REGRESSION:
         if "PerPixelRegression" in class_path:
             return "per_pixel_regression_to_scalar"
         return None

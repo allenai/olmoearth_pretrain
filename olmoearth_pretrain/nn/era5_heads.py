@@ -89,7 +89,9 @@ class RegressionHead(SupervisedHead):
     reported in the original target units for interpretability.
     """
 
-    task_type = TaskType.REGRESSION
+    # Value "regression": ERA5 scalar targets keep this string, and the in-loop
+    # evaluator probes them as a 1x1 map (the per-pixel regression probe path).
+    task_type = TaskType.PER_PIXEL_REGRESSION
 
     def __init__(
         self,
@@ -265,7 +267,7 @@ def build_head(
 ) -> SupervisedHead:
     """Construct the right head for a given (task_type, is_multilabel) pair."""
     task_type = TaskType(task_type)
-    if task_type == TaskType.REGRESSION:
+    if task_type == TaskType.PER_PIXEL_REGRESSION:
         num_outputs = num_classes or 1
         return RegressionHead(
             num_outputs=num_outputs,

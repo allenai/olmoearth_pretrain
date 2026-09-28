@@ -361,7 +361,7 @@ class Era5TaskSpec:
 
     name: str
     weight: float = 1.0
-    task_type: TaskType | str = TaskType.REGRESSION
+    task_type: TaskType | str = TaskType.PER_PIXEL_REGRESSION
     is_multilabel: bool = False
     num_classes: int | None = None
     regression_label_key: str = "value"
@@ -391,7 +391,7 @@ class Era5TaskSpec:
         task_type = TaskType(self.task_type)
         if task_type == TaskType.CLASSIFICATION:
             return default_classification_label
-        if task_type == TaskType.REGRESSION:
+        if task_type == TaskType.PER_PIXEL_REGRESSION:
             return make_regression_extractor(self.regression_label_key)
         raise ValueError(
             f"Unsupported task_type for ERA5 supervised pretraining: {task_type}"
