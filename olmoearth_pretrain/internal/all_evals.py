@@ -3879,6 +3879,35 @@ for _n_months in range(1, 13):
         f"mo{_n_months:02d}", f"pastis2_drom_bg8void_2019_mo{_n_months:02d}"
     )
 
+# ---------------------------------------------------------------------------
+# Calendar-2019 input-combination tasks for the varying-inputs table. The S2
+# arm is planteur_2019_probe_sentinel2 above; these add the other four. Landsat
+# was not in the original 2019 materialization and was re-ingested for this, so
+# all five columns now come from the same calendar-2019 windows rather than the
+# 2018-09 set the published table used.
+_INPUT_COMBOS_2019 = {
+    "sentinel1": (["SENTINEL1"], "pastis2_drom_bg8void_2019_s1"),
+    "sentinel1_sentinel2": (
+        ["SENTINEL1", "SENTINEL2_L2A"], "pastis2_drom_bg8void_2019_s1s2"),
+    "sentinel2_landsat": (
+        ["SENTINEL2_L2A", "LANDSAT"], "pastis2_drom_bg8void_2019_s2ls"),
+    "sentinel1_sentinel2_landsat": (
+        ["SENTINEL1", "SENTINEL2_L2A", "LANDSAT"], "pastis2_drom_bg8void_2019_s1s2ls"),
+}
+
+for _combo, (_mods, _ds_name) in _INPUT_COMBOS_2019.items():
+    _mod_names = [getattr(Modality, _m).name for _m in _mods]
+    _probe = _pastis_ps1_task(_mod_names, window_size=16, dataset=_ds_name)
+    EVAL_TASKS[f"planteur_2019_probe_{_combo}"] = _probe
+    for _dim in (128, 64):
+        EVAL_TASKS[f"planteur_2019_probe_{_combo}_proj{_dim}"] = replace(
+            _probe, eval_on_projected_registers=True, eval_projection_dim=_dim
+        )
+    FT_EVAL_TASKS[f"planteur_2019_ft_{_combo}"] = _pastis_ft_task(
+        _mod_names, dataset=_ds_name
+    )
+
+
 
 # Tessera live-encoder raw-acquisition tasks (S1+S2, shared union time axis,
 # calendar 2019, capped at 120 slots). tile_samples is False because
