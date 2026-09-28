@@ -3,7 +3,7 @@
 Question: is narrow mixing enough? It is the deployable version (~8x cheaper token path than the 768-dim arm).
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6d128_read6``
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6d128_rl6``
 (named so that ``v1_3_vit0_mix6_read6`` is not a prefix of it).
 """
 

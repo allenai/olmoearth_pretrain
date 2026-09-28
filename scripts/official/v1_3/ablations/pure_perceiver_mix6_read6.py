@@ -1,9 +1,12 @@
-"""Token-mixing pure-Perceiver arm: 6 neighbourhood-mixing blocks (3x3 cells) interleaved with 6 reads, + 6 latent-only blocks.
+"""Token-mixing pure-Perceiver arm: 6 neighbourhood-mixing blocks (3x3 cells) interleaved with 6 [read -> latent] pairs (``MRMRMRMRMRMR``).
 
 Question: the main arm: does local token computation before each read close the gap between the pure Perceiver (trope_ld12) and the joint arms?
 
+First launched as ``v1_3_vit0_mix6_read6`` with 6 extra latent-only blocks; stopped
+before training (2026-09-28) when the arms dropped latent-only blocks.
+
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6_read6``.
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6_rl6``.
 """
 
 import logging

@@ -27,12 +27,13 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_joint_latentread_rstride_range.py` | the random-stride latentread arm with interval latents (`latent_time_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_srange.py` | the random-stride latentread arm with footprint-aware latents: spatial sinc gate over each latent's stride x stride pixels (`latent_spatial_range`) |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange.py` | the same with interval latents in time as well |
-| `ablations/pure_perceiver_mix.py` | shared builders for the token-mixing arms: `trope_ld12` + neighbourhood token-mixing blocks (`token_mix_layout`) interleaved with the reads, 12 latent blocks in total, + m-eurosat / pastis on the d768 registers |
-| `ablations/pure_perceiver_mix6_read6.py` | 6 mixing blocks (3x3 cells, all timesteps + modalities) interleaved with 6 reads, + 6 latent-only blocks |
-| `ablations/pure_perceiver_mix6c_read6.py` | the same with own-cell mixing only (`token_mix_radius=0`) |
-| `ablations/pure_perceiver_mix8_read5.py` | 8 mixing blocks interleaved with 5 reads, + 7 latent-only blocks |
+| `ablations/pure_perceiver_mix.py` | shared builders for the token-mixing arms: `trope_ld12` + neighbourhood token-mixing blocks (`token_mix_layout`) interleaved with the reads, no latent-only blocks, + m-eurosat / pastis on the d768 registers |
+| `ablations/pure_perceiver_mix6_read6.py` | 6 mixing blocks (3x3 cells, all timesteps + modalities) interleaved with 6 [read -> latent] pairs; trained as `v1_3_vit0_mix6_rl6` |
+| `ablations/pure_perceiver_mix6c_read6.py` | the same with own-cell mixing only (`token_mix_radius=0`); trained as `v1_3_vit0_mix6c_rl6` |
+| `ablations/pure_perceiver_mix8_read5.py` | 8 mixing blocks interleaved with 5 [read -> latent] pairs; trained as `v1_3_vit0_mix8_rl5` |
 | `ablations/pure_perceiver_mix5pre_read4.py` | 5 mixing blocks first, then 4 [read -> latent] pairs (`MMMMMRRRR`, the RC's Perceiver shape; 4 latent blocks) |
-| `ablations/pure_perceiver_mix6_read6_d128.py` | `mix6_read6` with a 128-dim mixing stream (2 heads); trained as `v1_3_vit0_mix6d128_read6` |
+| `ablations/pure_perceiver_mix8pre_rl2.py` | 8 mixing blocks first, then 2 [read -> latent] pairs (`MMMMMMMMRR`) |
+| `ablations/pure_perceiver_mix6_read6_d128.py` | `mix6_read6` with a 128-dim mixing stream (2 heads); trained as `v1_3_vit0_mix6d128_rl6` |
 | `ablations/pure_perceiver_joint_latentread_rstride_fast.py` | speed copy of the point-latent random-stride arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_fast.py` | speed copy of the interval arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange_fast.py` | speed copy of the interval + footprint arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |

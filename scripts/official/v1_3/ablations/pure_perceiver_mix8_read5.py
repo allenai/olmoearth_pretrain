@@ -1,9 +1,9 @@
-"""Token-mixing pure-Perceiver arm: 8 neighbourhood-mixing blocks (3x3 cells) interleaved with 5 reads, + 7 latent-only blocks.
+"""Token-mixing pure-Perceiver arm: 8 neighbourhood-mixing blocks (3x3 cells) interleaved with 5 [read -> latent] pairs (``MMRMMRMRMMRMR``).
 
 Question: mixing depth vs read count at a similar budget to ``mix6_read6``.
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix8_read5``.
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix8_rl5``.
 """
 
 import logging

@@ -1,9 +1,15 @@
-"""Token-mixing pure-Perceiver arm: ``pure_perceiver_mix6_read6.py`` with the mixing restricted to each token's OWN cell (``token_mix_radius=0``: time x modality only).
+"""Token-mixing pure-Perceiver arm: 8 neighbourhood-mixing blocks (3x3 cells) FIRST, then 2 [read -> latent] pairs.
 
-Question: isolates the spatial part of the 3x3 window -- on single-timestep inputs (m-eurosat) own-cell mixing is a per-token MLP, so this arm should lose there if spatial mixing matters.
+Layout ``MMMMMMMMRR`` (each ``R`` is a read plus its paired latent block): all the token
+computation happens before the Perceiver, which keeps only 2 ``[read -> self-attend]``
+pairs (the RC's latent depth was inert between 2 and 4 layers). About 90% of the
+MACs on a 12-timestep S1+S2+L8 window go to the mixing (621 G at ws16 / ps1).
+
+Question: with nearly all compute in the (temporal + local spatial) token mixing, is
+2 layers of latent depth enough?
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6c_rl6``.
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix8pre_rl2``.
 """
 
 import logging
@@ -30,12 +36,15 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/official/v1_3/ablations/pure_perceiver_mix6c_read6.py"
+MODULE_PATH = "scripts/official/v1_3/ablations/pure_perceiver_mix8pre_rl2.py"
+
+# 8 mixing blocks, then 2 [read -> latent] pairs.
+LAYOUT = "MMMMMMMMRR"
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """``trope_ld12`` with this arm's token-mixing layout."""
-    return build_mix_model_config(common, n_mix=6, n_read=6, radius=0)
+    return build_mix_model_config(common, layout=LAYOUT)
 
 
 def build_trainer_config(common: CommonComponents):

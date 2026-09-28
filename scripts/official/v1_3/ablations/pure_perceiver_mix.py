@@ -11,9 +11,11 @@ pools tokens already refined by the mixing before it. On a single timestep a 3x3
 mixing block is local spatial attention (a content-dependent 3x3 conv); on a
 12-timestep, 3-modality input it mixes space, time and modality in one hop.
 
-Every arm keeps 12 latent blocks in total (the pure arm's latent depth): the reads a
-layout drops are replaced by latent-only blocks, so the arms differ from
-``trope_ld12`` in where token computation happens, not in latent depth. Reads stay
+No latent-only blocks: every read keeps just its paired latent block, so latent depth
+equals the read count (the RC showed 2 and 4 latent layers score the same, and on
+multi-timestep inputs the latent blocks are a few percent of the compute), and the
+budget goes to the token mixing instead. (A first launch topped every arm up to 12
+latent blocks with latent-only blocks; it was stopped before training, 2026-09-28.) Reads stay
 point reads (window-centre time anchor), as in ``trope_ld12``. The mixing runs on a
 Perceiver-internal copy of the tokens: the encoder output and the latent-MIM target
 (projection-only patch embeddings) are unchanged.
@@ -48,24 +50,22 @@ from olmoearth_pretrain.internal.experiment import CommonComponents  # noqa: E40
 from olmoearth_pretrain.nn.flexi_vit import PerceiverConfig  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 
-# Total latent blocks in every arm (read-paired + latent-only), = trope_ld12's depth.
-TOTAL_LATENT_BLOCKS = 12
 # v1.2 catalog tasks scored on the d768 register grid (not the student).
 REGISTER_EVAL_TASKS = ("m-eurosat", "pastis")
 
 
 def interleaved_layout(n_mix: int, n_read: int) -> str:
-    """``n_mix`` M and ``n_read`` R spread evenly (ending on a read), then L blocks.
+    """``n_mix`` M and ``n_read`` R spread evenly, ending on a read.
 
     The mixing is distributed so every read sees one more round of mixing than the
-    previous one; latent-only blocks top the latent stack up to TOTAL_LATENT_BLOCKS.
+    previous one.
     """
     layout = ""
     for i in range(n_read):
         # Mixing blocks due before read i: an even share of n_mix, front-loaded.
         target = -(-n_mix * (i + 1) // n_read)
         layout += "M" * (target - layout.count("M")) + "R"
-    return layout + "L" * (TOTAL_LATENT_BLOCKS - n_read)
+    return layout
 
 
 def build_mix_model_config(
