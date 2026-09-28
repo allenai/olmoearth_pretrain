@@ -71,8 +71,11 @@ def test_active_removed_feature_is_refused() -> None:
     "old,new",
     [
         ("encoder.register_bottleneck.norm.weight", "encoder.perceiver.norm.weight"),
-        ("encoder.register_projection.weight", "encoder.register_student.0.weight"),
-        ("encoder.register_projection_norm.bias", "encoder.register_student.1.bias"),
+        ("encoder.register_projection.weight", "encoder.perceiver.student.0.weight"),
+        (
+            "encoder.register_projection_norm.bias",
+            "encoder.perceiver.student.1.bias",
+        ),
         (
             "encoder.register_back_projections.128.0.weight",
             "register_distillation_head.back_projections.128.0.weight",
@@ -85,6 +88,23 @@ def test_key_mapping_round_trips(old: str, new: str) -> None:
     """Old -> new -> old for every kind of moved parameter (and an unmoved one)."""
     assert convert.convert_key(old) == new
     assert convert.legacy_key(new) == old
+
+
+@pytest.mark.parametrize(
+    "interim,new",
+    [
+        ("encoder.register_student.0.weight", "encoder.perceiver.student.0.weight"),
+        ("encoder.register_student.1.bias", "encoder.perceiver.student.1.bias"),
+        ("register_student.0.bias", "perceiver.student.0.bias"),
+        ("encoder.perceiver.norm.weight", "encoder.perceiver.norm.weight"),
+    ],
+)
+def test_interim_student_names_convert(interim: str, new: str) -> None:
+    """The encoder-level ``register_student`` names convert too, and are recoverable."""
+    assert convert.convert_key(interim) == new
+    assert convert.interim_key(new) == interim
+    # Idempotent on a current name.
+    assert convert.convert_key(new) == new
 
 
 def test_release_manifest_keys_map_onto_the_current_model() -> None:
@@ -150,6 +170,10 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
     legacy = {convert.legacy_key(k): v for k, v in model.state_dict().items()}
     assert any(k.startswith("encoder.register_projection_norm.") for k in legacy)
     model.load_state_dict(convert.convert_state_dict(legacy), strict=True)
+    # A dump under the interim encoder-level student names converts as well.
+    interim = {convert.interim_key(k): v for k, v in model.state_dict().items()}
+    assert any(k.startswith("encoder.register_student.") for k in interim)
+    model.load_state_dict(convert.convert_state_dict(interim), strict=True)
     # An encoder-only dump drops the heads it cannot house.
     enc_only = {
         k[len("encoder.") :]: v for k, v in legacy.items() if k.startswith("encoder.")
