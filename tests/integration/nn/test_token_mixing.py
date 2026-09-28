@@ -297,3 +297,42 @@ def test_mixing_block_runs_through_the_block_mask_path(
         x=tokens, rope_positions=positions, block_mask=dense["attn_mask"]
     )
     torch.testing.assert_close(via_block_mask, via_dense)
+
+
+def test_token_mix_block_size_reaches_the_module_and_is_validated() -> None:
+    """The config's block size is what the Perceiver passes to its mask builder."""
+    encoder = _mixing_encoder(
+        latent_depth=1, token_mix_layout="MR", token_mix_block_size=64
+    )
+    assert isinstance(encoder.perceiver, Perceiver)
+    assert encoder.perceiver.token_mix_block_size == 64
+    assert _mixing_perceiver().token_mix_block_size == 128  # default
+    with pytest.raises(ValueError, match="64 or 128"):
+        _mixing_perceiver(token_mix_block_size=96)
+    orphan = PerceiverConfig(register_dim=32, token_mix_block_size=64)
+    with pytest.raises(ValueError, match="need token_mix_layout"):
+        orphan.validate(encoder_num_heads=4, position_encoding="rope_3d_mixed")
+
+
+@pytest.mark.parametrize(
+    "block, expect", [(128, None), (64, {"fwd_BLOCK_M": 64, "fwd_BLOCK_N": 64})]
+)
+def test_flex_attention_gets_matching_forward_tiles_for_small_blocks(
+    monkeypatch: pytest.MonkeyPatch, block: int, expect: dict | None
+) -> None:
+    """A 64-block mask needs a 64-row forward tile (H100's default is 128)."""
+    import olmoearth_pretrain.nn.joint_latent as jl
+
+    seen: dict = {}
+
+    def fake_flex(q, k, v, block_mask, kernel_options=None):  # type: ignore[no-untyped-def]
+        seen["kernel_options"] = kernel_options
+        return q
+
+    class FakeMask:
+        BLOCK_SIZE = (block, block)
+
+    monkeypatch.setattr(jl, "_COMPILED_FLEX", fake_flex)
+    x = torch.zeros(1, 1, 4, 8)
+    jl.flex_attention_cuda(x, x, x, FakeMask())
+    assert seen["kernel_options"] == expect

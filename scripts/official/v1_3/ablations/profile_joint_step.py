@@ -37,6 +37,9 @@ PROFILE_TARGETS = {
     "prof_mix6r2": "pure_perceiver_mix6_read6",
     "prof_mix6d128r1": "pure_perceiver_mix6_read6_d128",
     "prof_mix6d128r2": "pure_perceiver_mix6_read6_d128",
+    # FlexAttention sparse block size for the mixing mask: 64 vs the default 128.
+    "prof_mix6r2b64": "pure_perceiver_mix6_read6",
+    "prof_mix6d128r2b64": "pure_perceiver_mix6_read6_d128",
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -44,6 +47,8 @@ PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
     "prof_mix6r2": {"token_mix_radius": 2},
     "prof_mix6d128r1": {"token_mix_radius": 1},
     "prof_mix6d128r2": {"token_mix_radius": 2},
+    "prof_mix6r2b64": {"token_mix_radius": 2, "token_mix_block_size": 64},
+    "prof_mix6d128r2b64": {"token_mix_radius": 2, "token_mix_block_size": 64},
 }
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.
 GLOBAL_BATCH_SIZE = 64
