@@ -78,6 +78,28 @@ def get_embedding_dim_args(dim: int) -> str:
     )
 
 
+def get_quantize_bits_args(bits: int) -> str:
+    """Get quantize_bits args for all tasks."""
+    return " ".join(
+        [" "]
+        + [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantize_bits={bits}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
+def get_quantile_config_path_args(path: str) -> str:
+    """Get quantile_config_path args for all tasks."""
+    return " ".join(
+        [" "]
+        + [
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.quantile_config_path={path}"
+            for task_name in EVAL_TASKS.keys()
+        ]
+    )
+
+
 dataset_args = " ".join(
     [" "]
     + [
@@ -410,10 +432,10 @@ def _get_base_run_name(
     return run_name
 
 
-def _get_checkpoint_args(checkpoint_path: str) -> str:
-    """Generate checkpoint arguments string."""
+def _get_checkpoint_args(checkpoint_path: str | None) -> str:
+    """Generate trainer args for checkpoint-resumed evaluation."""
     if checkpoint_path is not None:
-        return f"--trainer.load_path={checkpoint_path}"
+        return f"--trainer.load_path={checkpoint_path}{_EVAL_RESUME_MAX_DURATION}"
     return ""
 
 
@@ -575,9 +597,16 @@ def _get_tasks_to_run_arg(args: argparse.Namespace) -> str:
 
     if len(tasks_to_run) == len(EVAL_TASKS):
         return ""
+    # Emit compact JSON (no space after commas). json.dumps' default separators
+    # add a space after each comma (["a", "b"]); when this list-valued override
+    # is baked into a launched Beaker job command, the surrounding quotes can be
+    # lost during shell re-serialization, so those spaces get word-split and
+    # OmegaConf receives an unterminated flow sequence (ParserError: "expected
+    # node content, but found <stream end>"). Compact separators avoid the
+    # word-splitting entirely.
     return (
         " --trainer.callbacks.downstream_evaluator.tasks_to_run="
-        f"'{json.dumps(tasks_to_run)}'"
+        f"'{json.dumps(tasks_to_run, separators=(',', ':'))}'"
     )
 
 
@@ -587,12 +616,21 @@ MAX_DURATION_OVERRIDE = (
     "--trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
 )
 
+# Finished checkpoints still use the training max_duration; without extending it,
+# trainer.fit() exits immediately and eval_on_startup callbacks never run. Same values
+# as full_eval_sweep_finetune.py.
+_EVAL_RESUME_MAX_DURATION = (
+    " --trainer.max_duration.value=10000000 --trainer.max_duration.unit=steps"
+)
+
 
 def _get_env_prefix(args: argparse.Namespace, module_path: str) -> str:
     """Build the environment variable prefix for commands."""
     prefix = f"TRAIN_SCRIPT_PATH={module_path}"
     if getattr(args, "embedding_diagnostics_only", False):
         prefix += " EMBEDDING_DIAGNOSTICS_ONLY=1"
+    if getattr(args, "load_arch_from_checkpoint", False):
+        prefix += " LOAD_ARCH_FROM_CHECKPOINT=1"
     return prefix
 
 
@@ -622,6 +660,25 @@ def _build_default_command(
         else _get_module_path(args.model)
     )
     logger.info(f"Using module path {module_path}")
+
+    # Add quantization args if enabled
+    if getattr(args, "quantize_embeddings", False):
+        cmd_args += quantize_args
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
+
+    # Add embedding dim args if enabled
+    embedding_dim = getattr(args, "embedding_dim", None)
+    if embedding_dim is not None:
+        cmd_args += get_embedding_dim_args(embedding_dim)
+        run_name += f"_dim{embedding_dim}"
 
     # Per-task overrides reference EVAL_TASKS keys — skip when using EMBED_DIAG_TASKS
     if not getattr(args, "embedding_diagnostics_only", False):
@@ -700,7 +757,15 @@ def _build_hyperparameter_command(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_qt"
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
 
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
@@ -848,7 +913,15 @@ def _build_command_from_eval_settings(
     # Add quantization args if enabled
     if getattr(args, "quantize_embeddings", False):
         cmd_args += quantize_args
-        run_name += "_qt"
+        quantize_bits = getattr(args, "quantize_bits", None)
+        if quantize_bits is not None:
+            cmd_args += get_quantize_bits_args(quantize_bits)
+            run_name += f"_qt{quantize_bits}b"
+        else:
+            run_name += "_qt"
+        quantile_config_path = getattr(args, "quantile_config_path", None)
+        if quantile_config_path is not None:
+            cmd_args += get_quantile_config_path_args(quantile_config_path)
 
     embedding_dim = getattr(args, "embedding_dim", None)
     if embedding_dim is not None:
@@ -1197,6 +1270,19 @@ def main() -> None:
         help="If set, quantize embeddings to int8 for all tasks",
     )
     parser.add_argument(
+        "--quantize_bits",
+        type=int,
+        choices=[1, 2, 4, 8],
+        default=None,
+        help="Number of bits for percentile-based quantization (requires --quantile_config_path)",
+    )
+    parser.add_argument(
+        "--quantile_config_path",
+        type=str,
+        default=None,
+        help="Path to HDF5 file with precomputed quantile boundaries for percentile quantization",
+    )
+    parser.add_argument(
         "--embedding_dim",
         type=int,
         default=None,
@@ -1226,6 +1312,16 @@ def main() -> None:
         type=float,
         default=1.0,
         help="Train-label fraction to evaluate (1.0 uses all labels).",
+    )
+    parser.add_argument(
+        "--load_arch_from_checkpoint",
+        action="store_true",
+        help=(
+            "Reconstruct the model architecture from the checkpoint's saved "
+            "config.json instead of the training module's defaults. Lets you eval "
+            "runs whose architecture was set via train-time CLI overrides without "
+            "re-passing those overrides here."
+        ),
     )
 
     args, extra_cli = parser.parse_known_args()

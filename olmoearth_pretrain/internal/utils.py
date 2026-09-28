@@ -109,6 +109,16 @@ MODEL_SIZE_ARGS = {
         "decoder_num_heads": 3,
         "mlp_ratio": 4.0,
     },
+    # Canonical ViT-Small (DeiT, Touvron et al. 2021): 384-d, depth 12, 6 heads.
+    "small_shallow_decoder": {
+        "decoder_depth": 4,
+        "encoder_embedding_size": 384,
+        "decoder_embedding_size": 384,
+        "encoder_depth": 12,
+        "encoder_num_heads": 6,
+        "decoder_num_heads": 6,
+        "mlp_ratio": 4.0,
+    },
     "base_shallow_decoder": {
         "decoder_depth": 4,
         "encoder_embedding_size": 768,
@@ -274,3 +284,13 @@ class MockLatentMIMTrainModule(TrainModule):
 
     def zero_grads(self) -> None:
         """No-op gradient reset."""
+
+    def num_flops_per_token(self, seq_len: int) -> int | None:
+        """FLOP counts are not tracked (abstract on olmo-core >= 2.5)."""
+        del seq_len
+        return None
+
+    def global_num_flops_in_batch(self, batch: dict[str, Any]) -> int | None:
+        """FLOP counts are not tracked (abstract on olmo-core >= 2.5)."""
+        del batch
+        return None

@@ -5,7 +5,7 @@ import random
 
 from upath import UPath
 
-from .util import create_windows_with_highres_time
+from .util import create_windows
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -39,6 +39,4 @@ if __name__ == "__main__":
         lat = random.random() * 160 - 80
         lonlats.append((lon, lat))
 
-    create_windows_with_highres_time(
-        UPath(args.ds_path), lonlats, force_lowres_prob=0.25, workers=args.workers
-    )
+    create_windows(UPath(args.ds_path), lonlats, workers=args.workers)

@@ -7,7 +7,6 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import rasterio
-import rasterio.windows
 from pyproj import Transformer
 
 from olmoearth_pretrain.data.constants import (
@@ -28,10 +27,9 @@ logger = logging.getLogger(__name__)
 class SampleInformation:
     """Specification of a training example.
 
-    The example corresponds to one GridTile that appears in the dataset.
-
-    It includes all of the information to load modalities at this tile, along with
-    crops from coarser grained tiles that contain this tile.
+    The example corresponds to one GridTile that appears in the dataset. Each modality is
+    materialized per-window at this tile, so it includes all of the information to load
+    every modality at this tile.
     """
 
     grid_tile: GridTile
@@ -42,7 +40,7 @@ class SampleInformation:
     # always tied to a specific time range.
     time_span: TimeSpan
 
-    # The modalities available at this grid tile or coarser ones containing this tile.
+    # The modalities available at this grid tile.
     # The time spans from which the ModalityTiles are sourced should either match the
     # time span of the sample, or should be TimeSpan.STATIC.
     modalities: dict[ModalitySpec, ModalityTile]
@@ -100,26 +98,14 @@ def image_tiles_to_samples(
                 image_tile_index[index_key] = tile
 
     # Enumerate all the (grid_tile, time_span) tuples present in the dataset.
-    # Each of these identifies a training example.
-    # We ignore static time span here, unless it is at the base resolution, in which
-    # case we add it as both year and two-week, since currently all data at the base
-    # resolution is static. (The intention here is to avoid adding a two-week tile
-    # based on WorldCover being available if Sentinel-2 and others are only available
-    # for one-year, but to still add NAIP or Maxar tiles.)
+    # Each of these identifies a training example. Only multitemporal (YEAR) tiles
+    # define training examples; static tiles are attached to those samples below (in
+    # the per-modality loop) rather than creating their own.
     unique_image_tiles: set[tuple[GridTile, TimeSpan]] = set()
     for modality, grid_tile, time_span in image_tile_index.keys():
         if time_span == TimeSpan.STATIC:
-            if grid_tile.resolution_factor > 1:
-                logger.debug(
-                    f"ignoring static tile {grid_tile.resolution_factor} "
-                    f"because it is coarser than the base resolution for modality {modality.name}"
-                )
-                continue
-            else:
-                unique_image_tiles.add((grid_tile, TimeSpan.TWO_WEEK))  # type: ignore
-                unique_image_tiles.add((grid_tile, TimeSpan.YEAR))  # type: ignore
-        else:
-            unique_image_tiles.add((grid_tile, time_span))  # type: ignore
+            continue
+        unique_image_tiles.add((grid_tile, time_span))  # type: ignore
 
     # Now for each (grid_tile, time_span), construct the Sample object.
     # We also skip if not all modalities are available.
@@ -138,20 +124,11 @@ def image_tiles_to_samples(
                     f"ignoring modality {modality.name} not in supported_modalities"
                 )
                 continue
-            # We only use modalities that are at an equal or coarser resolution.
-            if modality.tile_resolution_factor < sample.grid_tile.resolution_factor:
-                logger.debug(
-                    f"ignoring modality {modality.name} with resolution factor "
-                    f"{modality.tile_resolution_factor} because it is coarser than "
-                    f"the sample grid tile resolution factor {sample.grid_tile.resolution_factor}"
-                )
-                continue
 
-            downscale_factor = (
-                modality.tile_resolution_factor // sample.grid_tile.resolution_factor
-            )
-
-            # Check to see if there is an available image tile for this modality.
+            # Every modality is materialized per-window at the sample's own grid tile
+            # (the 10 m/pixel base grid), so we look it up directly. Per-band-set
+            # resolution differences (e.g. 20 m Sentinel-2 bands, or naip_10 stored
+            # finer than 10 m) are handled by resampling in load_image_for_sample.
             # If modality is static, then we just use TimeSpan.STATIC for the lookup.
             # If the modality is multitemporal, then we use the time span of the sample
             # for the lookup.
@@ -161,57 +138,40 @@ def image_tiles_to_samples(
             else:
                 lookup_time_span = TimeSpan.STATIC  # type: ignore
 
-            # We need to downscale the grid tile for the lookup.
-            modality_grid_tile = GridTile(
-                crs=grid_tile.crs,
-                resolution_factor=modality.tile_resolution_factor,
-                col=grid_tile.col // downscale_factor,
-                row=grid_tile.row // downscale_factor,
-            )
-
-            index_key = (modality, modality_grid_tile, lookup_time_span)
+            index_key = (modality, grid_tile, lookup_time_span)
             if index_key not in image_tile_index:
                 logger.debug(
                     f"ignoring modality {modality.name} because no tile found for index_key={index_key}"
                 )
                 continue
-            image_tile = image_tile_index[index_key]
 
             # We found a tile, so we just add it in the modality map for this sample.
-            # The ImageTile object includes all the information needed to load the
-            # image (potentially requiring cropping).
-            sample.modalities[modality] = image_tile
+            sample.modalities[modality] = image_tile_index[index_key]
 
         samples.append(sample)
     return samples
 
 
 def load_image_for_sample(
-    image_tile: ModalityTile, sample: SampleInformation
+    image_tile: ModalityTile,
+    sample: SampleInformation,
 ) -> npt.NDArray:
-    """Loads the portion of the image that corresponds with the sample.
+    """Loads the per-window image for a modality.
 
-    If image_tile and sample share the same resolution, then we load the entire image.
-    Otherwise, if the image tile is at a coarser resolution, then we load just the crop
-    that is aligned with the sample.
-
-    The sample must not have a coarser resolution -- that would require reading many
-    image tiles and downsampling, but we do not want to do that.
+    Every modality is materialized per-window at the sample's own extent, so the entire
+    raster is read. Band sets stored at a coarser or finer resolution than the modality
+    grid (e.g. 20 m Sentinel-2 bands, or naip_10 stored at 2.5 m/pixel) are resampled to
+    the modality's grid resolution.
 
     Args:
         image_tile: the image to load.
-        sample: the SampleInformation. This is used to determine if the entire image
-            should be loaded or just a portion of it.
+        sample: the SampleInformation.
 
     Returns:
         the image as a numpy array TCHW (time is on the first dimension).
         In the future, this may include vector data too, or that may go in a separate
         function.
     """
-    # Compute the factor by which image_tile is bigger (coarser) than the sample.
-    factor = (
-        image_tile.grid_tile.resolution_factor // sample.grid_tile.resolution_factor
-    )
     # Read the modality image one band set at a time.
     # For now we resample all bands to the grid resolution of the modality.
     band_set_images = []
@@ -219,8 +179,6 @@ def load_image_for_sample(
         logger.debug(f"band_set={band_set}, fname={fname}")
         with fname.open("rb") as f:
             with rasterio.open(f) as raster:
-                # Identify the portion of the tile that we need to read.
-                # We refer to this as a subtile.
                 if raster.width != raster.height:
                     raise ValueError(
                         f"expected tile to be square but width={raster.width} != height={raster.height}"
@@ -236,30 +194,14 @@ def load_image_for_sample(
                     band_set_images.append(image)
                     continue
 
-                # Assuming all tiles cover the same area as the resolution factor 16 tile
-                subtile_size = raster.width // factor
-                col_offset = subtile_size * (sample.grid_tile.col % factor)
-                row_offset = subtile_size * (sample.grid_tile.row % factor)
-
-                # Now we can perform a windowed read.
-                rasterio_window = rasterio.windows.Window(
-                    col_off=col_offset,
-                    row_off=row_offset,
-                    width=subtile_size,
-                    height=subtile_size,
-                )
-                logger.debug(f"reading window={rasterio_window} from {fname}")
-                image: npt.NDArray = raster.read(window=rasterio_window)  # type: ignore
+                image: npt.NDArray = raster.read()  # type: ignore
+                subtile_size = raster.width
                 logger.debug(f"image.shape={image.shape}")
 
-                # And then for now resample it to the grid resolution.
+                # Resample the band set to the modality's grid resolution.
                 # The difference in resolution should always be a power of 2.
-                # If the factor is less than 1 we want the desired size to be multiplied by the thing
-                # If the tile size is greater we want to keep that extent
                 desired_subtile_size = int(
-                    IMAGE_TILE_SIZE
-                    * image_tile.modality.image_tile_size_factor
-                    // factor
+                    IMAGE_TILE_SIZE * image_tile.modality.image_tile_size_factor
                 )
                 if desired_subtile_size < subtile_size:
                     # In this case we need to downscale.

@@ -1,11 +1,13 @@
 """Launch script for evaluation allowing you to easily run all the evals for your model by just pointing at your training script."""
 
 import importlib.util
+import json
 import os
 import sys
 from logging import getLogger
 from typing import Any
 
+from olmo_core.config import Config
 from olmo_core.train.callbacks import (
     BeakerCallback,
     ConfigSaverCallback,
@@ -15,6 +17,7 @@ from olmo_core.train.callbacks import (
 from olmo_core.train.checkpoint import CheckpointerConfig
 from olmo_core.train.common import Duration, LoadStrategy
 from olmo_core.train.config import TrainerConfig
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
@@ -24,6 +27,7 @@ from olmoearth_pretrain.internal.experiment import (
     CommonComponents,
     main,
 )
+from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks import (
     DownstreamEvaluatorCallbackConfig,
@@ -33,6 +37,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamTaskConfig,
     EvalMode,
 )
+from olmoearth_pretrain.train.train_module.train_module import _strip_unknown_fields
 
 logger = getLogger(__name__)
 
@@ -63,6 +68,57 @@ def load_user_module(path: str) -> Any:
     return user_mod
 
 
+def _load_path_from_argv() -> str | None:
+    """Extract the checkpoint path from a ``--trainer.load_path=...`` CLI override."""
+    prefix = "--trainer.load_path="
+    for arg in sys.argv:
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
+    """Wrap a model-config builder to reconstruct the architecture from a checkpoint.
+
+    When ``LOAD_ARCH_FROM_CHECKPOINT`` is set, the returned builder reads
+    ``{load_path}/config.json`` -- the fully-resolved config that ConfigSaverCallback
+    writes alongside every checkpoint -- and deserializes its ``model`` block. This
+    rebuilds the EXACT architecture the checkpoint weights expect, so train-time
+    architecture overrides (e.g.
+    ``--model.encoder_config.perceiver_config.register_dim=768``) do NOT
+    need to be re-passed at eval time.
+
+    Falls back to ``fallback_builder`` (the training module's ``build_model_config``)
+    when no ``--trainer.load_path`` is given or the ``config.json`` is missing -- e.g.
+    older checkpoints or baseline models -- so existing flows are unaffected.
+    """
+
+    def builder(common: Any) -> Any:
+        load_path = _load_path_from_argv()
+        if load_path is None:
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but no --trainer.load_path was "
+                "provided; falling back to the module's build_model_config."
+            )
+            return fallback_builder(common)
+        config_path = UPath(load_path) / "config.json"
+        if not config_path.exists():
+            logger.warning(
+                "LOAD_ARCH_FROM_CHECKPOINT is set but %s does not exist; falling back "
+                "to the module's build_model_config.",
+                config_path,
+            )
+            return fallback_builder(common)
+        logger.info("Reconstructing model architecture from %s", config_path)
+        # Use the same reconstruction pipeline as the train-module compatibility check
+        # (patch legacy fields, strip fields unknown to the current schema) so the eval
+        # model and that check agree exactly.
+        config_dict = patch_legacy_encoder_config(json.loads(config_path.read_text()))
+        return Config.from_dict(_strip_unknown_fields(config_dict["model"]))
+
+    return builder
+
+
 EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
@@ -73,6 +129,21 @@ EVAL_TASKS = {
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         eval_interval=Duration.epochs(5),
         input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.KNN,
+        primary_metric=EvalMetric.ACCURACY,
+    ),
+    "similar_but_different": DownstreamTaskConfig(
+        dataset="similar_but_different",
+        embedding_batch_size=128,
+        probe_batch_size=128,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(5),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
         eval_mode=EvalMode.KNN,
         primary_metric=EvalMetric.ACCURACY,
     ),
@@ -260,6 +331,136 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
+    # Three split modes (random / by_city / by_continent), each with an S2-only,
+    # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
+    # name; the modality choice is the per-task input_modalities here.
+    "fifty_cities_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(20),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_city_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities_by_city",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_city_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities_by_city",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_city_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities_by_city",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(20),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_continent_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities_by_continent",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_continent_sentinel1": DownstreamTaskConfig(
+        dataset="fifty_cities_by_continent",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "fifty_cities_by_continent_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="fifty_cities_by_continent",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(20),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+    ),
     # TODO: Auto-generate EVAL_TASKS from registry entries. Most of this config
     # (dataset name, task_type -> eval_mode, modalities) is not task-specific and
     # can be derived from EvalDatasetEntry. Only batch sizes and learning rates
@@ -386,6 +587,434 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    # AEF-style single-labeled-center-pixel S2 timeseries datasets, cropped to
+    # 32x32 and ingested via the registry. Modeled as segmentation over
+    # label_raster (nodata=255 elsewhere) -> linear probe, overall accuracy.
+    "africa_crop_mask": DownstreamTaskConfig(
+        dataset="africa_crop_mask",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "canada_crops_coarse": DownstreamTaskConfig(
+        dataset="canada_crops_coarse",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "canada_crops_fine": DownstreamTaskConfig(
+        dataset="canada_crops_fine",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "descals": DownstreamTaskConfig(
+        dataset="descals",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "ethiopia_crops": DownstreamTaskConfig(
+        dataset="ethiopia_crops",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "glance": DownstreamTaskConfig(
+        dataset="glance",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "lcmap_lu": DownstreamTaskConfig(
+        dataset="lcmap_lu",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "us_trees": DownstreamTaskConfig(
+        dataset="us_trees",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "surface_fuels": DownstreamTaskConfig(
+        dataset="surface_fuels",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    "kenya_intercropping": DownstreamTaskConfig(
+        dataset="kenya_intercropping",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    # Vessel attribute datasets (single-timestep, centered vessel). Length is a
+    # regression task (RMSE); type is a 9-class classification task. We enable
+    # use_center_token because the crops are centered at the vessel; this way, we
+    # use the token at the center spatial patch instead of pooling over all spatial
+    # patches.
+    "small_landsat_vessel_type": DownstreamTaskConfig(
+        dataset="small_landsat_vessel_type",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.LANDSAT.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        use_center_token=True,
+    ),
+    "small_landsat_vessel_length": DownstreamTaskConfig(
+        dataset="small_landsat_vessel_length",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.LANDSAT.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
+    ),
+    "small_sentinel1_vessel_type": DownstreamTaskConfig(
+        dataset="small_sentinel1_vessel_type",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        use_center_token=True,
+    ),
+    "small_sentinel1_vessel_length": DownstreamTaskConfig(
+        dataset="small_sentinel1_vessel_length",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
+    ),
+    "small_sentinel2_vessel_type": DownstreamTaskConfig(
+        dataset="small_sentinel2_vessel_type",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        use_center_token=True,
+    ),
+    "small_sentinel2_vessel_length": DownstreamTaskConfig(
+        dataset="small_sentinel2_vessel_length",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.RMSE,
+        use_center_token=True,
+    ),
+    # GeoBench v2 (`gb2-*` datasets; keys use underscores for Hydra)
+    "gb2_benv2": DownstreamTaskConfig(
+        dataset="gb2-benv2",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.KNN,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
+        primary_metric=EvalMetric.MICRO_MAP,
+        epochs=50,
+    ),
+    "gb2_biomassters": DownstreamTaskConfig(
+        dataset="gb2-biomassters",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=1e-3,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        # RMSE (on z-scored targets) to match what GeoBench-2 reports/ranks on.
+        primary_metric=EvalMetric.RMSE,
+    ),
+    "gb2_burn_scars": DownstreamTaskConfig(
+        dataset="gb2-burn_scars",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    # Only 1 SAR amplitude band is provided, so we pass it in as a Sentinel1
+    # modality but only the "vv" band is used.
+    "gb2_caffe": DownstreamTaskConfig(
+        dataset="gb2-caffe",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_cloudsen12": DownstreamTaskConfig(
+        dataset="gb2-cloudsen12",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_kuro_siwo": DownstreamTaskConfig(
+        dataset="gb2-kuro_siwo",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SRTM.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_spacenet2": DownstreamTaskConfig(
+        dataset="gb2-spacenet2",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_spacenet7": DownstreamTaskConfig(
+        dataset="gb2-spacenet7",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_flair2": DownstreamTaskConfig(
+        dataset="gb2-flair2",
+        embedding_batch_size=8,
+        probe_batch_size=8,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_fotw": DownstreamTaskConfig(
+        dataset="gb2-fotw",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        patch_size=4,
+    ),
+    "gb2_treesatai": DownstreamTaskConfig(
+        dataset="gb2-treesatai",
+        embedding_batch_size=16,
+        probe_batch_size=16,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        eval_mode=EvalMode.KNN,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free).
+        primary_metric=EvalMetric.MICRO_MAP,
+        epochs=50,
+    ),
     # this eval is very large and can lead to
     # OOM errors. Skipping for now.
     # "oil_spill_detection": DownstreamTaskConfig(
@@ -437,6 +1066,40 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
     ),
+    "mapbiomas_3k_dense": DownstreamTaskConfig(
+        dataset="mapbiomas_3k_dense",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.001,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[
+            Modality.SENTINEL2_L2A.name,
+        ],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MACRO_F1,
+    ),
+    # "mapbiomas_3k_sparse": DownstreamTaskConfig(
+    #     dataset="mapbiomas_3k_sparse",
+    #     embedding_batch_size=32,
+    #     probe_batch_size=8,
+    #     num_workers=8,
+    #     pooling_type=PoolingType.MEAN,
+    #     norm_stats_from_pretrained=True,
+    #     norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+    #     probe_lr=0.0001,
+    #     eval_interval=Duration.epochs(10),
+    #     input_modalities=[
+    #         Modality.SENTINEL2_L2A.name,
+    #     ],
+    #     epochs=50,
+    #     eval_mode=EvalMode.LINEAR_PROBE,
+    #     primary_metric=EvalMetric.MACRO_F1,
+    # ),
 }
 
 # Pretrain-subset evals read from frozen snapshots under presto_eval_sets, NOT
@@ -703,16 +1366,6 @@ FT_EVAL_TASKS = {
         epochs=50,
         primary_metric=EvalMetric.MICRO_F1,
     ),
-    "pastis_sentinel2": DownstreamTaskConfig(
-        dataset="pastis",
-        ft_batch_size=16,
-        num_workers=2,
-        pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
-        input_modalities=[Modality.SENTINEL2_L2A.name],
-        epochs=50,
-        primary_metric=EvalMetric.MIOU,
-    ),
     "m_brick_kiln": DownstreamTaskConfig(
         dataset="m-brick-kiln",
         ft_batch_size=64,
@@ -731,6 +1384,26 @@ FT_EVAL_TASKS = {
         epochs=50,
         primary_metric=EvalMetric.MIOU,
     ),
+    "pastis_sentinel2": DownstreamTaskConfig(
+        dataset="pastis",
+        ft_batch_size=16,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "m_forestnet": DownstreamTaskConfig(
+        dataset="m-forestnet",
+        ft_batch_size=4,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        epochs=50,
+        primary_metric=EvalMetric.ACCURACY,
+    ),
     # Cashew plant requires a larger patch size; 16 performed best.
     "m_cashew_plant": DownstreamTaskConfig(
         dataset="m-cashew-plant",
@@ -743,15 +1416,144 @@ FT_EVAL_TASKS = {
         patch_size=16,
         primary_metric=EvalMetric.MIOU,
     ),
-    "m_forestnet": DownstreamTaskConfig(
-        dataset="m-forestnet",
+    # GeoBench v2 (same ``dataset=`` strings and modalities as EVAL_TASKS gb2_*).
+    "gb2_benv2": DownstreamTaskConfig(
+        dataset="gb2-benv2",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free),
+        # not macro-F1 at a fixed 0.5 threshold.
+        primary_metric=EvalMetric.MICRO_MAP,
+    ),
+    "gb2_biomassters": DownstreamTaskConfig(
+        dataset="gb2-biomassters",
+        ft_batch_size=2,
+        ft_grad_accum_steps=4,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        # RMSE (on z-scored targets) to match what GeoBench-2 reports/ranks on.
+        primary_metric=EvalMetric.RMSE,
+    ),
+    "gb2_burn_scars": DownstreamTaskConfig(
+        dataset="gb2-burn_scars",
+        ft_batch_size=2,
+        ft_grad_accum_steps=4,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    # Only 1 SAR amplitude band is provided, so we pass it in as a Sentinel1
+    # modality but only the "vv" band is used.
+    "gb2_caffe": DownstreamTaskConfig(
+        dataset="gb2-caffe",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL1.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_cloudsen12": DownstreamTaskConfig(
+        dataset="gb2-cloudsen12",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_kuro_siwo": DownstreamTaskConfig(
+        dataset="gb2-kuro_siwo",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL1.name, Modality.SRTM.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_spacenet2": DownstreamTaskConfig(
+        dataset="gb2-spacenet2",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_spacenet7": DownstreamTaskConfig(
+        dataset="gb2-spacenet7",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_flair2": DownstreamTaskConfig(
+        dataset="gb2-flair2",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_fotw": DownstreamTaskConfig(
+        dataset="gb2-fotw",
         ft_batch_size=4,
         num_workers=4,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=False,
+        norm_stats_from_pretrained=True,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
-        primary_metric=EvalMetric.ACCURACY,
+        patch_size=4,
+        primary_metric=EvalMetric.MIOU,
+    ),
+    "gb2_treesatai": DownstreamTaskConfig(
+        dataset="gb2-treesatai",
+        ft_batch_size=2,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        # Multilabel: GeoBench-2 reports micro-averaged mAP (threshold-free),
+        # not macro-F1 at a fixed 0.5 threshold.
+        primary_metric=EvalMetric.MICRO_MAP,
     ),
 }
 
@@ -826,6 +1628,10 @@ if __name__ == "__main__":
         build_train_module_config = None
 
     build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
     main(
         common_components_builder=build_common_components,
         model_config_builder=build_model_config,

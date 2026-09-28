@@ -1,45 +1,5 @@
 {
   "layers": {
-    "landsat_freq": {
-      "alias": "landsat",
-      "band_sets": [
-        {
-          "bands": [
-            "B1",
-            "B2",
-            "B3",
-            "B4",
-            "B5",
-            "B6",
-            "B7",
-            "B9",
-            "B10",
-            "B11"
-          ],
-          "dtype": "uint16",
-          "zoom_offset": -1
-        },
-        {
-          "bands": [
-            "B8"
-          ],
-          "dtype": "uint16"
-        }
-      ],
-      "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
-        "ingest": false,
-        "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
-        },
-        "query_config": {
-          "max_matches": 8,
-          "space_mode": "INTERSECTS"
-        }
-      },
-      "type": "raster"
-    },
     "landsat_mo01": {
       "alias": "landsat",
       "band_sets": [
@@ -67,12 +27,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-180d"
       },
@@ -105,12 +68,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-150d"
       },
@@ -143,12 +109,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-120d"
       },
@@ -181,12 +150,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-90d"
       },
@@ -219,12 +191,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-60d"
       },
@@ -257,12 +232,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-30d"
       },
@@ -295,12 +273,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "0d"
       },
@@ -333,12 +314,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "30d"
       },
@@ -371,12 +355,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "60d"
       },
@@ -409,12 +396,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "90d"
       },
@@ -447,12 +437,15 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "120d"
       },
@@ -485,16 +478,22 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.aws_landsat.LandsatOliTirs",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.landsat_8_9_c2_l1.Landsat89C2L1",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "metadata_cache_dir": "cache/landsat",
-          "sort_by": "cloud_cover"
+          "query": {
+            "sort_by": "CLOUD_COVER",
+            "sort_direction": "ASC"
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "150d"
       },
       "type": "raster"
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

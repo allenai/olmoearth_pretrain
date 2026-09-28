@@ -1,5 +1,7 @@
 """Unit tests for the centralized config module."""
 
+from dataclasses import dataclass
+
 import pytest
 
 from olmoearth_pretrain.config import (
@@ -8,6 +10,20 @@ from olmoearth_pretrain.config import (
     _StandaloneConfig,
     require_olmo_core,
 )
+
+
+@dataclass
+class _Inner(_StandaloneConfig):
+    """Module-level so ``_CLASS_`` can resolve it by import."""
+
+    width: int
+
+
+@dataclass
+class _Outer(_StandaloneConfig):
+    """Holds a nested ``_Inner``."""
+
+    inner: _Inner
 
 
 class TestOlmoCoreAvailability:
@@ -68,6 +84,28 @@ class TestStandaloneConfig:
 
         assert config.value == 42
         assert config.name == "test"
+
+    def test_standalone_config_rejects_unknown_fields(self) -> None:
+        """A key the dataclass lacks raises instead of being dropped silently."""
+        from dataclasses import dataclass
+
+        @dataclass
+        class SimpleConfig(_StandaloneConfig):
+            value: int
+
+        with pytest.raises(ValueError, match="stale_field"):
+            SimpleConfig.from_dict({"value": 1, "stale_field": True})
+
+    def test_standalone_config_rejects_unknown_nested_fields(self) -> None:
+        """Strictness also applies to nested ``_CLASS_`` dicts."""
+        inner_cls = f"{_Inner.__module__}.{_Inner.__qualname__}"
+        data = {"inner": {"_CLASS_": inner_cls, "width": 4, "stale_field": 1}}
+        with pytest.raises(ValueError, match="stale_field"):
+            _Outer.from_dict(data)
+        assert (
+            _Outer.from_dict({"inner": {"_CLASS_": inner_cls, "width": 4}}).inner.width
+            == 4
+        )
 
     def test_standalone_config_as_dict(self) -> None:
         """Test that _StandaloneConfig.as_dict works correctly."""

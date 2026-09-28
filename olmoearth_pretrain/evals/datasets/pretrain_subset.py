@@ -16,7 +16,13 @@ import torch
 from torch.utils.data import Dataset
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.constants import (
+    MISSING_VALUE,
+    Modality,
+)
+from olmoearth_pretrain.data.constants import (
+    WORLDCOVER_CLASSES as WORLDCOVER_CLASS_CODES,
+)
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
@@ -30,7 +36,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATCH_SIZE = 4
 DEFAULT_HW_P = 8
 DEFAULT_MAX_SAMPLES = 512
-WORLDCOVER_CLASSES = torch.tensor([10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100])
+WORLDCOVER_CLASSES = torch.tensor(WORLDCOVER_CLASS_CODES)
 OSM_TARGET_MODALITY = "openstreetmap_raster"
 SRTM_TARGET_MODALITY = "srtm"
 WORLDCOVER_TARGET_MODALITY = "worldcover"

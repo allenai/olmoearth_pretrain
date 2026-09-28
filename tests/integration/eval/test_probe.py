@@ -105,9 +105,15 @@ def test_probe_seg() -> None:
     assert isinstance(result.test_result, EvalResult)
 
     # Segmentation returns EvalResult with segmentation metrics
-    expected_metrics = {"miou", "overall_acc", "macro_acc", "macro_f1", "micro_f1"} | {
-        f"f1_class_{i}" for i in range(config.num_classes)
-    }
+    expected_metrics = {
+        "miou",
+        "overall_acc",
+        "macro_acc",
+        "macro_f1",
+        "micro_f1",
+        "auroc",
+        "prauc",
+    } | {f"f1_class_{i}" for i in range(config.num_classes)}
     assert set(result.val_result.metrics.keys()) == expected_metrics
     assert set(result.test_result.metrics.keys()) == expected_metrics
 
@@ -130,7 +136,7 @@ def test_probe_regression() -> None:
     test_labels = torch.rand(32, h, w)
 
     config = EvalDatasetConfig(
-        task_type=TaskType.REGRESSION,
+        task_type=TaskType.PER_PIXEL_REGRESSION,
         imputes=[],
         num_classes=1,
         is_multilabel=False,

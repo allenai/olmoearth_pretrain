@@ -10,7 +10,10 @@ import torch
 from upath import UPath
 
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
-from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.constants import (
+    MISSING_VALUE,
+    Modality,
+)
 from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     OlmoEarthSample,

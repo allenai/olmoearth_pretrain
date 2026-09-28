@@ -12,13 +12,16 @@ from typing import Any
 
 import numpy as np
 import torch
+from olmo_core.distributed.utils import get_rank
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
+from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
 from torch.utils.data import DataLoader, IterableDataset
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     EvalDatasetConfig,
@@ -34,6 +37,8 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     dequantize_embeddings,
+    dequantize_embeddings_percentile,
+    load_quantile_config,
     reduce_embedding_dim,
 )
 from olmoearth_pretrain.evals.embeddings import get_embeddings
@@ -50,6 +55,7 @@ logger = logging.getLogger(__name__)
 
 def _seed_worker(worker_id: int, base_seed: int) -> None:
     """Seed DataLoader worker RNGs deterministically."""
+    _worker_ignore_sigterm(worker_id)
     worker_seed = base_seed + worker_id
     random.seed(worker_seed)
     np.random.seed(worker_seed)
@@ -86,7 +92,11 @@ class DownstreamTaskConfig:
     # FT
     ft_lr: float | None = None
     ft_batch_size: int = 32
+    ft_grad_accum_steps: int = 1
     finetune_seed: int = 42
+    ft_head_type: str = (
+        "linear"  # "linear" or "unet" (unet only valid for segmentation/regression)
+    )
     # LP / FT
     epochs: int = 50
     # LP / KNN / FT
@@ -95,6 +105,26 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
+    # If the model has a Perceiver, probe the pooled encoder patch tokens
+    # instead of the register latents. No effect without a Perceiver.
+    eval_on_encoder_tokens: bool = False
+    # If the model has a detached register projection (perceiver_config.student_dims),
+    # probe the low-dim student_registers instead of the register grid -- the same
+    # checkpoint can then be evaluated at both widths by registering the task twice.
+    # Mutually exclusive with eval_on_encoder_tokens.
+    eval_on_student_registers: bool = False
+    # With eval_on_student_registers: probe only the first N dims of the student (a
+    # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
+    eval_student_dim: int | None = None
+    # For geobench segmentation tasks: split each native image into
+    # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
+    # (keeps every pixel, shrinks the token grid the model/register-read sees).
+    # Used to test whether the large-grid read dilution drives the register
+    # regressions on the 256px tasks (sa_crop_type, cashew_plant). None = native size.
+    tile_size: int | None = None
+    # Use the center spatial patch embedding instead of pooling across all patches
+    # for classification tasks. Has no effect on segmentation tasks.
+    use_center_token: bool = False
     # Fraction of training labels to use for low-label evals. Dataset-specific
     # code translates this into fixed partitions or deterministic subsamples.
     label_fraction: float = 1.0
@@ -111,6 +141,11 @@ class DownstreamTaskConfig:
     max_train_samples_seed: int = 42
     # Quantize embeddings to int8 for storage efficiency evaluation
     quantize_embeddings: bool = False
+    # Number of bits for percentile-based quantization (1, 2, 4, or 8)
+    # If None, uses legacy power-based int8 quantization when quantize_embeddings=True
+    quantize_bits: int | None = None
+    # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
+    quantile_config_path: str | None = None
     # Reduce embedding dimensionality via PCA (None = no reduction)
     embedding_dim: int | None = None
     # Use weighted dice loss instead of cross-entropy (only for specific tasks like wildfire)
@@ -177,7 +212,9 @@ class DownstreamEvaluator:
         self.probe_batch_size = task.probe_batch_size
         self.ft_lr = task.ft_lr
         self.ft_batch_size = task.ft_batch_size
+        self.ft_grad_accum_steps = task.ft_grad_accum_steps
         self.finetune_seed = task.finetune_seed
+        self.ft_head_type = task.ft_head_type
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
@@ -189,8 +226,19 @@ class DownstreamEvaluator:
         self.label_fraction = task.label_fraction
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
+        self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
+        self.eval_on_student_registers = task.eval_on_student_registers
+        self.eval_student_dim = task.eval_student_dim
+        self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
+        self.quantize_bits = task.quantize_bits
+        self.quantile_config_path = task.quantile_config_path
+        # Load quantile config if path is provided
+        self.quantile_config: dict | None = None
+        if self.quantile_config_path is not None:
+            logger.info(f"Loading quantile config from {self.quantile_config_path}")
+            self.quantile_config = load_quantile_config(self.quantile_config_path)
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
         self.primary_metric = task.primary_metric
@@ -222,7 +270,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.LINEAR_PROBE:
             if self.probe_lr is None:
                 raise ValueError("probe_lr cannot be none for segmentation tasks.")
-            if self.config.task_type in (TaskType.SEGMENTATION, TaskType.REGRESSION):
+            if self.config.task_type in (
+                TaskType.SEGMENTATION,
+                TaskType.PER_PIXEL_REGRESSION,
+            ):
                 if self.config.height_width is None:
                     raise ValueError(
                         "config.height_width cannot be none for segmentation tasks."
@@ -235,6 +286,10 @@ class DownstreamEvaluator:
         if self.eval_mode == EvalMode.FINETUNE:
             if self.ft_lr is None:
                 raise ValueError("ft_lr cannot be none for finetune tasks.")
+            if self.ft_grad_accum_steps < 1:
+                raise ValueError(
+                    f"ft_grad_accum_steps must be >= 1, got {self.ft_grad_accum_steps}"
+                )
             if self.config.task_type == TaskType.SEGMENTATION:
                 if self.config.height_width is None:
                     raise ValueError(
@@ -277,7 +332,7 @@ class DownstreamEvaluator:
         )
 
         generator = None
-        worker_init_fn = None
+        worker_init_fn: Any = _worker_ignore_sigterm
         if seed is not None:
             split_offsets = {"train": 0, "valid": 1, "test": 2}
             split_seed = seed + split_offsets.get(split, 0)
@@ -350,6 +405,10 @@ class DownstreamEvaluator:
             "pooling_type": self.pooling_type,
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
+            "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
+            "eval_on_student_registers": self.eval_on_student_registers,
+            "eval_student_dim": self.eval_student_dim,
+            "use_center_token": self.use_center_token,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -357,6 +416,8 @@ class DownstreamEvaluator:
             model=model,
             is_train=is_train,
             quantize=self.quantize_embeddings,
+            quantize_bits=self.quantize_bits,
+            quantile_config=self.quantile_config,
         )
 
     def _val_embed_probe(self) -> EvalTaskResult:
@@ -429,10 +490,26 @@ class DownstreamEvaluator:
 
         if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
-            train_embeddings = dequantize_embeddings(train_embeddings)
-            val_embeddings = dequantize_embeddings(val_embeddings)
-            if test_embeddings is not None:
-                test_embeddings = dequantize_embeddings(test_embeddings)
+            if self.quantize_bits is not None and self.quantile_config is not None:
+                # Percentile-based dequantization
+                key = f"{self.quantize_bits}bit"
+                midpoints = self.quantile_config[key]["midpoints"]
+                train_embeddings = dequantize_embeddings_percentile(
+                    train_embeddings, midpoints
+                )
+                val_embeddings = dequantize_embeddings_percentile(
+                    val_embeddings, midpoints
+                )
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings_percentile(
+                        test_embeddings, midpoints
+                    )
+            else:
+                # Legacy power-based dequantization
+                train_embeddings = dequantize_embeddings(train_embeddings)
+                val_embeddings = dequantize_embeddings(val_embeddings)
+                if test_embeddings is not None:
+                    test_embeddings = dequantize_embeddings(test_embeddings)
 
         # Reduce embedding dimensionality via PCA if specified
         if self.embedding_dim is not None:
@@ -557,6 +634,7 @@ class DownstreamEvaluator:
             patch_size=self.patch_size,
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
+            eval_on_encoder_tokens=self.eval_on_encoder_tokens,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
@@ -565,6 +643,9 @@ class DownstreamEvaluator:
             resume_checkpoint_path=resume_checkpoint_path,
             primary_metric=self.primary_metric,
             primary_metric_class=self.primary_metric_class,
+            ft_grad_accum_steps=self.ft_grad_accum_steps,
+            head_type=self.ft_head_type,  # type: ignore[arg-type]
+            use_dice_loss=self.use_dice_loss,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
@@ -610,6 +691,36 @@ def _make_other_prefix(prefix: str) -> str:
     parts = prefix.split("/", 1)
     parts[0] = parts[0] + "_other"
     return "/".join(parts)
+
+
+# Name of the wandb metric that eval curves are plotted against. It equals the
+# training step at which the evaluated checkpoint was saved. Both the in-loop
+# evals (this callback) and the built-in beaker-job evals log on this x-axis so
+# their curves share one directly-comparable axis in wandb -- rather than the
+# in-loop evals landing on wandb's native per-run ``step`` while the beaker-job
+# evals (a separate run) land on ``checkpoint_step``.
+CHECKPOINT_STEP_METRIC = "checkpoint_step"
+
+# Eval metric prefixes bound to the ``checkpoint_step`` x-axis.
+EVAL_METRIC_PREFIXES = (
+    "eval/*",
+    "eval/test/*",
+    "eval_other/*",
+    "eval_other/test/*",
+    "eval_time/*",
+    "eval_embed_diagnostics/*",
+)
+
+
+def define_checkpoint_step_metrics(wandb_module: Any) -> None:
+    """Tell wandb to plot the eval metric prefixes against ``checkpoint_step``.
+
+    ``wandb_module`` is the live ``wandb`` handle (e.g. ``wandb_callback.wandb``).
+    Safe to call once after the run is initialized.
+    """
+    wandb_module.define_metric(CHECKPOINT_STEP_METRIC)
+    for metric_prefix in EVAL_METRIC_PREFIXES:
+        wandb_module.define_metric(metric_prefix, step_metric=CHECKPOINT_STEP_METRIC)
 
 
 def eval_result_log_dict(
@@ -658,6 +769,11 @@ class DownstreamEvaluatorCallback(Callback):
     run_on_test: bool = False
     n_bootstrap: int = 0
     bootstrap_seed: int = 42
+    run_as_beaker_job: bool = False
+    beaker_eval_module_path: str | None = None
+    beaker_eval_clusters: list[str] | None = None
+    beaker_eval_priority: str | None = None
+    beaker_eval_extra_overrides: list[str] | None = None
 
     def _check_supported_modalities(self, evaluator: DownstreamEvaluator) -> bool:
         """Check if the evaluator is supported by the model."""
@@ -804,7 +920,32 @@ class DownstreamEvaluatorCallback(Callback):
 
     def pre_train(self) -> None:
         """Run the evaluators on startup."""
-        if self.eval_on_startup:
+        # Bind eval metrics to the shared ``checkpoint_step`` x-axis so in-loop
+        # eval curves line up with the built-in beaker-job evals (which log on the
+        # same axis from a separate run). Only needed for in-loop (non-beaker)
+        # evals; the beaker-job path defines these metrics in its own run.
+        if not self.run_as_beaker_job:
+            wandb_callback = self._get_wandb_callback()
+            if (
+                wandb_callback is not None
+                and wandb_callback.enabled
+                and get_rank() == 0
+            ):
+                define_checkpoint_step_metrics(wandb_callback.wandb)
+
+        if self.eval_on_startup and self.run_as_beaker_job:
+            supported = [
+                evaluator
+                for evaluator in self.evaluators
+                if self._check_supported_modalities(evaluator)
+            ]
+            if supported:
+                # Evaluates the checkpoint at the (possibly resumed) current step;
+                # skipped inside the launcher if no such checkpoint exists yet.
+                self._launch_beaker_eval_job(
+                    self.step, [evaluator.evaluation_name for evaluator in supported]
+                )
+        elif self.eval_on_startup:
             logger.info(f"Running {len(self.evaluators)} evaluators on startup.")
 
             for evaluator in self.evaluators:
@@ -828,13 +969,30 @@ class DownstreamEvaluatorCallback(Callback):
                 no_sync=True,  # 'no_sync' because we're calling this from all ranks at the same time.
             )
 
+    def _is_due(self, evaluator: DownstreamEvaluator) -> bool:
+        """Whether ``evaluator`` is scheduled to run at the current step."""
+        eval_interval_steps = self.trainer.convert_duration_to_steps(
+            evaluator.eval_interval
+        )
+        return self.step > 1 and self.step % eval_interval_steps == 0
+
     def post_step(self) -> None:
         """Run the evaluators in-loop."""
+        if self.run_as_beaker_job:
+            due = [
+                evaluator
+                for evaluator in self.evaluators
+                if self._is_due(evaluator)
+                and self._check_supported_modalities(evaluator)
+            ]
+            if due:
+                self._launch_beaker_eval_job(
+                    self.step, [evaluator.evaluation_name for evaluator in due]
+                )
+            return
+
         for evaluator in self.evaluators:
-            eval_interval_steps = self.trainer.convert_duration_to_steps(
-                evaluator.eval_interval
-            )
-            if self.step <= 1 or self.step % eval_interval_steps != 0:
+            if not self._is_due(evaluator):
                 continue
             if not self._check_supported_modalities(evaluator):
                 logger.info(
@@ -843,9 +1001,155 @@ class DownstreamEvaluatorCallback(Callback):
                 continue
             self._perform_eval(evaluator)
 
+    def _get_wandb_callback(self) -> OlmoEarthWandBCallback | None:
+        """Return the wandb callback if one is registered."""
+        return next(
+            (
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, OlmoEarthWandBCallback)
+            ),
+            None,
+        )
+
+    def _permanent_save_interval(self) -> int | None:
+        """Permanent-checkpoint interval (in steps) of the trainer's checkpointer.
+
+        Beaker-job evals load a *saved* checkpoint at their eval step, but only
+        permanent checkpoints (saved every ``save_interval`` steps) survive -- a
+        single ephemeral checkpoint is kept at a time and deleted well before a
+        queued eval job runs. This lets ``_launch_beaker_eval_job`` skip steps that
+        will not have a durable checkpoint. Returns ``None`` if no enabled
+        checkpointer is found (caller then falls back to the launcher's on-disk
+        existence check).
+        """
+        checkpointer = next(
+            (
+                callback
+                for callback in self.trainer._iter_callbacks()
+                if isinstance(callback, CheckpointerCallback)
+            ),
+            None,
+        )
+        if checkpointer is None or not getattr(checkpointer, "enabled", True):
+            return None
+        return checkpointer.save_interval
+
+    def _launch_beaker_eval_job(self, step: int, task_names: list[str]) -> None:
+        """Launch a Beaker job to evaluate the checkpoint at ``step``.
+
+        Runs only on rank 0 and never blocks training: it spawns a launcher
+        subprocess that submits the eval experiment and returns immediately. The
+        eval job evaluates the saved checkpoint (so it does not touch the live
+        training model) and logs metrics on a ``checkpoint_step`` wandb x-axis.
+
+        Note: the spawned job rebuilds its evaluators from the canonical eval task
+        set, then filters to ``task_names`` -- so the task names used in the in-loop
+        config must match those known to the eval job for the filter to select them.
+        """
+        # Importing lazily keeps the (optional) beaker dependency and import cost out
+        # of the module-load path.
+        from olmoearth_pretrain.internal.loop_eval_launch import (
+            launch_checkpoint_eval_job,
+            resolve_parent_priority,
+        )
+
+        if get_rank() != 0:
+            return
+
+        # The eval job loads the saved checkpoint at ``step``, but only permanent
+        # checkpoints persist long enough for a queued Beaker job to load them
+        # (ephemeral checkpoints are rotated out within a few hundred steps). If
+        # ``step`` will not have a permanent checkpoint, skip the launch instead of
+        # spawning a job that will crash with "No step directories found" once the
+        # ephemeral checkpoint is gone.
+        save_interval = self._permanent_save_interval()
+        if save_interval is not None and step % save_interval != 0:
+            logger.warning(
+                "Skipping in-loop Beaker eval launch for step %d: it is not a "
+                "permanent checkpoint step (checkpointer save_interval=%d). Set the "
+                "evaluator eval_interval to a multiple of %d so a durable checkpoint "
+                "exists for the eval job to load.",
+                step,
+                save_interval,
+                save_interval,
+            )
+            return
+
+        module_path = self.beaker_eval_module_path or os.environ.get(
+            "TRAIN_SCRIPT_PATH"
+        )
+        if not module_path:
+            logger.warning(
+                "run_as_beaker_job is set but no module path is available "
+                "(set beaker_eval_module_path or the TRAIN_SCRIPT_PATH env var); "
+                "skipping eval launch for step %d.",
+                step,
+            )
+            return
+
+        clusters = self.beaker_eval_clusters
+        if not clusters:
+            env_clusters = os.environ.get("OE_LOOP_EVAL_CLUSTERS")
+            clusters = (
+                [c.strip() for c in env_clusters.split(",") if c.strip()]
+                if env_clusters
+                else None
+            )
+        if not clusters:
+            logger.warning(
+                "run_as_beaker_job is set but no clusters are available "
+                "(set beaker_eval_clusters or the OE_LOOP_EVAL_CLUSTERS env var); "
+                "skipping eval launch for step %d.",
+                step,
+            )
+            return
+
+        priority = self.beaker_eval_priority or resolve_parent_priority()
+
+        save_folder = str(self.trainer.save_folder)
+        wandb_callback = self._get_wandb_callback()
+        train_run_name = (
+            wandb_callback.name
+            if wandb_callback is not None and wandb_callback.name
+            else os.path.basename(save_folder.rstrip("/"))
+        )
+
+        launch_checkpoint_eval_job(
+            module_path=module_path,
+            checkpoint_dir=save_folder,
+            step=step,
+            cluster=clusters[0],
+            run_name=f"{train_run_name}_eval_step{step}",
+            priority=priority,
+            tasks_to_run=task_names,
+            wandb_project=(
+                wandb_callback.project if wandb_callback is not None else None
+            ),
+            wandb_entity=(
+                wandb_callback.entity if wandb_callback is not None else None
+            ),
+            # Group all of this run's eval jobs together (and alongside training).
+            wandb_group=train_run_name,
+            # All eval steps log to one consolidated wandb run (resumed via the
+            # shared runid file set in launch_checkpoint_eval_job), keyed on
+            # checkpoint_step -- instead of a separate run per eval step.
+            wandb_run_name=f"{train_run_name}_loop_evals",
+            # Collect all of this run's eval experiments into one Beaker group
+            # (same name as the consolidated wandb run) to declutter the console.
+            beaker_group=f"{train_run_name}_loop_evals",
+            extra_overrides=self.beaker_eval_extra_overrides,
+            log_dir=os.path.join(save_folder, "loop_eval_launch_logs"),
+        )
+
     def _perform_eval(self, evaluator: DownstreamEvaluator) -> EvalTaskResult:
         """Run the evaluator."""
         logger.info(f"Running {evaluator.evaluation_name} evaluations...")
+
+        # Record the checkpoint step alongside the eval metrics so they share the
+        # ``checkpoint_step`` x-axis with the built-in beaker-job evals. It is
+        # numerically equal to the training step, so existing curves are unchanged.
+        self.trainer.record_metric(CHECKPOINT_STEP_METRIC, self.step)
 
         start_time = time.monotonic()
         result = evaluator.val()
@@ -920,6 +1224,24 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
     n_bootstrap: int = 0  # Number of bootstrap samples (0 = no bootstrap)
     bootstrap_seed: int = 42  # Random seed for bootstrap sampling
 
+    # --- Run evals as separate Beaker jobs (instead of inline, blocking training) ---
+    # When True, an eval that comes due launches a Beaker job (via
+    # checkpoint_sweep_evals.py) that evaluates the just-saved checkpoint, and the
+    # training loop continues without running the eval inline. Requires that a
+    # checkpoint exists at the eval step, so eval_interval should be a multiple of the
+    # checkpointer save_interval.
+    run_as_beaker_job: bool = False
+    # Module path used to rebuild the model/train-module config in the eval job
+    # (passed as TRAIN_SCRIPT_PATH). Falls back to the $TRAIN_SCRIPT_PATH env var.
+    beaker_eval_module_path: str | None = None
+    # Cluster(s) the eval job may run on. The first is used as the launch positional.
+    # Falls back to $OE_LOOP_EVAL_CLUSTERS (comma-separated) if unset.
+    beaker_eval_clusters: list[str] | None = None
+    # Priority for the eval job. None -> match the running training job's priority.
+    beaker_eval_priority: str | None = None
+    # Extra CLI overrides appended verbatim to the eval launch command.
+    beaker_eval_extra_overrides: list[str] | None = None
+
     def verify_input_modalities(
         self, task: DownstreamTaskConfig, config: EvalDatasetConfig
     ) -> None:
@@ -970,7 +1292,12 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
 
             config = dataset_to_config(task.dataset)
             if (
-                config.task_type == TaskType.SEGMENTATION
+                config.task_type
+                in (
+                    TaskType.SEGMENTATION,
+                    TaskType.PER_PIXEL_REGRESSION,
+                    TaskType.WINDOW_REGRESSION,
+                )
                 and task.eval_mode != EvalMode.EMBEDDING_DIAGNOSTICS
             ):
                 if task.probe_lr is None and task.ft_lr is None:
@@ -1000,4 +1327,9 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             run_on_test=self.run_on_test,
             n_bootstrap=self.n_bootstrap,
             bootstrap_seed=self.bootstrap_seed,
+            run_as_beaker_job=self.run_as_beaker_job,
+            beaker_eval_module_path=self.beaker_eval_module_path,
+            beaker_eval_clusters=self.beaker_eval_clusters,
+            beaker_eval_priority=self.beaker_eval_priority,
+            beaker_eval_extra_overrides=self.beaker_eval_extra_overrides,
         )

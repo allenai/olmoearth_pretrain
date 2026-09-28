@@ -321,6 +321,12 @@ class ConvertToH5py:
                     f"Image for modality {modality.name} is all zeros, removing this modality"
                 )
                 modalities_to_remove.add(modality)
+            # Remove ERA5L daily if it contains any nodata sentinel values (-9999.0)
+            if modality == Modality.ERA5L_DAY_10 and np.any(image == -9999.0):
+                logger.warning(
+                    f"Image for modality {modality.name} contains nodata values, removing this modality"
+                )
+                modalities_to_remove.add(modality)
             # Remove S1 if it contains any nodata values
             if modality == Modality.SENTINEL1 and np.any(image == SENTINEL1_NODATA):
                 logger.warning(

@@ -55,6 +55,68 @@
       }
     }
   },
+  "fifty_cities": {
+    "sentinel1": {
+      "vh": {
+        "max": 38.791,
+        "min": -52.086
+      },
+      "vv": {
+        "max": 40.521,
+        "min": -48.819
+      }
+    },
+    "sentinel2_l2a": {
+      "01 - Coastal aerosol": {
+        "max": 19328.0,
+        "min": 0.0
+      },
+      "02 - Blue": {
+        "max": 34208.0,
+        "min": 0.0
+      },
+      "03 - Green": {
+        "max": 29008.0,
+        "min": 0.0
+      },
+      "04 - Red": {
+        "max": 25120.0,
+        "min": 0.0
+      },
+      "05 - Vegetation Red Edge": {
+        "max": 23469.0,
+        "min": 0.0
+      },
+      "06 - Vegetation Red Edge": {
+        "max": 22705.0,
+        "min": 0.0
+      },
+      "07 - Vegetation Red Edge": {
+        "max": 22017.0,
+        "min": 0.0
+      },
+      "08 - NIR": {
+        "max": 21344.0,
+        "min": 0.0
+      },
+      "08A - Vegetation Red Edge": {
+        "max": 20873.0,
+        "min": 0.0
+      },
+      "09 - Water vapour": {
+        "max": 19939.0,
+        "min": 0.0
+      },
+      "11 - SWIR": {
+        "max": 16653.0,
+        "min": 0.0
+      },
+      "12 - SWIR": {
+        "max": 16261.0,
+        "min": 0.0
+      }
+    }
+  },
   "mados": {
     "sentinel2_l2a": {
       "01 - Coastal aerosol": {

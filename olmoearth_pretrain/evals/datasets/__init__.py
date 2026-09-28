@@ -9,13 +9,16 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.evals.studio_ingest.registry import get_dataset_entry
 
 from .breizhcrops import BreizhCropsDataset
+from .fifty_cities_dataset import FiftyCitiesDataset
 from .floods_dataset import Sen1Floods11Dataset
 from .geobench_dataset import GeobenchDataset
+from .geobench_v2_dataset import GeobenchV2Dataset
 from .mados_dataset import MADOSDataset
 from .normalize import NormMethod
 from .pastis_dataset import PASTISRDataset
 from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
+from .sbd_dataset import SBDDataset
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +75,14 @@ def get_eval_dataset(
             split_strategy=kwargs.get("pretrain_split_strategy", "random"),
             geographic_bin_size_deg=kwargs.get("pretrain_geographic_bin_size_deg", 5.0),
         )
+    elif eval_dataset.startswith("gb2-"):
+        return GeobenchV2Dataset(
+            dataset=eval_dataset,
+            split=split,
+            partition=kwargs.get("partition", ""),
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+        )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"
         return GeobenchDataset(
@@ -117,9 +128,35 @@ def get_eval_dataset(
         else:
             kwargs["path_to_splits"] = paths.PASTIS_DIR
         return PASTISRDataset(**kwargs)  # type: ignore
+    elif eval_dataset.startswith("fifty_cities"):
+        # Split mode is encoded in the dataset-name suffix; "fifty_cities" alone
+        # is the random split.
+        if eval_dataset.endswith("by_continent"):
+            split_mode = "by_continent"
+        elif eval_dataset.endswith("by_city"):
+            split_mode = "by_city"
+        else:
+            split_mode = "random"
+        return FiftyCitiesDataset(
+            path_to_splits=paths.FIFTY_CITIES_DIR,
+            split=split,
+            split_mode=split_mode,
+            input_modalities=input_modalities,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+            label_fraction=label_fraction,
+        )
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
+            split=split,
+            label_fraction=label_fraction,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+        )
+    elif eval_dataset == "similar_but_different":
+        return SBDDataset(
+            path_to_splits=paths.SBD_DIR,
             split=split,
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,

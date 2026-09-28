@@ -1,55 +1,5 @@
 {
   "layers": {
-    "sentinel2_freq": {
-      "alias": "sentinel2",
-      "band_sets": [
-        {
-          "bands": [
-            "B02",
-            "B03",
-            "B04",
-            "B08"
-          ],
-          "dtype": "uint16"
-        },
-        {
-          "bands": [
-            "B05",
-            "B06",
-            "B07",
-            "B8A",
-            "B11",
-            "B12"
-          ],
-          "dtype": "uint16",
-          "zoom_offset": -1
-        },
-        {
-          "bands": [
-            "B01",
-            "B09",
-            "B10"
-          ],
-          "dtype": "uint16",
-          "zoom_offset": -2
-        }
-      ],
-      "data_source": {
-        "class_path": "rslearn.data_sources.gcp_public_data.Sentinel2",
-        "init_args": {
-          "harmonize": true,
-          "index_cache_dir": "cache/sentinel2",
-          "modality": "L1C",
-          "sort_by": "cloud_cover",
-          "use_rtree_index": true
-        },
-        "query_config": {
-          "max_matches": 8,
-          "space_mode": "INTERSECTS"
-        }
-      },
-      "type": "raster"
-    },
     "sentinel2_mo01": {
       "alias": "sentinel2",
       "band_sets": [
@@ -637,5 +587,8 @@
       },
       "path_suffix": "file:///tmp/rslearn_helios_tile_store"
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

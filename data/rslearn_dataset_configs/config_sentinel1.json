@@ -1,41 +1,5 @@
 {
   "layers": {
-    "sentinel1_freq": {
-      "alias": "sentinel1",
-      "band_sets": [
-        {
-          "bands": [
-            "vv",
-            "vh"
-          ],
-          "dtype": "float32",
-          "nodata_value": -32768
-        }
-      ],
-      "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
-        "ingest": false,
-        "init_args": {
-          "cache_dir": "cache/planetary_computer",
-          "query": {
-            "sar:instrument_mode": {
-              "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
-            }
-          }
-        },
-        "query_config": {
-          "max_matches": 8,
-          "space_mode": "INTERSECTS"
-        }
-      },
-      "type": "raster"
-    },
     "sentinel1_mo01": {
       "alias": "sentinel1",
       "band_sets": [
@@ -49,22 +13,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-180d"
       },
@@ -83,22 +41,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-150d"
       },
@@ -117,22 +69,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-120d"
       },
@@ -151,22 +97,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-90d"
       },
@@ -185,22 +125,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-60d"
       },
@@ -219,22 +153,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "-30d"
       },
@@ -253,22 +181,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "0d"
       },
@@ -287,22 +209,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "30d"
       },
@@ -321,22 +237,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "60d"
       },
@@ -355,22 +265,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "90d"
       },
@@ -389,22 +293,16 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "120d"
       },
@@ -423,26 +321,23 @@
         }
       ],
       "data_source": {
-        "class_path": "rslearn.data_sources.planetary_computer.Sentinel1",
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.sentinel1_rtc.Sentinel1RTC",
         "duration": "30d",
         "ingest": false,
         "init_args": {
-          "cache_dir": "cache/planetary_computer",
           "query": {
-            "sar:instrument_mode": {
+            "instrument_mode": {
               "eq": "IW"
-            },
-            "sar:polarizations": {
-              "eq": [
-                "VV",
-                "VH"
-              ]
             }
-          }
+          },
+          "timeout": "0:0:10"
         },
         "time_offset": "150d"
       },
       "type": "raster"
     }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
   }
 }

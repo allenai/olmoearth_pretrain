@@ -72,8 +72,23 @@ class _StandaloneConfig:
     - YAML loading
     - Validation beyond what dataclasses provide
 
+    Like olmo-core's deserializer it is STRICT: a key the target dataclass does not
+    have raises instead of being dropped, so a checkpoint config written by code with
+    a since-removed field can never silently build a different model. Convert such a
+    checkpoint once (``scripts/official/v1_3/convert_legacy_checkpoint.py``) instead.
+
     For full functionality, install olmo-core.
     """
+
+    @staticmethod
+    def _reject_unknown_fields(target: type, data: dict[str, Any]) -> None:
+        """Raise if ``data`` carries keys that ``target`` has no field for."""
+        unknown = set(data) - {f.name for f in fields(target)}
+        if unknown:
+            raise ValueError(
+                f"{target.__name__} has no field(s) {sorted(unknown)}; a checkpoint "
+                "written by older code must be converted first"
+            )
 
     CLASS_NAME_FIELD = "_CLASS_"
 
@@ -103,12 +118,9 @@ class _StandaloneConfig:
                 resolved_cls = cls._resolve_class(class_name)
                 if not is_dataclass(resolved_cls):
                     raise TypeError(f"Class '{class_name}' is not a dataclass")
-                # Get the field names for this dataclass
-                field_names = {f.name for f in fields(resolved_cls)}
-                # Filter to only include valid fields
-                valid_kwargs = {k: v for k, v in cleaned.items() if k in field_names}
+                cls._reject_unknown_fields(resolved_cls, cleaned)
                 try:
-                    return resolved_cls(**valid_kwargs)
+                    return resolved_cls(**cleaned)
                 except TypeError as e:
                     raise TypeError(f"Failed to instantiate {class_name}: {e}") from e
             return cleaned
@@ -150,10 +162,8 @@ class _StandaloneConfig:
         if isinstance(cleaned, cls):
             return cleaned
         elif isinstance(cleaned, dict):
-            # Get field names for this class
-            field_names = {f.name for f in fields(cls)}
-            valid_kwargs = {k: v for k, v in cleaned.items() if k in field_names}
-            return cls(**valid_kwargs)
+            cls._reject_unknown_fields(cls, cleaned)
+            return cls(**cleaned)
         else:
             raise TypeError(f"Expected dict, got {type(cleaned)}")
 

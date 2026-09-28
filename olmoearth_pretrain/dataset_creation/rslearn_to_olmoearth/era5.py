@@ -4,7 +4,6 @@ import argparse
 import csv
 import logging
 import multiprocessing
-from datetime import datetime
 
 import numpy as np
 import numpy.typing as npt
@@ -21,6 +20,7 @@ from olmoearth_pretrain.dataset.utils import get_modality_fname
 
 from ..constants import METADATA_COLUMNS
 from ..util import get_modality_temp_meta_fname, get_window_metadata
+from .cli import add_common_arguments
 
 # Layer name in the input rslearn dataset.
 LAYER_NAME = "era5"
@@ -54,12 +54,9 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
 
     # Read the images over time.
     # The items in this data source are based on the calendar month, so we use all of
-    # the groups for the one-year monthly data but then also see which monthly group
-    # contains the window's time range for the frequent data.
+    # the groups for the one-year monthly data.
     year_images: list[npt.NDArray] = []
     year_time_ranges = []
-    two_week_image: npt.NDArray | None = None
-    two_week_time_range: tuple[datetime, datetime] | None = None
     for group_idx, group in enumerate(layer_datas[LAYER_NAME].serialized_item_groups):
         # Can be uncompleted due to errors since for some reason the API occasionally
         # just returns two bands instead of all the requested variables.
@@ -70,23 +67,12 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         # Use first item in the group to get the start time for this image.
         time_range = Item.deserialize(group[0]).geometry.time_range
 
-        raster_dir = window.get_raster_dir(LAYER_NAME, band_set.bands, group_idx)
-        image = raster_format.decode_raster(
-            raster_dir, window.projection, window.bounds
+        image = window.data.read_raster(
+            LAYER_NAME, band_set.bands, raster_format, group_idx=group_idx
         ).get_chw_array()
 
         year_images.append(image)
         year_time_ranges.append(time_range)
-
-        # Should we use this image for the frequent data for this window?
-        assert window.time_range is not None, "Window time range should not be None"
-        assert time_range is not None, "Item time range should not be None"
-        if (
-            window.time_range[0] < time_range[1]
-            and time_range[0] < window.time_range[1]
-        ):
-            two_week_image = image
-            two_week_time_range = time_range
 
     if len(year_images) < 12:
         logger.warning(
@@ -97,12 +83,6 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
         # In case there are more than 12 images, only use the first 12
         year_images = year_images[:12]
         year_time_ranges = year_time_ranges[:12]
-
-    if two_week_image is None or two_week_time_range is None:
-        logger.warning(
-            f"skipping window {window.name} because it did not have an image intersecting the window time range"
-        )
-        return
 
     logger.warning(f"window {window.name} is good")
 
@@ -143,41 +123,6 @@ def convert_era5(window: Window, olmoearth_path: UPath) -> None:
                 )
             )
 
-    # Save the two-week image and metadata.
-    two_week_dst_fname = get_modality_fname(
-        olmoearth_path,
-        Modality.ERA5,
-        TimeSpan.TWO_WEEK,
-        window_metadata,
-        band_set.get_resolution(),
-        "tif",
-    )
-    raster_format.encode_raster(
-        path=two_week_dst_fname.parent,
-        projection=window.projection,
-        bounds=window.bounds,
-        raster=RasterArray(chw_array=two_week_image),
-        fname=two_week_dst_fname.name,
-    )
-    two_week_metadata_fname = get_modality_temp_meta_fname(
-        olmoearth_path, Modality.ERA5, TimeSpan.TWO_WEEK, window.name
-    )
-    two_week_metadata_fname.parent.mkdir(parents=True, exist_ok=True)
-    with two_week_metadata_fname.open("w") as f:
-        writer = csv.DictWriter(f, fieldnames=METADATA_COLUMNS)
-        writer.writeheader()
-        writer.writerow(
-            dict(
-                crs=window_metadata.crs,
-                col=window_metadata.col,
-                row=window_metadata.row,
-                tile_time=window_metadata.time.isoformat(),
-                image_idx="0",
-                start_time=two_week_time_range[0].isoformat(),
-                end_time=two_week_time_range[1].isoformat(),
-            )
-        )
-
 
 if __name__ == "__main__":
     multiprocessing.set_start_method("forkserver")
@@ -185,24 +130,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Post-process OlmoEarth Pretrain data",
     )
-    parser.add_argument(
-        "--ds_path",
-        type=str,
-        help="Source rslearn dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--olmoearth_path",
-        type=str,
-        help="Destination OlmoEarth Pretrain dataset path",
-        required=True,
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        help="Number of workers to use",
-        default=32,
-    )
+    add_common_arguments(parser)
     args = parser.parse_args()
 
     dataset = Dataset(UPath(args.ds_path))

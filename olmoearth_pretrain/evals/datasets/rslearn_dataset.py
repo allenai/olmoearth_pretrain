@@ -22,7 +22,10 @@ from torch.utils.data import Dataset, IterableDataset, Subset
 from olmoearth_pretrain.data.constants import YEAR_NUM_TIMESTEPS, Modality
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.evals.constants import RSLEARN_TO_OLMOEARTH
+from olmoearth_pretrain.evals.constants import (
+    RSLEARN_TO_OLMOEARTH,
+    resolve_rslearn_layer_name,
+)
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset,
@@ -157,7 +160,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         if self.target_task_type not in {
             TaskType.SEGMENTATION,
             TaskType.CLASSIFICATION,
-            TaskType.REGRESSION,
+            TaskType.PER_PIXEL_REGRESSION,
+            TaskType.WINDOW_REGRESSION,
         }:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"
@@ -251,16 +255,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             layers = get_modality_layers(model_config)
             input_modalities = []
             for layer in layers:
-                resolved = layer
-                if layer not in RSLEARN_TO_OLMOEARTH:
-                    for prefix in ("pre_", "post_"):
-                        if (
-                            layer.startswith(prefix)
-                            and layer[len(prefix) :] in RSLEARN_TO_OLMOEARTH
-                        ):
-                            resolved = layer[len(prefix) :]
-                            break
-                if resolved in RSLEARN_TO_OLMOEARTH:
+                resolved = resolve_rslearn_layer_name(layer)
+                if resolved is not None:
                     input_modalities.append(RSLEARN_TO_OLMOEARTH[resolved].name)
                 else:
                     input_modalities.append(layer)
@@ -430,7 +426,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.target_task_type == TaskType.CLASSIFICATION:
             classes = data_dict["class"]
             valid = data_dict["valid"]
-        elif self.target_task_type == TaskType.REGRESSION:
+        elif self.target_task_type == TaskType.PER_PIXEL_REGRESSION:
             values = torch.as_tensor(
                 data_dict["values"].image, dtype=torch.float32
             ).squeeze()
@@ -439,6 +435,13 @@ class RslearnToOlmoEarthDataset(Dataset):
             ).squeeze()
             values[valid == 0] = float("nan")
             return masked_sample, values
+        elif self.target_task_type == TaskType.WINDOW_REGRESSION:
+            # Vector RegressionTask emits a single value/valid per window.
+            value = torch.as_tensor(data_dict["value"], dtype=torch.float32).squeeze()
+            valid = torch.as_tensor(data_dict["valid"], dtype=torch.float32).squeeze()
+            if valid == 0:
+                value = torch.tensor(float("nan"), dtype=torch.float32)
+            return masked_sample, value
         else:
             raise ValueError(
                 f"Unsupported target task type: {self.target_task_type.value}"

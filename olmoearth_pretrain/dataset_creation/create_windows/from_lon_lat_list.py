@@ -5,7 +5,7 @@ import json
 
 from upath import UPath
 
-from .util import create_windows_with_highres_time
+from .util import create_windows
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -34,6 +34,4 @@ if __name__ == "__main__":
     with open(args.fname) as f:
         lonlats = [(lon, lat) for lon, lat in json.load(f)]
 
-    create_windows_with_highres_time(
-        UPath(args.ds_path), lonlats, force_lowres_prob=0.25, workers=args.workers
-    )
+    create_windows(UPath(args.ds_path), lonlats, workers=args.workers)
