@@ -144,10 +144,13 @@ def build_launch_config(
         # Share a uv cache on Weka across jobs so wheels are downloaded (and
         # sdists like flash-attn are compiled) only once. Gantry's entrypoint
         # picks this up and flock-guards it against concurrent jobs.
+        # A fresh directory: on 2026-09-28 ~08:00 UTC a `uv sync` wedged the shared
+        # cache's builds-v0 directory (even `ls` on it hangs), and every job using the
+        # old cache then hung at "Creating virtual environment" or in uv sync.
         env_vars.append(
             BeakerEnvVar(
                 name="UV_CACHE_DIR",
-                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache",
+                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache-20260928",
             )
         )
     nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
