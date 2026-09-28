@@ -467,6 +467,8 @@ class DownstreamEvaluator:
         self.probe_input_norm = task.probe_input_norm
         self.embedding_dim = task.embedding_dim
         self.use_dice_loss = task.use_dice_loss
+        self.ft_class_weighting = task.ft_class_weighting
+        self.ft_focal_gamma = task.ft_focal_gamma
         self.primary_metric = task.primary_metric
         self.primary_metric_class = task.primary_metric_class
         self.balanced_trial = task.balanced_trial
@@ -585,6 +587,8 @@ class DownstreamEvaluator:
                     lr=self.probe_lr,
                     select_best_by_primary_metric=self.select_best_by_primary_metric,
                     use_dice_loss=self.use_dice_loss,
+                    class_weighting=self.ft_class_weighting,
+                    focal_gamma=self.ft_focal_gamma,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
                     dump_tag=(
@@ -1282,6 +1286,8 @@ class DownstreamEvaluator:
             ft_grad_accum_steps=self.ft_grad_accum_steps,
             head_type=self.ft_head_type,  # type: ignore[arg-type]
             use_dice_loss=self.use_dice_loss,
+            class_weighting=self.ft_class_weighting,
+            focal_gamma=self.ft_focal_gamma,
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"

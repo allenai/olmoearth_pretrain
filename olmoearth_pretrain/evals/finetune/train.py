@@ -257,6 +257,8 @@ def run_finetune_eval(
     ft_grad_accum_steps: int = 1,
     head_type: HeadType = "linear",
     use_dice_loss: bool = False,
+    class_weighting: str = "none",
+    focal_gamma: float = 0.0,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if task_config.task_type == TaskType.WINDOW_REGRESSION:
@@ -340,8 +342,8 @@ def run_finetune_eval(
         num_classes = task_config.num_classes
         loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
-        _cw = getattr(task_config, "ft_class_weighting", "none")
-        _gamma = float(getattr(task_config, "ft_focal_gamma", 0.0))
+        _cw = class_weighting
+        _gamma = float(focal_gamma)
         _weight = None
         if _cw and _cw != "none":
             _weight = _train_class_weights(

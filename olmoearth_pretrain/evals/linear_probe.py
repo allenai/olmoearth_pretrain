@@ -390,6 +390,8 @@ def train_and_eval_probe(
     primary_metric_class: int | None = None,
     dump_tag: str | None = None,
     probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM,
+    class_weighting: str = "none",
+    focal_gamma: float = 0.0,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -511,8 +513,8 @@ def train_and_eval_probe(
             task_type=config.task_type,
             num_classes=config.num_classes,
             use_dice_loss=use_dice_loss,
-            class_weighting=getattr(config, "ft_class_weighting", "none"),
-            focal_gamma=float(getattr(config, "ft_focal_gamma", 0.0)),
+            class_weighting=class_weighting,
+            focal_gamma=float(focal_gamma),
         )
         val_result = evaluate_probe(
             data_loader=DataLoader(
