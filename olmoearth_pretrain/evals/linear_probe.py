@@ -511,6 +511,8 @@ def train_and_eval_probe(
             task_type=config.task_type,
             num_classes=config.num_classes,
             use_dice_loss=use_dice_loss,
+            class_weighting=getattr(config, "ft_class_weighting", "none"),
+            focal_gamma=float(getattr(config, "ft_focal_gamma", 0.0)),
         )
         val_result = evaluate_probe(
             data_loader=DataLoader(
@@ -604,6 +606,7 @@ def train_and_eval_probe(
         # offline visualization. No effect unless OE_PRED_DIR is set or the weka
         # marker file exists. Keyed by dump_tag (dataset/height_width/modalities) + lr.
         import os as _os
+
         # OE_PRED_DIR takes precedence over the weka marker, mirroring OE_DUMP_DIR for
         # the embedding dump. dump_tag is (dataset, height_width, modalities) and carries
         # no model identifier, so two checkpoints evaluated on the same task and LR write
@@ -789,6 +792,8 @@ def train_probe(
     task_type: TaskType,
     num_classes: int,
     use_dice_loss: bool = False,
+    class_weighting: str = "none",
+    focal_gamma: float = 0.0,
 ) -> nn.Module:
     """Train a linear probe on a classification or segmentation task."""
     opt = torch.optim.AdamW(probe.parameters(), lr=lr)
@@ -800,7 +805,31 @@ def train_probe(
     elif use_dice_loss:
         loss_function = functools.partial(weighted_dice_loss, num_classes=num_classes)
     else:
-        loss_function = nn.CrossEntropyLoss(ignore_index=SEGMENTATION_IGNORE_LABEL)
+        # Shared with the fine-tune path so "inv"/"invsqrt"/focal mean the same
+        # thing for both families in the loss-ablation table. Defaults give
+        # plain CrossEntropyLoss, i.e. the previous behaviour exactly.
+        from olmoearth_pretrain.evals.finetune.train import (
+            _FocalCE,
+            _train_class_weights,
+        )
+
+        _w = None
+        if class_weighting and class_weighting != "none":
+            _w = _train_class_weights(
+                data_loader,
+                num_classes,
+                class_weighting,
+                device,
+                ignore_index=SEGMENTATION_IGNORE_LABEL,
+            )
+        if focal_gamma > 0:
+            loss_function = _FocalCE(
+                _w, focal_gamma, ignore_index=SEGMENTATION_IGNORE_LABEL
+            ).to(device)
+        else:
+            loss_function = nn.CrossEntropyLoss(
+                weight=_w, ignore_index=SEGMENTATION_IGNORE_LABEL
+            )
     start_epoch = current_epoch
     for epoch in range(start_epoch, epochs):
         for i, batch in enumerate(data_loader):
