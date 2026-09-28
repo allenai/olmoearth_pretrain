@@ -1,6 +1,6 @@
 """Token-mixing pure-Perceiver arm: ``pure_perceiver_mix6_read6.py`` with the mixing restricted to each token's OWN cell (``token_mix_radius=0``: time x modality only).
 
-Question: isolates the spatial part of the 3x3 window -- on single-timestep inputs (m-eurosat) own-cell mixing is a per-token MLP, so this arm should lose there if spatial mixing matters.
+Question: isolates the spatial part of the mixing window (the other arms use 5x5) -- on single-timestep inputs (m-eurosat) own-cell mixing is a per-token MLP, so this arm should lose there if spatial mixing matters.
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
 ``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix6c_rl6``.

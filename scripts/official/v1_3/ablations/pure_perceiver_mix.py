@@ -6,16 +6,21 @@ pooled, and on a single-timestep input no two pixels interact before the latent
 blocks. These arms keep that model and add TOKEN-MIXING blocks
 (``PerceiverConfig.token_mix_layout``): self-attention over the patch tokens
 restricted to a spatial neighbourhood of cells -- every timestep and modality of the
-cells within ``token_mix_radius`` (1 = 3x3) -- interleaved with the reads, so each read
-pools tokens already refined by the mixing before it. On a single timestep a 3x3
-mixing block is local spatial attention (a content-dependent 3x3 conv); on a
+cells within ``token_mix_radius`` (2 = 5x5, the default) -- interleaved with the reads,
+so each read pools tokens already refined by the mixing before it. On a single timestep
+a 5x5 mixing block is local spatial attention (a content-dependent 5x5 conv); on a
 12-timestep, 3-modality input it mixes space, time and modality in one hop.
 
 No latent-only blocks: every read keeps just its paired latent block, so latent depth
 equals the read count (the RC showed 2 and 4 latent layers score the same, and on
 multi-timestep inputs the latent blocks are a few percent of the compute), and the
 budget goes to the token mixing instead. (A first launch topped every arm up to 12
-latent blocks with latent-only blocks; it was stopped before training, 2026-09-28.) Reads stay
+latent blocks with latent-only blocks; it was stopped before training, 2026-09-28.)
+
+Window: 5x5 cells. The arms first trained ~1.5k steps at 3x3 (``*_rl*`` run names without
+``w5``) and were replaced: a 1-GPU profile put 5x5 at +5-10% step time for the 768-dim
+arm (FlexAttention 26% -> 30% of GPU time) and +1-4% at 128 dims, for twice the one-hop
+reach. Reads stay
 point reads (window-centre time anchor), as in ``trope_ld12``. The mixing runs on a
 Perceiver-internal copy of the tokens: the encoder output and the latent-MIM target
 (projection-only patch embeddings) are unchanged.
@@ -73,7 +78,7 @@ def build_mix_model_config(
     *,
     n_mix: int = 0,
     n_read: int = 0,
-    radius: int = 1,
+    radius: int = 2,
     mix_dim: int | None = None,
     mix_heads: int | None = None,
     layout: str | None = None,

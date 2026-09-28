@@ -1,4 +1,4 @@
-"""Token-mixing pure-Perceiver arm: 8 neighbourhood-mixing blocks (3x3 cells) FIRST, then 2 [read -> latent] pairs.
+"""Token-mixing pure-Perceiver arm: 8 neighbourhood-mixing blocks (5x5 cells) FIRST, then 2 [read -> latent] pairs.
 
 Layout ``MMMMMMMMRR`` (each ``R`` is a read plus its paired latent block): all the token
 computation happens before the Perceiver, which keeps only 2 ``[read -> self-attend]``
@@ -9,7 +9,8 @@ Question: with nearly all compute in the (temporal + local spatial) token mixing
 2 layers of latent depth enough?
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix8pre_rl2``.
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix8prew5_rl2``
+(5x5 window; ``v1_3_vit0_mix8pre_rl2`` is the stopped 3x3 run).
 """
 
 import logging

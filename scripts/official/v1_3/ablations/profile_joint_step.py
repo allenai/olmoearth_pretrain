@@ -40,7 +40,9 @@ PROFILE_TARGETS = {
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
+    "prof_mix6r1": {"token_mix_radius": 1},
     "prof_mix6r2": {"token_mix_radius": 2},
+    "prof_mix6d128r1": {"token_mix_radius": 1},
     "prof_mix6d128r2": {"token_mix_radius": 2},
 }
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.

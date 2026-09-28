@@ -1,4 +1,4 @@
-"""Token-mixing pure-Perceiver arm: 5 neighbourhood-mixing blocks (3x3 cells) FIRST, then 4 [read -> latent] pairs.
+"""Token-mixing pure-Perceiver arm: 5 neighbourhood-mixing blocks (5x5 cells) FIRST, then 4 [read -> latent] pairs.
 
 Layout ``MMMMMRRRR`` (each ``R`` is a read plus its paired latent block): all the token
 computation happens before the Perceiver, which then has the RC's shape -- 4
@@ -9,7 +9,8 @@ Question: does front-loaded mixing (every read sees the same fully mixed tokens)
 interleaving, at a fraction of the latent depth?
 
 See ``pure_perceiver_mix.py`` for the design and the evals. W&B project
-``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix5pre_read4``.
+``20260921_perceiver_shapes``; trained as ``v1_3_vit0_mix5prew5_read4``
+(5x5 window; ``v1_3_vit0_mix5pre_read4`` is the stopped 3x3 run).
 """
 
 import logging
