@@ -1541,7 +1541,6 @@ class Perceiver(nn.Module):
         token_mix_radius: int = 1,
         token_mix_dim: int | None = None,
         token_mix_num_heads: int | None = None,
-        token_mix_block_size: int = 128,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1619,9 +1618,6 @@ class Perceiver(nn.Module):
                 width; a smaller value linearly projects the tokens down first, and the
                 reads then consume the narrow tokens.
             token_mix_num_heads: Heads of the token-mixing blocks (None = ``num_heads``).
-            token_mix_block_size: FlexAttention sparse block size of the mixing mask
-                on CUDA (64 or 128). Smaller blocks compute less of a local mask's
-                empty area; numerics are unchanged.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1652,11 +1648,6 @@ class Perceiver(nn.Module):
         num_read_blocks = latent_transformer_depth
         self.token_mix_layout = token_mix_layout
         self.token_mix_radius = token_mix_radius
-        if token_mix_block_size not in (64, 128):
-            raise ValueError(
-                f"token_mix_block_size must be 64 or 128, got {token_mix_block_size}"
-            )
-        self.token_mix_block_size = token_mix_block_size
         n_mix = n_extra_latent = 0
         if token_mix_layout is not None:
             if set(token_mix_layout) - set("MRL"):
@@ -2000,11 +1991,7 @@ class Perceiver(nn.Module):
                 else patch_tokens
             )
             mix_kwargs = token_mix_attention_kwargs(
-                cell_ids,
-                read_attn_mask,
-                spatial_grid[1],
-                self.token_mix_radius,
-                block_size=self.token_mix_block_size,
+                cell_ids, read_attn_mask, spatial_grid[1], self.token_mix_radius
             )
             i_mix = i_read = i_latent = 0
             for layer in self.token_mix_layout:
@@ -2107,8 +2094,6 @@ class PerceiverConfig(Config):
         token_mix_dim: Width of the token-mixing stream (the tokens are linearly
             projected down to it and the reads consume it). None = encoder width.
         token_mix_num_heads: Heads of the mixing blocks. None = the bottleneck's.
-        token_mix_block_size: FlexAttention sparse block size of the mixing mask (64
-            or 128). None means 128. A speed setting only: numerics are unchanged.
     """
 
     register_dim: int
@@ -2127,7 +2112,6 @@ class PerceiverConfig(Config):
     token_mix_radius: int | None = None
     token_mix_dim: int | None = None
     token_mix_num_heads: int | None = None
-    token_mix_block_size: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2208,7 +2192,6 @@ class PerceiverConfig(Config):
                 self.token_mix_radius,
                 self.token_mix_dim,
                 self.token_mix_num_heads,
-                self.token_mix_block_size,
             )
         ):
             raise ValueError("token_mix_* settings need token_mix_layout")
@@ -2262,11 +2245,6 @@ class PerceiverConfig(Config):
             ),
             token_mix_dim=self.token_mix_dim,
             token_mix_num_heads=self.token_mix_num_heads,
-            token_mix_block_size=(
-                self.token_mix_block_size
-                if self.token_mix_block_size is not None
-                else 128
-            ),
         )
 
 

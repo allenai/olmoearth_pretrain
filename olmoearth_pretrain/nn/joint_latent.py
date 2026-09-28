@@ -56,15 +56,6 @@ def flex_attention_cuda(q: Tensor, k: Tensor, v: Tensor, block_mask: Any) -> Ten
         # dynamic=True: sequence lengths change every batch, and a recompile per
         # length would dwarf the attention itself.
         _COMPILED_FLEX = torch.compile(flex_attention, dynamic=True)
-    q_block, kv_block = block_mask.BLOCK_SIZE
-    if q_block < 128:
-        # The kernel's tiles must divide the mask's blocks; Inductor's default forward
-        # tile on H100 (bf16, head dim 64) is 128 rows, so smaller mask blocks need a
-        # matching forward tile. The default backward tile (64 x 64) already divides.
-        kernel_options = {"fwd_BLOCK_M": q_block, "fwd_BLOCK_N": min(64, kv_block)}
-        return _COMPILED_FLEX(
-            q, k, v, block_mask=block_mask, kernel_options=kernel_options
-        )
     return _COMPILED_FLEX(q, k, v, block_mask=block_mask)
 
 
@@ -76,13 +67,8 @@ def create_block_mask_cuda(
     batch: int,
     length: int,
     device: torch.device,
-    block_size: int = 128,
 ) -> Any:
     """``create_block_mask`` compiled once per process (CUDA only).
-
-    ``block_size`` is the sparse block (query and key) the mask is tracked at; 128 is
-    FlexAttention's default. Smaller blocks skip more of a local mask's empty area at
-    some cost in kernel efficiency (see :func:`flex_attention_cuda`).
 
     The eager ``create_block_mask`` evaluates ``mask_mod`` on the full
     ``[B, L, L]`` grid -- with int64 gather intermediates, 8 bytes per element -- and
@@ -104,7 +90,7 @@ def create_block_mask_cuda(
 
         _COMPILED_CREATE_BLOCK_MASK = torch.compile(create_block_mask, dynamic=True)
     return _COMPILED_CREATE_BLOCK_MASK(
-        mask_mod, batch, None, length, length, device=device, BLOCK_SIZE=block_size
+        mask_mod, batch, None, length, length, device=device
     )
 
 
@@ -208,11 +194,7 @@ def neighbourhood_attention_allowed(
 
 
 def token_mix_attention_kwargs(
-    cell_ids: Tensor,
-    valid: Tensor | None,
-    n_w: int,
-    radius: int,
-    block_size: int = 128,
+    cell_ids: Tensor, valid: Tensor | None, n_w: int, radius: int
 ) -> dict[str, Any]:
     """Attention-mask kwargs for the neighbourhood token-mixing blocks.
 
@@ -238,7 +220,7 @@ def token_mix_attention_kwargs(
         batch, length = cell_ids.shape
         return {
             "block_mask": create_block_mask_cuda(
-                mask_mod, batch, length, cell_ids.device, block_size=block_size
+                mask_mod, batch, length, cell_ids.device
             )
         }
     return {
