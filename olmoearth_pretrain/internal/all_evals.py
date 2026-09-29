@@ -3886,6 +3886,36 @@ for _n_months in range(1, 13):
 # to the baseline column of the same table.
 _register_2019_variant("bgdown", "pastis2_drom_bg8void_bgdown_2019")
 
+# Calendar-2019 few-shot roots, all three arms. The published few-shot rows were
+# produced by an offline linear head on dumped embeddings rather than this
+# pipeline. On the non-2019 data the two agree from X=100 upward, but the offline
+# head reads 4-6 mIoU-8 high at X=10, so the arms are put through the real probe
+# pipeline here. mIoU-8 is recovered from the per-class f1 the evaluator already
+# emits -- IoU = f1 / (2 - f1), verified exact against the 8-class bg8void tasks --
+# so no evaluator change is needed to score these in the benchmark metric.
+#
+# NOTE: this adds 12 fine-tune tasks. The sweep emits per-task overrides for every
+# registered FT task, which has overflowed ARG_MAX before; launch these through
+# tmp/ft_sweep_narrow.py rather than full_eval_sweep directly.
+for _arm in ("plo", "bal", "pxi"):
+    for _x in (10, 25, 100, 1000):
+        _xs_ds = f"pastis_planteur_{_arm}{_x}_2019"
+        _xs_probe = _pastis_ps1_task(
+            [Modality.SENTINEL2_L2A.name], window_size=16, dataset=_xs_ds
+        )
+        EVAL_TASKS[f"planteur_2019_{_arm}{_x}_probe_sentinel2"] = _xs_probe
+        for _xs_dim in (128, 64):
+            EVAL_TASKS[
+                f"planteur_2019_{_arm}{_x}_probe_sentinel2_proj{_xs_dim}"
+            ] = replace(
+                _xs_probe,
+                eval_on_projected_registers=True,
+                eval_projection_dim=_xs_dim,
+            )
+        FT_EVAL_TASKS[f"planteur_2019_{_arm}{_x}_ft_sentinel2"] = _pastis_ft_task(
+            [Modality.SENTINEL2_L2A.name], dataset=_xs_ds
+        )
+
 # ---------------------------------------------------------------------------
 # Calendar-2019 input-combination tasks for the varying-inputs table. The S2
 # arm is planteur_2019_probe_sentinel2 above; these add the other four. Landsat
