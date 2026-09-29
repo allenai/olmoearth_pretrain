@@ -3916,6 +3916,7 @@ for _arm in ("plo", "bal", "pxi"):
             [Modality.SENTINEL2_L2A.name], dataset=_xs_ds
         )
 
+
 # ---------------------------------------------------------------------------
 # Calendar-2019 input-combination tasks for the varying-inputs table. The S2
 # arm is planteur_2019_probe_sentinel2 above; these add the other four. Landsat
@@ -4014,3 +4015,30 @@ if __name__ == "__main__":
         trainer_config_builder=build_trainer_config,
         train_module_config_builder=build_train_module_config,
     )
+# Calendar-2019 LOIO input ablations. The S2 column already exists via the
+# per-island variants above; these add the other four input combinations for
+# every fold. Each dataset is the same materialized 2019 data with the combo
+# modality set and split_tag_key swapped to loio_<island>, so no re-ingest is
+# needed -- the same construction as the LOIO S2 variants.
+#
+# NOTE: this adds 20 more fine-tune tasks. Launch fine-tunes through
+# tmp/ft_sweep_narrow.py; the stock sweep emits per-task overrides for every
+# registered FT task and has overflowed ARG_MAX before.
+for _lc_island in _LOIO_ISLANDS:
+    for _lc_combo, (_lc_mods, _lc_base) in _INPUT_COMBOS_2019.items():
+        _loio_combo_ds = _lc_base.replace(
+            "pastis2_drom_bg8void_2019_",
+            f"pastis2_drom_bg8void_2019_loio_{_lc_island}_",
+        )
+        _lc_probe = _pastis_ps1_task(_lc_mods, window_size=16, dataset=_loio_combo_ds)
+        _lc_name = f"planteur_2019_loio_{_lc_island}_probe_{_lc_combo}"
+        EVAL_TASKS[_lc_name] = _lc_probe
+        for _lc_dim in (128, 64):
+            EVAL_TASKS[f"{_lc_name}_proj{_lc_dim}"] = replace(
+                _lc_probe,
+                eval_on_projected_registers=True,
+                eval_projection_dim=_lc_dim,
+            )
+        FT_EVAL_TASKS[
+            f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"
+        ] = _pastis_ft_task(_lc_mods, dataset=_loio_combo_ds)
