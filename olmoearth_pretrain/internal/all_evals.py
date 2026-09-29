@@ -3879,6 +3879,13 @@ for _n_months in range(1, 13):
         f"mo{_n_months:02d}", f"pastis2_drom_bg8void_2019_mo{_n_months:02d}"
     )
 
+# Background-downweight ablation on the calendar-2019 windows. Same materialized
+# dataset as the main table, read through `label_bgdown`: TRAIN windows keep a
+# random 25.07% of Background so Background is roughly balanced against all crops
+# combined. Val and test rasters are untouched, so this stays directly comparable
+# to the baseline column of the same table.
+_register_2019_variant("bgdown", "pastis2_drom_bg8void_bgdown_2019")
+
 # ---------------------------------------------------------------------------
 # Calendar-2019 input-combination tasks for the varying-inputs table. The S2
 # arm is planteur_2019_probe_sentinel2 above; these add the other four. Landsat
