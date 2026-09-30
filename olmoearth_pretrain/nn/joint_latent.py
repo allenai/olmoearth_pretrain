@@ -169,6 +169,53 @@ def joint_attention_allowed(
     return valid[:, None, :] & allowed
 
 
+def choose_latent_stride(
+    *,
+    training: bool,
+    spatial_grid: tuple[int, int],
+    patch_size: int,
+    random_latent_stride: bool,
+    max_latents: int | None,
+    eval_latent_stride: int,
+    stride_bias: float = 0.0,
+) -> int:
+    """Latent stride (pixels per latent along each axis) for one forward pass.
+
+    Training with ``random_latent_stride``: drawn among the divisors ``s`` of
+    ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
+    ``max_latents``; the patch stride is always allowed, so every grid has an option.
+    ``stride_bias`` (beta) weights each allowed stride by ``(1 / s) ** beta``, like the
+    sampler's temporal bias: 0 is uniform, larger values favour the finest stride that
+    fits without always taking it. Training without random strides uses stride 1.
+    Outside training: ``eval_latent_stride``.
+    """
+    if not training:
+        if patch_size % eval_latent_stride != 0:
+            raise ValueError(
+                f"eval_latent_stride {eval_latent_stride} does not divide "
+                f"patch_size {patch_size}"
+            )
+        return eval_latent_stride
+    if not random_latent_stride:
+        return 1
+    n_h, n_w = spatial_grid
+    assert max_latents is not None
+    allowed = [
+        s
+        for s in range(1, patch_size + 1)
+        if patch_size % s == 0
+        and (
+            s == patch_size
+            or (n_h * patch_size // s) * (n_w * patch_size // s) <= max_latents
+        )
+    ]
+    if stride_bias == 0:
+        # Uniform, and the same RNG draw as before the bias existed.
+        return allowed[int(torch.randint(len(allowed), (1,)).item())]
+    weights = torch.tensor([(1.0 / s) ** stride_bias for s in allowed])
+    return allowed[int(torch.multinomial(weights, 1).item())]
+
+
 def neighbourhood_attention_allowed(
     cell_ids: Tensor, valid: Tensor, n_w: int, radius: int
 ) -> Tensor:
@@ -282,6 +329,7 @@ class JointLatentTransformer(nn.Module):
         random_latent_stride: bool = False,
         max_latents: int | None = None,
         eval_latent_stride: int = 1,
+        latent_stride_bias: float = 0.0,
         latent_spatial_range: bool = False,
         token_mlp_ratio: float | None = None,
         compile_rope: bool = False,
@@ -346,6 +394,9 @@ class JointLatentTransformer(nn.Module):
                 grids fall back to coarser strides instead of being excluded.
             eval_latent_stride: Stride used outside training (evals, inference); must
                 divide the patch size. 1 = per-pixel embeddings.
+            latent_stride_bias: With ``random_latent_stride``, weight each allowed
+                stride ``s`` by ``(1 / s) ** latent_stride_bias`` (0 = uniform); see
+                :func:`choose_latent_stride`.
             latent_spatial_range: With ``pixel_latents``, encode every latent as the
                 SQUARE of pixels it stands for (side = its stride) rather than a point:
                 its RoPE pairs are sinc-gated on their row and col frequencies by the
@@ -403,6 +454,7 @@ class JointLatentTransformer(nn.Module):
         self.random_latent_stride = random_latent_stride
         self.max_latents = max_latents
         self.eval_latent_stride = eval_latent_stride
+        self.latent_stride_bias = latent_stride_bias
         if latent_spatial_range and (
             not pixel_latents or position_encoding != PositionEncoding.MIXED_3D_ROPE
         ):
@@ -510,34 +562,16 @@ class JointLatentTransformer(nn.Module):
     def choose_latent_stride(
         self, spatial_grid: tuple[int, int], patch_size: int
     ) -> int:
-        """Latent stride for this forward pass (pixel-latent mode).
-
-        Training with ``random_latent_stride``: uniform over the divisors of
-        ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
-        ``max_latents``; the patch stride is always allowed so every grid has an option.
-        Otherwise: ``eval_latent_stride`` outside training, 1 in training.
-        """
-        if not self.training:
-            if patch_size % self.eval_latent_stride != 0:
-                raise ValueError(
-                    f"eval_latent_stride {self.eval_latent_stride} does not divide "
-                    f"patch_size {patch_size}"
-                )
-            return self.eval_latent_stride
-        if not self.random_latent_stride:
-            return 1
-        n_h, n_w = spatial_grid
-        assert self.max_latents is not None
-        allowed = [
-            s
-            for s in range(1, patch_size + 1)
-            if patch_size % s == 0
-            and (
-                s == patch_size
-                or (n_h * patch_size // s) * (n_w * patch_size // s) <= self.max_latents
-            )
-        ]
-        return allowed[int(torch.randint(len(allowed), (1,)).item())]
+        """Latent stride for this forward pass (see :func:`choose_latent_stride`)."""
+        return choose_latent_stride(
+            training=self.training,
+            spatial_grid=spatial_grid,
+            patch_size=patch_size,
+            random_latent_stride=self.random_latent_stride,
+            max_latents=self.max_latents,
+            eval_latent_stride=self.eval_latent_stride,
+            stride_bias=self.latent_stride_bias,
+        )
 
     def _attention_masks(
         self, cell_id: Tensor, is_latent: Tensor, valid: Tensor
@@ -813,6 +847,8 @@ class JointLatentConfig(Config):
             resolution from one latent per pixel to one per patch under a per-sample
             latent budget; see :class:`JointLatentTransformer`. Leave the supervision
             heads at the default unfold (``max_patch_size``) so they fit any stride.
+        latent_stride_bias: Bias the random stride toward the finest one that fits
+            (weights ``(1 / s) ** bias``). None = 0 (uniform).
         latent_spatial_range: Encode each pixel latent's square footprint in its RoPE
             (sinc-gated row/col pairs), so latents know their stride.
         token_mlp_ratio: A separate, lighter MLP for the tokens (CoLT5-style); the
@@ -833,6 +869,8 @@ class JointLatentConfig(Config):
     random_latent_stride: bool = False
     max_latents: int | None = None
     eval_latent_stride: int = 1
+    # None default: as_config_dict drops None, so existing checkpoints round-trip.
+    latent_stride_bias: float | None = None
     latent_spatial_range: bool = False
     token_mlp_ratio: float | None = None
     compile_rope: bool = False
@@ -914,6 +952,9 @@ class JointLatentConfig(Config):
             random_latent_stride=self.random_latent_stride,
             max_latents=self.max_latents,
             eval_latent_stride=self.eval_latent_stride,
+            latent_stride_bias=(
+                self.latent_stride_bias if self.latent_stride_bias is not None else 0.0
+            ),
             latent_spatial_range=self.latent_spatial_range,
             token_mlp_ratio=self.token_mlp_ratio,
             compile_rope=self.compile_rope,

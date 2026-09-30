@@ -40,7 +40,9 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
 from olmoearth_pretrain.nn.joint_latent import (
     JointLatentConfig,
     JointLatentTransformer,
+    build_pixel_latent_positions,
     build_register_grid_positions,
+    choose_latent_stride,
     sort_tokens_by_cell,
     token_mix_attention_kwargs,
 )
@@ -1541,6 +1543,11 @@ class Perceiver(nn.Module):
         token_mix_radius: int = 1,
         token_mix_dim: int | None = None,
         token_mix_num_heads: int | None = None,
+        pixel_latents: bool = False,
+        random_latent_stride: bool = False,
+        max_latents: int | None = None,
+        eval_latent_stride: int = 1,
+        latent_stride_bias: float = 0.0,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1618,6 +1625,19 @@ class Perceiver(nn.Module):
                 width; a smaller value linearly projects the tokens down first, and the
                 reads then consume the narrow tokens.
             token_mix_num_heads: Heads of the token-mixing blocks (None = ``num_heads``).
+            pixel_latents: Lay the register grid at sub-patch resolution: one latent per
+                ``stride x stride`` pixels (``stride`` divides the patch size), at the
+                pixel-block centres (:func:`build_pixel_latent_positions`), instead of
+                one per patch. The reads are global, so nothing else changes; the grid
+                returned is ``[B, n_h * p / stride, n_w * p / stride, D]``. Same
+                convention as the joint module's pixel latents.
+            random_latent_stride: With ``pixel_latents``, draw the stride per forward
+                pass in training under ``max_latents`` (the patch stride is always
+                allowed); see :func:`choose_latent_stride`.
+            max_latents: Per-sample latent budget for ``random_latent_stride``.
+            eval_latent_stride: Stride outside training (1 = one latent per pixel).
+            latent_stride_bias: Weight allowed strides by ``(1 / s) ** bias`` (0 =
+                uniform), biasing training toward the finest stride that fits.
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1648,6 +1668,15 @@ class Perceiver(nn.Module):
         num_read_blocks = latent_transformer_depth
         self.token_mix_layout = token_mix_layout
         self.token_mix_radius = token_mix_radius
+        if (random_latent_stride or eval_latent_stride != 1) and not pixel_latents:
+            raise ValueError("latent strides require pixel_latents=True")
+        if random_latent_stride and (max_latents is None or max_latents < 1):
+            raise ValueError("random_latent_stride needs a positive max_latents budget")
+        self.pixel_latents = pixel_latents
+        self.random_latent_stride = random_latent_stride
+        self.max_latents = max_latents
+        self.eval_latent_stride = eval_latent_stride
+        self.latent_stride_bias = latent_stride_bias
         n_mix = n_extra_latent = 0
         if token_mix_layout is not None:
             if set(token_mix_layout) - set("MRL"):
@@ -1830,6 +1859,8 @@ class Perceiver(nn.Module):
         spatial_grid: tuple[int, int],
         grid_extent_positions: Tensor | None = None,
         cell_ids: Tensor | None = None,
+        patch_size: int = 1,
+        patch_spacing: float | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1848,9 +1879,13 @@ class Perceiver(nn.Module):
             cell_ids: ``[B, N]`` row-major patch-cell index per token (``-1`` for
                 non-spatial tokens), in the same order as ``patch_tokens``. Required
                 with ``token_mix_layout``; ignored otherwise.
+            patch_size: Patch size of this forward pass (``pixel_latents`` only).
+            patch_spacing: Distance between adjacent patch centres in the RoPE frame
+                (``pixel_latents`` only), to place the sub-patch latent centres.
 
         Returns:
-            registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
+            registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
+                ``[B, n_h * p / s, n_w * p / s, register_dim]``) -- the grid, shaped, so callers
                 never rebuild it from a flat sequence.
             register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
                 only consumer is the decoder's cross-attention, which wants a token
@@ -1894,7 +1929,25 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        register_grid = spatial_grid
+        latent_stride = patch_size
+        if self.pixel_latents:
+            if patch_spacing is None:
+                raise ValueError("pixel_latents requires patch_spacing")
+            latent_stride = choose_latent_stride(
+                training=self.training,
+                spatial_grid=spatial_grid,
+                patch_size=patch_size,
+                random_latent_stride=self.random_latent_stride,
+                max_latents=self.max_latents,
+                eval_latent_stride=self.eval_latent_stride,
+                stride_bias=self.latent_stride_bias,
+            )
+            register_grid = (
+                spatial_grid[0] * patch_size // latent_stride,
+                spatial_grid[1] * patch_size // latent_stride,
+            )
+        else:
+            register_grid = spatial_grid
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.
@@ -1918,9 +1971,20 @@ class Perceiver(nn.Module):
                 if grid_extent_positions is not None
                 else patch_positions
             )
-            register_positions = self.build_register_positions(
-                extent_source[..., -2:], register_grid
-            )
+            if self.pixel_latents:
+                assert patch_spacing is not None
+                register_positions = build_pixel_latent_positions(
+                    batch_size,
+                    register_grid,
+                    patch_size,
+                    patch_spacing,
+                    reference_tokens.device,
+                    latent_stride,
+                )
+            else:
+                register_positions = self.build_register_positions(
+                    extent_source[..., -2:], register_grid
+                )
             if self.time_rope_encoding is not None:
                 if patch_positions.shape[-1] != 3:
                     raise ValueError(
@@ -2094,6 +2158,14 @@ class PerceiverConfig(Config):
         token_mix_dim: Width of the token-mixing stream (the tokens are linearly
             projected down to it and the reads consume it). None = encoder width.
         token_mix_num_heads: Heads of the mixing blocks. None = the bottleneck's.
+        pixel_latents: Sub-patch register grid (one latent per ``stride x stride``
+            pixels); see :class:`Perceiver`. None = False.
+        random_latent_stride: With ``pixel_latents``, draw the stride per forward pass
+            in training under ``max_latents``. None = False.
+        max_latents: Per-sample latent budget for ``random_latent_stride``.
+        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel).
+        latent_stride_bias: Bias the drawn stride toward the finest that fits
+            (weights ``(1 / s) ** bias``). None = 0 (uniform).
     """
 
     register_dim: int
@@ -2112,6 +2184,11 @@ class PerceiverConfig(Config):
     token_mix_radius: int | None = None
     token_mix_dim: int | None = None
     token_mix_num_heads: int | None = None
+    pixel_latents: bool | None = None
+    random_latent_stride: bool | None = None
+    max_latents: int | None = None
+    eval_latent_stride: int | None = None
+    latent_stride_bias: float | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2195,6 +2272,20 @@ class PerceiverConfig(Config):
             )
         ):
             raise ValueError("token_mix_* settings need token_mix_layout")
+        if not self.pixel_latents and any(
+            v is not None
+            for v in (
+                self.random_latent_stride,
+                self.max_latents,
+                self.eval_latent_stride,
+                self.latent_stride_bias,
+            )
+        ):
+            raise ValueError("latent stride settings need pixel_latents=True")
+        if self.random_latent_stride and (
+            self.max_latents is None or self.max_latents < 1
+        ):
+            raise ValueError("random_latent_stride needs a positive max_latents budget")
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2245,6 +2336,15 @@ class PerceiverConfig(Config):
             ),
             token_mix_dim=self.token_mix_dim,
             token_mix_num_heads=self.token_mix_num_heads,
+            pixel_latents=bool(self.pixel_latents),
+            random_latent_stride=bool(self.random_latent_stride),
+            max_latents=self.max_latents,
+            eval_latent_stride=(
+                self.eval_latent_stride if self.eval_latent_stride is not None else 1
+            ),
+            latent_stride_bias=(
+                self.latent_stride_bias if self.latent_stride_bias is not None else 0.0
+            ),
         )
 
 
@@ -2922,6 +3022,11 @@ class Encoder(FlexiVitBase):
                     spatial_grid=spatial_grid,
                     grid_extent_positions=register_kv_positions,
                     cell_ids=cell_ids[..., 0] if cell_ids is not None else None,
+                    patch_size=patch_size,
+                    patch_spacing=CompositeEncodings.calculate_gsd_ratio(
+                        input_res, patch_size
+                    )
+                    * self.rope_coordinate_scale,
                 )
             register_output = {
                 "registers": registers,

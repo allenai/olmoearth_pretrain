@@ -297,3 +297,105 @@ def test_mixing_block_runs_through_the_block_mask_path(
         x=tokens, rope_positions=positions, block_mask=dense["attn_mask"]
     )
     torch.testing.assert_close(via_block_mask, via_dense)
+
+
+# --- Pixel (sub-patch) latents on the Perceiver ----------------------------------------
+
+
+def test_perceiver_latent_stride_equal_to_patch_size_is_the_patch_grid() -> None:
+    """Latents every ``patch_size`` pixels reproduce the patch-latent Perceiver exactly."""
+    torch.manual_seed(0)
+    patch_model = _mixing_encoder(latent_depth=2, token_mix_layout="MRMR").eval()
+    strided = _mixing_encoder(
+        latent_depth=2,
+        token_mix_layout="MRMR",
+        pixel_latents=True,
+        eval_latent_stride=2,
+    ).eval()
+    strided.load_state_dict(patch_model.state_dict())
+    sample = _sample()
+    with torch.no_grad():
+        a = patch_model(sample, patch_size=2, input_res=10)
+        b = strided(sample, patch_size=2, input_res=10)
+    torch.testing.assert_close(a["registers"], b["registers"])
+    torch.testing.assert_close(a["register_positions"], b["register_positions"])
+
+
+def test_perceiver_pixel_latents_train_and_eval_grids() -> None:
+    """Stride-1 eval gives one latent per pixel; training strides stay in budget.
+
+    Gradients reach the mixing blocks and the reads at a sub-patch stride.
+    """
+    torch.manual_seed(0)
+    encoder = _mixing_encoder(
+        latent_depth=2,
+        token_mix_layout="MMRR",
+        pixel_latents=True,
+        random_latent_stride=True,
+        max_latents=64,
+    )
+    sample = _sample()
+    encoder.eval()
+    with torch.no_grad():
+        out = encoder(sample, patch_size=2, input_res=10, fast_pass=True)
+    assert out["registers"].shape == (2, 8, 8, 32)  # 4x4 patches x 2x2 pixels
+    assert out["register_positions"].shape == (2, 64, 2)
+    encoder.train()
+    shapes = set()
+    for _ in range(20):
+        out = encoder(sample, patch_size=2, input_res=10)
+        shapes.add(tuple(out["registers"].shape[1:3]))
+    # 4x4 patches at ps2: stride 1 = 64 latents (== budget), stride 2 = 16.
+    assert shapes <= {(8, 8), (4, 4)} and (8, 8) in shapes
+    out["registers"].sum().backward()
+    perceiver = encoder.perceiver
+    assert isinstance(perceiver, Perceiver)
+    for blk in list(perceiver.token_mix_blocks) + list(perceiver.read_blocks):
+        assert any(
+            p.grad is not None and p.grad.abs().sum() > 0 for p in blk.parameters()
+        )
+
+
+def test_latent_stride_bias_prefers_fine_strides_and_keeps_uniform_default() -> None:
+    """Bias 0 is the old uniform draw (same RNG path); a large bias picks the finest."""
+    from olmoearth_pretrain.nn.joint_latent import choose_latent_stride
+
+    kwargs = dict(
+        training=True,
+        spatial_grid=(2, 2),
+        patch_size=4,
+        random_latent_stride=True,
+        max_latents=1024,
+        eval_latent_stride=1,
+    )
+    torch.manual_seed(0)
+    uniform = [choose_latent_stride(**kwargs) for _ in range(300)]  # type: ignore[arg-type]
+    torch.manual_seed(0)
+    allowed = [1, 2, 4]
+    old = [allowed[int(torch.randint(3, (1,)).item())] for _ in range(300)]
+    assert uniform == old
+    torch.manual_seed(0)
+    biased = [
+        choose_latent_stride(**kwargs, stride_bias=8.0)  # type: ignore[arg-type]
+        for _ in range(300)
+    ]
+    assert biased.count(1) > 250 and set(biased) <= {1, 2, 4}
+    torch.manual_seed(0)
+    mild = [
+        choose_latent_stride(**kwargs, stride_bias=2.0)  # type: ignore[arg-type]
+        for _ in range(3000)
+    ]
+    # Weights 1 : 1/4 : 1/16 -> about 76% / 19% / 5%.
+    assert 0.70 < mild.count(1) / 3000 < 0.82
+
+
+def test_pixel_latent_settings_need_pixel_latents() -> None:
+    """Stride settings without pixel latents fail validation."""
+    config = PerceiverConfig(register_dim=32, latent_stride_bias=2.0)
+    with pytest.raises(ValueError, match="pixel_latents"):
+        config.validate(encoder_num_heads=4, position_encoding="rope_3d_mixed")
+    config = PerceiverConfig(
+        register_dim=32, pixel_latents=True, random_latent_stride=True
+    )
+    with pytest.raises(ValueError, match="max_latents"):
+        config.validate(encoder_num_heads=4, position_encoding="rope_3d_mixed")
