@@ -4030,7 +4030,10 @@ for _lc_island in _LOIO_ISLANDS:
             "pastis2_drom_bg8void_2019_",
             f"pastis2_drom_bg8void_2019_loio_{_lc_island}_",
         )
-        _lc_probe = _pastis_ps1_task(_lc_mods, window_size=16, dataset=_loio_combo_ds)
+        _lc_mod_names = [getattr(Modality, _m).name for _m in _lc_mods]
+        _lc_probe = _pastis_ps1_task(
+            _lc_mod_names, window_size=16, dataset=_loio_combo_ds
+        )
         _lc_name = f"planteur_2019_loio_{_lc_island}_probe_{_lc_combo}"
         EVAL_TASKS[_lc_name] = _lc_probe
         for _lc_dim in (128, 64):
@@ -4041,4 +4044,4 @@ for _lc_island in _LOIO_ISLANDS:
             )
         FT_EVAL_TASKS[
             f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"
-        ] = _pastis_ft_task(_lc_mods, dataset=_loio_combo_ds)
+        ] = _pastis_ft_task(_lc_mod_names, dataset=_loio_combo_ds)
