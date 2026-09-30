@@ -455,3 +455,25 @@ def test_encoder_with_write_back_and_pixel_latents(layout: str) -> None:
     out["registers"].sum().backward()
     perceiver = encoder.perceiver
     assert isinstance(perceiver, Perceiver) and len(perceiver.write_blocks) == 1
+
+
+def test_write_back_with_a_narrow_mixing_stream() -> None:
+    """A write-back at token_mix_dim < register_dim attends the wide latents."""
+    torch.manual_seed(0)
+    encoder = _mixing_encoder(
+        latent_depth=2,
+        token_mix_layout="MRWMR",
+        token_mix_dim=16,
+        token_mix_num_heads=2,
+        pixel_latents=True,
+        random_latent_stride=True,
+        max_latents=64,
+    )
+    perceiver = encoder.perceiver
+    assert isinstance(perceiver, Perceiver)
+    attn = perceiver.write_blocks[0].attn
+    assert attn.q.in_features == 16 and attn.k.in_features == 32
+    encoder.train()
+    out = encoder(_sample(), patch_size=2, input_res=10)
+    out["registers"].sum().backward()
+    assert attn.k.weight.grad is not None and attn.k.weight.grad.abs().sum() > 0
