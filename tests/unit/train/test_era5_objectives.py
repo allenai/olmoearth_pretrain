@@ -37,6 +37,7 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import (
     Era5TaskSpec,
     make_regression_extractor,
 )
+from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult
 from olmoearth_pretrain.nn.attention import Mlp
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig
@@ -2080,3 +2081,46 @@ class TestRawLossByRegion:
         )
         _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
         assert self.RECENT not in metrics and self.EARLIER not in metrics
+
+
+class TestProbeLrSweep:
+    """Probe-LR sweep flattening and launcher wiring."""
+
+    def test_best_lr_follows_higher_is_better(self):
+        results = {
+            1e-3: EvalResult.from_regression(mae=1.0, rmse=2.0, r2=0.1),
+            1e-2: EvalResult.from_regression(mae=1.0, rmse=1.5, r2=0.2),
+            1e-1: None,
+        }
+        out = era5_evaluator_callback._lr_sweep_log_dict("lfmc_woody_eval", results)
+        prefix = "eval_lrsweep/lfmc_woody_eval"
+        assert out[f"{prefix}/lr1e-03"] == -2.0
+        assert out[f"{prefix}/lr1e-02"] == -1.5
+        assert f"{prefix}/lr1e-01" not in out
+        assert out[f"{prefix}/best_lr"] == 1e-2
+        assert out[f"{prefix}/best"] == -1.5
+
+    def test_best_lr_follows_lower_is_better(self):
+        results = {
+            lr: EvalResult.from_regression(
+                mae=1.0, rmse=rmse, r2=0.0, primary_metric=EvalMetric.RMSE
+            )
+            for lr, rmse in ((1e-4, 3.0), (3e-4, 2.5), (1e-3, 2.8))
+        }
+        out = era5_evaluator_callback._lr_sweep_log_dict("t", results)
+        assert out["eval_lrsweep/t/best_lr"] == 3e-4
+        assert out["eval_lrsweep/t/best"] == 2.5
+
+    def test_empty_results(self):
+        assert era5_evaluator_callback._lr_sweep_log_dict("t", {1e-3: None}) == {}
+
+    def test_launcher_knob(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(["eval_tasks=[lfmc_woody_eval]", "eval_probe_lr_grid=[0.001,0.01]"])
+        configs = era5_launch_script._resolve_eval_task_configs(common)
+        assert [c.probe_lr_grid for c in configs] == [[0.001, 0.01]]

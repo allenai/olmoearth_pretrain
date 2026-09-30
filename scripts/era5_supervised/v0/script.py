@@ -255,6 +255,9 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # pinned to this seed at every eval (see Era5DownstreamEvaluatorCallback),
     # making probe results comparable across runs / probe-LR values.
     eval_probe_seed: int | None = None
+    # Extra probe LRs to sweep at every eval, on the same embeddings; results go
+    # to eval_lrsweep/<task>/lr<LR> plus best / best_lr. Empty: no sweep.
+    eval_probe_lr_grid: list[float] = field(default_factory=list)
     eval_probe_epochs: int = 50
     eval_probe_batch_size: int = 256
     eval_embedding_batch_size: int = 128
@@ -635,6 +638,7 @@ def _resolve_eval_task_configs(
                     )
                 ),
                 probe_seed=common.eval_probe_seed,
+                probe_lr_grid=list(common.eval_probe_lr_grid),
                 probe_epochs=common.eval_probe_epochs,
                 probe_batch_size=common.eval_probe_batch_size,
                 embedding_batch_size=common.eval_embedding_batch_size,

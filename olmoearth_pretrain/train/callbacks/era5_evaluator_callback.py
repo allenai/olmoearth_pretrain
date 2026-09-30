@@ -41,7 +41,11 @@ from olmoearth_pretrain.data.multi_task_era5_dataset import (
 )
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.linear_probe import ProbeType, train_and_eval_probe
-from olmoearth_pretrain.evals.metrics import EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.metrics import (
+    EvalResult,
+    EvalTaskResult,
+    metric_higher_is_better,
+)
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     _record_eval_result,
     eval_result_log_dict,
@@ -75,6 +79,9 @@ class Era5LinearProbeTaskConfig:
     test_groups: list[str] | None = None
     test_tags: dict[str, str] | None = None
     probe_lr: float = 1e-3
+    # Optional extra probe LRs, each probed on the same embeddings and logged
+    # under eval_lrsweep/<task>/ (empty: registry LR only).
+    probe_lr_grid: list[float] = field(default_factory=list)
     # When set, the probe's weight init AND the training DataLoader's shuffle
     # order are pinned to this seed (see `_run_eval`), making probe results
     # comparable across runs / probe-LR values. None keeps legacy behavior
@@ -237,6 +244,37 @@ def _embedding_geometry_metrics(
     }
 
 
+def _lr_sweep_log_dict(
+    task_name: str, results: dict[float, EvalResult | None]
+) -> dict[str, float]:
+    """Flatten a probe-LR sweep into wandb metrics, plus the best LR.
+
+    Args:
+        task_name: Eval task name, used in the metric keys.
+        results: Val result per probe LR (None when a probe produced none).
+
+    Returns:
+        ``eval_lrsweep/<task>/lr<lr>`` with each LR's primary val metric, and
+        ``eval_lrsweep/<task>/best`` and ``.../best_lr`` for the best of them
+        (the primary metric's own direction decides which is best).
+    """
+    prefix = f"eval_lrsweep/{task_name}"
+    out: dict[str, float] = {}
+    best: tuple[float, float] | None = None
+    for lr, result in results.items():
+        if result is None:
+            continue
+        value = float(result.primary)
+        out[f"{prefix}/lr{lr:.0e}"] = value
+        higher = metric_higher_is_better(result.primary_metric)
+        if best is None or (value > best[1] if higher else value < best[1]):
+            best = (lr, value)
+    if best is not None:
+        out[f"{prefix}/best_lr"] = best[0]
+        out[f"{prefix}/best"] = best[1]
+    return out
+
+
 def _log_to_wandb(
     trainer: Trainer,
     prefix: str,
@@ -389,6 +427,63 @@ class Era5DownstreamEvaluatorCallback(Callback):
         for task in self.tasks:
             self._run_eval(task)
 
+    def _train_probe(
+        self,
+        task: Era5LinearProbeTaskConfig,
+        lr: float,
+        eval_config: EvalDatasetConfig,
+        probe_inputs: tuple[Any, ...],
+    ) -> EvalTaskResult:
+        """Train and evaluate one linear probe at ``lr`` on precomputed embeddings.
+
+        When ``task.probe_seed`` is set, the probe's init and batch ordering are
+        pinned: both the nn.Linear/Conv init and the shuffling DataLoader's
+        RandomSampler draw from the process-global torch RNG, so seeding it makes
+        the probe deterministic in those two respects, identically at every LR.
+        fork_rng restores the global RNG afterwards so a mid-training eval does
+        not perturb the pretraining RNG stream.
+
+        Args:
+            task: Eval task (probe seed, epochs, batch size).
+            lr: Probe learning rate.
+            eval_config: Probe dataset config (task type, classes).
+            probe_inputs: ``(train_emb, train_labels, val_emb, val_labels,
+                test_emb, test_labels)``; the test entries may be None.
+
+        Returns:
+            The probe's val (and optional test) results.
+        """
+        device = self.trainer.device
+        train_emb, train_labels, val_emb, val_labels, test_emb, test_labels = (
+            probe_inputs
+        )
+        if task.probe_seed is not None:
+            rng_context = torch.random.fork_rng(
+                devices=[device] if device.type == "cuda" else []
+            )
+        else:
+            rng_context = contextlib.nullcontext()
+        with rng_context:
+            if task.probe_seed is not None:
+                torch.manual_seed(task.probe_seed)
+                if device.type == "cuda":
+                    torch.cuda.manual_seed_all(task.probe_seed)
+            return train_and_eval_probe(
+                config=eval_config,
+                lr=lr,
+                train_embeddings=train_emb,
+                train_labels=train_labels,
+                val_embeddings=val_emb,
+                val_labels=val_labels,
+                test_embeddings=test_emb,
+                test_labels=test_labels,
+                device=device,
+                batch_size=task.probe_batch_size,
+                epochs=task.probe_epochs,
+                eval_interval=task.probe_epochs,
+                probe_type=ProbeType.LINEAR,
+            )
+
     def _get_task_batches(
         self, task: Era5LinearProbeTaskConfig
     ) -> tuple[list[Any], list[Any], list[Any] | None] | None:
@@ -507,38 +602,23 @@ class Era5DownstreamEvaluatorCallback(Callback):
             test_embeddings.shape[0] if test_embeddings is not None else "N/A",
         )
 
-        # When probe_seed is set, pin the probe's init and batch ordering:
-        # both the nn.Linear/Conv init and the shuffling DataLoader's
-        # RandomSampler draw from the process-global torch RNG, so seeding it
-        # here makes the probe fully deterministic in those two respects.
-        # fork_rng restores the global RNG afterwards so a mid-training eval
-        # doesn't perturb the pretraining RNG stream.
-        if task.probe_seed is not None:
-            rng_context = torch.random.fork_rng(
-                devices=[device] if device.type == "cuda" else []
-            )
-        else:
-            rng_context = contextlib.nullcontext()
-        with rng_context:
-            if task.probe_seed is not None:
-                torch.manual_seed(task.probe_seed)
-                if device.type == "cuda":
-                    torch.cuda.manual_seed_all(task.probe_seed)
-            result: EvalTaskResult = train_and_eval_probe(
-                config=eval_config,
-                lr=task.probe_lr,
-                train_embeddings=train_embeddings,
-                train_labels=train_labels,
-                val_embeddings=val_embeddings,
-                val_labels=val_labels,
-                test_embeddings=test_embeddings,
-                test_labels=test_labels,
-                device=device,
-                batch_size=task.probe_batch_size,
-                epochs=task.probe_epochs,
-                eval_interval=task.probe_epochs,
-                probe_type=ProbeType.LINEAR,
-            )
+        probe_inputs = (
+            train_embeddings,
+            train_labels,
+            val_embeddings,
+            val_labels,
+            test_embeddings,
+            test_labels,
+        )
+        result = self._train_probe(task, task.probe_lr, eval_config, probe_inputs)
+        # Optional probe-LR sweep on the same embeddings (same pinned probe
+        # seed at every LR), logged next to the registry-LR result.
+        if task.probe_lr_grid:
+            sweep = {
+                lr: self._train_probe(task, lr, eval_config, probe_inputs).val_result
+                for lr in task.probe_lr_grid
+            }
+            geometry.update(_lr_sweep_log_dict(task.name, sweep))
 
         eval_time = time.monotonic() - start_time
         self._last_eval_step = self.step
