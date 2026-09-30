@@ -172,6 +172,12 @@ def build_launch_config(
                 value=loop_eval_from_train_config,
             )
         )
+    # Propagate the prediction-dump directory so each launch can dump to its own
+    # folder instead of the shared weka marker's (dump names carry no model id).
+    pred_dir = os.environ.get("OE_PRED_DIR")
+    if pred_dir is not None:
+        logger.info(f"Propagating OE_PRED_DIR to experiment: {pred_dir}")
+        env_vars.append(BeakerEnvVar(name="OE_PRED_DIR", value=pred_dir))
     # Propagate the finetune tag to the experiment if set
     finetune = os.environ.get("FINETUNE")
     if finetune is not None:

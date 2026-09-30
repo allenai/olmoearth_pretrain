@@ -594,6 +594,13 @@ class DownstreamEvaluator:
                     dump_tag=(
                         f"{self.dataset}_hw{getattr(self.config, 'height_width', None)}"
                         f"_{'-'.join(sorted(self.input_modalities))}"
+                        # v1.3's projected readouts share a dataset with the full-width
+                        # probe; without the width they overwrite each other's dump.
+                        + (
+                            f"_proj{self.eval_projection_dim}"
+                            if self.eval_on_projected_registers
+                            else ""
+                        )
                     ),
                     probe_input_norm=self.probe_input_norm,
                 )
