@@ -4045,3 +4045,28 @@ for _lc_island in _LOIO_ISLANDS:
         FT_EVAL_TASKS[
             f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"
         ] = _pastis_ft_task(_lc_mod_names, dataset=_loio_combo_ds)
+
+
+# ---------------------------------------------------------------------------
+# Tessera v2 / AEF read-outs of the calendar-2019 few-shot datasets.
+#
+# tab:planteur-fewshot (plo arm) and tab:planteur-transfer-mix (unbal/bal arms)
+# compare OlmoEarth against Tessera v2 and AEF. The OlmoEarth rows are produced
+# by an offline linear head trained on dumped embeddings; to put the baselines
+# on the SAME head rather than a weaker one, they need embedding dumps over the
+# same twelve few-shot datasets. These tasks exist only to produce those dumps.
+#
+# Both encoders are released embeddings read straight off materialized layers
+# (`tessera_v2`, `gse`), so there is no distilled projection and therefore no
+# _proj128 / _proj64 variants -- one read-out each, 12 datasets x 2 encoders.
+_XSHOT_ARMS_2019 = ("plo", "bal", "pxi")
+_XSHOT_SIZES_2019 = (10, 25, 100, 1000)
+for _xs_enc, _xs_mod in (("tessera_v2", Modality.TESSERA_V2), ("aef", Modality.GSE)):
+    for _xs_arm in _XSHOT_ARMS_2019:
+        for _xs_n in _XSHOT_SIZES_2019:
+            _xs_ds = f"pastis_planteur_{_xs_arm}{_xs_n}_2019"
+            EVAL_TASKS[
+                f"planteur_2019_{_xs_arm}{_xs_n}_probe_{_xs_enc}"
+            ] = _pastis_ps1_task(
+                [_xs_mod.name], window_size=16, dataset=_xs_ds
+            )
