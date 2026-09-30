@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
@@ -158,6 +159,18 @@ class Era5DailyEncoderConfig(Config):
         drop_path_rate: Stochastic depth rate (linearly increased per layer).
         add_day_of_year_features: Add sin/cos day-of-year features to tokens.
         add_relative_position_features: Add sin/cos relative index features.
+            Legacy: the encoding spans a full circle, so the first and last
+            tokens get identical features; prefer ``position_embedding``.
+        position_embedding: ``"none"`` (default) or ``"learned"``. ``"learned"``
+            adds a learned absolute position embedding, one row per patch
+            token, end-aligned so the last token (the days just before the
+            window end) always gets the same row. Without it, tokens are told
+            apart only by day of year, which repeats within a 448-day window.
+        pooled_norm: ``"none"`` (default) or ``"layernorm"``. ``"layernorm"``
+            applies a parameter-free LayerNorm to the pooled embedding, for
+            every pooling mode (each half separately for ``cls_mean_concat``),
+            so its scale no longer drifts with how aligned the tokens are.
+            It adds no parameters, so older checkpoints still load.
         use_mask_embed: When True, create a learned per-band mask embedding
             ``[1, 1, V]`` and accept an optional ``corruption_mask`` in
             ``forward()``.  Masked positions are replaced with the learned
@@ -189,6 +202,8 @@ class Era5DailyEncoderConfig(Config):
     drop_path_rate: float = 0.0
     add_day_of_year_features: bool = True
     add_relative_position_features: bool = False
+    position_embedding: str = "none"
+    pooled_norm: str = "none"
     use_mask_embed: bool = False
     use_conv_stem: bool = False
     is_swt_input: bool = False
@@ -213,6 +228,23 @@ class Era5DailyEncoderConfig(Config):
             raise ValueError("patch_stride must be >= 1")
         if self.drop_path_rate < 0.0 or self.drop_path_rate >= 1.0:
             raise ValueError("drop_path_rate must be in [0, 1)")
+        if self.position_embedding not in ("none", "learned"):
+            raise ValueError(
+                f"position_embedding must be 'none' or 'learned', got "
+                f"{self.position_embedding!r}"
+            )
+        if self.pooled_norm not in ("none", "layernorm"):
+            raise ValueError(
+                f"pooled_norm must be 'none' or 'layernorm', got {self.pooled_norm!r}"
+            )
+        if (
+            self.position_embedding == "learned"
+            and self.max_sequence_length < self.patch_kernel_size
+        ):
+            raise ValueError(
+                "position_embedding='learned' needs max_sequence_length >= "
+                "patch_kernel_size"
+            )
         if self.is_swt_input and not self.swt_input_levels:
             raise ValueError(
                 "swt_input_levels must be non-empty when is_swt_input=True"
@@ -275,6 +307,7 @@ class Era5DailyEncoder(nn.Module):
         self.patch_kernel_size = config.patch_kernel_size
         self.patch_stride = config.patch_stride
         self.pooling = Era5Pooling(config.pooling)
+        self.pooled_norm = config.pooled_norm
         self.add_day_of_year_features = config.add_day_of_year_features
         self.add_relative_position_features = config.add_relative_position_features
 
@@ -369,6 +402,17 @@ class Era5DailyEncoder(nn.Module):
             if self.num_time_features > 0
             else None
         )
+
+        # Learned absolute position embedding: one row per patch token of a
+        # max-length sequence, added end-aligned (see forward).
+        if config.position_embedding == "learned":
+            num_positions = self._num_patches(config.max_sequence_length)
+            self.pos_embed: nn.Parameter | None = nn.Parameter(
+                torch.zeros(1, num_positions, d_model)
+            )
+            nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        else:
+            self.pos_embed = None
 
         # CLS token (only for cls / cls_mean_concat pooling)
         if self.pooling in {Era5Pooling.CLS, Era5Pooling.CLS_MEAN_CONCAT}:
@@ -497,6 +541,17 @@ class Era5DailyEncoder(nn.Module):
         if patch_time is not None:
             tokens = tokens + patch_time
 
+        # --- Learned position embedding, end-aligned: a shorter sequence uses
+        # the last rows, so the final token always gets the same embedding ---
+        if self.pos_embed is not None:
+            num_tokens = tokens.shape[1]
+            if num_tokens > self.pos_embed.shape[1]:
+                raise ValueError(
+                    f"{num_tokens} patch tokens exceed the {self.pos_embed.shape[1]} "
+                    "learned positions (max_sequence_length)"
+                )
+            tokens = tokens + self.pos_embed[:, -num_tokens:, :]
+
         # --- Prepend prior_tokens and/or CLS ---
         num_prior = 0
         num_cls = 0
@@ -532,6 +587,8 @@ class Era5DailyEncoder(nn.Module):
             num_prior=num_prior,
             num_cls=num_cls,
         )
+        if self.pooled_norm == "layernorm":
+            pooled = self._layernorm_pooled(pooled)
 
         return {
             "tokens": tokens,
@@ -668,6 +725,20 @@ class Era5DailyEncoder(nn.Module):
 
         patch_time = torch.stack(feats, dim=-1)  # [B, N, F]
         return self.time_embed(patch_time)  # [B, N, D]
+
+    def _layernorm_pooled(self, pooled: Tensor) -> Tensor:
+        """Parameter-free LayerNorm over each ``embedding_size`` chunk of ``pooled``.
+
+        Args:
+            pooled: ``[B, D]`` or, for ``cls_mean_concat``, ``[B, 2 * D]``.
+
+        Returns:
+            The same shape, each ``D``-wide chunk (the whole vector, or the CLS
+            and mean halves separately) with zero mean and unit variance.
+        """
+        chunks = pooled.reshape(pooled.shape[0], -1, self.embedding_size)
+        normed = F.layer_norm(chunks, (self.embedding_size,))
+        return normed.reshape(pooled.shape)
 
     def _pool(
         self,

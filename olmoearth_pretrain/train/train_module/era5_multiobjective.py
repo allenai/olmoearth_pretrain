@@ -67,6 +67,7 @@ from olmoearth_pretrain.nn.transforms.era5_swt import (
     StationaryWaveletTransform1d,
     swt_band_supports,
 )
+from olmoearth_pretrain.train.embedding_geometry import spread_and_mean_cosine
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -554,14 +555,29 @@ def _instance_infonce(
                 (logits.argmax(dim=1) == labels).float().mean()
                 + (logits.argmax(dim=0) == labels).float().mean()
             ) / 2
-            projected_std = (
-                a.std(dim=0, correction=0).mean() + b.std(dim=0, correction=0).mean()
-            ) / 2
+    spread, mean_cos = _mean_geometry([a, b])
     return loss, {
         "contrastive_accuracy": accuracy,
         "contrastive_batch_size": loss.new_tensor(a.shape[0]),
-        "projected_std": projected_std,
+        "projected_std_r": spread,
+        "projected_mean_cos": mean_cos,
     }
+
+
+def _mean_geometry(views: list[Tensor]) -> tuple[Tensor, Tensor]:
+    """Spread ratio and mean pairwise cosine, averaged over views.
+
+    Args:
+        views: One ``[B, d]`` embedding batch per view.
+
+    Returns:
+        ``(spread, mean_cos)`` as 0-d tensors, each averaged over the views
+        (see :mod:`olmoearth_pretrain.train.embedding_geometry`).
+    """
+    stats = [spread_and_mean_cosine(v.detach()) for v in views]
+    spread = torch.stack([s for s, _ in stats]).mean()
+    mean_cos = torch.stack([c for _, c in stats]).mean()
+    return spread, mean_cos
 
 
 def _pair(values: list[int], name: str) -> tuple[int, int]:
@@ -639,6 +655,16 @@ class ReconstructionObjective(_Objective):
         # Static variable-count weights for loss averaging. Each (group, scale)
         # term is weighted by the number of variables in the group
         self._raw_weight, self._swt_weight = self._compute_loss_weights()
+        # Variables the raw loss scores (groups whose mode includes raw).
+        self._raw_scored_vars = sorted(
+            i
+            for group_name, bi in self.variable_groups.items()
+            if _parse_recon_mode(
+                self.group_recon_mode.get(group_name, "raw_plus_all_swt"),
+                self.swt_levels,
+            )[0]
+            for i in bi
+        )
 
     def _compute_loss_weights(self) -> tuple[float, float]:
         """Precompute variable-count weights for raw and SWT loss averaging.
@@ -701,11 +727,21 @@ class ReconstructionObjective(_Objective):
         if self.num_views == 2:
             recon_loss_b, metrics_b, out_b = self._compute_view(encoder, batch)
             recon_loss = (recon_loss + recon_loss_b) / 2
+            # Keys present in only one view (e.g. a region with no scored cell)
+            # keep that view's value.
             metrics = {
-                key: (value + metrics_b[key]) / 2 for key, value in metrics.items()
-            }
+                key: (value + metrics_b[key]) / 2 if key in metrics_b else value
+                for key, value in metrics.items()
+            } | {k: v for k, v in metrics_b.items() if k not in metrics}
         metrics[f"{self.name}/recon_loss"] = recon_loss.detach()
         metrics[f"{self.name}/num_views"] = recon_loss.new_tensor(self.num_views)
+        # Collapse monitors on the pooled embedding the probes read, for every
+        # run (reconstruction-only included). No gradients, no RNG.
+        if batch.era5.shape[0] >= 2 and "pooled" in out_a:
+            views = [out_a["pooled"]] + ([out_b["pooled"]] if out_b is not None else [])
+            spread, mean_cos = _mean_geometry(views)
+            metrics[f"{self.name}/pooled_std_r"] = spread
+            metrics[f"{self.name}/pooled_mean_cos"] = mean_cos
 
         total_loss = recon_loss
         if self.contrastive_lambda > 0:
@@ -719,22 +755,9 @@ class ReconstructionObjective(_Objective):
             )
             w_cont_loss = self.contrastive_lambda * cont_loss
             total_loss = recon_loss + w_cont_loss
-            with (
-                torch.no_grad(),
-                torch.autocast(device_type=pooled_a.device.type, enabled=False),
-            ):
-                pooled_std = (
-                    F.normalize(pooled_a.float(), dim=-1)
-                    .std(dim=0, correction=0)
-                    .mean()
-                    + F.normalize(pooled_b.float(), dim=-1)
-                    .std(dim=0, correction=0)
-                    .mean()
-                ) / 2
             contrastive_metrics.update(
                 contrastive_loss=cont_loss.detach(),
                 contrastive_weighted_loss=w_cont_loss.detach(),
-                pooled_std=pooled_std,
             )
             metrics.update(
                 {
@@ -973,7 +996,53 @@ class ReconstructionObjective(_Objective):
                 level_loss_sums[-1].detach() / approx_cnt
             )
 
+        # Temporary diagnostic for the position-embedding test (delete once
+        # checked): raw loss on the last ts days, which share day-of-year tags
+        # with the buffer, vs the earlier target days.
+        if self.raw_lambda > 0 and self._raw_scored_vars:
+            scored = valid_tgt & var_valid.unsqueeze(1)
+            if self.raw_loss_on_masked_only:
+                scored = scored & eff_raw_mask_tgt
+            metrics.update(self._raw_loss_by_region(x_hat_tgt, x_tgt, scored, ts))
+
         return total_loss, metrics, out
+
+    def _raw_loss_by_region(
+        self, pred: Tensor, targ: Tensor, scored: Tensor, recent_days: int
+    ) -> dict[str, Tensor]:
+        """Band-normalized raw Huber on the last ``recent_days`` target days vs the rest.
+
+        A plain mean over scored cells of the raw-scored variables, not the
+        group-weighted ``raw_loss``: the two regions compare with each other,
+        not with ``raw_loss``. A region with no scored cell is omitted.
+
+        Args:
+            pred: ``[B, T_win, V]`` reconstruction over the target window.
+            targ: ``[B, T_win, V]`` target over the target window.
+            scored: ``[B, T_win, V]`` bool, the cells the raw loss scores.
+            recent_days: Length of the recent region at the end of the window.
+
+        Returns:
+            ``{name}/raw_loss_last{recent_days}d`` and ``{name}/raw_loss_earlier``,
+            each only if that region has scored cells.
+        """
+        out: dict[str, Tensor] = {}
+        with torch.no_grad():
+            vi = self._raw_scored_vars
+            p, t, m = pred[:, :, vi], targ[:, :, vi], scored[:, :, vi]
+            std = t.std(dim=(0, 1)).clamp(min=1e-6)
+            err = F.huber_loss(
+                p / std, t / std, reduction="none", delta=self.huber_delta
+            )
+            regions = (
+                (f"raw_loss_last{recent_days}d", slice(-recent_days, None)),
+                ("raw_loss_earlier", slice(None, -recent_days)),
+            )
+            for name, region in regions:
+                region_mask = m[:, region]
+                if region_mask.any():
+                    out[f"{self.name}/{name}"] = err[:, region][region_mask].mean()
+        return out
 
 
 # ---------------------------------------------------------------------------

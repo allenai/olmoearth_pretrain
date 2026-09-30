@@ -27,6 +27,7 @@ from olmo_core.config import Config
 from torch import Tensor, nn
 
 import olmoearth_pretrain.nn.era5_encoder as era5_encoder_mod
+import olmoearth_pretrain.train.callbacks.era5_evaluator_callback as era5_evaluator_callback
 import olmoearth_pretrain.train.train_module.era5_multiobjective as era5_multiobjective
 from olmoearth_pretrain.data.constants import ERA5_INPUT_SEQUENCE_LENGTH, Modality
 from olmoearth_pretrain.data.multi_task_era5_dataset import (
@@ -1894,3 +1895,188 @@ def test_regression_label_extractor_is_picklable() -> None:
         restored = pickle.loads(pickle.dumps(fn))
         out = restored({"value": torch.tensor(3.5), "valid": torch.tensor(1.0)})
         assert float(out) == 3.5 and out.shape == ()
+
+
+class TestLearnedPositionEmbedding:
+    """The encoder's optional learned position embedding (end-aligned)."""
+
+    def test_default_adds_no_parameters(self):
+        encoder = _small_encoder_cfg().build()
+        assert encoder.pos_embed is None
+        assert not any("pos_embed" in key for key in encoder.state_dict())
+
+    def test_learned_shape_and_forward(self):
+        encoder = _small_encoder_cfg(position_embedding="learned").build()
+        num_tokens = (T - encoder.patch_kernel_size) // encoder.patch_stride + 1
+        assert encoder.pos_embed.shape == (1, num_tokens, D)
+        batch = _make_batch()
+        out = encoder(era5=batch.era5, timestamps=batch.timestamps)
+        assert out["tokens"].shape == (B, num_tokens, D)
+        out["pooled"].sum().backward()
+        assert encoder.pos_embed.grad is not None
+        assert encoder.pos_embed.grad.abs().sum() > 0
+
+    def test_end_aligned_rows(self):
+        """A shorter sequence uses the last rows; only the used rows matter."""
+        torch.manual_seed(0)
+        plain = _small_encoder_cfg().build().eval()
+        learned = _small_encoder_cfg(position_embedding="learned").build().eval()
+        missing, _ = learned.load_state_dict(plain.state_dict(), strict=False)
+        assert missing == ["pos_embed"]
+        batch = _make_batch()
+        with torch.no_grad():
+            learned.pos_embed.zero_()
+            # Only the first (oldest) row; random, since the LayerNorms would
+            # cancel a constant shift across features.
+            learned.pos_embed[0, 0] = torch.randn(D)
+        short = T - learned.patch_stride * 2  # two tokens fewer
+        for t, should_differ in ((T, True), (short, False)):
+            with torch.no_grad():
+                a = plain(era5=batch.era5[:, :t], timestamps=batch.timestamps[:, :t])
+                b = learned(era5=batch.era5[:, :t], timestamps=batch.timestamps[:, :t])
+            assert (not torch.allclose(a["pooled"], b["pooled"])) is should_differ
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="position_embedding"):
+            _small_encoder_cfg(position_embedding="sincos").build()
+
+    def test_launcher_knob(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(["encoder_position_embedding=learned"])
+        cfg = era5_launch_script.build_model_config(common)
+        assert cfg.encoder_config.position_embedding == "learned"
+
+
+class TestPooledLayerNorm:
+    """The encoder's optional parameter-free LayerNorm on the pooled embedding."""
+
+    @pytest.mark.parametrize("pooling", ["mean", "cls", "attention", "cls_mean_concat"])
+    def test_each_chunk_is_normalized(self, pooling):
+        encoder = _small_encoder_cfg(pooling=pooling, pooled_norm="layernorm").build()
+        batch = _make_batch()
+        pooled = encoder(era5=batch.era5, timestamps=batch.timestamps)["pooled"]
+        chunks = pooled.reshape(B, -1, D)
+        assert chunks.shape[1] == (2 if pooling == "cls_mean_concat" else 1)
+        torch.testing.assert_close(
+            chunks.mean(-1), torch.zeros(B, chunks.shape[1]), atol=1e-4, rtol=0
+        )
+        torch.testing.assert_close(
+            chunks.var(-1, correction=0),
+            torch.ones(B, chunks.shape[1]),
+            atol=1e-3,
+            rtol=0,
+        )
+
+    def test_adds_no_parameters_and_loads_old_checkpoints(self):
+        plain = _small_encoder_cfg().build()
+        normed = _small_encoder_cfg(pooled_norm="layernorm").build()
+        assert set(plain.state_dict()) == set(normed.state_dict())
+        normed.load_state_dict(plain.state_dict(), strict=True)
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="pooled_norm"):
+            _small_encoder_cfg(pooled_norm="batchnorm").build()
+
+    def test_launcher_knob(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(["encoder_pooled_norm=layernorm"])
+        cfg = era5_launch_script.build_model_config(common)
+        assert cfg.encoder_config.pooled_norm == "layernorm"
+
+
+class TestCollapseMetrics:
+    """Training-step and eval-time collapse monitors."""
+
+    def test_reconstruction_only_logs_pooled_geometry(self):
+        model = _contrastive_model(contrastive_lambda=0.0)
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        for key in ("pooled_std_r", "pooled_mean_cos"):
+            value = metrics[f"reconstruction/{key}"]
+            assert torch.isfinite(value) and not value.requires_grad
+        assert 0.0 <= float(metrics["reconstruction/pooled_std_r"]) <= 1.0 + 1e-6
+        assert not any(k.endswith(("pooled_std", "projected_std")) for k in metrics)
+        assert "reconstruction/projected_std_r" not in metrics
+
+    def test_contrastive_logs_projected_geometry(self):
+        model = _contrastive_model(contrastive_lambda=0.1)
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        for key in (
+            "pooled_std_r",
+            "pooled_mean_cos",
+            "projected_std_r",
+            "projected_mean_cos",
+        ):
+            assert torch.isfinite(metrics[f"reconstruction/{key}"])
+
+    def test_evaluator_geometry_metrics(self):
+        torch.manual_seed(0)
+        out = era5_evaluator_callback._embedding_geometry_metrics(
+            "lfmc_woody_eval", torch.randn(500, 16)
+        )
+        prefix = "eval_other/lfmc_woody_eval"
+        assert set(out) == {
+            f"{prefix}/{k}"
+            for k in (
+                "pooled_std_r",
+                "pooled_mean_cos",
+                "effective_rank",
+                "top10pc_var_share",
+            )
+        }
+        assert 1.0 <= out[f"{prefix}/effective_rank"] <= 16.0
+        assert (
+            era5_evaluator_callback._embedding_geometry_metrics("x", torch.randn(1, 16))
+            == {}
+        )
+
+
+class TestRawLossByRegion:
+    """Temporary diagnostic: raw loss on the last 83 days vs earlier target days."""
+
+    RECENT = "reconstruction/raw_loss_last83d"
+    EARLIER = "reconstruction/raw_loss_earlier"
+
+    def _mask_only(self, monkeypatch, start: int, end: int) -> None:
+        raw = torch.zeros(B, T, V, dtype=torch.bool)
+        raw[:, start:end, :] = True
+        monkeypatch.setattr(
+            era5_multiobjective,
+            "corrupt_era5_swt",
+            lambda *args: Era5CorruptionMasks(
+                band_mask=raw.repeat_interleave(7, dim=-1), raw_loss_mask=raw
+            ),
+        )
+
+    def test_both_regions_logged(self):
+        model = _contrastive_model(contrastive_lambda=0.0)
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        for key in (self.RECENT, self.EARLIER):
+            assert torch.isfinite(metrics[key]) and not metrics[key].requires_grad
+
+    @pytest.mark.parametrize("recent_only", [True, False])
+    def test_region_without_scored_cells_is_omitted(self, monkeypatch, recent_only):
+        if recent_only:
+            self._mask_only(monkeypatch, T - SWT_BUFFER, T)
+        else:
+            self._mask_only(monkeypatch, SWT_BUFFER, T - SWT_BUFFER)
+        model = _contrastive_model(contrastive_lambda=0.0, num_views=2)
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        assert (self.RECENT in metrics) is recent_only
+        assert (self.EARLIER in metrics) is not recent_only
+
+    def test_absent_without_raw_loss(self):
+        model = _contrastive_model(
+            contrastive_lambda=0.0, raw_lambda=0.0, swt_lambda=1.0
+        )
+        _, metrics = model.objective_list[0].compute(model.encoder, _make_batch())
+        assert self.RECENT not in metrics and self.EARLIER not in metrics

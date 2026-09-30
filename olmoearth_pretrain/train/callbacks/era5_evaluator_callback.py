@@ -47,6 +47,10 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     eval_result_log_dict,
 )
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
+from olmoearth_pretrain.train.embedding_geometry import (
+    effective_rank,
+    spread_and_mean_cosine,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +207,34 @@ def _get_wandb_callback(trainer: Trainer) -> OlmoEarthWandBCallback | None:
         if isinstance(callback, OlmoEarthWandBCallback) and callback.enabled:
             return callback
     return None
+
+
+def _embedding_geometry_metrics(
+    task_name: str, embeddings: torch.Tensor
+) -> dict[str, float]:
+    """Collapse monitors on a task's probe-train embeddings.
+
+    Args:
+        task_name: Eval task name, used in the metric keys.
+        embeddings: ``[N, D]`` pooled embeddings, as extracted for the probe.
+
+    Returns:
+        ``eval_other/<task>/{pooled_std_r, pooled_mean_cos, effective_rank,
+        top10pc_var_share}`` as floats, or an empty dict if ``N < 2``. See
+        :mod:`olmoearth_pretrain.train.embedding_geometry`.
+    """
+    flat = embeddings.reshape(embeddings.shape[0], -1)
+    if flat.shape[0] < 2:
+        return {}
+    spread, mean_cos = spread_and_mean_cosine(flat)
+    erank, top10_share = effective_rank(flat, top_k=10)
+    prefix = f"eval_other/{task_name}"
+    return {
+        f"{prefix}/pooled_std_r": float(spread),
+        f"{prefix}/pooled_mean_cos": float(mean_cos),
+        f"{prefix}/effective_rank": erank,
+        f"{prefix}/top10pc_var_share": top10_share,
+    }
 
 
 def _log_to_wandb(
@@ -432,6 +464,7 @@ class Era5DownstreamEvaluatorCallback(Callback):
         train_embeddings, train_labels = _extract_embeddings(
             train_batches, encoder, device
         )
+        geometry = _embedding_geometry_metrics(task.name, train_embeddings)
         val_embeddings, val_labels = _extract_embeddings(val_batches, encoder, device)
 
         test_embeddings: torch.Tensor | None = None
@@ -516,6 +549,8 @@ class Era5DownstreamEvaluatorCallback(Callback):
         record_to_trainer = log_step is None
         if record_to_trainer:
             self.trainer.record_metric(f"eval_time/{task.name}", eval_time)
+            for key, value in geometry.items():
+                self.trainer.record_metric(key, value)
 
         if result.val_result is not None:
             if record_to_trainer:
@@ -542,10 +577,13 @@ class Era5DownstreamEvaluatorCallback(Callback):
                 result.test_result.primary,
             )
 
-        # Log eval time to wandb at the same explicit step as the eval metrics.
+        # Log eval time and embedding geometry to wandb at the same explicit
+        # step as the eval metrics.
         wandb_callback = _get_wandb_callback(self.trainer)
         if wandb_callback is not None:
-            wandb_callback.wandb.log({f"eval_time/{task.name}": eval_time}, step=step)
+            wandb_callback.wandb.log(
+                {f"eval_time/{task.name}": eval_time, **geometry}, step=step
+            )
 
         del train_embeddings, train_labels, val_embeddings, val_labels
         del test_embeddings, test_labels

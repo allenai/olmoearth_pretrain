@@ -86,7 +86,30 @@ With InfoNCE enabled, `contrastive_loss` reports unweighted InfoNCE,
 `contrastive_weighted_loss` includes lambda but not `recon_weight`,
 `contrastive_accuracy` averages matching accuracy across both directions, and
 `contrastive_batch_size` reports the actual local number of samples (one positive
-and B−1 negatives per anchor). `pooled_std` and `projected_std` report mean
-per-dimension batch standard deviations after L2 normalization, averaged across
-views with population variance. Similarity and loss computations use FP32 even
+and B−1 negatives per anchor). Similarity and loss computations use FP32 even
 under mixed precision. Contrastive metrics are omitted when lambda is zero.
+
+## Collapse monitors
+
+Logged for every reconstruction run, contrastive or not, averaged over views
+(definitions in `olmoearth_pretrain/train/embedding_geometry.py`):
+
+| Metric | Where | Meaning |
+|---|---|---|
+| `train/reconstruction/pooled_std_r` | each step, pooled embedding | Mean per-dimension std of the unit-length embeddings × √d, in [0, 1]. 1 = centred with even variance. A high value rules out collapse; it does not measure rank. |
+| `train/reconstruction/pooled_mean_cos` | each step, pooled embedding | Mean cosine similarity between distinct windows in the batch: 0 = spread out, 1 = collapsed. |
+| `train/reconstruction/projected_std_r`, `projected_mean_cos` | each step, projector output (InfoNCE on) | The same two on the 128-d space the loss sees. |
+| `eval_other/<task>/effective_rank` | each eval, the task's probe-train embeddings | exp(entropy) of the normalized singular values of the centred embeddings (RankMe); 1 to min(N − 1, d). Detects dimensional collapse. |
+| `eval_other/<task>/top10pc_var_share` | each eval | Variance share of the 10 largest principal directions (not raw dimensions). |
+| `eval_other/<task>/pooled_std_r`, `pooled_mean_cos` | each eval | The batch metrics over the whole probe-train set. |
+
+## Encoder options
+
+- `common.encoder_position_embedding=learned`: a learned, end-aligned position
+  embedding per patch token. Without it, tokens carry only day-of-year features,
+  which repeat within a 448-day window, and mean pooling ignores order.
+- `common.encoder_pooled_norm=layernorm`: a parameter-free LayerNorm on the
+  pooled embedding (each half separately for `cls_mean_concat`). Older
+  checkpoints still load.
+
+Both default to `none`, which reproduces earlier runs.

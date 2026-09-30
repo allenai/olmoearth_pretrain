@@ -152,6 +152,12 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_pooling: str = Era5Pooling.MEAN.value
     # Settled default (v0.3): the two-layer conv tokenizer stem was a large win.
     encoder_use_conv_stem: bool = True
+    # "learned" adds an end-aligned learned position embedding per patch token;
+    # "none" (default) leaves tokens distinguishable only by day of year.
+    encoder_position_embedding: str = "none"
+    # "layernorm" applies a parameter-free LayerNorm to the pooled embedding
+    # (every pooling mode); "none" (default) keeps the raw pooled vector.
+    encoder_pooled_norm: str = "none"
     # ------------------------------------------------------------------
     # SWT-input encoder (objective B in wavelet space).  When enabled, the
     # encoder decomposes the raw input into V*n_bands band channels before
@@ -737,6 +743,8 @@ def build_model_config(
         pooling=common.encoder_pooling,
         use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
+        position_embedding=common.encoder_position_embedding,
+        pooled_norm=common.encoder_pooled_norm,
         is_swt_input=common.encoder_swt_input,
         swt_input_levels=common.encoder_swt_input_levels,
         swt_input_include_approx=common.encoder_swt_input_include_approx,
