@@ -1611,7 +1611,10 @@ class Perceiver(nn.Module):
                 window as a soft box rather than a peak at the centre.
             token_mix_layout: If set, the layer schedule as a string over ``M`` (a
                 token-mixing block), ``R`` (a read + its paired latent block, exactly
-                the default layer) and ``L`` (a latent-only block), run left to right;
+                the default layer), ``L`` (a latent-only block) and ``W`` (a
+                write-back: the tokens cross-attend the current latent grid, then an
+                MLP, so later mixing blocks and reads see tokens that carry the
+                latents' pooled context), run left to right;
                 e.g. ``"MRMRMRMRMRMRLLLLLL"``. The number of ``R`` must equal
                 ``latent_transformer_depth``. A token-mixing block is self-attention
                 over the patch tokens restricted to a spatial neighbourhood of cells
@@ -1677,11 +1680,19 @@ class Perceiver(nn.Module):
         self.max_latents = max_latents
         self.eval_latent_stride = eval_latent_stride
         self.latent_stride_bias = latent_stride_bias
-        n_mix = n_extra_latent = 0
+        n_mix = n_extra_latent = n_write = 0
         if token_mix_layout is not None:
-            if set(token_mix_layout) - set("MRL"):
+            if set(token_mix_layout) - set("MRLW"):
                 raise ValueError(
-                    f"token_mix_layout may only contain M, R and L, got {token_mix_layout}"
+                    "token_mix_layout may only contain M, R, L and W, got "
+                    f"{token_mix_layout}"
+                )
+            if "W" in token_mix_layout and token_mix_layout.index(
+                "W"
+            ) < token_mix_layout.find("R"):
+                raise ValueError(
+                    "a write-back (W) before the first read (R) would broadcast the "
+                    f"cloned, content-free latents: {token_mix_layout}"
                 )
             if token_mix_layout.count("R") != num_read_blocks:
                 raise ValueError(
@@ -1704,6 +1715,7 @@ class Perceiver(nn.Module):
                 )
             n_mix = token_mix_layout.count("M")
             n_extra_latent = token_mix_layout.count("L")
+            n_write = token_mix_layout.count("W")
         # With token mixing the reads consume the (possibly narrower) mixing stream.
         token_dim = (
             token_mix_dim
@@ -1822,6 +1834,32 @@ class Perceiver(nn.Module):
         )
         self.extra_latent_blocks = nn.ModuleList(
             [latent_block() for _ in range(n_extra_latent)]
+        )
+        # Write-backs: tokens (queries) cross-attend the latent grid (keys/values).
+        # The block does not norm its cross-attention context, so each gets a norm on
+        # the latents. Created last, so layouts without W keep their init order.
+        self.write_norms = nn.ModuleList(
+            [nn.LayerNorm(register_dim) for _ in range(n_write)]
+        )
+        self.write_blocks = nn.ModuleList(
+            [
+                Block(
+                    token_dim,
+                    token_mix_num_heads or num_heads,
+                    mlp_ratio,
+                    qkv_bias=True,
+                    qk_norm=qk_norm,
+                    cross_attn=True,
+                    use_flash_attn=False,
+                    position_encoding=PositionEncoding.MIXED_3D_ROPE,
+                    rope_base=rope_base,
+                    rope_mixed_base=rope_mixed_base,
+                    temporal_rope_dim_frac=temporal_rope_dim_frac,
+                    rope_temporal_base=rope_temporal_base,
+                    kv_in_dim=register_dim if register_dim != token_dim else None,
+                )
+                for _ in range(n_write)
+            ]
         )
         if share_read_kv:
             # One K and one V projection for all reads, sized like the per-block layers
@@ -2057,7 +2095,7 @@ class Perceiver(nn.Module):
             mix_kwargs = token_mix_attention_kwargs(
                 cell_ids, read_attn_mask, spatial_grid[1], self.token_mix_radius
             )
-            i_mix = i_read = i_latent = 0
+            i_mix = i_read = i_latent = i_write = 0
             for layer in self.token_mix_layout:
                 if layer == "M":
                     tokens = self.token_mix_blocks[i_mix](
@@ -2076,6 +2114,16 @@ class Perceiver(nn.Module):
                         x=registers, rope_positions=register_positions
                     )
                     i_read += 1
+                elif layer == "W":
+                    # Tokens read the latents back, under the same (t, row, col)
+                    # RoPE frame as the reads, with the roles swapped.
+                    tokens = self.write_blocks[i_write](
+                        x=tokens,
+                        y=self.write_norms[i_write](registers),
+                        rope_positions=patch_positions,
+                        rope_positions_y=read_query_positions,
+                    )
+                    i_write += 1
                 else:
                     registers = self.extra_latent_blocks[i_latent](
                         x=registers, rope_positions=register_positions
@@ -2148,8 +2196,9 @@ class PerceiverConfig(Config):
             The heads that distil the teacher into the student are configured
             separately (``LatentMIMConfig.register_distillation_head_config``).
         token_mix_layout: Layer schedule over ``M`` (token mixing within a spatial
-            neighbourhood of cells), ``R`` (read + paired latent block) and ``L``
-            (latent-only block), e.g. ``"MRMRMRMRMRMRLLLLLL"``; the ``R`` count must
+            neighbourhood of cells), ``R`` (read + paired latent block), ``L``
+            (latent-only block) and ``W`` (write-back: tokens cross-attend the latents),
+            e.g. ``"MMMMRWMMMMR"``; the ``R`` count must
             equal ``latent_depth``. Needs ``read_time_rope`` on a ``rope_3d_mixed``
             encoder. None (default) keeps the plain ``[read -> self-attend]`` stack.
             See :class:`Perceiver`.

@@ -249,7 +249,7 @@ def test_encoder_with_token_mixing_trains_and_evaluates(
             dict(latent_depth=1, token_mix_layout="MR", read_time_rope=False),
             "read_time_rope",
         ),
-        (dict(latent_depth=1, token_mix_layout="MRX"), "M, R and L"),
+        (dict(latent_depth=1, token_mix_layout="MRX"), "M, R, L and W"),
         (dict(latent_depth=1, token_mix_radius=1), "need token_mix_layout"),
     ],
 )
@@ -399,3 +399,59 @@ def test_pixel_latent_settings_need_pixel_latents() -> None:
     )
     with pytest.raises(ValueError, match="max_latents"):
         config.validate(encoder_num_heads=4, position_encoding="rope_3d_mixed")
+
+
+# --- Write-back (W) layers -----------------------------------------------------------
+
+
+def test_write_back_before_any_read_is_rejected() -> None:
+    """A W with no earlier R would broadcast the cloned, content-free latents."""
+    with pytest.raises(ValueError, match="before the first read"):
+        _mixing_perceiver("MWR")
+    _mixing_perceiver("MRWR")  # fine
+
+
+def test_write_back_feeds_the_next_read_and_trains() -> None:
+    """Perturbing the write-back changes the final grid; gradients reach it."""
+    torch.manual_seed(0)
+    perceiver = _mixing_perceiver("MRWR")
+    tokens, positions, cells = _grid_inputs(B=2)
+    valid = torch.ones(cells.shape, dtype=torch.bool)
+    out, _ = perceiver(tokens, positions, valid, spatial_grid=(4, 4), cell_ids=cells)
+    with torch.no_grad():
+        # Random, not constant: a constant shift per token is removed by the next
+        # read's LayerNorm.
+        w = perceiver.write_blocks[0].attn.proj.weight
+        w.add_(0.5 * torch.randn_like(w))
+    out2, _ = perceiver(tokens, positions, valid, spatial_grid=(4, 4), cell_ids=cells)
+    assert (out2 - out).abs().max() > 1e-4
+    perceiver.train()
+    out3, _ = perceiver(tokens, positions, valid, spatial_grid=(4, 4), cell_ids=cells)
+    out3.sum().backward()
+    grads = [
+        p.grad for p in perceiver.write_blocks[0].parameters() if p.grad is not None
+    ]
+    assert grads and any(g.abs().sum() > 0 for g in grads)
+
+
+@pytest.mark.parametrize("layout", ["MMRWR", "MRWMR"])
+def test_encoder_with_write_back_and_pixel_latents(layout: str) -> None:
+    """Pixel latents + write-back: per-pixel eval grid, random strides in training."""
+    torch.manual_seed(0)
+    encoder = _mixing_encoder(
+        latent_depth=2,
+        token_mix_layout=layout,
+        pixel_latents=True,
+        random_latent_stride=True,
+        max_latents=64,
+    )
+    sample = _sample()
+    encoder.eval()
+    with torch.no_grad():
+        out = encoder(sample, patch_size=2, input_res=10, fast_pass=True)
+    assert out["registers"].shape == (2, 8, 8, 32)
+    encoder.train()
+    out = encoder(sample, patch_size=2, input_res=10)
+    out["registers"].sum().backward()
+    perceiver = encoder.perceiver
+    assert isinstance(perceiver, Perceiver) and len(perceiver.write_blocks) == 1

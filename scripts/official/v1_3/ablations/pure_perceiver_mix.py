@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from base import (  # noqa: E402
     STUDENT_LOOP_EVAL_INTERVAL_STEPS,
+    aeftrial_loop_eval_tasks,
     set_student_loop_evals,
 )
 from olmo_core.train.common import Duration  # noqa: E402
@@ -82,6 +83,9 @@ def build_mix_model_config(
     mix_dim: int | None = None,
     mix_heads: int | None = None,
     layout: str | None = None,
+    pixel_latents: bool = False,
+    max_latents: int | None = None,
+    latent_stride_bias: float | None = None,
 ) -> LatentMIMConfig:
     """``trope_ld12`` with ``n_mix`` neighbourhood-mixing blocks and ``n_read`` reads.
 
@@ -99,11 +103,27 @@ def build_mix_model_config(
     perceiver.token_mix_radius = radius
     perceiver.token_mix_dim = mix_dim
     perceiver.token_mix_num_heads = mix_heads
+    if pixel_latents:
+        # Sub-patch latents with a random stride under the budget in training, one
+        # latent per pixel at eval (the joint random-stride arms' convention).
+        assert max_latents is not None
+        perceiver.pixel_latents = True
+        perceiver.random_latent_stride = True
+        perceiver.max_latents = max_latents
+        perceiver.eval_latent_stride = 1
+        perceiver.latent_stride_bias = latent_stride_bias
     return config
 
 
-def build_mix_trainer_config(common: CommonComponents, module_path: str):
-    """``trope_ld12``'s student evals + m-eurosat / pastis on the d768 registers."""
+def build_mix_trainer_config(
+    common: CommonComponents, module_path: str, *, ps4_student_evals: bool = False
+):
+    """``trope_ld12``'s student evals + m-eurosat / pastis on the d768 registers.
+
+    ``ps4_student_evals`` adds the d128 student at patch size 4 on the AEF + PASTIS
+    tasks (named ``*_ws16_ps4_*_proj128``), for arms whose latents stay per pixel at a
+    coarse patch size.
+    """
     v1_2_trainer = _v1_2_build_trainer_config(common)
     catalog = v1_2_trainer.callbacks["downstream_evaluator"].tasks
     register_tasks = {
@@ -114,6 +134,15 @@ def build_mix_trainer_config(common: CommonComponents, module_path: str):
         for name in REGISTER_EVAL_TASKS
     }
     trainer_config = set_student_loop_evals(v1_2_trainer, module_path)
-    trainer_config.callbacks["downstream_evaluator"].tasks.update(register_tasks)
+    evaluator = trainer_config.callbacks["downstream_evaluator"]
+    evaluator.tasks.update(register_tasks)
+    if ps4_student_evals:
+        for name, task in aeftrial_loop_eval_tasks(
+            STUDENT_LOOP_EVAL_INTERVAL_STEPS
+        ).items():
+            assert "_ps1_" in name, name
+            evaluator.tasks[name.replace("_ps1_", "_ps4_") + "_proj128"] = replace(
+                task, patch_size=4, eval_on_student_registers=True, eval_student_dim=128
+            )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
     return trainer_config
