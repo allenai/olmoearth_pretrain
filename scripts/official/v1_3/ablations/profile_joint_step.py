@@ -37,6 +37,9 @@ PROFILE_TARGETS = {
     "prof_mix6r2": "pure_perceiver_mix6_read6",
     "prof_mix6d128r1": "pure_perceiver_mix6_read6_d128",
     "prof_mix6d128r2": "pure_perceiver_mix6_read6_d128",
+    # Latent budget memory check for the random-stride point arm: 512 (as trained) vs 1024.
+    "prof_rstride512": "pure_perceiver_joint_latentread_rstride",
+    "prof_rstride1024": "pure_perceiver_joint_latentread_rstride",
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -44,7 +47,11 @@ PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
     "prof_mix6r2": {"token_mix_radius": 2},
     "prof_mix6d128r1": {"token_mix_radius": 1},
     "prof_mix6d128r2": {"token_mix_radius": 2},
+    "prof_rstride512": {"max_latents": 512},
+    "prof_rstride1024": {"max_latents": 1024},
 }
+# Longer runs for memory checks: more batches drawn at the per-sample latent ceiling.
+PROFILE_MAX_STEPS: dict[str, int] = {"prof_rstride512": 1000, "prof_rstride1024": 1000}
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.
 GLOBAL_BATCH_SIZE = 64
 PROFILE_SKIP = 300
@@ -95,7 +102,9 @@ def build_dataloader_config(common: CommonComponents):
 def build_trainer_config(common: CommonComponents):
     """The arm's trainer, stripped to a short profiled run."""
     trainer_config = _target(common).build_trainer_config(common)
-    trainer_config.max_duration = Duration.steps(MAX_STEPS)
+    trainer_config.max_duration = Duration.steps(
+        PROFILE_MAX_STEPS.get(_prefix(common), MAX_STEPS)
+    )
     trainer_config.callbacks.pop("downstream_evaluator", None)
     trainer_config.callbacks["wandb"].enabled = False
     checkpointer = trainer_config.callbacks["checkpointer"]
