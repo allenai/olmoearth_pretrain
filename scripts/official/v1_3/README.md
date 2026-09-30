@@ -35,6 +35,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_mix8pre_rl2.py` | 8 mixing blocks first, then 2 [read -> latent] pairs (`MMMMMMMMRR`); trained as `v1_3_vit0_mix8prew5_rl2` |
 | `ablations/pure_perceiver_pix_mix8pre_rwr.py` | per-pixel latents (512 budget, uniform stride) + `MMMMMMMMRWR`: mixing, read, write-back (tokens attend the latents), read; trained as `v1_3_vit0_pix512_mix8pre_rwr` |
 | `ablations/pure_perceiver_pix_mix4rw4r.py` | the same with the write-back mid-mixing, `MMMMRWMMMMR`; trained as `v1_3_vit0_pix512_mix4rw4r` |
+| `ablations/pure_perceiver_pix_mix6_rw6.py` | per-pixel latents + interleaved mixing with a write-back after every read but the last, `MRWMRWMRWMRWMRWMR`; trained as `v1_3_vit0_pix512_mix6_rw6` |
 | `ablations/pure_perceiver_mix6_read6_d128.py` | `mix6_read6` with a 128-dim mixing stream (2 heads); trained as `v1_3_vit0_mix6d128w5_rl6` |
 | `ablations/pure_perceiver_joint_latentread_rstride_fast.py` | speed copy of the point-latent random-stride arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_fast.py` | speed copy of the interval arm: compiled RoPE (`compile_rope`) + sync-free losses; a same-seed loss comparison |
