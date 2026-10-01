@@ -1,5 +1,6 @@
 """Attention Components for OlmoEarth Pretrain."""
 
+from collections.abc import Callable
 from logging import getLogger
 from typing import Any
 
@@ -237,6 +238,8 @@ class Attention(nn.Module):
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
         block_mask: Any | None = None,
+        attention_fn: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+        | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -255,10 +258,20 @@ class Attention(nn.Module):
             block_mask: Optional FlexAttention ``BlockMask`` (CUDA only). Routes the
                 attention through the compiled block-sparse kernel instead of SDPA;
                 ``attn_mask`` must then be None.
+            attention_fn: Optional replacement for the whole attention computation,
+                called as ``attention_fn(q, k, v)`` on post-RoPE ``(B, H, N, D)``
+                tensors (e.g. the mask-free joint-latent inference path). Exclusive
+                with ``attn_mask`` / ``block_mask``.
 
         Returns:
             Output tensor of shape (B, H, N, D)
         """
+        if attention_fn is not None:
+            if attn_mask is not None or block_mask is not None:
+                raise ValueError(
+                    "attention_fn is exclusive with attn_mask / block_mask"
+                )
+            return attention_fn(q, k, v)
         if block_mask is not None:
             if attn_mask is not None or self.use_flash_attn:
                 raise ValueError(
@@ -331,6 +344,8 @@ class Attention(nn.Module):
         rope_positions_y: torch.Tensor | None = None,
         kv: tuple[torch.Tensor, torch.Tensor] | None = None,
         block_mask: Any | None = None,
+        attention_fn: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]
+        | None = None,
         rope_extent: torch.Tensor | None = None,
         rope_extent_y: torch.Tensor | None = None,
         rope_spatial_extent: torch.Tensor | None = None,
@@ -343,6 +358,8 @@ class Attention(nn.Module):
             x: Input tensor of shape (B, N, C) or (B* N , C) if packed
             y: Second input for cross-attention. Defaults to None.
             block_mask: Optional FlexAttention block mask (see :meth:`sdpa`).
+            attention_fn: Optional replacement attention on the post-RoPE q/k/v (see
+                :meth:`sdpa`).
             rope_extent: Optional per-query temporal interval widths ``(B, N)`` for
                 mixed 3D RoPE: queries are encoded as intervals (rotation averaged
                 over the interval, i.e. sinc-gated per pair) instead of points. Only
@@ -481,6 +498,7 @@ class Attention(nn.Module):
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
             block_mask=block_mask,
+            attention_fn=attention_fn,
         )
         # The attention output is at the internal attention width (== the input width
         # unless attn_dim decouples them); proj maps it back to the input width.

@@ -36,6 +36,11 @@ from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.nn.attention import Block, Mlp
+from olmoearth_pretrain.nn.dense_joint_attention import (
+    build_dense_joint_layout,
+    dense_joint_attention,
+    flash_attn,
+)
 from olmoearth_pretrain.nn.encodings import PositionEncoding, use_compiled_mixed_rope
 
 logger = logging.getLogger(__name__)
@@ -426,6 +431,7 @@ class JointLatentTransformer(nn.Module):
         local_radius: int | None = None,
         latent_radius: int | None = None,
         sort_latents_by_cell: bool = False,
+        dense_inference_attention: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -520,6 +526,12 @@ class JointLatentTransformer(nn.Module):
             sort_latents_by_cell: With sub-patch pixel latents, order the latents
                 cell-major inside the joint blocks (restored afterwards). Numerically a
                 no-op; makes the local masks' latent windows contiguous key ranges.
+            dense_inference_attention: Outside autograd (evals, inference), run the
+                joint attention as mask-free dense kernels instead of one masked
+                FlexAttention (:mod:`~olmoearth_pretrain.nn.dense_joint_attention`).
+                Exact up to floating-point reassociation. Applies with
+                ``latent_reads_all`` and no local radii; other configs, and any
+                forward with grad enabled, keep the masked path.
         """
         super().__init__()
         for name, radius in (
@@ -531,6 +543,7 @@ class JointLatentTransformer(nn.Module):
         self.local_radius = local_radius
         self.latent_radius = latent_radius
         self.sort_latents_by_cell = sort_latents_by_cell
+        self.dense_inference_attention = dense_inference_attention
         if compile_rope:
             use_compiled_mixed_rope(True)
         self.compile_rope = compile_rope
@@ -686,6 +699,16 @@ class JointLatentTransformer(nn.Module):
             max_latents=self.max_latents,
             eval_latent_stride=self.eval_latent_stride,
             stride_bias=self.latent_stride_bias,
+        )
+
+    def _use_dense_attention(self) -> bool:
+        """Whether this forward takes the mask-free inference path."""
+        return (
+            self.dense_inference_attention
+            and not torch.is_grad_enabled()
+            and self.latent_reads_all
+            and self.local_radius is None
+            and self.latent_radius is None
         )
 
     def _attention_masks(
@@ -936,7 +959,18 @@ class JointLatentTransformer(nn.Module):
             ],
             dim=1,
         )
-        attn_kwargs = self._attention_masks(cell_id, is_latent, valid, n_w)
+        if self._use_dense_attention():
+            layout = build_dense_joint_layout(
+                cell_ids, valid_tokens, n_cells, n_latents
+            )
+            use_flash = patch_tokens.is_cuda and flash_attn is not None
+
+            def attention_fn(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
+                return dense_joint_attention(q, k, v, layout, use_flash)
+
+            attn_kwargs: dict[str, Any] = {"attention_fn": attention_fn}
+        else:
+            attn_kwargs = self._attention_masks(cell_id, is_latent, valid, n_w)
         rope_spatial_extent: Tensor | None = None
         if self.latent_spatial_range:
             assert patch_spacing is not None
@@ -1015,6 +1049,9 @@ class JointLatentConfig(Config):
             <-> latents within ``local_radius``, latents <-> latents within
             ``latent_radius``. None = global (the default). See
             :class:`JointLatentTransformer`.
+        dense_inference_attention: Mask-free dense attention outside autograd (evals,
+            inference); exact up to floating-point reassociation. None = False. See
+            :class:`JointLatentTransformer`.
     """
 
     register_dim: int
@@ -1040,6 +1077,8 @@ class JointLatentConfig(Config):
     latent_radius: int | None = None
     # None = False; None-default so existing checkpoints' configs round-trip.
     sort_latents_by_cell: bool | None = None
+    # None = False; None-default so existing checkpoints' configs round-trip.
+    dense_inference_attention: bool | None = None
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -1127,4 +1166,5 @@ class JointLatentConfig(Config):
             local_radius=self.local_radius,
             latent_radius=self.latent_radius,
             sort_latents_by_cell=bool(self.sort_latents_by_cell),
+            dense_inference_attention=bool(self.dense_inference_attention),
         )
