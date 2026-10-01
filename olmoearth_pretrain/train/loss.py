@@ -544,12 +544,18 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         all_targets: Tensor,
         modality: str,
     ) -> Tensor:
-        batch_size, num_tokens, dim = all_preds.shape
+        batch_size, _, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
         count = decoder_mask.sum(dim=-1)  # (batch,)
 
-        # Sort so decoder tokens come first per sample
+        # Sort so decoder tokens come first per sample, then keep only the first
+        # max(count) positions: every later position is a non-decoder token whose
+        # row/column is masked out below, so dropping them leaves the loss
+        # unchanged while the (batch, T, T) score tensors shrink from all tokens
+        # (incl. MISSING padding) to decoder tokens.
         _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        num_tokens = max(int(count.max()), 1)
+        sort_indices = sort_indices[:, :num_tokens]
         sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
         sorted_preds = all_preds.gather(1, sort_expanded).float()
         sorted_targets = all_targets.gather(1, sort_expanded).float()
