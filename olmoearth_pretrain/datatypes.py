@@ -97,6 +97,7 @@ class OlmoEarthSample(NamedTuple):
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
+    tessera_v2: ArrayTensor | None = None  # [B, H, W, 1, len(TESSERA_bands)]
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     worldpop: ArrayTensor | None = None  # [B, H, W, 1, len(WORLDPOP_bands)]
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
@@ -106,6 +107,17 @@ class OlmoEarthSample(NamedTuple):
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # open_set is a supervision label layer (not an encoder input): a single band of
+    # globally-unique class ids (uint16; nodata 65535).
+    open_set: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # open_set_regression is a supervision label layer: band 0 = 1-based regression
+    # dataset id (0 = no label), band 1 = value remapped to [1, 65535] (0 = nodata).
+    open_set_regression: ArrayTensor | None = None  # [B, H, W, 1, 2]
+    # open_set_change_boundary marks paired pre/post change samples: the date
+    # (same [day, month, year] convention as timestamps) at which "before" ends and
+    # "after" begins; a timestep is post-change iff timestamp >= boundary.
+    # Missing-filled (-99999) for non-change samples.
+    open_set_change_boundary: ArrayTensor | None = None  # [B, 3]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -377,6 +389,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    tessera_v2: Tensor | None = None
+    tessera_v2_mask: Tensor | None = None
     cdl: Tensor | None = None
     cdl_mask: Tensor | None = None
     worldpop: Tensor | None = None
@@ -391,6 +405,14 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    # Supervision label layers (see OlmoEarthSample). Carried through masking so they
+    # reach the train module; the encoder never tokenizes them.
+    open_set: Tensor | None = None
+    open_set_mask: Tensor | None = None
+    open_set_regression: Tensor | None = None
+    open_set_regression_mask: Tensor | None = None
+    open_set_change_boundary: Tensor | None = None
+    open_set_change_boundary_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -517,6 +539,8 @@ class TokensAndMasks(NamedTuple):
     naip_10_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
+    tessera_v2: Tensor | None = None
+    tessera_v2_mask: Tensor | None = None
     cdl: Tensor | None = None
     cdl_mask: Tensor | None = None
     worldpop: Tensor | None = None

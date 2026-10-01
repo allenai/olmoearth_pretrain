@@ -1,6 +1,8 @@
-"""Post-extraction transforms for embeddings (quantization, dim reduction)."""
+"""Post-extraction transforms for embeddings (normalization, quantization, dim reduction)."""
 
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 import h5py
@@ -13,6 +15,13 @@ logger = logging.getLogger(__name__)
 # Constants matching AlphaEarth's scheme
 QUANTIZE_POWER = 2.0
 QUANTIZE_SCALE = 127.5
+
+# The power scheme saturates where |x|^(1/power) * scale exceeds the int8 range:
+# |x| > (127 / scale)^power. AEF's embeddings are 64-d unit-L2 vectors, so their
+# coordinates sit far below this; anything coming off a LayerNorm (per-coordinate
+# std ~ 1) clips a large fraction of its coordinates instead. Diagnostics report
+# the clipped fraction so the mismatch is visible rather than silent.
+QUANTIZE_CLIP_THRESHOLD = (127.0 / QUANTIZE_SCALE) ** QUANTIZE_POWER
 
 
 def quantize_embeddings(embeddings: torch.Tensor) -> torch.Tensor:
@@ -50,6 +59,125 @@ def dequantize_embeddings(quantized: torch.Tensor) -> torch.Tensor:
     # Apply square, preserve sign: x = |rescaled|^power * sign(rescaled)
     dequantized = rescaled.abs().pow(QUANTIZE_POWER) * rescaled.sign()
     return dequantized
+
+
+# === Tessera's quantization scheme ===
+# Verified against the shipped client, geotessera/store.py:
+#
+#     def dequantise(emb_int8, scales):   # (B,H,W) + (H,W) -> (H,W,B) float32
+#         f32 = emb_int8.astype(np.float32) * scales[np.newaxis, :, :]
+#
+# i.e. LINEAR with one float32 scale per PIXEL (broadcast over all 128 bands),
+# published as `grid_{lon}_{lat}.npy` + `_scales.npy`. Two ways this differs
+# from the AEF power scheme above, both of which matter for a LayerNorm-geometry
+# embedding: the scale is fitted per vector instead of being the global constant
+# QUANTIZE_SCALE, and there is no companding curve. Together they make it
+# **clip-free by construction** -- the largest coordinate of every vector lands
+# exactly on +/-127 -- where the power scheme saturates everything beyond
+# QUANTIZE_CLIP_THRESHOLD. Measured on d128 register embeddings: cos(orig,
+# round-trip) 0.99998 here vs 0.95058 under the power scheme.
+#
+# Only their DECODER is in the client, so the encoder below is the natural
+# inverse (scale = max|x| / 127). Any per-vector scale is clip-free; the exact
+# choice moves the step size by a few percent, not the conclusion.
+TESSERA_INT8_MAX = 127.0
+
+
+def quantize_embeddings_tessera(
+    embeddings: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Quantize to int8 with Tessera's per-vector scale.
+
+    Args:
+        embeddings: Float tensor of shape (N, dim) or (N, H, W, dim).
+
+    Returns:
+        ``(quantized, scales)``: int8 codes of the input shape, and the float32
+        scales with the last dim kept as 1 so they broadcast on dequantization.
+    """
+    scales = embeddings.abs().amax(dim=-1, keepdim=True) / TESSERA_INT8_MAX
+    # An all-zero vector has no scale; 1.0 leaves it at zero and keeps the
+    # round-trip finite (their product marks such pixels non-finite instead).
+    scales = torch.where(scales > 0, scales, torch.ones_like(scales))
+    quantized = (
+        torch.round(embeddings / scales)
+        .clamp(-TESSERA_INT8_MAX, TESSERA_INT8_MAX)
+        .to(torch.int8)
+    )
+    return quantized, scales
+
+
+def dequantize_embeddings_tessera(
+    quantized: torch.Tensor, scales: torch.Tensor
+) -> torch.Tensor:
+    """Dequantize Tessera-scheme int8 codes: ``codes * scales``."""
+    return quantized.float() * scales
+
+
+def roundtrip_embeddings_tessera(embeddings: torch.Tensor) -> torch.Tensor:
+    """Push embeddings through Tessera's int8 scheme, returning float32.
+
+    Fused because the per-vector scales are needed to reconstruct, and unlike
+    the power scheme the int8 codes alone are not a faithful stand-in for the
+    stored product (they have had each vector's magnitude divided out). The
+    result carries exactly the information a consumer of their published
+    ``int8 + _scales.npy`` pair gets after ``geotessera``'s ``dequantise``.
+    """
+    quantized, scales = quantize_embeddings_tessera(embeddings)
+    return dequantize_embeddings_tessera(quantized, scales)
+
+
+class QuantizationScheme(StrEnum):
+    """Which int8 scheme ``quantize_embeddings=True`` applies.
+
+    Per-product, because the point of the embedding-eval convention is to score
+    each arm at the precision it actually ships.
+    """
+
+    # AlphaEarth's published scheme (POWER/SCALE above). The default, and the
+    # right choice for AEF-geometry (unit-L2) embeddings.
+    AEF_POWER = "aef_power"
+    # Tessera's scheme: linear, per-vector scale, clip-free. Used for the
+    # tessera_v2 arm, which we bake ourselves in float32.
+    TESSERA_PER_VECTOR = "tessera_per_vector"
+
+
+# === Normalization ===
+
+
+class EmbeddingNormalization(StrEnum):
+    """How to normalize extracted embeddings before the int8 round-trip / probe.
+
+    Nothing in pretraining pins the geometry of an embedding head's output: the
+    register bottleneck and its distilled student both end in a LayerNorm
+    (per-token scale), but the distillation losses are invariant to any
+    invertible linear map of the student space, so the absolute magnitude is
+    free. ``quantize_embeddings`` assumes AEF's convention (coordinates well
+    inside [-1, 1]); a LayerNorm-scale embedding saturates instead (see
+    ``QUANTIZE_CLIP_THRESHOLD``), which is what L2 normalization -- the
+    deployed convention -- avoids.
+    """
+
+    # Embeddings are consumed exactly as the model emits them.
+    NONE = "none"
+    # Per-embedding L2 normalization (AEF's convention; the deployed one).
+    L2 = "l2"
+
+
+@dataclass
+class EmbeddingNormalizer:
+    """A stateless embedding normalization, applied on the last dim.
+
+    Accepts ``[N, D]`` and spatial ``[N, ..., D]`` embeddings alike.
+    """
+
+    mode: EmbeddingNormalization
+
+    def __call__(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """Apply the normalization, leaving NONE (and dtype) untouched."""
+        if self.mode == EmbeddingNormalization.NONE:
+            return embeddings
+        return torch.nn.functional.normalize(embeddings.float(), dim=-1)
 
 
 # === Percentile-based Quantization ===

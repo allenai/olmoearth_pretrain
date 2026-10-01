@@ -1,5 +1,7 @@
 """Utilities related to dataset creation."""
 
+from datetime import datetime
+
 from rslearn.dataset import Window
 from upath import UPath
 
@@ -18,14 +20,36 @@ def get_window_metadata(window: Window) -> WindowMetadata:
     Returns:
         WindowMetadata object containing the OlmoEarth Pretrain metadata encoded within the window
     """
-    crs, resolution, col, row = window.name.split("_")
-    center_time = window.time_range[0] + WINDOW_DURATION // 2
+    parts = window.name.split("_")
+    if len(parts) == 4:
+        try:
+            crs, resolution, col, row = parts
+            center_time = window.time_range[0] + WINDOW_DURATION // 2
+            return WindowMetadata(
+                crs,
+                float(resolution),
+                int(col),
+                int(row),
+                center_time,
+            )
+        except ValueError:
+            # Not a grid tile name (crs_res_col_row); fall through to options.
+            pass
+
+    # Windows that are centered on a sample rather than snapped to a global grid
+    # (e.g. the open-set segmentation dataset) are named slug_sampleid and cannot be
+    # parsed as crs_res_col_row. They instead carry the metadata explicitly in
+    # window.options.
+    opts = window.options
+    time = opts["time"]
+    center_time = datetime.fromisoformat(time) if isinstance(time, str) else time
     return WindowMetadata(
-        crs,
-        float(resolution),
-        int(col),
-        int(row),
-        center_time,
+        crs=opts["crs"],
+        resolution=float(opts["resolution"]),
+        col=int(opts["col"]),
+        row=int(opts["row"]),
+        time=center_time,
+        example_id=opts.get("example_id"),
     )
 
 

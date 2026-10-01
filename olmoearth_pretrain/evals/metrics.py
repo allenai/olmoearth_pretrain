@@ -12,6 +12,7 @@ import torch
 from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
+    balanced_accuracy_score,
     f1_score,
     roc_auc_score,
 )
@@ -21,6 +22,11 @@ class EvalMetric(StrEnum):
     """Available eval metrics."""
 
     ACCURACY = "accuracy"
+    # Mean per-class recall for single-label classification. This is the metric
+    # reported by the AlphaEarth Foundations evaluation protocol
+    # (arXiv:2507.22291), so tasks compared against AEF's published numbers
+    # should select it as their primary metric.
+    BALANCED_ACCURACY = "balanced_accuracy"
     F1 = "f1"
     CLASS_F1 = "class_f1"
     MICRO_F1 = "micro_f1"
@@ -71,6 +77,18 @@ class EvalTaskResult:
     bootstrap_stats: dict[str, Any] = field(default_factory=dict)
     eval_time: float | None = None
     embedding_diagnostics: dict[str, float] = field(default_factory=dict)
+    # Results produced by a DIFFERENT protocol than val_result/test_result --
+    # currently the AEF balanced trials (olmoearth_pretrain/evals/balanced_trial.py).
+    # Keyed by a synthetic task name (e.g. "<task>_aeftrial_ridge") and logged
+    # as their own tasks rather than as extra metrics on the host task: they
+    # train on a different set (a class-balanced draw), score on a different
+    # set (the remainder), and may use a different predictor, so filing them
+    # under the host task would put two very different numbers behind one name.
+    extra_results: dict[str, EvalResult] = field(default_factory=dict)
+    # Test-split counterparts of extra_results, for the synthetic tasks that DO
+    # score our test split (the classifier probes, evals/classifier_probes.py);
+    # logged under eval/test/{name}. The balanced trials never populate this.
+    extra_test_results: dict[str, EvalResult] = field(default_factory=dict)
 
 
 @dataclass
@@ -121,6 +139,7 @@ class EvalResult:
     def from_classification(
         cls,
         accuracy: float,
+        balanced_accuracy: float | None = None,
         f1: float | None = None,
         macro_f1: float | None = None,
         per_class_f1: list[float] | None = None,
@@ -136,6 +155,8 @@ class EvalResult:
         Primary metric defaults to F1 for multilabel, ACCURACY for single-label.
         """
         metrics: dict[str, float] = {EvalMetric.ACCURACY.value: accuracy}
+        if balanced_accuracy is not None:
+            metrics[EvalMetric.BALANCED_ACCURACY.value] = balanced_accuracy
         if f1 is not None:
             metrics[EvalMetric.F1.value] = f1
         if macro_f1 is not None:
@@ -465,6 +486,7 @@ def classification_metrics(
         )
 
     accuracy = accuracy_score(labels_np, preds_np)
+    balanced_accuracy = float(balanced_accuracy_score(labels_np, preds_np))
     macro_f1 = f1_score(labels_np, preds_np, average="macro", zero_division=0)
     per_class_f1 = f1_score(labels_np, preds_np, average=None, zero_division=0).tolist()
     one_hot = _indices_to_one_hot(labels_np, scores_np.shape[-1])
@@ -472,6 +494,7 @@ def classification_metrics(
     prauc = _macro_binary_score(scores_np, one_hot, average_precision_score)
     return EvalResult.from_classification(
         accuracy,
+        balanced_accuracy=balanced_accuracy,
         macro_f1=macro_f1,
         per_class_f1=per_class_f1,
         auroc=auroc,

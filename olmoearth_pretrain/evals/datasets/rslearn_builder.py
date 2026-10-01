@@ -24,9 +24,48 @@ from rslearn.train.dataset import ModelDataset
 from rslearn.utils.jsonargparse import init_jsonargparse
 from upath import UPath
 
+from olmoearth_pretrain.evals.studio_ingest.provenance import (
+    verify_config_json_hash,
+)
+
 logger = logging.getLogger(__name__)
 
 _JSONARGPARSE_INITIALIZED = False
+
+
+def _make_index_save_best_effort() -> None:
+    """Stop a failed dataset-index cache write from killing the eval.
+
+    DatasetIndex.save_windows writes <hash>.json.tmp.<pid> then renames.
+    Containerized eval jobs share weka AND pid numbers, so two jobs
+    cold-building the same index write the SAME tmp file; the winner's
+    rename removes it and the loser dies FileNotFoundError — this killed a
+    tranche of the 20260808 sweep. The index is purely a cache (the loser
+    computed its window list fine and the winner already persisted an
+    identical index), so a failed save should be a warning, not a crash.
+    """
+    from rslearn.train.dataset_index import DatasetIndex
+
+    if getattr(DatasetIndex.save_windows, "_best_effort", False):
+        return
+    orig = DatasetIndex.save_windows
+
+    def save_windows(self, windows):  # type: ignore[no-untyped-def]
+        try:
+            orig(self, windows)
+        except OSError as e:
+            logger.warning(
+                "dataset index save failed (concurrent writer?), continuing "
+                "without cache: %s: %s",
+                type(e).__name__,
+                e,
+            )
+
+    save_windows._best_effort = True  # type: ignore[attr-defined]
+    DatasetIndex.save_windows = save_windows
+
+
+_make_index_save_best_effort()
 
 
 def _ensure_jsonargparse() -> None:
@@ -330,6 +369,7 @@ def build_dataset_from_registry_entry(
     tags_override = {entry.split_tag_key: split}
     logger.info("Using tag-based splits: %s=%s", entry.split_tag_key, split)
 
+    verify_config_json_hash(entry.name, entry.weka_path, entry.config_json_sha256)
     model_config = parse_model_config(entry.model_yaml_path)
     return build_model_dataset(
         model_config=model_config,
