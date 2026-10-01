@@ -2614,11 +2614,16 @@ class Encoder(FlexiVitBase):
         new_mask: Tensor,
         fast_pass: bool,
     ) -> Tensor | None:
-        """Get the attention mask or None if we should pass None to the transformer."""
-        if fast_pass or not self.training:
+        """Get the attention mask or None if we should pass None to the transformer.
+
+        Only ``fast_pass`` skips the mask. Outside training the compacted sequence is
+        still padded to the batch's longest sample whenever tokens were removed (e.g.
+        MISSING timesteps), so the padding must be masked in eval too; dropping it there
+        made a sample's embedding depend on its batch neighbours.
+        """
+        if fast_pass:
             return None
-        else:
-            return new_mask
+        return new_mask
 
     def add_register_tokens_and_masks(
         self,
