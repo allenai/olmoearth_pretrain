@@ -93,8 +93,18 @@ def main() -> None:
     for ps, side, core in ((4, 448, 64), (1, 288, 32)):
         halo = lighthouse_reach_px(16, ps, depth, encoder.max_patch_size)
         base = 200
-        dom = _crop(full, slice(base, base + side), slice(base, base + side))
-        whole = student(encoder, dom, ps, LighthouseSettings(fov_px=16))
+        dom = {
+            k: (
+                v if k == "timestamps" else v[:, base : base + side, base : base + side]
+            )
+            for k, v in full.items()
+        }
+        whole = student(
+            encoder,
+            _crop(dom, slice(0, side), slice(0, side)),
+            ps,
+            LighthouseSettings(fov_px=16),
+        )
         c0 = side // 2 - core // 2
         lo, hi = c0 - halo, c0 + core + halo
         assert lo >= 0 and hi <= side, (lo, hi, side)
