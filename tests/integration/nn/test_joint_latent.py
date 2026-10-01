@@ -390,10 +390,10 @@ def test_pixel_latents_grid_positions_and_cells(latent_reads_all: bool) -> None:
     original = encoder.perceiver._attention_masks
 
     def spy(
-        cell_id: torch.Tensor, is_latent: torch.Tensor, valid: torch.Tensor
+        cell_id: torch.Tensor, is_latent: torch.Tensor, valid: torch.Tensor, n_w: int
     ) -> dict[str, Any]:
         captured["cell_id"], captured["is_latent"] = cell_id, is_latent
-        return original(cell_id, is_latent, valid)
+        return original(cell_id, is_latent, valid, n_w)
 
     encoder.perceiver._attention_masks = spy  # type: ignore[method-assign]
     with torch.no_grad():
@@ -504,3 +504,144 @@ def test_token_mlp_ratio_gives_tokens_their_own_light_mlp() -> None:
     assert light.token_mlps[0].fc1.out_features == 16
     with pytest.raises(ValueError, match="token_mlp_ratio"):
         _joint_encoder(joint_depth=1, token_mlp=False, token_mlp_ratio=1.0)
+
+
+def _grid_inputs(
+    n_h: int, n_w: int, tokens_per_cell: int, latents_per_cell_side: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+    """Cell ids / latent flags / validity for a grid with sub-patch latents.
+
+    Latents are laid row-major at ``latents_per_cell_side`` per patch side, each carrying
+    the cell of the patch that contains it (as ``JointLatentTransformer`` does), plus one
+    non-spatial token (cell -1) and one padding token.
+    """
+    tok = torch.arange(n_h * n_w).repeat_interleave(tokens_per_cell)
+    tok = torch.cat([tok, torch.tensor([-1, 0])])
+    s = latents_per_cell_side
+    rows = torch.arange(n_h * s) // s
+    cols = torch.arange(n_w * s) // s
+    lat = (rows[:, None] * n_w + cols[None, :]).reshape(-1)
+    cell_id = torch.cat([tok, lat])[None]
+    is_latent = torch.cat(
+        [
+            torch.zeros(len(tok), dtype=torch.bool),
+            torch.ones(len(lat), dtype=torch.bool),
+        ]
+    )[None]
+    valid = torch.ones_like(is_latent)
+    valid[0, len(tok) - 1] = False  # the padding token
+    return cell_id, is_latent, valid, len(tok)
+
+
+@pytest.mark.parametrize(
+    "local_radius,latent_radius", [(1, None), (None, 1), (1, 2), (0, 0)]
+)
+@pytest.mark.parametrize("latent_reads_all", [False, True])
+def test_local_radii_match_the_written_out_rule(
+    local_radius: int | None, latent_radius: int | None, latent_reads_all: bool
+) -> None:
+    """The radius mask equals the rule written as loops (Chebyshev distance in cells)."""
+    n_h, n_w = 4, 5
+    cell_id, is_latent, valid, n_tok = _grid_inputs(n_h, n_w, 2, 2)
+    allowed = joint_attention_allowed(
+        cell_id,
+        is_latent,
+        valid,
+        latent_reads_all=latent_reads_all,
+        n_w=n_w,
+        local_radius=local_radius,
+        latent_radius=latent_radius,
+    )[0]
+
+    def dist(a: int, b: int) -> float:
+        if a < 0 or b < 0:
+            return float("inf")
+        return max(abs(a // n_w - b // n_w), abs(a % n_w - b % n_w))
+
+    L = cell_id.shape[1]
+    for q in range(L):
+        cq, lq = int(cell_id[0, q]), bool(is_latent[0, q])
+        for kv in range(L):
+            ckv, lkv = int(cell_id[0, kv]), bool(is_latent[0, kv])
+            d = dist(cq, ckv)
+            if not lq:  # token query
+                if lkv:
+                    expect = local_radius is None or cq < 0 or d <= local_radius
+                else:
+                    expect = cq == ckv
+            else:  # latent query
+                if lkv:
+                    expect = latent_radius is None or d <= latent_radius
+                elif local_radius is not None:
+                    expect = d <= local_radius
+                else:
+                    expect = latent_reads_all or cq == ckv
+            expect = expect and bool(valid[0, kv])
+            assert bool(allowed[q, kv]) == expect, (q, kv, cq, ckv)
+    # Every latent row keeps itself, so no row is empty.
+    assert allowed[n_tok:].any(dim=1).all()
+
+
+@pytest.mark.parametrize("latent_reads_all", [False, True])
+def test_no_radii_is_the_original_mask(latent_reads_all: bool) -> None:
+    """With both radii None the mask is exactly the pre-radius rule."""
+    cell_id, is_latent, valid, _ = _grid_inputs(3, 3, 3, 2)
+    new = joint_attention_allowed(
+        cell_id, is_latent, valid, latent_reads_all=latent_reads_all, n_w=3
+    )
+    same_cell = cell_id[:, :, None] == cell_id[:, None, :]
+    old = is_latent[:, None, :] | same_cell
+    if latent_reads_all:
+        old = old | is_latent[:, :, None]
+    assert torch.equal(new, valid[:, None, :] & old)
+
+
+def test_local_radii_bound_the_receptive_field() -> None:
+    """One joint block with radius 1: a corner token cannot reach the far-corner latent.
+
+    Pins the forward path (n_w threading, sub-patch latent cells) and the config
+    round-trip, not just the mask helper.
+    """
+    torch.manual_seed(0)
+    n_h = n_w = 4
+    tokens, positions, valid, cells = _encoder_order_inputs(
+        B=1, n_h=n_h, n_w=n_w, T=2, n_mod=1
+    )
+    valid[:] = True
+    cfg = JointLatentConfig(
+        register_dim=32,
+        joint_depth=1,
+        latent_reads_all=True,
+        pixel_latents=True,
+        local_radius=1,
+        latent_radius=1,
+    )
+    module = cfg.build(
+        encoder_embedding_size=32,
+        encoder_num_heads=4,
+        mlp_ratio=2.0,
+        position_encoding="rope_3d_mixed",
+        rope_base=10000.0,
+        qk_norm=False,
+    ).eval()
+    assert module.local_radius == 1 and module.latent_radius == 1
+    global_ = _joint_module(
+        joint_depth=1, latent_only_depth=0, latent_reads_all=True, pixel_latents=True
+    )
+    global_.load_state_dict(module.state_dict())
+    kw = dict(patch_size=2, patch_spacing=1.0)
+    perturbed = tokens.clone()
+    # Every token of cell (0, 0); random, since a constant shift is erased by the
+    # blocks' pre-norm LayerNorm.
+    hit = cells[0] == 0
+    perturbed[0, hit] += torch.randn(int(hit.sum()), tokens.shape[-1])
+    with torch.no_grad():
+        a, _ = module(tokens, positions, valid, cells, (n_h, n_w), **kw)
+        b, _ = module(perturbed, positions, valid, cells, (n_h, n_w), **kw)
+        ga, _ = global_(tokens, positions, valid, cells, (n_h, n_w), **kw)
+        gb, _ = global_(perturbed, positions, valid, cells, (n_h, n_w), **kw)
+    # Pixel latents: 2x2 per cell. Cell (3, 3) is 3 cells away -> untouched.
+    torch.testing.assert_close(a[0, 6:, 6:], b[0, 6:, 6:])
+    # Cell (1, 1) is within radius 1 -> changed; so is everything in the global model.
+    assert not torch.allclose(a[0, 2:4, 2:4], b[0, 2:4, 2:4])
+    assert not torch.allclose(ga[0, 6:, 6:], gb[0, 6:, 6:])

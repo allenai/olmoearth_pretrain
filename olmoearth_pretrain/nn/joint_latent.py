@@ -149,8 +149,71 @@ def build_pixel_latent_positions(
     return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
 
+def _joint_rule(
+    cell_q: Tensor,
+    cell_kv: Tensor,
+    latent_q: Tensor,
+    latent_kv: Tensor,
+    *,
+    n_w: int,
+    latent_reads_all: bool,
+    local_radius: int | None,
+    latent_radius: int | None,
+) -> Tensor:
+    """Whether query ``q`` may attend key ``kv`` (before key validity).
+
+    Elementwise over broadcastable tensors, so the dense reference mask and the
+    FlexAttention ``mask_mod`` share one definition. Radii are in patch cells
+    (Chebyshev distance on the patch grid); a sub-patch latent sits in the cell of
+    the patch that contains it. Non-spatial tokens (cell ``-1``) are never "near"
+    anything, and keep their non-local behaviour (see every latent).
+
+    * token query: latents (all, or within ``local_radius``) + tokens of its own cell;
+    * latent query: latents (all, or within ``latent_radius``) + tokens of its own
+      cell, every token (``latent_reads_all``), or tokens within ``local_radius``.
+    """
+    same_cell = cell_q == cell_kv
+
+    def near(radius: int) -> Tensor:
+        spatial = (cell_q >= 0) & (cell_kv >= 0)
+        row_q, col_q = cell_q // n_w, cell_q % n_w
+        row_kv, col_kv = cell_kv // n_w, cell_kv % n_w
+        return (
+            spatial
+            & ((row_q - row_kv).abs() <= radius)
+            & ((col_q - col_kv).abs() <= radius)
+        )
+
+    # Token query -> latent keys.
+    token_to_latent = latent_kv
+    if local_radius is not None:
+        token_to_latent = latent_kv & (near(local_radius) | (cell_q < 0))
+    token_rule = token_to_latent | (~latent_kv & same_cell)
+
+    # Latent query -> latent keys, then -> token keys.
+    latent_to_latent = latent_kv
+    if latent_radius is not None:
+        latent_to_latent = latent_kv & near(latent_radius)
+    if local_radius is not None:
+        latent_to_token = ~latent_kv & near(local_radius)
+    elif latent_reads_all:
+        latent_to_token = ~latent_kv
+    else:
+        latent_to_token = ~latent_kv & same_cell
+    latent_rule = latent_to_latent | latent_to_token
+
+    return torch.where(latent_q, latent_rule, token_rule)
+
+
 def joint_attention_allowed(
-    cell_id: Tensor, is_latent: Tensor, valid: Tensor, latent_reads_all: bool = False
+    cell_id: Tensor,
+    is_latent: Tensor,
+    valid: Tensor,
+    latent_reads_all: bool = False,
+    *,
+    n_w: int = 1,
+    local_radius: int | None = None,
+    latent_radius: int | None = None,
 ) -> Tensor:
     """Dense ``[B, L, L]`` boolean mask for the joint pattern (reference / CPU path).
 
@@ -161,11 +224,20 @@ def joint_attention_allowed(
     With ``latent_reads_all`` a latent QUERY additionally sees every valid key
     (``| is_latent[b, q]``): latents read the whole sample in one hop, as the pure
     Perceiver's reads do, while token rows keep the cell-local pattern.
+
+    ``local_radius`` / ``latent_radius`` (patch cells, ``n_w`` = grid width) make the
+    spatial edges local; see :func:`_joint_rule`.
     """
-    same_cell = cell_id[:, :, None] == cell_id[:, None, :]
-    allowed = is_latent[:, None, :] | same_cell
-    if latent_reads_all:
-        allowed = allowed | is_latent[:, :, None]
+    allowed = _joint_rule(
+        cell_id[:, :, None],
+        cell_id[:, None, :],
+        is_latent[:, :, None],
+        is_latent[:, None, :],
+        n_w=n_w,
+        latent_reads_all=latent_reads_all,
+        local_radius=local_radius,
+        latent_radius=latent_radius,
+    )
     return valid[:, None, :] & allowed
 
 
@@ -333,6 +405,8 @@ class JointLatentTransformer(nn.Module):
         latent_spatial_range: bool = False,
         token_mlp_ratio: float | None = None,
         compile_rope: bool = False,
+        local_radius: int | None = None,
+        latent_radius: int | None = None,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -414,8 +488,26 @@ class JointLatentTransformer(nn.Module):
                 process-wide switch, set when this module is built. Fuses the many
                 small rotary kernels per attention call; numerics unchanged up to
                 floating-point reassociation.
+            local_radius: If set, the token-latent edges become spatially local: a token
+                attends only latents within this many patch cells (Chebyshev, so 2 is a
+                5x5 window of cells, i.e. ``(5 * patch_size / stride)**2`` latents), and
+                a latent reads only the tokens within it -- replacing both "every latent"
+                and the latent's own-cell / ``latent_reads_all`` read. Tokens still see
+                their own cell's tokens.
+            latent_radius: If set, a latent attends only the latents within this many
+                patch cells (latent self-attention becomes local). Together with
+                ``local_radius`` the whole block is local, and attention cost is linear
+                in image area; the receptive field grows by ``max(radii)`` cells per block.
         """
         super().__init__()
+        for name, radius in (
+            ("local_radius", local_radius),
+            ("latent_radius", latent_radius),
+        ):
+            if radius is not None and radius < 0:
+                raise ValueError(f"{name} must be >= 0, got {radius}")
+        self.local_radius = local_radius
+        self.latent_radius = latent_radius
         if compile_rope:
             use_compiled_mixed_rope(True)
         self.compile_rope = compile_rope
@@ -574,20 +666,38 @@ class JointLatentTransformer(nn.Module):
         )
 
     def _attention_masks(
-        self, cell_id: Tensor, is_latent: Tensor, valid: Tensor
+        self, cell_id: Tensor, is_latent: Tensor, valid: Tensor, n_w: int
     ) -> dict[str, Any]:
         """Attention-mask kwargs for :meth:`Attention.forward`.
 
         A FlexAttention block mask on CUDA, a dense ``[B, 1, L, L]`` SDPA mask elsewhere.
         """
+        local_radius, latent_radius = self.local_radius, self.latent_radius
         if cell_id.is_cuda:
             reads_all = self.latent_reads_all  # Python bool: specialised at trace time
 
-            def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-                allowed = is_latent[b, kv] | (cell_id[b, q] == cell_id[b, kv])
-                if reads_all:
-                    allowed = allowed | is_latent[b, q]
-                return valid[b, kv] & allowed
+            if local_radius is None and latent_radius is None:
+
+                def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+                    allowed = is_latent[b, kv] | (cell_id[b, q] == cell_id[b, kv])
+                    if reads_all:
+                        allowed = allowed | is_latent[b, q]
+                    return valid[b, kv] & allowed
+
+            else:
+
+                def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+                    allowed = _joint_rule(
+                        cell_id[b, q],
+                        cell_id[b, kv],
+                        is_latent[b, q],
+                        is_latent[b, kv],
+                        n_w=n_w,
+                        latent_reads_all=reads_all,
+                        local_radius=local_radius,
+                        latent_radius=latent_radius,
+                    )
+                    return valid[b, kv] & allowed
 
             batch, length = cell_id.shape
             return {
@@ -597,7 +707,13 @@ class JointLatentTransformer(nn.Module):
             }
         return {
             "attn_mask": joint_attention_allowed(
-                cell_id, is_latent, valid, latent_reads_all=self.latent_reads_all
+                cell_id,
+                is_latent,
+                valid,
+                latent_reads_all=self.latent_reads_all,
+                n_w=n_w,
+                local_radius=local_radius,
+                latent_radius=latent_radius,
             )[:, None]
         }
 
@@ -783,7 +899,7 @@ class JointLatentTransformer(nn.Module):
             ],
             dim=1,
         )
-        attn_kwargs = self._attention_masks(cell_id, is_latent, valid)
+        attn_kwargs = self._attention_masks(cell_id, is_latent, valid, n_w)
         rope_spatial_extent: Tensor | None = None
         if self.latent_spatial_range:
             assert patch_spacing is not None
@@ -854,6 +970,10 @@ class JointLatentConfig(Config):
         token_mlp_ratio: A separate, lighter MLP for the tokens (CoLT5-style); the
             latents keep the full ``mlp_ratio`` MLP. None = shared MLP.
         compile_rope: ``torch.compile`` the mixed-RoPE op (process-wide switch).
+        local_radius / latent_radius: Spatially local attention, in patch cells: tokens
+            <-> latents within ``local_radius``, latents <-> latents within
+            ``latent_radius``. None = global (the default). See
+            :class:`JointLatentTransformer`.
     """
 
     register_dim: int
@@ -874,6 +994,9 @@ class JointLatentConfig(Config):
     latent_spatial_range: bool = False
     token_mlp_ratio: float | None = None
     compile_rope: bool = False
+    # None defaults: as_config_dict drops None, so existing checkpoints round-trip.
+    local_radius: int | None = None
+    latent_radius: int | None = None
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -958,4 +1081,6 @@ class JointLatentConfig(Config):
             latent_spatial_range=self.latent_spatial_range,
             token_mlp_ratio=self.token_mlp_ratio,
             compile_rope=self.compile_rope,
+            local_radius=self.local_radius,
+            latent_radius=self.latent_radius,
         )
