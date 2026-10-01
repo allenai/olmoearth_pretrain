@@ -83,6 +83,36 @@ class OlmoEarthWandBCallback(WandBCallback):
     # their metrics consolidate into a single run instead of one run per job.
     runid_path: str | None = None
 
+    def _set_beaker_config_for_resumed_run(self) -> None:
+        """Point a resumed run's beaker_experiment_url/id at the current experiment.
+
+        A relaunch (a new Beaker experiment resuming the same run name) resumes the
+        W&B run, whose config still holds the previous experiment's values; olmo-core's
+        BeakerCallback then fails to overwrite them (W&B refuses config value changes
+        without ``allow_val_change``). Writing the new values here first makes its
+        update a no-op.
+        """
+        from olmo_core.launch.beaker import (
+            get_beaker_client,
+            get_beaker_experiment_id,
+            is_running_in_beaker_batch_job,
+        )
+
+        if not is_running_in_beaker_batch_job():
+            return
+        experiment_id = get_beaker_experiment_id()
+        if experiment_id is None:
+            return
+        with get_beaker_client() as beaker:
+            beaker_url = beaker.workload.url(beaker.workload.get(experiment_id))
+        self.run.config.update(
+            {
+                "beaker_experiment_url": beaker_url,
+                "beaker_experiment_id": experiment_id,
+            },
+            allow_val_change=True,
+        )
+
     def pre_train(self) -> None:
         """Pre-train callback for the wandb callback."""
         if self.enabled and get_rank() == 0:
@@ -122,6 +152,8 @@ class OlmoEarthWandBCallback(WandBCallback):
             if not resume_id and use_runid_file:
                 runid_file.parent.mkdir(parents=True, exist_ok=True)
                 runid_file.write_text(self.run.id)
+            if resume_id:
+                self._set_beaker_config_for_resumed_run()
 
             self._run_path = self.run.path  # type: ignore
             if self.upload_dataset_distribution_pre_train:
