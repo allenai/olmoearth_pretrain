@@ -154,9 +154,15 @@ def evaluate_checkpoints(
     for step_num, step_path in checkpoints:
         logger.info(f"=== Evaluating checkpoint step {step_num}: {step_path} ===")
 
-        # Load model weights from the distributed checkpoint
+        # Load model weights from the distributed checkpoint, or from a flat
+        # weights.pth (a converted release checkpoint) when there is none.
         train_module_dir = os.path.join(step_path, "model_and_optim")
-        load_model_and_optim_state(train_module_dir, model)
+        flat_weights = os.path.join(step_path, "weights.pth")
+        if not os.path.isdir(train_module_dir) and os.path.isfile(flat_weights):
+            state_dict = torch.load(flat_weights, map_location="cpu")
+            model.load_state_dict(state_dict, strict=True)
+        else:
+            load_model_and_optim_state(train_module_dir, model)
         model.to(device)
 
         for evaluator in eval_callback.evaluators:
