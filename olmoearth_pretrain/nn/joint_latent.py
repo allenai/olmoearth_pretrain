@@ -530,6 +530,9 @@ class JointLatentTransformer(nn.Module):
                 raise ValueError(f"{name} must be >= 0, got {radius}")
         self.local_radius = local_radius
         self.latent_radius = latent_radius
+        # Inference-only sliding-FOV mode (olmoearth_pretrain.nn.lighthouse); never
+        # part of the config, so checkpoints and training are untouched.
+        self.lighthouse: Any = None
         self.sort_latents_by_cell = sort_latents_by_cell
         if compile_rope:
             use_compiled_mixed_rope(True)
@@ -827,6 +830,20 @@ class JointLatentTransformer(nn.Module):
             register_positions: ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` for the
                 decoder's cross-attention.
         """
+        if self.lighthouse is not None:
+            from olmoearth_pretrain.nn.lighthouse import lighthouse_forward
+
+            return lighthouse_forward(
+                self,
+                patch_tokens,
+                patch_positions,
+                visible_mask,
+                cell_ids,
+                spatial_grid,
+                grid_extent_positions,
+                patch_size,
+                patch_spacing,
+            )
         batch_size, n_tokens, _ = patch_tokens.shape
         device = patch_tokens.device
         n_h, n_w = spatial_grid
