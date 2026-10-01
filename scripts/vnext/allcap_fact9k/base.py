@@ -26,8 +26,14 @@ used; ``v1_2/base.py`` says 10000).
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
+
+# Every microbatch has a different (grid, timeline) shape; without expandable
+# segments the caching allocator fragments (smoke test: ~48 GiB active, 76 of
+# 80 GiB reserved at microbatch 8). Must be set before the first CUDA allocation.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "official" / "v1_2"))
 
