@@ -3344,6 +3344,150 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
       "window_size": 128
     },
+    "pastis_fine_grained": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "config_json_sha256": "5261da8322dfc74cf417b51d7d44f3bc982a4029a1d6ddfbe8eb2355d6e5a873",
+      "config_repo_dir": "data/rslearn_dataset_configs/pastis_fine_grained",
+      "end_time": "2019-09-01",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "name": "pastis_fine_grained",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 19.68572425842285,
+            "mean": -16.361109214593032,
+            "min": -100.0,
+            "std": 3.0656779240164145
+          },
+          "vv": {
+            "max": 35.75605773925781,
+            "mean": -9.9867434725577,
+            "min": -100.0,
+            "std": 3.150031488685353
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 21157.0,
+            "mean": 647.691312898808,
+            "min": 0.0,
+            "std": 1262.330341490884
+          },
+          "B02": {
+            "max": 19968.0,
+            "mean": 751.2715023876773,
+            "min": 0.0,
+            "std": 1222.9657243488316
+          },
+          "B03": {
+            "max": 19648.0,
+            "mean": 992.5020089614897,
+            "min": 0.0,
+            "std": 1129.2111017671414
+          },
+          "B04": {
+            "max": 18272.0,
+            "mean": 1010.9958015006331,
+            "min": 0.0,
+            "std": 1163.766157318768
+          },
+          "B05": {
+            "max": 17561.0,
+            "mean": 1459.1256845379403,
+            "min": 0.0,
+            "std": 1131.1022976049078
+          },
+          "B06": {
+            "max": 17187.0,
+            "mean": 2456.6356387761857,
+            "min": 0.0,
+            "std": 1138.367109706842
+          },
+          "B07": {
+            "max": 16975.0,
+            "mean": 2812.586430277394,
+            "min": 0.0,
+            "std": 1232.2394396131242
+          },
+          "B08": {
+            "max": 16752.0,
+            "mean": 3003.699059136884,
+            "min": 0.0,
+            "std": 1294.6202200514176
+          },
+          "B09": {
+            "max": 16524.0,
+            "mean": 3173.910584282919,
+            "min": 0.0,
+            "std": 1546.4394862265563
+          },
+          "B11": {
+            "max": 15440.0,
+            "mean": 2320.7043786373806,
+            "min": 0.0,
+            "std": 1002.6818882235024
+          },
+          "B12": {
+            "max": 15229.0,
+            "mean": 1586.7242845285882,
+            "min": 0.0,
+            "std": 967.4802844044757
+          },
+          "B8A": {
+            "max": 16661.0,
+            "mean": 3040.3085061875936,
+            "min": 0.0,
+            "std": 1234.176028357105
+          }
+        }
+      },
+      "num_classes": 19,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/pastis_fine_grained",
+      "split_stats": {
+        "test": {
+          "count": 383
+        },
+        "train": {
+          "count": 1455
+        },
+        "val": {
+          "count": 377
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2018-09-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_fine_grained",
+      "window_size": 128
+    },
     "pastis_rslearn": {
       "classes": [
         "0",
@@ -4768,6 +4912,125 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/us_trees_year_aligned",
       "window_size": 32
     },
+    "worldcover_fine_grained": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8"
+      ],
+      "config_json_sha256": "123968779352e40453c19ca61472336420ea62631b32678a008e9239a9c49ad8",
+      "config_repo_dir": "data/rslearn_dataset_configs/worldcover_fine_grained",
+      "end_time": null,
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "worldcover_fine_grained",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "max": 30055.0,
+            "mean": 1631.0639666939342,
+            "min": 0.0,
+            "std": 2730.7729903904496
+          },
+          "B02": {
+            "max": 27312.0,
+            "mean": 1564.8438766957727,
+            "min": 0.0,
+            "std": 2522.5450589980846
+          },
+          "B03": {
+            "max": 24160.0,
+            "mean": 1737.2506137032778,
+            "min": 0.0,
+            "std": 2388.514391341303
+          },
+          "B04": {
+            "max": 21792.0,
+            "mean": 1829.0812699224848,
+            "min": 0.0,
+            "std": 2377.398545598316
+          },
+          "B05": {
+            "max": 20735.0,
+            "mean": 2140.7862676435043,
+            "min": 0.0,
+            "std": 2432.35059459703
+          },
+          "B06": {
+            "max": 19269.0,
+            "mean": 2540.5410066065147,
+            "min": 0.0,
+            "std": 2321.7417643376493
+          },
+          "B07": {
+            "max": 17998.0,
+            "mean": 2678.3135368189983,
+            "min": 0.0,
+            "std": 2290.648786319435
+          },
+          "B08": {
+            "max": 18784.0,
+            "mean": 2716.9185539288314,
+            "min": 0.0,
+            "std": 2320.8767704467373
+          },
+          "B09": {
+            "max": 19646.0,
+            "mean": 3323.1412186487696,
+            "min": 0.0,
+            "std": 3412.346725379549
+          },
+          "B11": {
+            "max": 15376.0,
+            "mean": 2208.409668535892,
+            "min": 0.0,
+            "std": 1724.0709993150863
+          },
+          "B12": {
+            "max": 15796.0,
+            "mean": 1712.4670142204964,
+            "min": 0.0,
+            "std": 1491.1261348963296
+          },
+          "B8A": {
+            "max": 17576.0,
+            "mean": 2790.081956219921,
+            "min": 0.0,
+            "std": 2270.0683229373903
+          }
+        }
+      },
+      "num_classes": 9,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/worldcover_fine_grained",
+      "split_stats": {
+        "test": {
+          "count": 5000
+        },
+        "train": {
+          "count": 8753
+        },
+        "val": {
+          "count": 5000
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": null,
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/worldcover_fine_grained",
+      "window_size": 32
+    },
     "yemen_crop": {
       "classes": [
         "0",
@@ -4888,6 +5151,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-08-19T20:51:22.017287",
+  "updated_at": "2026-10-01T09:59:26.595736",
   "version": "1.0"
 }

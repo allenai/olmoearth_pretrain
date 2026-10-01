@@ -333,6 +333,42 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # Fine-grained PASTIS: pastis_rslearn windows, but val/test score only crop
+    # parcels of <= 50 px plus a capped sample of their bordering pixels (see
+    # scripts/tools/build_fine_grained_eval_datasets.py). The 128x128 samples
+    # are tiled into 64x64 windows, matching the pastis tasks above.
+    "pastis_fine_grained_sentinel2": DownstreamTaskConfig(
+        dataset="pastis_fine_grained",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=64,
+        tile_samples=True,
+    ),
+    "pastis_fine_grained_sentinel1_sentinel2": DownstreamTaskConfig(
+        dataset="pastis_fine_grained",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=64,
+        tile_samples=True,
+    ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # Three split modes (random / by_city / by_continent), each with an S2-only,
     # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
@@ -681,6 +717,24 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.OVERALL_ACC,
+    ),
+    # Fine-grained land cover: Geo-Wiki 10 m reference blocks, val/test scoring
+    # only small (<= 10 px) components plus a capped sample of their bordering
+    # pixels (see scripts/tools/build_fine_grained_eval_datasets.py).
+    "worldcover_fine_grained": DownstreamTaskConfig(
+        dataset="worldcover_fine_grained",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(10),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
     ),
     "lcmap_lu": DownstreamTaskConfig(
         dataset="lcmap_lu",
@@ -1574,6 +1628,45 @@ EMBEDDING_EVAL_TASKS.update(
         ),
     }
 )
+
+# Fine-grained twins (see the EVAL_TASKS entries). pastis_fine_grained keeps the
+# pastis tiling; worldcover_fine_grained has dense labels in a 10x10 block
+# rather than one labeled pixel, so each sample is center-cropped to a single
+# window (which contains the block at ws16) and scored as segmentation.
+for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
+    EMBEDDING_EVAL_TASKS.update(
+        {
+            f"pastis_fine_grained_ws{_ws}_ps1_sentinel2": replace(
+                _pastis_ps1_task([Modality.SENTINEL2_L2A.name], window_size=_ws),
+                dataset="pastis_fine_grained",
+            ),
+            f"pastis_fine_grained_ws{_ws}_ps1_sentinel1_sentinel2": replace(
+                _pastis_ps1_task(
+                    [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+                    window_size=_ws,
+                ),
+                dataset="pastis_fine_grained",
+            ),
+            f"worldcover_fine_grained_ws{_ws}_ps1": DownstreamTaskConfig(
+                dataset="worldcover_fine_grained",
+                embedding_batch_size=32 * _embedding_eval_batch_scale(_ws),
+                probe_batch_size=8 * _embedding_eval_batch_scale(_ws),
+                num_workers=8,
+                pooling_type=PoolingType.MEAN,
+                norm_stats_from_pretrained=True,
+                norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+                probe_lr=0.01,
+                eval_interval=Duration.epochs(10),
+                input_modalities=[Modality.SENTINEL2_L2A.name],
+                epochs=50,
+                eval_mode=EvalMode.LINEAR_PROBE,
+                primary_metric=EvalMetric.MIOU,
+                window_size=_ws,
+                patch_size=1,
+                quantize_embeddings=True,
+            ),
+        }
+    )
 
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
