@@ -123,6 +123,9 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.time_range_days_choices = list(TIME_RANGE_DAYS)
     config.tokenization_config = common.tokenization_config
     config.prefetch_factor = 2
+    # Batch shapes vary per microbatch, so pinned buffers are never reused: each
+    # batch was a fresh ~33 ms cudaHostAlloc that stalled kernel launches.
+    config.pin_memory = False
     return config
 
 

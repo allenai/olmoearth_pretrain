@@ -32,7 +32,7 @@ def _block(drop_path: float = 0.0) -> Block:
 
 
 def test_build_token_groups_layout() -> None:
-    """Groups gather each key's tokens; inverse restores the packed order."""
+    """Groups gather each key's tokens; token_position restores the packed order."""
     key = torch.tensor([2, 0, 2, 1, 0, 2])
     sample = torch.zeros(6, dtype=torch.long)
     groups = build_token_groups(key, sample, batch_size=1)
@@ -45,7 +45,7 @@ def test_build_token_groups_layout() -> None:
         assert (key[members] == k).all()
     packed = torch.arange(6.0)
     regrouped = torch.cat([packed, packed.new_zeros(1)])[groups.index]
-    torch.testing.assert_close(regrouped[groups.valid][groups.inverse], packed)
+    torch.testing.assert_close(regrouped.reshape(-1)[groups.token_position], packed)
 
 
 def test_grouped_block_one_group_per_sample_matches_full_attention(

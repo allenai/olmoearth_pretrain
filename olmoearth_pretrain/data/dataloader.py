@@ -94,6 +94,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         drop_last: bool = True,
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
+        pin_memory: bool = True,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
@@ -162,6 +163,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             drop_last: Whether to drop the last incomplete batch.
             persistent_workers: Whether to keep workers alive between epochs.
             multiprocessing_context: Multiprocessing context ("spawn" or "forkserver").
+            pin_memory: Pin batches in host memory (CUDA, workers > 0). Turn off when
+                batch shapes vary a lot: every new shape is a fresh ``cudaHostAlloc``
+                (tens of ms, contends with kernel launches on the driver).
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
             masking_strategy: Masking strategy to apply in the dataloader workers.
@@ -200,6 +204,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
+        self.pin_memory = pin_memory
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
 
         # Dataloader-side masking configuration
@@ -357,7 +362,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             _IterableDatasetWrapper(self),
             batch_size=None,
             num_workers=self.num_workers,
-            pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
+            pin_memory=self.pin_memory
+            and self.target_device_type == "cuda"
+            and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
             persistent_workers=(
                 self.persistent_workers if self.num_workers > 0 else False
@@ -856,6 +863,7 @@ class OlmoEarthDataLoaderConfig(Config):
     prefetch_factor: int | None = None
     target_device_type: str | None = None
     drop_last: bool = True
+    pin_memory: bool = True
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -934,6 +942,7 @@ class OlmoEarthDataLoaderConfig(Config):
             target_device_type=self.target_device_type or get_default_device().type,
             collator=collator,
             drop_last=self.drop_last,
+            pin_memory=self.pin_memory,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,

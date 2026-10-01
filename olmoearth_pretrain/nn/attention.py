@@ -35,13 +35,15 @@ class TokenGroups(NamedTuple):
 
     Built by :func:`build_token_groups`. ``index[g, j]`` is the packed position of
     the j-th token of group g (``P`` = padding); ``valid`` marks real entries;
-    ``inverse`` maps each packed token to its position in ``valid``-order;
-    ``sample`` is each packed token's batch index (for per-sample drop path).
+    ``token_position`` is each packed token's flat position ``g * S + j`` in the
+    grid; ``sample`` is each packed token's batch index (for per-sample drop path).
+    Regrouping uses only integer ``index_select`` (no boolean masks), so neither
+    direction synchronizes with the host and backward is a scatter-add.
     """
 
     index: torch.Tensor  # (G, S) long
     valid: torch.Tensor  # (G, S) bool
-    inverse: torch.Tensor  # (P,) long
+    token_position: torch.Tensor  # (P,) long
     sample: torch.Tensor  # (P,) long
     batch_size: int
 
@@ -63,10 +65,12 @@ def build_token_groups(
         (num_groups, group_size), num_tokens, dtype=torch.long, device=device
     )
     index[group, position] = order
+    token_position = torch.empty_like(order)
+    token_position[order] = group * group_size + position
     return TokenGroups(
         index=index,
         valid=index < num_tokens,
-        inverse=torch.argsort(order),
+        token_position=token_position,
         sample=sample,
         batch_size=batch_size,
     )
@@ -790,23 +794,34 @@ class Block(nn.Module):
     ) -> torch.Tensor:
         """Self-attention within each group of packed tokens ``x`` (P, C)."""
         assert not self.attn.cross_attn, "grouped attention is self-attention only"
-        index, valid, inverse = (
-            token_groups.index,
-            token_groups.valid,
-            token_groups.inverse,
-        )
+        index, valid = token_groups.index, token_groups.valid
+        num_groups, group_size = index.shape
+        flat_index = index.reshape(-1)
         h = self.norm1(x)
         # Row P of the padded copy is the (zero) padding token.
-        grouped = torch.cat([h, h.new_zeros(1, h.shape[-1])])[index]
+        grouped = (
+            torch.cat([h, h.new_zeros(1, h.shape[-1])])
+            .index_select(0, flat_index)
+            .view(num_groups, group_size, -1)
+        )
         grouped_positions = None
         if rope_positions is not None:
-            grouped_positions = torch.cat(
-                [rope_positions, rope_positions.new_zeros(1, rope_positions.shape[-1])]
-            )[index]
+            grouped_positions = (
+                torch.cat(
+                    [
+                        rope_positions,
+                        rope_positions.new_zeros(1, rope_positions.shape[-1]),
+                    ]
+                )
+                .index_select(0, flat_index)
+                .view(num_groups, group_size, -1)
+            )
         attended = self.attn(
             x=grouped, attn_mask=valid, rope_positions=grouped_positions
         )
-        attended = attended[valid][inverse]
+        attended = attended.reshape(num_groups * group_size, -1).index_select(
+            0, token_groups.token_position
+        )
         x = x + self._drop_path_grouped(self.ls1(attended), token_groups)
         x = x + self._drop_path_grouped(self.ls2(self.mlp(self.norm2(x))), token_groups)
         return x

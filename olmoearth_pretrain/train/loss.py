@@ -543,6 +543,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         all_masks: Tensor,
         all_targets: Tensor,
         modality: str,
+        max_decoder_count: int | None = None,
     ) -> Tensor:
         batch_size, _, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
@@ -554,7 +555,9 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         # unchanged while the (batch, T, T) score tensors shrink from all tokens
         # (incl. MISSING padding) to decoder tokens.
         _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
-        num_tokens = max(int(count.max()), 1)
+        if max_decoder_count is None:
+            max_decoder_count = int(count.max())
+        num_tokens = max(max_decoder_count, 1)
         sort_indices = sort_indices[:, :num_tokens]
         sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
         sorted_preds = all_preds.gather(1, sort_expanded).float()
@@ -657,13 +660,31 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
             predictions.flatten_tokens_and_masks_per_modality()
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+        # Per-modality max decoder-token counts in ONE host sync (each sizes that
+        # modality's score tensors).
+        max_decoder_counts: list[int | None] = [None] * len(modality_masks)
+        if modality_masks:
+            max_decoder_counts = (
+                torch.stack(
+                    [
+                        (masks == MaskValue.DECODER.value).sum(dim=-1).max()
+                        for masks in modality_masks
+                    ]
+                )
+                .int()
+                .tolist()
+            )
 
         total_loss = 0
-        for all_preds, all_masks, all_targets, modality in zip(
-            modality_preds, modality_masks, modality_targets, targets.modalities
+        for all_preds, all_masks, all_targets, modality, max_count in zip(
+            modality_preds,
+            modality_masks,
+            modality_targets,
+            targets.modalities,
+            max_decoder_counts,
         ):
             loss = self._compute_modality_loss_parallel(
-                all_preds, all_masks, all_targets, modality
+                all_preds, all_masks, all_targets, modality, max_count
             )
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)

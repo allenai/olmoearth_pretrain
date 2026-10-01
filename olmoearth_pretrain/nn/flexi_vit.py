@@ -2370,18 +2370,20 @@ class Encoder(FlexiVitBase):
         (across locations). Tokens are packed (no per-sample padding); each block
         attends over padded groups. tokens (B, N, D), new_mask (B, N) True = kept.
         """
-        batch_size, num_tokens, _ = tokens.shape
-        keep = new_mask.bool()
-        x = tokens[keep]
-        packed_positions = positions[keep] if positions is not None else None
-        ids = token_ids[keep]
-        sample = (
-            torch.arange(batch_size, device=tokens.device)
-            .unsqueeze(1)
-            .expand(batch_size, num_tokens)[keep]
+        batch_size, num_tokens, dim = tokens.shape
+        # Integer gather/scatter (index_select / index_copy) rather than boolean
+        # masks: boolean indexing syncs with the host and its backward is a slow
+        # sort-based index_put.
+        keep = new_mask.reshape(-1).nonzero().squeeze(1)
+        x = tokens.reshape(-1, dim).index_select(0, keep)
+        packed_positions = (
+            positions.reshape(-1, positions.shape[-1]).index_select(0, keep)
+            if positions is not None
+            else None
         )
-        num_locations = int(ids[:, 0].max()) + 1
-        num_slots = int(ids[:, 1].max()) + 1
+        ids = token_ids.reshape(-1, 2).index_select(0, keep)
+        sample = keep // num_tokens
+        num_locations, num_slots = (n + 1 for n in ids.max(dim=0).values.tolist())
         local_groups = build_token_groups(
             sample * num_locations + ids[:, 0], sample, batch_size
         )
@@ -2394,9 +2396,8 @@ class Encoder(FlexiVitBase):
                 rope_positions=packed_positions,
                 token_groups=local_groups if i_blk % 2 == 0 else spatial_groups,
             )
-        out = x.new_zeros(batch_size, num_tokens, x.shape[-1])
-        out[keep] = x
-        return out
+        out = x.new_zeros(batch_size * num_tokens, dim).index_copy(0, keep, x)
+        return out.view(batch_size, num_tokens, dim)
 
     def _maybe_remove_masked_tokens(
         self,
