@@ -83,6 +83,14 @@ class LighthouseSettings:
             depends on the absolute coordinates (~1e-4 differences). Giving every
             chunk its domain coordinates makes chunked runs reproduce the
             full-domain forward to fp32 precision.
+        mask_impl: ``"packed"`` (default) evaluates the FOV rule from two packed
+            int64 codes per query-key pair; ``"gather"`` reads ten per-element
+            tensors (the reference; much slower, the mask runs for every score).
+        attn_dtype: Dtype Q/K/V are cast to for the FlexAttention kernel. Under bf16
+            autocast the mixed-RoPE output is fp32, which would otherwise run the
+            kernel in fp32. None keeps whatever the projections + RoPE return.
+        profile: Synchronize and record per-phase seconds (attention vs the rest)
+            in ``last_lighthouse_stats``.
     """
 
     fov_px: int
@@ -90,6 +98,9 @@ class LighthouseSettings:
     seq_chunk: int = 1 << 18
     dense: bool = False
     origin_px: tuple[int, int] = (0, 0)
+    mask_impl: str = "packed"
+    attn_dtype: str | None = "bfloat16"
+    profile: bool = False
 
 
 def lighthouse_reach_px(
@@ -284,11 +295,63 @@ def lighthouse_dense_mask(lay: _Layout, fov: int) -> Tensor:
     return _fov_rule(lay, fov, idx[:, None], idx[None, :])
 
 
-def _flex_block_mask(lay: _Layout, fov: int) -> Any:
+_BITS = 14  # rows/cols < 16384 cells
+_M = (1 << _BITS) - 1
+
+
+def _packed_codes(lay: _Layout) -> tuple[Tensor, Tensor]:
+    """Per-element int64 codes so the mask needs two reads per score, not ten.
+
+    Key code: ``row | col << 14 | is_latent << 28 | valid << 29``. Query code:
+    ``row0 | col0 << 14 | row << 28 | col << 42 | is_latent << 56 | valid << 57``.
+    Padding rows/cols are stored as 0 with valid=0 (the rule is gated on validity).
+    """
+    row = torch.where(lay.valid, lay.row, 0)
+    col = torch.where(lay.valid, lay.col, 0)
+    lat = lay.is_latent.long()
+    val = lay.valid.long()
+    kv_code = row | (col << _BITS) | (lat << (2 * _BITS)) | (val << (2 * _BITS + 1))
+    q_code = (
+        lay.row0
+        | (lay.col0 << _BITS)
+        | (row << (2 * _BITS))
+        | (col << (3 * _BITS))
+        | (lat << (4 * _BITS))
+        | (val << (4 * _BITS + 1))
+    )
+    return q_code, kv_code
+
+
+def _packed_rule(fov: int, qc: Tensor, kc: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+    """:func:`_fov_rule` from the packed codes of one query and one key."""
+    r0, c0 = qc & _M, (qc >> _BITS) & _M
+    qr, qcol = (qc >> (2 * _BITS)) & _M, (qc >> (3 * _BITS)) & _M
+    q_lat, q_val = (qc >> (4 * _BITS)) & 1, (qc >> (4 * _BITS + 1)) & 1
+    kr, kcol = kc & _M, (kc >> _BITS) & _M
+    k_lat, k_val = (kc >> (2 * _BITS)) & 1, (kc >> (2 * _BITS + 1)) & 1
+    in_fov = (kr >= r0) & (kr < r0 + fov) & (kcol >= c0) & (kcol < c0 + fov)
+    same_cell = (kr == qr) & (kcol == qcol)
+    # latent query: FOV; token query: latent keys in FOV, token keys of its own cell.
+    rule = torch.where((q_lat | k_lat) == 1, in_fov, same_cell)
+    return ((q_val & k_val) == 1) & rule | (q == kv)
+
+
+def _flex_block_mask(lay: _Layout, fov: int, mask_impl: str = "packed") -> Any:
     from torch.nn.attention.flex_attention import BlockMask
 
-    def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
-        return _fov_rule(lay, fov, q, kv)
+    if mask_impl == "packed":
+        q_code, kv_code = _packed_codes(lay)
+
+        def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+            return _packed_rule(fov, q_code[q], kv_code[kv], q, kv)
+
+    elif mask_impl == "gather":
+
+        def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
+            return _fov_rule(lay, fov, q, kv)
+
+    else:
+        raise ValueError(f"unknown mask_impl {mask_impl!r}")
 
     return BlockMask.from_kv_blocks(
         lay.kv_num_blocks,
@@ -328,8 +391,20 @@ def _lighthouse_block(
     positions: Tensor,
     attend: Any,
     seq_chunk: int,
+    attn_dtype: torch.dtype | None = None,
+    timings: dict[str, float] | None = None,
 ) -> Tensor:
     """One joint block (attention + full MLP on every element), chunked, in place."""
+
+    def tick(key: str, t0: float) -> float:
+        if timings is None:
+            return t0
+        torch.cuda.synchronize()
+        now = time.perf_counter()
+        timings[key] = timings.get(key, 0.0) + now - t0
+        return now
+
+    t0 = tick("_", time.perf_counter()) if timings is not None else 0.0
     attn = blk.attn
     heads, head_dim = attn.num_heads, attn.head_dim
     length = x.shape[1]
@@ -341,6 +416,8 @@ def _lighthouse_block(
         v = rearrange(attn.v(h), "b n (h d) -> b h n d", h=heads)
         q, k = attn.q_norm(q), attn.k_norm(k)
         q, k = _rope(attn, q, positions[:, s]), _rope(attn, k, positions[:, s])
+        if attn_dtype is not None:
+            q, k, v = q.to(attn_dtype), k.to(attn_dtype), v.to(attn_dtype)
         if q_all is None:
             shape = (x.shape[0], heads, length, head_dim)
             q_all = torch.empty(shape, dtype=q.dtype, device=x.device)
@@ -349,12 +426,15 @@ def _lighthouse_block(
         assert k_all is not None and v_all is not None
         q_all[:, :, s], k_all[:, :, s], v_all[:, :, s] = q, k, v
         del h, q, k, v
+    t0 = tick("qkv_rope_s", t0)
     out = attend(q_all, k_all, v_all)
     del q_all, k_all, v_all
+    t0 = tick("attention_s", t0)
     for s in _chunks(length, seq_chunk):
         o = rearrange(out[:, :, s], "b h n d -> b n (h d)")
-        xs = x[:, s] + blk.ls1(attn.proj(o))
+        xs = x[:, s] + blk.ls1(attn.proj(o).to(x.dtype))
         x[:, s] = xs + blk.ls2(blk.mlp(blk.norm2(xs)))
+    tick("proj_mlp_s", t0)
     return x
 
 
@@ -472,14 +552,26 @@ def lighthouse_forward(
         from olmoearth_pretrain.nn.joint_latent import flex_attention_cuda
 
         t_mask = time.perf_counter()
-        block_mask = _flex_block_mask(lay, fov)
+        block_mask = _flex_block_mask(lay, fov, settings.mask_impl)
         lay.stats["block_mask_s"] = time.perf_counter() - t_mask
 
         def attend(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
             return flex_attention_cuda(q, k, v, block_mask)
 
+    # The dense path is the fp32 reference; the dtype cast is for the flex kernel.
+    attn_dtype = (
+        getattr(torch, settings.attn_dtype)
+        if settings.attn_dtype and not settings.dense
+        else None
+    )
+    timings: dict[str, float] | None = {} if settings.profile else None
     for blk in module.joint_blocks:
-        x = _lighthouse_block(blk, x, positions, attend, settings.seq_chunk)
+        x = _lighthouse_block(
+            blk, x, positions, attend, settings.seq_chunk, attn_dtype, timings
+        )
+    if timings is not None:
+        timings.pop("_", None)
+        lay.stats.update(timings)
 
     latents = x[:, lay.latent_dest]
     del x

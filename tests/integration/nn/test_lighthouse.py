@@ -11,6 +11,8 @@ from olmoearth_pretrain.nn.lighthouse import (
     BLOCK,
     LighthouseSettings,
     _build_layout,
+    _packed_codes,
+    _packed_rule,
     lighthouse_dense_mask,
     lighthouse_reach_px,
 )
@@ -166,3 +168,11 @@ def test_layout_block_lists_cover_every_allowed_pair_and_key_counts(
     assert (lat_keys[valid] == n_lat_fov).all()  # every query: the FOV's latents
     assert (tok_keys[valid & is_lat] == fov * fov * per_cell).all()
     assert (tok_keys[valid & ~is_lat] == per_cell).all()  # tokens: own cell
+
+    # The packed two-read rule the flex kernel uses equals the reference rule.
+    q_code, kv_code = _packed_codes(lay)
+    idx = torch.arange(lay.length)
+    packed = _packed_rule(
+        fov, q_code[:, None], kv_code[None, :], idx[:, None], idx[None, :]
+    )
+    assert torch.equal(packed, dense)
