@@ -420,9 +420,16 @@ def main() -> None:
     device = torch.device("cuda")
     model = load_pretrain_checkpoint(args.checkpoint, device=device)
     encoder = model.encoder
-    assert isinstance(encoder.perceiver, JointLatentTransformer)
-    assert encoder.perceiver.eval_latent_stride == 1
-    if not args.masked_attention:
+    joint = isinstance(encoder.perceiver, JointLatentTransformer)
+    if not joint:
+        # A register-bottleneck checkpoint such as the RC (ViT blocks + Perceiver):
+        # tiled only, and only at ps1, where its student grid is per pixel too.
+        bad = [c for c in args.configs if parse_config(c) != ("tiled", 1)]
+        if bad:
+            raise ValueError(f"non-joint checkpoints support tiled_ps1 only, got {bad}")
+    else:
+        assert encoder.perceiver.eval_latent_stride == 1
+    if joint and not args.masked_attention:
         # Not in this checkpoint's config.json (the flag postdates it); inference
         # only, exact up to reassociation. Lighthouse forwards dispatch before it.
         from olmoearth_pretrain.nn.dense_joint_attention import flash_attn
@@ -447,7 +454,9 @@ def main() -> None:
         "checkpoint": args.checkpoint,
         "gpu": torch.cuda.get_device_name(device),
         "torch": torch.__version__,
-        "tiled_attention": "masked_flex" if args.masked_attention else "dense_flash",
+        "tiled_attention": "n/a (not joint)"
+        if not joint
+        else ("masked_flex" if args.masked_attention else "dense_flash"),
         "args": {k: v for k, v in vars(args).items() if k != "core_px"},
         "windows": {},
     }
