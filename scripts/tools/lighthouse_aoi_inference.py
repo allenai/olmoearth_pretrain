@@ -201,6 +201,11 @@ def _stack_crops(
     return MaskedOlmoEarthSample(**out)
 
 
+def _identity(x: Any) -> Any:
+    """Collate for batch_size=None (module level: spawned workers pickle it)."""
+    return x
+
+
 class Timer:
     """CUDA-synchronized wall clock."""
 
@@ -432,7 +437,7 @@ def main() -> None:
         windows,
         batch_size=None,
         num_workers=args.num_workers,
-        collate_fn=lambda x: x,
+        collate_fn=_identity,
         prefetch_factor=1 if args.num_workers else None,
     )
     out_dir = Path(args.out_dir)
