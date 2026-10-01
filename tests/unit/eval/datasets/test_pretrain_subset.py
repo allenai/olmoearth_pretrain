@@ -3,7 +3,9 @@
 import numpy as np
 import torch
 
-from olmoearth_pretrain.evals.datasets.pretrain_subset import PretrainSubsetDataset
+from olmoearth_pretrain.evals.datasets.pretrain_subset import (
+    PretrainSubsetDataset,
+)
 
 
 def test_split_indices_are_disjoint_and_deterministic() -> None:

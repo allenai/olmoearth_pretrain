@@ -306,6 +306,7 @@ class LinearProbe(nn.Module):
                 "num_output_pixels_per_side_of_patch is required for segmentation"
             )
             out_dim = num_classes * num_output_pixels_per_side_of_patch**2
+            # Dense probes have no input norm.
             self.batchnorm: nn.Module = nn.Identity()
         else:
             out_dim = num_classes
@@ -448,6 +449,8 @@ def train_and_eval_probe(
         TensorDataset(train_embeddings, train_labels),
         batch_size=batch_size,
         shuffle=True,
+        # A final batch of size 1 breaks BatchNorm1d in training mode.
+        drop_last=len(train_embeddings) % batch_size == 1,
     )
     # Training loop: only evaluate on validation set
     for i in range(num_times_to_run_eval):
