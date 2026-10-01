@@ -426,14 +426,32 @@ class MaskedOlmoEarthSample(NamedTuple):
     def to_device(
         self, device: torch.device, non_blocking: bool = True
     ) -> MaskedOlmoEarthSample:
-        """Move all tensors to the specified device."""
-        return MaskedOlmoEarthSample(
-            **{
-                key: val.to(device, non_blocking=non_blocking)
-                for key, val in self.as_dict(include_nones=False).items()
-                if val is not None and hasattr(val, "to")
-            }
-        )
+        """Move all tensors to the specified device.
+
+        Masks compacted to uint8 for the dataloader transfer (see
+        ``MaskedOlmoEarthSample.with_uint8_masks``) are restored to int64 here.
+        """
+        moved = {}
+        for key, val in self.as_dict(include_nones=False).items():
+            if val is None or not hasattr(val, "to"):
+                continue
+            val = val.to(device, non_blocking=non_blocking)
+            if key in _MASKED_SAMPLE_MASK_FIELDS and val.dtype == torch.uint8:
+                val = val.long()
+            moved[key] = val
+        return MaskedOlmoEarthSample(**moved)
+
+    def with_uint8_masks(self) -> MaskedOlmoEarthSample:
+        """Cast masks to uint8 (values 0-3) to shrink dataloader payloads 8x.
+
+        ``to_device`` casts them back to int64.
+        """
+        updates = {}
+        for name in _MASKED_SAMPLE_MASK_FIELDS:
+            val = getattr(self, name)
+            if isinstance(val, torch.Tensor) and val.dtype == torch.int64:
+                updates[name] = val.to(torch.uint8)
+        return self._replace(**updates)
 
     def unmask(self) -> MaskedOlmoEarthSample:
         """Return an unmasked MaskedOlmoEarthSample.

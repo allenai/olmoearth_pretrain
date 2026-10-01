@@ -17,7 +17,7 @@ from olmoearth_pretrain.data.dataset import (
     build_union_timeline,
     timestamps_to_ordinals,
 )
-from olmoearth_pretrain.datatypes import OlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 
 MODALITIES = [
@@ -121,7 +121,7 @@ S2_SINGLE = TokenizationConfig(
 )
 
 
-def _field(sample: OlmoEarthSample, name: str) -> Any:
+def _field(sample: OlmoEarthSample | MaskedOlmoEarthSample, name: str) -> Any:
     """A present field of a sample (asserting it is not None)."""
     value = getattr(sample, name)
     assert value is not None
@@ -226,3 +226,36 @@ def test_collate_pads_to_the_longest_sample(allcap_h5py_dir: UPath) -> None:
         _field(collated, "timestamps")[0, lengths[0] :]
         == _field(collated, "timestamps")[0, lengths[0] - 1]
     ).all()
+
+
+def test_uint8_masks_round_trip(allcap_h5py_dir: UPath) -> None:
+    """uint8 transport masks come back from to_device identical to int64 masks."""
+    import torch
+
+    from olmoearth_pretrain.data.collate import collate_double_masked_batched
+    from olmoearth_pretrain.train.masking import MaskingConfig
+
+    dataset = _dataset(allcap_h5py_dir, normalize=True)
+    np.random.seed(2)
+    batch = [
+        dataset[GetItemArgs(idx=i, patch_size=2, sampled_hw_p=4, time_range_days=90)]
+        for i in (0, 1)
+    ]
+    masking = MaskingConfig(strategy_config={"type": "random_time_with_decode"}).build()
+    outputs = []
+    for uint8_masks in (False, True):
+        np.random.seed(3)
+        torch.manual_seed(3)
+        outputs.append(
+            collate_double_masked_batched(
+                batch, None, masking, None, uint8_masks=uint8_masks
+            )
+        )
+    (_, ref_a, ref_b), (_, small_a, small_b) = outputs
+    assert _field(small_a, "sentinel2_l2a_mask").dtype == torch.uint8
+    for ref, small in ((ref_a, small_a), (ref_b, small_b)):
+        moved = small.to_device(torch.device("cpu"))
+        for name, value in ref.as_dict().items():
+            restored = getattr(moved, name)
+            assert restored.dtype == value.dtype, name
+            assert torch.equal(restored, value), name

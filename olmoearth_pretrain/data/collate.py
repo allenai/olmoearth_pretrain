@@ -54,6 +54,7 @@ def collate_single_masked_batched(
     batch: list[tuple[int, OlmoEarthSample]],
     transform: Transform | None,
     masking_strategy: MaskingStrategy,
+    uint8_masks: bool = False,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -65,6 +66,7 @@ def collate_single_masked_batched(
         batch: List of (patch_size, OlmoEarthSample) tuples.
         transform: Optional transform to apply to the batch.
         masking_strategy: Masking strategy to apply to the batch.
+        uint8_masks: Send masks as uint8 (restored to int64 by ``to_device``).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample).
@@ -78,6 +80,8 @@ def collate_single_masked_batched(
 
     # Apply masking to the batch
     masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+    if uint8_masks:
+        masked_sample = masked_sample.with_uint8_masks()
 
     return patch_size, masked_sample
 
@@ -87,6 +91,7 @@ def collate_double_masked_batched(
     transform: Transform | None,
     masking_strategy: MaskingStrategy,
     masking_strategy_b: MaskingStrategy | None,
+    uint8_masks: bool = False,
 ) -> tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]:
     """Collate function that applies transform and two masking strategies to the full batch.
 
@@ -99,6 +104,7 @@ def collate_double_masked_batched(
         transform: Optional transform to apply to the batch.
         masking_strategy: First masking strategy to apply.
         masking_strategy_b: Second masking strategy to apply. If None, uses masking_strategy.
+        uint8_masks: Send masks as uint8 (restored to int64 by ``to_device``).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b).
@@ -116,5 +122,8 @@ def collate_double_masked_batched(
         masking_strategy_b if masking_strategy_b is not None else masking_strategy
     )
     masked_sample_b = strategy_b.apply_mask(stacked_sample, patch_size)
+    if uint8_masks:
+        masked_sample_a = masked_sample_a.with_uint8_masks()
+        masked_sample_b = masked_sample_b.with_uint8_masks()
 
     return patch_size, masked_sample_a, masked_sample_b

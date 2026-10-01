@@ -864,6 +864,9 @@ class OlmoEarthDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     pin_memory: bool = True
+    # Send masks to the main process as uint8 instead of int64 (8x smaller; the
+    # masks are pixel-resolution). Restored to int64 on device.
+    uint8_masks: bool = False
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -919,6 +922,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 collate_single_masked_batched,
                 transform=transform,
                 masking_strategy=masking_strategy,
+                uint8_masks=self.uint8_masks,
             )
         else:  # num_masked_views == 2
             collator = functools.partial(
@@ -926,6 +930,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 transform=transform,
                 masking_strategy=masking_strategy,
                 masking_strategy_b=masking_strategy_b,
+                uint8_masks=self.uint8_masks,
             )
 
         return OlmoEarthDataLoader(
