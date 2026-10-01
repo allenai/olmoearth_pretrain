@@ -192,7 +192,7 @@ class MaskingStrategy:
         # this only works because we assume B = 1
         flat_mask = mask.flatten()  # N tokens
         not_missing_tokens = flat_mask != MaskValue.MISSING.value
-        num_not_missing_tokens = sum(not_missing_tokens)
+        num_not_missing_tokens = int(not_missing_tokens.sum())
 
         if encode_ratio is None:
             encode_ratio = self.encode_ratio
@@ -1921,7 +1921,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
 
             if missing_per_time is None:
                 use_random_masking = True
-            elif sum(missing_per_time) <= 1:
+            elif missing_per_time.sum() <= 1:
                 use_random_masking = True
             else:
                 if np.random.random() < self.random_ratio:

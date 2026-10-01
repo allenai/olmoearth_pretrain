@@ -279,6 +279,20 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Landsat 8/9 Collection-2 Level-2 (surface reflectance + thermal), used by
+    # the every-capture "allcap" corpus. Distinct from LANDSAT (Level-1 TOA,
+    # which also has the pan/cirrus/B11 bands that Level-2 lacks).
+    LANDSAT_L2 = ModalitySpec(
+        name="landsat_l2",
+        tile_resolution_factor=16,
+        band_sets=[
+            # 30 m/pixel bands that we store at 20 m/pixel.
+            BandSet(["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B10"], 32),
+        ],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     WORLDCOVER = ModalitySpec(
         name="worldcover",
         tile_resolution_factor=16,

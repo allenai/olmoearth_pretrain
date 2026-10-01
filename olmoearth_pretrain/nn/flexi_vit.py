@@ -23,7 +23,7 @@ from olmoearth_pretrain.datatypes import (
     MaskValue,
     TokensAndMasks,
 )
-from olmoearth_pretrain.nn.attention import Block
+from olmoearth_pretrain.nn.attention import Block, build_token_groups
 from olmoearth_pretrain.nn.encodings import (
     PositionEncoding,
     axial_3d_dim_split,
@@ -1905,6 +1905,7 @@ class Encoder(FlexiVitBase):
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
         perceiver_config: PerceiverConfig | None = None,
+        attention_mode: str = "full",
     ):
         """Initialize the encoder.
 
@@ -1966,6 +1967,12 @@ class Encoder(FlexiVitBase):
             perceiver_config: If set, add a Perceiver-style spatial register
                 bottleneck (and optionally its detached student readout); see
                 :class:`PerceiverConfig`. Requires a RoPE position encoding.
+            attention_mode: "full" (joint self-attention over all visible tokens)
+                or "factorized": even blocks attend within each spatial location
+                (across its modality/bandset/timestep tokens), odd blocks within
+                each (modality, bandset, timestep) slot (across locations). Cost
+                is linear in the number of timesteps per location, which makes
+                long time series affordable.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -1992,6 +1999,7 @@ class Encoder(FlexiVitBase):
         )
         self.num_register_tokens = num_register_tokens
         self.has_register_tokens = num_register_tokens > 0
+        self.attention_mode = attention_mode
         self.log_token_norm_stats = log_token_norm_stats
         if self.has_register_tokens:
             self.register_tokens = nn.Parameter(
@@ -2297,6 +2305,99 @@ class Encoder(FlexiVitBase):
         token_norm_stats = {**reg_stats, **nonreg_stats}
         return token_norm_stats
 
+    def _factorized_token_ids(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Per-token ``(location, slot)`` ids ``(B, N, 2)`` in collapsed token order.
+
+        location = patch row * grid width + patch col (shared by all spatial
+        modalities, which tokenize onto one patch grid); slot = a unique id per
+        (modality, [timestep,] bandset).
+        """
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        ids_dict: dict[str, Tensor] = {}
+        grid: tuple[int, int] | None = None
+        slot_offset = 0
+        for modality in modalities_to_process:
+            tokens = tokens_only_dict[modality]
+            if tokens.ndim not in (5, 6):
+                raise NotImplementedError(
+                    f"factorized attention needs spatial tokens, got {modality} "
+                    f"with shape {tuple(tokens.shape)}"
+                )
+            batch_size, height, width = tokens.shape[:3]
+            if grid is None:
+                grid = (height, width)
+            elif grid != (height, width):
+                raise ValueError(
+                    f"factorized attention needs one patch grid, got {grid} and "
+                    f"{(height, width)} ({modality})"
+                )
+            slot_shape = tuple(tokens.shape[3:-1])  # (t, b_s) or (b_s,)
+            num_slots = math.prod(slot_shape)
+            ones = (1,) * len(slot_shape)
+            location = torch.arange(height * width, device=tokens.device).view(
+                1, height, width, *ones
+            )
+            slot = (torch.arange(num_slots, device=tokens.device) + slot_offset).view(
+                1, 1, 1, *slot_shape
+            )
+            full_shape = (batch_size, height, width, *slot_shape)
+            ids_dict[modality] = torch.stack(
+                [location.expand(full_shape), slot.expand(full_shape)], dim=-1
+            )
+            slot_offset += num_slots
+        ids_dict.update(original_masks_dict)
+        ids, _ = self.collapse_and_combine_hwtc(ids_dict)
+        return ids
+
+    def _apply_factorized_blocks(
+        self,
+        tokens: Tensor,
+        new_mask: Tensor,
+        positions: Tensor | None,
+        token_ids: Tensor,
+    ) -> Tensor:
+        """Run the blocks with factorized self-attention over the kept tokens.
+
+        Even blocks attend within each location (across its modality, bandset and
+        timestep tokens), odd blocks within each (modality, bandset, timestep) slot
+        (across locations). Tokens are packed (no per-sample padding); each block
+        attends over padded groups. tokens (B, N, D), new_mask (B, N) True = kept.
+        """
+        batch_size, num_tokens, _ = tokens.shape
+        keep = new_mask.bool()
+        x = tokens[keep]
+        packed_positions = positions[keep] if positions is not None else None
+        ids = token_ids[keep]
+        sample = (
+            torch.arange(batch_size, device=tokens.device)
+            .unsqueeze(1)
+            .expand(batch_size, num_tokens)[keep]
+        )
+        num_locations = int(ids[:, 0].max()) + 1
+        num_slots = int(ids[:, 1].max()) + 1
+        local_groups = build_token_groups(
+            sample * num_locations + ids[:, 0], sample, batch_size
+        )
+        spatial_groups = build_token_groups(
+            sample * num_slots + ids[:, 1], sample, batch_size
+        )
+        for i_blk, blk in enumerate(self.blocks):
+            x = blk(
+                x=x,
+                rope_positions=packed_positions,
+                token_groups=local_groups if i_blk % 2 == 0 else spatial_groups,
+            )
+        out = x.new_zeros(batch_size, num_tokens, x.shape[-1])
+        out[keep] = x
+        return out
+
     def _maybe_remove_masked_tokens(
         self,
         tokens: Tensor,
@@ -2381,11 +2482,25 @@ class Encoder(FlexiVitBase):
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
+        # Factorized attention always works on the kept (ONLINE) tokens, so it
+        # never takes the no-removal inference fast pass.
+        factorized = self.attention_mode == "factorized"
+        remove_fast_pass = fast_pass and not factorized
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
-            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+            self._maybe_remove_masked_tokens(tokens, mask, remove_fast_pass)
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
+        token_ids = None
+        if factorized:
+            if exit_ids_seq is not None:
+                raise NotImplementedError(
+                    "factorized attention does not support token exits"
+                )
+            token_ids, _, _, _, _ = self.remove_masked_tokens(
+                self._factorized_token_ids(tokens_only_dict, original_masks_dict),
+                bool_mask,
+            )
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -2416,32 +2531,38 @@ class Encoder(FlexiVitBase):
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
-        # Apply attn with varying encoder depths
-        for i_blk, blk in enumerate(self.blocks):
-            # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
-            if (exit_ids_seq is not None) and (i_blk > 0):
-                # this should only ever be called by the target encoder,
-                # in a torch.no_grad context
-                assert exited_tokens is not None
-                # If a token should exit, then we update the exit token with the current token at the same position
-                exited_tokens = torch.where(
-                    condition=(exit_ids_seq == i_blk),
-                    input=tokens,
-                    other=exited_tokens,
-                )
-            # we take the inverse of the mask because a value
-            # of True indicates the value *should* take part in
-            # attention
-            # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
-
-            tokens = blk(
-                x=tokens,
-                cu_seqlens=cu_seqlens,
-                max_seqlen=max_seqlen,
-                # we will have to specify k and q lens for cross attention
-                attn_mask=attn_mask,
-                rope_positions=positions,
+        if factorized:
+            assert token_ids is not None
+            tokens = self._apply_factorized_blocks(
+                tokens, new_mask, positions, token_ids
             )
+        else:
+            # Apply attn with varying encoder depths
+            for i_blk, blk in enumerate(self.blocks):
+                # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
+                if (exit_ids_seq is not None) and (i_blk > 0):
+                    # this should only ever be called by the target encoder,
+                    # in a torch.no_grad context
+                    assert exited_tokens is not None
+                    # If a token should exit, then we update the exit token with the current token at the same position
+                    exited_tokens = torch.where(
+                        condition=(exit_ids_seq == i_blk),
+                        input=tokens,
+                        other=exited_tokens,
+                    )
+                # we take the inverse of the mask because a value
+                # of True indicates the value *should* take part in
+                # attention
+                # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
+
+                tokens = blk(
+                    x=tokens,
+                    cu_seqlens=cu_seqlens,
+                    max_seqlen=max_seqlen,
+                    # we will have to specify k and q lens for cross attention
+                    attn_mask=attn_mask,
+                    rope_positions=positions,
+                )
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -2472,7 +2593,9 @@ class Encoder(FlexiVitBase):
         tokens = self.norm(tokens)
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
-        tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
+        tokens = self._maybe_add_removed_tokens(
+            tokens, indices, new_mask, remove_fast_pass
+        )
 
         register_output = None
         if self.perceiver is not None:
@@ -3159,6 +3282,10 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str | None = None
     # Perceiver-style spatial Perceiver; None -> plain encoder.
     perceiver_config: PerceiverConfig | None = None
+    # Encoder self-attention pattern: "full" (joint attention over all visible
+    # tokens) or "factorized" (blocks alternate within-location / within-slot
+    # attention; see Encoder._apply_factorized_blocks).
+    attention_mode: str = "full"
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
@@ -3235,6 +3362,19 @@ class EncoderConfig(Config):
             head_dim=self.embedding_size // self.num_heads,
             temporal_rope_dim_frac=self.temporal_rope_dim_frac,
         )
+        if self.attention_mode not in ("full", "factorized"):
+            raise ValueError(
+                f"attention_mode must be 'full' or 'factorized', got {self.attention_mode}"
+            )
+        if self.attention_mode == "factorized" and (
+            self.use_flash_attn
+            or self.num_register_tokens > 0
+            or self.perceiver_config is not None
+        ):
+            raise ValueError(
+                "attention_mode='factorized' does not support use_flash_attn, "
+                "register tokens or a perceiver"
+            )
 
     @property
     def supported_modalities(self) -> list[ModalitySpec]:

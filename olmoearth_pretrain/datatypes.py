@@ -92,6 +92,7 @@ class OlmoEarthSample(NamedTuple):
     openstreetmap_raster: ArrayTensor | None = None  # [B, H, W, 1, len(OSM_bands)]
     srtm: ArrayTensor | None = None  # [B, H, W, 1, len(SRTM_bands)]
     landsat: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_bands)]
+    landsat_l2: ArrayTensor | None = None  # [B, H, W, T, len(LANDSAT_L2_bands)]
     # naip with different tile resolution is currently not used in favor of naip_10.
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
@@ -371,6 +372,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     srtm_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
+    landsat_l2: Tensor | None = None
+    landsat_l2_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None
@@ -511,6 +514,8 @@ class TokensAndMasks(NamedTuple):
     srtm_mask: Tensor | None = None
     landsat: Tensor | None = None
     landsat_mask: Tensor | None = None
+    landsat_l2: Tensor | None = None
+    landsat_l2_mask: Tensor | None = None
     naip: Tensor | None = None
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None

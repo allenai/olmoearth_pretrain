@@ -80,6 +80,7 @@
     "encoder_config": {
       "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.EncoderConfig",
       "aggregate_then_project": true,
+      "attention_mode": "full",
       "band_dropout_modalities": [
         "sentinel2_l2a",
         "landsat"

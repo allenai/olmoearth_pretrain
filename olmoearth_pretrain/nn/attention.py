@@ -1,7 +1,7 @@
 """Attention Components for OlmoEarth Pretrain."""
 
 from logging import getLogger
-from typing import Any
+from typing import Any, NamedTuple
 
 import torch
 import torch.nn as nn
@@ -28,6 +28,48 @@ except ImportError:
     flash_attn = None
 
 logger = getLogger(__name__)
+
+
+class TokenGroups(NamedTuple):
+    """A grouping of packed tokens ``(P, D)`` into padded attention groups.
+
+    Built by :func:`build_token_groups`. ``index[g, j]`` is the packed position of
+    the j-th token of group g (``P`` = padding); ``valid`` marks real entries;
+    ``inverse`` maps each packed token to its position in ``valid``-order;
+    ``sample`` is each packed token's batch index (for per-sample drop path).
+    """
+
+    index: torch.Tensor  # (G, S) long
+    valid: torch.Tensor  # (G, S) bool
+    inverse: torch.Tensor  # (P,) long
+    sample: torch.Tensor  # (P,) long
+    batch_size: int
+
+
+def build_token_groups(
+    group_key: torch.Tensor, sample: torch.Tensor, batch_size: int
+) -> TokenGroups:
+    """Group packed tokens by ``group_key`` (P,) for grouped self-attention."""
+    num_tokens = group_key.shape[0]
+    device = group_key.device
+    order = torch.argsort(group_key, stable=True)
+    _, counts = torch.unique_consecutive(group_key[order], return_counts=True)
+    num_groups = counts.shape[0]
+    group_size = int(counts.max())
+    starts = torch.cumsum(counts, dim=0) - counts
+    group = torch.repeat_interleave(torch.arange(num_groups, device=device), counts)
+    position = torch.arange(num_tokens, device=device) - starts[group]
+    index = torch.full(
+        (num_groups, group_size), num_tokens, dtype=torch.long, device=device
+    )
+    index[group, position] = order
+    return TokenGroups(
+        index=index,
+        valid=index < num_tokens,
+        inverse=torch.argsort(order),
+        sample=sample,
+        batch_size=batch_size,
+    )
 
 
 @torch._dynamo.disable()
@@ -534,11 +576,16 @@ class DropPath(nn.Module):
         super().__init__()
         self.drop_prob = drop_prob
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, x: torch.Tensor, token_groups: TokenGroups | None = None
+    ) -> torch.Tensor:
         """Forward pass applying stochastic depth to input tensor.
 
         Args:
-            x: Input tensor of any shape (B, ...)
+            x: Input tensor of any shape (B, ...), or packed tokens (P, D) when
+                ``token_groups`` is given (one draw per sample, broadcast to that
+                sample's tokens via ``token_groups.sample``).
+            token_groups: Optional grouping of packed tokens.
 
         Returns:
             Tensor with same shape as input, with paths randomly dropped during training
@@ -547,6 +594,12 @@ class DropPath(nn.Module):
             return x
 
         keep_prob = 1 - self.drop_prob
+        if token_groups is not None:
+            random_tensor = keep_prob + torch.rand(
+                (token_groups.batch_size,), dtype=x.dtype, device=x.device
+            )
+            random_tensor.floor_()  # binarize
+            return x.div(keep_prob) * random_tensor[token_groups.sample][:, None]
         shape = (x.shape[0],) + (1,) * (x.ndim - 1)  # (B, 1, 1, ...)
         random_tensor = keep_prob + torch.rand(shape, dtype=x.dtype, device=x.device)
         random_tensor.floor_()  # binarize
@@ -680,11 +733,13 @@ class Block(nn.Module):
         attn_mask: torch.Tensor | None = None,
         rope_positions: torch.Tensor | None = None,
         rope_positions_y: torch.Tensor | None = None,
+        token_groups: TokenGroups | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
-            x: Input tensor of shape (B, N, C)
+            x: Input tensor of shape (B, N, C), or packed tokens (P, C) when
+                ``token_groups`` is given
             y: Optional context tensor for cross attention of shape (B, M, C)
             attn_mask: Optional attention mask tensor
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
@@ -697,10 +752,15 @@ class Block(nn.Module):
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
             rope_positions_y: Optional RoPE coordinates for y/key tokens:
                 ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            token_groups: Grouped self-attention over packed tokens: each token
+                attends only within its group (``rope_positions`` is then (P, 3)).
+                Norms, MLP and drop path (per sample) act per token as usual.
 
         Returns:
             Output tensor of shape (B, N, C)
         """
+        if token_groups is not None:
+            return self._forward_grouped(x, rope_positions, token_groups)
         x = x + self.drop_path(
             self.ls1(
                 self.attn(
@@ -720,6 +780,43 @@ class Block(nn.Module):
         )
 
         x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        return x
+
+    def _forward_grouped(
+        self,
+        x: torch.Tensor,
+        rope_positions: torch.Tensor | None,
+        token_groups: TokenGroups,
+    ) -> torch.Tensor:
+        """Self-attention within each group of packed tokens ``x`` (P, C)."""
+        assert not self.attn.cross_attn, "grouped attention is self-attention only"
+        index, valid, inverse = (
+            token_groups.index,
+            token_groups.valid,
+            token_groups.inverse,
+        )
+        h = self.norm1(x)
+        # Row P of the padded copy is the (zero) padding token.
+        grouped = torch.cat([h, h.new_zeros(1, h.shape[-1])])[index]
+        grouped_positions = None
+        if rope_positions is not None:
+            grouped_positions = torch.cat(
+                [rope_positions, rope_positions.new_zeros(1, rope_positions.shape[-1])]
+            )[index]
+        attended = self.attn(
+            x=grouped, attn_mask=valid, rope_positions=grouped_positions
+        )
+        attended = attended[valid][inverse]
+        x = x + self._drop_path_grouped(self.ls1(attended), token_groups)
+        x = x + self._drop_path_grouped(self.ls2(self.mlp(self.norm2(x))), token_groups)
+        return x
+
+    def _drop_path_grouped(
+        self, x: torch.Tensor, token_groups: TokenGroups
+    ) -> torch.Tensor:
+        """Per-sample drop path on packed tokens (no-op when drop_path is 0)."""
+        if isinstance(self.drop_path, DropPath):
+            return self.drop_path(x, token_groups)
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

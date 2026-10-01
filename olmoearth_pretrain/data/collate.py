@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import torch
 
+from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.data.transform import Transform
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
@@ -23,10 +24,22 @@ def collate_olmoearth_pretrain(
         # For partially missing samples we use MISSING_VALUE so we only check the first sample
         if getattr(batch[0][1], attr) is None:
             return None
-        stacked_tensor = torch.stack(
-            [torch.from_numpy(getattr(sample, attr)) for _, sample in batch], dim=0
+        arrays = [torch.from_numpy(getattr(sample, attr)) for _, sample in batch]
+        shape = tuple(max(sizes) for sizes in zip(*(a.shape for a in arrays)))
+        if all(tuple(a.shape) == shape for a in arrays):
+            return torch.stack(arrays, dim=0)
+        # Samples assembled on per-sample timelines (per_modality_timestamps
+        # datasets) differ in length: pad modalities with MISSING_VALUE (so the
+        # padded steps become MISSING tokens) and timestamps with copies of the
+        # last timestamp, as the dataset does when padding to max_sequence_length.
+        stacked = torch.full(
+            (len(arrays), *shape), MISSING_VALUE, dtype=arrays[0].dtype
         )
-        return stacked_tensor
+        for i, array in enumerate(arrays):
+            stacked[i][tuple(slice(0, n) for n in array.shape)] = array
+            if attr == "timestamps":
+                stacked[i, array.shape[0] :] = array[-1]
+        return stacked
 
     patch_size, batch_zero = batch[0]
     # Get all fields including timestamps

@@ -7,6 +7,7 @@ import logging
 import shutil
 import time
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, NamedTuple
 
 import h5py
@@ -375,6 +376,59 @@ def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     return onehot
 
 
+# Union-timeline key = ordinal day * this + same-day occurrence rank.
+_MAX_CAPTURES_PER_DAY = 64
+
+
+def timestamps_to_ordinals(timestamps: np.ndarray) -> np.ndarray:
+    """``(T, 3)`` ``[day, month-1, year]`` timestamps -> ``(T,)`` proleptic ordinal days."""
+    return np.array(
+        [date(int(y), int(m) + 1, int(d)).toordinal() for d, m, y in timestamps],
+        dtype=np.int64,
+    )
+
+
+def build_union_timeline(
+    timestamps_per_modality: dict[str, np.ndarray],
+) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Merge per-modality capture dates into one shared, chronological timeline.
+
+    Captures of different modalities on the same calendar day share a step. A
+    modality with k captures on one day occupies k consecutive steps of that day
+    (its j-th same-day capture shares a step with the other modalities' j-th
+    same-day captures), so every capture keeps its own step.
+
+    Args:
+        timestamps_per_modality: modality -> (T_m, 3) ``[day, month-1, year]``,
+            chronological.
+
+    Returns:
+        ``(timestamps, step_index)``: the union timeline ``(T_u, 3)`` in the same
+        format, and modality -> ``(T_m,)`` union step of each of its captures.
+    """
+    keys_per_modality: dict[str, np.ndarray] = {}
+    triples: list[np.ndarray] = []
+    for modality, ts in timestamps_per_modality.items():
+        ordinals = timestamps_to_ordinals(ts)
+        # Occurrence rank of each capture within its day (0 for the first).
+        rank = np.zeros(len(ordinals), dtype=np.int64)
+        for i in range(1, len(ordinals)):
+            if ordinals[i] == ordinals[i - 1]:
+                rank[i] = rank[i - 1] + 1
+        keys_per_modality[modality] = ordinals * _MAX_CAPTURES_PER_DAY + rank
+        triples.append(np.asarray(ts))
+    if not keys_per_modality:
+        return np.zeros((0, 3), dtype=np.int64), {}
+    all_keys = np.concatenate(list(keys_per_modality.values()))
+    union_keys, first = np.unique(all_keys, return_index=True)
+    timestamps = np.concatenate(triples)[first]
+    step_index = {
+        modality: np.searchsorted(union_keys, keys)
+        for modality, keys in keys_per_modality.items()
+    }
+    return timestamps, step_index
+
+
 class GetItemArgs(NamedTuple):
     """Arguments for the __getitem__ method of the OlmoEarthDataset."""
 
@@ -385,6 +439,9 @@ class GetItemArgs(NamedTuple):
     tokenization_config: TokenizationConfig | None = None
     target_t: int | None = None
     budget_exclude_modalities: frozenset[str] = frozenset()
+    # Per-modality-timestamps datasets only: length of the random time range
+    # (days) to take every capture from. None = the sample's whole span.
+    time_range_days: float | None = None
 
 
 # TODO should training modalities be str or modality_spec
@@ -404,6 +461,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        per_modality_timestamps: bool = False,
     ):
         """Initialize the dataset.
 
@@ -429,6 +487,11 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            per_modality_timestamps: The h5 files store every capture of each
+                multitemporal modality with its own ``timestamps_<modality>`` (the
+                every-capture corpus) instead of one shared ``timestamps`` grid with
+                missing-timestep masks. Samples are assembled on a per-sample union
+                timeline; see ``_getitem_per_modality_timestamps``.
 
         Returns:
             None
@@ -468,6 +531,7 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+        self.per_modality_timestamps = per_modality_timestamps
 
     @property
     def fingerprint_version(self) -> str:
@@ -810,10 +874,8 @@ class OlmoEarthDataset(Dataset):
             return
         time.sleep(time_to_sleep)
 
-    def read_h5_file(
-        self, h5_file_path: UPath
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Read the h5 file."""
+    def _local_h5_path(self, h5_file_path: UPath) -> UPath:
+        """Apply read throttling and, if a cache dir is set, return the cached copy."""
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
             logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
@@ -829,7 +891,13 @@ class OlmoEarthDataset(Dataset):
 
         else:
             self._apply_throttling()
+        return h5_file_path
 
+    def read_h5_file(
+        self, h5_file_path: UPath
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read the h5 file."""
+        h5_file_path = self._local_h5_path(h5_file_path)
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
@@ -900,12 +968,178 @@ class OlmoEarthDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
+    def read_h5_file_per_modality_timestamps(
+        self, h5_file_path: UPath
+    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+        """Read the training modalities and each multitemporal one's own timestamps.
+
+        Returns ``(data, timestamps)``: modality -> raw array as stored, and
+        multitemporal modality -> ``(T_m, 3)`` timestamps. Modalities absent from
+        the file are absent from both dicts.
+        """
+        h5_file_path = self._local_h5_path(h5_file_path)
+        data: dict[str, np.ndarray] = {}
+        timestamps: dict[str, np.ndarray] = {}
+        with h5_file_path.open("rb") as f:
+            with h5py.File(f, "r") as h5file:
+                for modality in self.training_modalities:
+                    if modality not in h5file:
+                        continue
+                    data[modality] = h5file[modality][()]
+                    if Modality.get(modality).is_multitemporal:
+                        timestamps[modality] = h5file[f"timestamps_{modality}"][()]
+        return data, timestamps
+
+    @staticmethod
+    def _select_time_range(
+        ordinals: dict[str, np.ndarray], time_range_days: float | None
+    ) -> dict[str, np.ndarray]:
+        """Pick a random range of ``time_range_days`` and keep every capture in it.
+
+        The range length is capped at the sample's span (first to last capture
+        over all modalities) and its position is uniform within the span. A
+        position whose range holds no capture is redrawn (up to 8 times, then the
+        whole span is used). Returns modality -> indices of the kept captures.
+        """
+        everything = {m: np.arange(len(o)) for m, o in ordinals.items()}
+        non_empty = [o for o in ordinals.values() if len(o) > 0]
+        if time_range_days is None or not non_empty:
+            return everything
+        first = min(int(o[0]) for o in non_empty)
+        last = max(int(o[-1]) for o in non_empty)
+        length = min(float(time_range_days), float(last - first))
+        for _ in range(8):
+            start = first + np.random.random() * (last - first - length)
+            kept = {
+                m: np.flatnonzero((o >= start) & (o <= start + length))
+                for m, o in ordinals.items()
+            }
+            if any(len(k) > 0 for k in kept.values()):
+                return kept
+        return everything
+
+    def _getitem_per_modality_timestamps(
+        self, index: int, args: GetItemArgs
+    ) -> dict[str, Any]:
+        """Assemble a sample from per-modality capture timelines.
+
+        1. Random spatial crop of ``sampled_hw_p * patch_size`` pixels.
+        2. Random time range of ``args.time_range_days``; every capture in it.
+        3. The kept captures are merged into a shared union timeline (see
+           ``build_union_timeline``); each modality is MISSING at the steps where
+           it has no capture, so the downstream shared-timestamps code (masking,
+           month encodings, 3D RoPE) applies unchanged.
+        4. Token budget on REAL tokens: a step costs ``hw_p**2 * bandsets`` for
+           each encoded modality captured at it. The kept steps are the run that
+           starts at a uniformly random step and extends forward while the running
+           total fits ``args.token_budget`` (always at least one step).
+
+        Only real captures are normalized (before they are placed on the
+        timeline), so the MISSING padding costs no normalization work.
+        """
+
+        def prepare(modality: str, values: np.ndarray) -> np.ndarray:
+            values = values.astype(self.dtype)
+            if not self.normalize:
+                return values
+            return self.normalize_image(Modality.get(modality), values).astype(
+                self.dtype
+            )
+
+        data, timestamps = self.read_h5_file_per_modality_timestamps(
+            self._get_h5_file_path(index)
+        )
+        sampled_hw = args.sampled_hw_p * args.patch_size
+        tile_h, tile_w = next(
+            v.shape[:2] for m, v in data.items() if Modality.get(m).is_spatial
+        )
+        start_h = np.random.choice(tile_h - sampled_hw + 1)
+        start_w = np.random.choice(tile_w - sampled_hw + 1)
+
+        ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
+        kept = self._select_time_range(ordinals, args.time_range_days)
+        union_ts, step_index = build_union_timeline(
+            {m: timestamps[m][kept[m]] for m in timestamps}
+        )
+
+        def num_bandsets(modality: str) -> int:
+            if args.tokenization_config is not None:
+                return args.tokenization_config.get_num_bandsets(modality)
+            return Modality.get(modality).num_band_sets
+
+        hw_p_sq = args.sampled_hw_p**2
+        step_tokens = np.zeros(len(union_ts), dtype=np.int64)
+        fixed_tokens = 0
+        for modality in data:
+            if modality in args.budget_exclude_modalities:
+                continue
+            if modality in step_index:
+                step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(modality)
+            else:
+                fixed_tokens += hw_p_sq * num_bandsets(modality)
+        first_step, last_step = 0, len(union_ts) - 1
+        if args.token_budget is not None and len(union_ts) > 0:
+            first_step = last_step = int(np.random.randint(len(union_ts)))
+            total = fixed_tokens + step_tokens[first_step]
+            while (
+                last_step + 1 < len(union_ts)
+                and total + step_tokens[last_step + 1] <= args.token_budget
+            ):
+                last_step += 1
+                total += step_tokens[last_step]
+        num_steps = last_step - first_step + 1
+
+        sample_dict: dict[str, Any] = {
+            "timestamps": union_ts[first_step : last_step + 1]
+        }
+        crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
+        for modality in self.training_modalities:
+            spec = Modality.get(modality)
+            if spec.image_tile_size_factor != 1:
+                raise NotImplementedError(
+                    f"per_modality_timestamps does not support {modality} "
+                    f"(image_tile_size_factor={spec.image_tile_size_factor})"
+                )
+            if spec.is_spacetime_varying:
+                out = np.full(
+                    (sampled_hw, sampled_hw, num_steps, spec.num_bands),
+                    MISSING_VALUE,
+                    dtype=self.dtype,
+                )
+                steps = step_index.get(modality, np.zeros(0, dtype=np.int64))
+                in_run = (steps >= first_step) & (steps <= last_step)
+                if in_run.any():
+                    captures = kept[modality][in_run]
+                    out[:, :, steps[in_run] - first_step] = prepare(
+                        modality, data[modality][crop][:, :, captures]
+                    )
+                sample_dict[modality] = out
+            elif spec.is_space_only_varying:
+                if modality in data:
+                    sample_dict[modality] = prepare(modality, data[modality][crop])
+                else:
+                    sample_dict[modality] = np.full(
+                        (sampled_hw, sampled_hw, 1, spec.num_bands),
+                        MISSING_VALUE,
+                        dtype=self.dtype,
+                    )
+            else:
+                raise NotImplementedError(
+                    f"per_modality_timestamps only supports spatial modalities, got {modality}"
+                )
+        return sample_dict
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
             index = self.sample_indices[args.idx]
         else:
             index = args.idx
+
+        if self.per_modality_timestamps:
+            sample_dict = self._getitem_per_modality_timestamps(index, args)
+            return args.patch_size, OlmoEarthSample(**sample_dict)
+
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
@@ -994,6 +1228,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    per_modality_timestamps: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

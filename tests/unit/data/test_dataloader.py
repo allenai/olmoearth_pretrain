@@ -217,10 +217,10 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         )
     )
 
-    assert all(len(it) == 4 for it in items)
+    assert all(len(it) == 5 for it in items)
     hw_seen: set[int] = set()
     t_by_hw: dict[int, set[int]] = {}
-    for _idx, ps, hw, t in items:
+    for _idx, ps, hw, t, _range in items:
         assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
         assert hw * ps <= dl.tile_size
         hw_seen.add(hw)
@@ -256,7 +256,7 @@ def test_min_tokens_floor_and_temporal_bias(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
         )
     )
-    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t in items]
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _range in items]
     # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
     assert all(tok >= 36 for _hw, _t, tok in tokens)
     assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)
