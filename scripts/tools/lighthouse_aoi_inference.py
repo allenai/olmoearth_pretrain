@@ -388,7 +388,13 @@ def main() -> None:
     p.add_argument("--overlap_px", type=int, default=4)
     p.add_argument("--tiled_batch", type=int, default=64)
     p.add_argument("--core_px_ps1", type=int, default=96)
+    p.add_argument("--core_px_ps2", type=int, default=256)
     p.add_argument("--core_px_ps4", type=int, default=512)
+    p.add_argument(
+        "--timings_name",
+        default="timings.json",
+        help="so jobs sharing an out_dir do not overwrite each other's timings",
+    )
     p.add_argument("--seq_chunk", type=int, default=1 << 18)
     p.add_argument("--dim", type=int, default=128)
     p.add_argument(
@@ -403,7 +409,7 @@ def main() -> None:
         "mask-free dense inference attention (nn/dense_joint_attention.py)",
     )
     args = p.parse_args()
-    args.core_px = {1: args.core_px_ps1, 4: args.core_px_ps4}
+    args.core_px = {1: args.core_px_ps1, 2: args.core_px_ps2, 4: args.core_px_ps4}
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     device = torch.device("cuda")
@@ -477,7 +483,7 @@ def main() -> None:
                 write_tif(out_dir / cfg / f"{name}.tif", quantize(emb), geo)
             del emb
         record["windows"][name] = rec
-        (out_dir / "timings.json").write_text(json.dumps(record, indent=1))
+        (out_dir / args.timings_name).write_text(json.dumps(record, indent=1))
     logger.info("done: %s", out_dir)
 
 
