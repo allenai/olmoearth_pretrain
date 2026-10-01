@@ -4,12 +4,13 @@ Seam metrics are computed on the dequantized embeddings, so they do not depend o
 any rendering basis. For each window and configuration, with
 ``d(x) = mean_{band,row} |E[:, :, x+1] - E[:, :, x]|`` (and the same down rows):
 
-* ``tile12``: the phase profile of ``d`` modulo the tiled crop stride (12 px for
-  window 16 / overlap 4): ``max_phase / median_phase``. Tiled crops are cut at
-  ``12k`` and the merger trims 2 px, so tiled seams sit at one fixed phase; a
-  seamless map gives ~1.
-* ``lattice4``: the same modulo 4, the ps4 patch grid (latents are per pixel but
-  tokens are 4x4 patches, so a patch lattice is the other artifact to look for).
+* ``tile12``: mean ``d`` across the merge seams of the tiled crop grid (rslearn's
+  crop starts + the merger's overlap // 2 trim) over mean ``d`` at non-seam positions
+  with the same phase mod 4; a seamless map gives ~1. Comparing within the phase
+  mod 4 keeps a 4 px patch lattice from posing as a tile seam.
+* ``lattice4``: max over median of the per-phase means of ``d`` modulo 4, with seam
+  positions excluded: the ps4 patch grid (latents are per pixel but tokens are 4x4
+  patches, so a patch lattice is the other artifact to look for).
 * ``detected``: the period-free statistic of the AOI seam_metric.py (autocorrelation
   peak in lags 4..64, then peak-phase mean over off-phase median), for anything
   periodic the fixed periods miss -- e.g. Lighthouse chunk edges, which should not
@@ -49,11 +50,34 @@ def diff_profile(e: np.ndarray, axis: int) -> np.ndarray:
     return d.mean(axis=(1 - axis, 2))
 
 
-def phase_ratio(prof: np.ndarray, period: int) -> tuple[float, int]:
-    """Max over median of the per-phase means, and the max phase."""
-    n = (prof.size // period) * period
-    phases = prof[:n].reshape(-1, period).mean(0)
+def phase_ratio(
+    prof: np.ndarray, period: int, exclude: np.ndarray | None = None
+) -> tuple[float, int]:
+    """Max over median of the per-phase means, and the max phase.
+
+    ``exclude`` masks positions out of the phase means (e.g. tile-seam differences,
+    which would otherwise leak into a shorter period that divides the tile stride).
+    """
+    idx = np.arange(prof.size)
+    keep = np.ones(prof.size, bool) if exclude is None else ~exclude
+    phases = np.array([prof[(idx % period == k) & keep].mean() for k in range(period)])
     return float(phases.max() / np.median(phases)), int(phases.argmax())
+
+
+def tile_seam_positions(n: int, crop: int = 16, overlap: int = 4) -> np.ndarray:
+    """Bool mask over the n-1 adjacent differences that straddle a tiled-merge seam.
+
+    rslearn crops start at 0, crop - overlap, ... and a last crop at n - crop; each
+    non-first crop is kept from start + overlap // 2, so the seam is the difference
+    between columns start + overlap // 2 - 1 and start + overlap // 2.
+    """
+    starts = [0, *range(crop - overlap, n - crop, crop - overlap)]
+    if n - crop > 0:
+        starts.append(n - crop)
+    mask = np.zeros(n - 1, bool)
+    for st in starts[1:]:
+        mask[st + overlap // 2 - 1] = True
+    return mask
 
 
 def detected_seam(
@@ -78,8 +102,18 @@ def seam_stats(e: np.ndarray) -> dict[str, float]:
     out: dict[str, float] = {}
     for axis, tag in ((1, "x"), (0, "y")):
         prof = diff_profile(e, axis)
-        out[f"tile12_{tag}"], out[f"tile12_phase_{tag}"] = phase_ratio(prof, 12)
-        out[f"lattice4_{tag}"], out[f"lattice4_phase_{tag}"] = phase_ratio(prof, 4)
+        # Tile seams vs. non-seam differences at the SAME phase mod 4, so a 4 px
+        # patch lattice (4 divides the 12 px stride) cannot pose as a tile seam.
+        seams = tile_seam_positions(prof.size + 1)
+        idx = np.arange(prof.size)
+        same4 = (idx % 4 == (np.nonzero(seams)[0][0] % 4)) & ~seams
+        out[f"tile12_{tag}"] = float(prof[seams].mean() / prof[same4].mean())
+        out[f"tile12_phase_{tag}"] = int(np.nonzero(seams)[0][0] % 12)
+        # Tile seams share a phase mod 4 (12 is a multiple of 4), so they are
+        # excluded before looking for the 4 px patch lattice.
+        out[f"lattice4_{tag}"], out[f"lattice4_phase_{tag}"] = phase_ratio(
+            prof, 4, exclude=seams
+        )
         out[f"detected_{tag}"], out[f"detected_period_{tag}"] = detected_seam(prof)
         out[f"mean_adjdiff_{tag}"] = float(prof.mean())
     return out
