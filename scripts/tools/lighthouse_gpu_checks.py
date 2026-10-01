@@ -67,9 +67,17 @@ def main() -> None:
     full = _batched(sample, dev)
     ok = True
 
-    # 1. One-window parity.
+    # 0. Stock forward: dense inference attention vs the masked FlexAttention path.
+    win = _crop(full, slice(500, 516), slice(500, 516))
     for ps in (1, 4):
-        win = _crop(full, slice(500, 516), slice(500, 516))
+        masked = student(encoder, win, ps)
+        encoder.perceiver.dense_inference_attention = True
+        dense = student(encoder, win, ps)
+        encoder.perceiver.dense_inference_attention = False
+        ok &= compare(f"stock dense vs masked ps{ps}", dense, masked, 5e-2, 0.999)
+
+    # 1. One-window parity (Lighthouse vs the stock masked forward).
+    for ps in (1, 4):
         ref = student(encoder, win, ps)
         lh = student(encoder, win, ps, LighthouseSettings(fov_px=16))
         # bf16 autocast: the two paths group work differently.

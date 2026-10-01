@@ -388,6 +388,12 @@ def main() -> None:
     )
     p.add_argument("--no_write", action="store_true")
     p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument(
+        "--masked_attention",
+        action="store_true",
+        help="tiled configs: keep the masked FlexAttention path instead of the "
+        "mask-free dense inference attention (nn/dense_joint_attention.py)",
+    )
     args = p.parse_args()
     args.core_px = {1: args.core_px_ps1, 4: args.core_px_ps4}
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -397,6 +403,14 @@ def main() -> None:
     encoder = model.encoder
     assert isinstance(encoder.perceiver, JointLatentTransformer)
     assert encoder.perceiver.eval_latent_stride == 1
+    if not args.masked_attention:
+        # Not in this checkpoint's config.json (the flag postdates it); inference
+        # only, exact up to reassociation. Lighthouse forwards dispatch before it.
+        from olmoearth_pretrain.nn.dense_joint_attention import flash_attn
+
+        if flash_attn is None:
+            raise RuntimeError("dense inference attention needs flash-attn installed")
+        encoder.perceiver.dense_inference_attention = True
     logger.info("loaded %s on %s", args.checkpoint, torch.cuda.get_device_name(device))
 
     windows = WindowSamples(build_window_dataset(args.dataset, args.group, args.names))
@@ -414,6 +428,7 @@ def main() -> None:
         "checkpoint": args.checkpoint,
         "gpu": torch.cuda.get_device_name(device),
         "torch": torch.__version__,
+        "tiled_attention": "masked_flex" if args.masked_attention else "dense_flash",
         "args": {k: v for k, v in vars(args).items() if k != "core_px"},
         "windows": {},
     }
