@@ -40,6 +40,12 @@ PROFILE_TARGETS = {
     # Latent budget memory check for the random-stride point arm: 512 (as trained) vs 1024.
     "prof_rstride512": "pure_perceiver_joint_latentread_rstride",
     "prof_rstride1024": "pure_perceiver_joint_latentread_rstride",
+    # Local-radius mask cost (2026-10-01): the trained rad2lat3 arm ran 2.3x slower per
+    # step than its global control. Control vs local (precomputed cell coordinates) vs
+    # local + cell-major latents.
+    "prof_rsfast2global": "pure_perceiver_joint_latentread_rstride_fast",
+    "prof_rad2lat3plain": "pure_perceiver_joint_latentread_rstride_local",
+    "prof_rad2lat3cellsort": "pure_perceiver_joint_latentread_rstride_local",
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -49,6 +55,7 @@ PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
     "prof_mix6d128r2": {"token_mix_radius": 2},
     "prof_rstride512": {"max_latents": 512},
     "prof_rstride1024": {"max_latents": 1024},
+    "prof_rad2lat3cellsort": {"sort_latents_by_cell": True},
 }
 # Longer runs for memory checks: more batches drawn at the per-sample latent ceiling.
 PROFILE_MAX_STEPS: dict[str, int] = {"prof_rstride512": 1000, "prof_rstride1024": 1000}

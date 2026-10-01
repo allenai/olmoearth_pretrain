@@ -645,3 +645,31 @@ def test_local_radii_bound_the_receptive_field() -> None:
     # Cell (1, 1) is within radius 1 -> changed; so is everything in the global model.
     assert not torch.allclose(a[0, 2:4, 2:4], b[0, 2:4, 2:4])
     assert not torch.allclose(ga[0, 6:, 6:], gb[0, 6:, 6:])
+
+
+@pytest.mark.parametrize("radii", [(None, None), (1, 2)])
+def test_sort_latents_by_cell_is_numerically_a_no_op(
+    radii: tuple[int | None, int | None],
+) -> None:
+    """Cell-major latent layout changes no register (sub-patch latents, ps2 stride 1)."""
+    torch.manual_seed(0)
+    n_h = n_w = 3
+    tokens, positions, valid, cells = _encoder_order_inputs(
+        B=2, n_h=n_h, n_w=n_w, T=2, n_mod=1
+    )
+    local_radius, latent_radius = radii
+    kw: dict[str, Any] = dict(
+        latent_reads_all=True,
+        pixel_latents=True,
+        local_radius=local_radius,
+        latent_radius=latent_radius,
+    )
+    grid = _joint_module(sort_latents_by_cell=False, **kw)
+    cellmajor = _joint_module(sort_latents_by_cell=True, **kw)
+    cellmajor.load_state_dict(grid.state_dict())
+    fw = dict(patch_size=2, patch_spacing=1.0)
+    with torch.no_grad():
+        ref, ref_pos = grid(tokens, positions, valid, cells, (n_h, n_w), **fw)
+        out, out_pos = cellmajor(tokens, positions, valid, cells, (n_h, n_w), **fw)
+    torch.testing.assert_close(out, ref, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(out_pos, ref_pos)

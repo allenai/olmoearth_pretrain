@@ -149,13 +149,33 @@ def build_pixel_latent_positions(
     return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
 
+# Row/col of non-spatial tokens: far from every real cell, so they are never "near".
+_NON_SPATIAL_COORD = -(10**6)
+
+
+def cell_rows_cols(cell_id: Tensor, n_w: int) -> tuple[Tensor, Tensor]:
+    """Grid row / col of every element's cell (non-spatial cells far from all others).
+
+    Precomputed once per forward so the FlexAttention ``mask_mod`` only indexes and
+    compares, instead of dividing per score element.
+    """
+    spatial = cell_id >= 0
+    far = torch.full_like(cell_id, _NON_SPATIAL_COORD)
+    row = torch.where(spatial, cell_id // n_w, far)
+    col = torch.where(spatial, cell_id % n_w, far)
+    return row, col
+
+
 def _joint_rule(
     cell_q: Tensor,
     cell_kv: Tensor,
     latent_q: Tensor,
     latent_kv: Tensor,
+    row_q: Tensor,
+    col_q: Tensor,
+    row_kv: Tensor,
+    col_kv: Tensor,
     *,
-    n_w: int,
     latent_reads_all: bool,
     local_radius: int | None,
     latent_radius: int | None,
@@ -175,14 +195,8 @@ def _joint_rule(
     same_cell = cell_q == cell_kv
 
     def near(radius: int) -> Tensor:
-        spatial = (cell_q >= 0) & (cell_kv >= 0)
-        row_q, col_q = cell_q // n_w, cell_q % n_w
-        row_kv, col_kv = cell_kv // n_w, cell_kv % n_w
-        return (
-            spatial
-            & ((row_q - row_kv).abs() <= radius)
-            & ((col_q - col_kv).abs() <= radius)
-        )
+        # Rows/cols come from cell_rows_cols: non-spatial cells sit far away.
+        return ((row_q - row_kv).abs() <= radius) & ((col_q - col_kv).abs() <= radius)
 
     # Token query -> latent keys.
     token_to_latent = latent_kv
@@ -228,12 +242,16 @@ def joint_attention_allowed(
     ``local_radius`` / ``latent_radius`` (patch cells, ``n_w`` = grid width) make the
     spatial edges local; see :func:`_joint_rule`.
     """
+    row, col = cell_rows_cols(cell_id, n_w)
     allowed = _joint_rule(
         cell_id[:, :, None],
         cell_id[:, None, :],
         is_latent[:, :, None],
         is_latent[:, None, :],
-        n_w=n_w,
+        row[:, :, None],
+        col[:, :, None],
+        row[:, None, :],
+        col[:, None, :],
         latent_reads_all=latent_reads_all,
         local_radius=local_radius,
         latent_radius=latent_radius,
@@ -407,6 +425,7 @@ class JointLatentTransformer(nn.Module):
         compile_rope: bool = False,
         local_radius: int | None = None,
         latent_radius: int | None = None,
+        sort_latents_by_cell: bool = False,
     ) -> None:
         """Initialize the joint transformer.
 
@@ -498,6 +517,9 @@ class JointLatentTransformer(nn.Module):
                 patch cells (latent self-attention becomes local). Together with
                 ``local_radius`` the whole block is local, and attention cost is linear
                 in image area; the receptive field grows by ``max(radii)`` cells per block.
+            sort_latents_by_cell: With sub-patch pixel latents, order the latents
+                cell-major inside the joint blocks (restored afterwards). Numerically a
+                no-op; makes the local masks' latent windows contiguous key ranges.
         """
         super().__init__()
         for name, radius in (
@@ -508,6 +530,7 @@ class JointLatentTransformer(nn.Module):
                 raise ValueError(f"{name} must be >= 0, got {radius}")
         self.local_radius = local_radius
         self.latent_radius = latent_radius
+        self.sort_latents_by_cell = sort_latents_by_cell
         if compile_rope:
             use_compiled_mixed_rope(True)
         self.compile_rope = compile_rope
@@ -685,6 +708,7 @@ class JointLatentTransformer(nn.Module):
                     return valid[b, kv] & allowed
 
             else:
+                row, col = cell_rows_cols(cell_id, n_w)
 
                 def mask_mod(b: Tensor, h: Tensor, q: Tensor, kv: Tensor) -> Tensor:
                     allowed = _joint_rule(
@@ -692,7 +716,10 @@ class JointLatentTransformer(nn.Module):
                         cell_id[b, kv],
                         is_latent[b, q],
                         is_latent[b, kv],
-                        n_w=n_w,
+                        row[b, q],
+                        col[b, q],
+                        row[b, kv],
+                        col[b, kv],
                         latent_reads_all=reads_all,
                         local_radius=local_radius,
                         latent_radius=latent_radius,
@@ -872,8 +899,6 @@ class JointLatentTransformer(nn.Module):
         else:
             latent_positions = latent_positions_2d
 
-        x = torch.cat([patch_tokens, latents.to(patch_tokens.dtype)], dim=1)
-        rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
         if self.pixel_latents:
             # Each pixel latent belongs to the patch cell that contains it.
             rows = torch.arange(lat_h, device=device) * stride // patch_size
@@ -884,6 +909,18 @@ class JointLatentTransformer(nn.Module):
             latent_cell_ids = torch.arange(n_latents, device=device).expand(
                 batch_size, -1
             )
+        # Optionally lay the latents out cell-major (a cell's sub-patch latents side by
+        # side) inside the joint blocks; they are put back in grid order afterwards.
+        # Latents are clones told apart only by position, so this is a permutation of
+        # an equivariant computation: numerically a no-op that keeps the local masks'
+        # windows block-aligned for FlexAttention.
+        latent_order: Tensor | None = None
+        if self.sort_latents_by_cell and self.pixel_latents and stride < patch_size:
+            latent_order = torch.argsort(latent_cell_ids[0], stable=True)
+            latent_cell_ids = latent_cell_ids[:, latent_order]
+            latent_positions = latent_positions[:, latent_order]
+        x = torch.cat([patch_tokens, latents.to(patch_tokens.dtype)], dim=1)
+        rope_positions = torch.cat([patch_positions, latent_positions], dim=1)
         cell_id = torch.cat([cell_ids, latent_cell_ids], dim=1)
         is_latent = torch.cat(
             [
@@ -926,6 +963,8 @@ class JointLatentTransformer(nn.Module):
                 block_index=block_index,
             )
         latents = x[:, n_tokens:]
+        if latent_order is not None:
+            latents = latents[:, torch.argsort(latent_order)]
         for blk in self.latent_blocks:
             latents = blk(x=latents, rope_positions=latent_positions_2d)
         out = self.norm(latents)
@@ -970,6 +1009,8 @@ class JointLatentConfig(Config):
         token_mlp_ratio: A separate, lighter MLP for the tokens (CoLT5-style); the
             latents keep the full ``mlp_ratio`` MLP. None = shared MLP.
         compile_rope: ``torch.compile`` the mixed-RoPE op (process-wide switch).
+        sort_latents_by_cell: Cell-major latent layout inside the joint blocks
+            (numerically a no-op; see :class:`JointLatentTransformer`). None = False.
         local_radius / latent_radius: Spatially local attention, in patch cells: tokens
             <-> latents within ``local_radius``, latents <-> latents within
             ``latent_radius``. None = global (the default). See
@@ -997,6 +1038,8 @@ class JointLatentConfig(Config):
     # None defaults: as_config_dict drops None, so existing checkpoints round-trip.
     local_radius: int | None = None
     latent_radius: int | None = None
+    # None = False; None-default so existing checkpoints' configs round-trip.
+    sort_latents_by_cell: bool | None = None
 
     @property
     def sorted_student_dims(self) -> list[int] | None:
@@ -1083,4 +1126,5 @@ class JointLatentConfig(Config):
             compile_rope=self.compile_rope,
             local_radius=self.local_radius,
             latent_radius=self.latent_radius,
+            sort_latents_by_cell=bool(self.sort_latents_by_cell),
         )
