@@ -39,6 +39,7 @@ peak memory is the residual stream plus Q/K/V and the attention output.
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -404,6 +405,7 @@ def lighthouse_forward(
     rows = torch.arange(lat_h, device=device) * stride // patch_size
     cols = torch.arange(lat_w, device=device) * stride // patch_size
     latent_cells = (rows[:, None] * n_w + cols[None, :]).reshape(-1)
+    t_layout = time.perf_counter()
     lay = _build_layout(
         cell_ids[0].long().cpu().numpy(),
         latent_cells.cpu().numpy(),
@@ -413,6 +415,7 @@ def lighthouse_forward(
         group,
         device,
     )
+    lay.stats["layout_s"] = time.perf_counter() - t_layout
     module.last_lighthouse_stats = lay.stats  # type: ignore[attr-defined]
 
     latent_xy = build_pixel_latent_positions(
@@ -468,7 +471,9 @@ def lighthouse_forward(
     else:
         from olmoearth_pretrain.nn.joint_latent import flex_attention_cuda
 
+        t_mask = time.perf_counter()
         block_mask = _flex_block_mask(lay, fov)
+        lay.stats["block_mask_s"] = time.perf_counter() - t_mask
 
         def attend(q: Tensor, k: Tensor, v: Tensor) -> Tensor:
             return flex_attention_cuda(q, k, v, block_mask)

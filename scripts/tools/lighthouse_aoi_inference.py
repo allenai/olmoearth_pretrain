@@ -300,6 +300,14 @@ def run_lighthouse(
             finally:
                 perceiver.lighthouse = None
             stats = dict(getattr(perceiver, "last_lighthouse_stats", {}))
+            logger.info(
+                "  chunk %dx%d px: %.2f s, peak %.1f GiB, %s",
+                r1 - r0,
+                c1 - c0,
+                t.seconds,
+                torch.cuda.max_memory_allocated(device) / 2**30,
+                {k: round(v, 3) for k, v in stats.items()},
+            )
             rc1, cc1 = min(r + core, H), min(c + core, W)
             out[r:rc1, c:cc1] = emb[0, r - r0 : rc1 - r0, c - c0 : cc1 - c0]
             processed += (r1 - r0) * (c1 - c0)
@@ -379,7 +387,7 @@ def main() -> None:
     )
     p.add_argument("--overlap_px", type=int, default=4)
     p.add_argument("--tiled_batch", type=int, default=64)
-    p.add_argument("--core_px_ps1", type=int, default=128)
+    p.add_argument("--core_px_ps1", type=int, default=96)
     p.add_argument("--core_px_ps4", type=int, default=512)
     p.add_argument("--seq_chunk", type=int, default=1 << 18)
     p.add_argument("--dim", type=int, default=128)
