@@ -438,6 +438,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         supervision_preds,
                         batch,
                         self.model.supervision_head,
+                        patch_size=patch_size,
                     )
                     loss = loss + sup_loss
                     for mod_name, mod_loss in per_modality_losses.items():

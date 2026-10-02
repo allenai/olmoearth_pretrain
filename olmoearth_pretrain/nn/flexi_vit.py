@@ -46,6 +46,7 @@ from olmoearth_pretrain.nn.joint_latent import (
     sort_tokens_by_cell,
     token_mix_attention_kwargs,
 )
+from olmoearth_pretrain.nn.pixel_branch import PIXEL_BRANCH_TYPES, PixelRegisterBranch
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -1917,6 +1918,22 @@ class Perceiver(nn.Module):
         """
         return build_register_grid_positions(patch_positions, register_grid)
 
+    def choose_latent_stride(
+        self, spatial_grid: tuple[int, int], patch_size: int
+    ) -> int:
+        """Latent stride for this forward pass (see :func:`choose_latent_stride`)."""
+        if not self.pixel_latents:
+            return patch_size
+        return choose_latent_stride(
+            training=self.training,
+            spatial_grid=spatial_grid,
+            patch_size=patch_size,
+            random_latent_stride=self.random_latent_stride,
+            max_latents=self.max_latents,
+            eval_latent_stride=self.eval_latent_stride,
+            stride_bias=self.latent_stride_bias,
+        )
+
     def forward(
         self,
         patch_tokens: Tensor,
@@ -1927,6 +1944,8 @@ class Perceiver(nn.Module):
         cell_ids: Tensor | None = None,
         patch_size: int = 1,
         patch_spacing: float | None = None,
+        latent_stride: int | None = None,
+        register_init: Tensor | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1948,6 +1967,11 @@ class Perceiver(nn.Module):
             patch_size: Patch size of this forward pass (``pixel_latents`` only).
             patch_spacing: Distance between adjacent patch centres in the RoPE frame
                 (``pixel_latents`` only), to place the sub-patch latent centres.
+            latent_stride: Pre-drawn latent stride (``pixel_latents`` only), for a
+                caller that must know the latent grid before the read (the pixel
+                branch). None draws it here with :meth:`choose_latent_stride`.
+            register_init: Optional ``[B, num_registers, register_dim]`` added to the
+                cloned latent before the first read (the pixel branch's handoff).
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
@@ -1995,24 +2019,24 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        latent_stride = patch_size
         if self.pixel_latents:
             if patch_spacing is None:
                 raise ValueError("pixel_latents requires patch_spacing")
-            latent_stride = choose_latent_stride(
-                training=self.training,
-                spatial_grid=spatial_grid,
-                patch_size=patch_size,
-                random_latent_stride=self.random_latent_stride,
-                max_latents=self.max_latents,
-                eval_latent_stride=self.eval_latent_stride,
-                stride_bias=self.latent_stride_bias,
-            )
+            if latent_stride is None:
+                latent_stride = self.choose_latent_stride(spatial_grid, patch_size)
+            elif patch_size % latent_stride != 0:
+                raise ValueError(
+                    f"latent_stride {latent_stride} does not divide patch_size "
+                    f"{patch_size}"
+                )
             register_grid = (
                 spatial_grid[0] * patch_size // latent_stride,
                 spatial_grid[1] * patch_size // latent_stride,
             )
         else:
+            if latent_stride is not None:
+                raise ValueError("latent_stride requires pixel_latents=True")
+            latent_stride = patch_size
             register_grid = spatial_grid
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
@@ -2022,6 +2046,13 @@ class Perceiver(nn.Module):
             .expand(batch_size, num_registers, -1)
             .contiguous()
         )
+        if register_init is not None:
+            if register_init.shape != registers.shape:
+                raise ValueError(
+                    f"register_init {tuple(register_init.shape)} does not match the "
+                    f"latent grid {tuple(registers.shape)}"
+                )
+            registers = registers + register_init.to(registers.dtype)
         register_positions = None
         read_query_positions: Tensor | None = None
         read_key_positions: Tensor | None = None
@@ -2243,6 +2274,20 @@ class PerceiverConfig(Config):
         eval_latent_stride: Stride outside training. None = 1 (one latent per pixel).
         latent_stride_bias: Bias the drawn stride toward the finest that fits
             (weights ``(1 / s) ** bias``). None = 0 (uniform).
+        pixel_branch_type: With ``pixel_latents``, attach the convolutional pixel
+            branch (``nn/pixel_branch.py``): a standalone conv stack over each
+            ``(timestep, band set)`` frame of the time-series inputs, pooled to the
+            latent stride of the forward pass, whose final features (ONLINE-only
+            pooled, zero-init projected) are added to the cloned latent before the
+            first read. Only ``"thinconv"``. None = no branch.
+        pixel_branch_dim: Per-cell embedding width of the branch. None = 128.
+        pixel_branch_depth: Number of conv steps. None = 4.
+        pixel_branch_kernel: Depthwise kernel size (odd). None = 3.
+        pixel_branch_mlp_ratio: Pointwise MLP ratio of the conv steps. None = 4.0.
+        pixel_branch_mask_normalized: Mask-normalized (partial) depthwise
+            convolutions that read only the ONLINE cells of each window. None = False.
+        pixel_branch_grad_checkpointing: Recompute each conv step in backward.
+            None = True.
     """
 
     register_dim: int
@@ -2266,6 +2311,13 @@ class PerceiverConfig(Config):
     max_latents: int | None = None
     eval_latent_stride: int | None = None
     latent_stride_bias: float | None = None
+    pixel_branch_type: str | None = None
+    pixel_branch_dim: int | None = None
+    pixel_branch_depth: int | None = None
+    pixel_branch_kernel: int | None = None
+    pixel_branch_mlp_ratio: float | None = None
+    pixel_branch_mask_normalized: bool | None = None
+    pixel_branch_grad_checkpointing: bool | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2363,6 +2415,44 @@ class PerceiverConfig(Config):
             self.max_latents is None or self.max_latents < 1
         ):
             raise ValueError("random_latent_stride needs a positive max_latents budget")
+        if self.pixel_branch_type is not None:
+            if self.pixel_branch_type not in PIXEL_BRANCH_TYPES:
+                raise ValueError(
+                    f"pixel_branch_type must be one of {PIXEL_BRANCH_TYPES}, got "
+                    f"{self.pixel_branch_type!r}"
+                )
+            if not self.pixel_latents:
+                raise ValueError(
+                    "pixel_branch_type requires pixel_latents=True (the branch "
+                    "initializes the sub-patch latent grid)"
+                )
+            dim = self.pixel_branch_dim
+            if dim is not None and (dim <= 0 or dim % 4 != 0):
+                raise ValueError(
+                    "pixel_branch_dim must be a positive multiple of 4 (2D sincos "
+                    f"encodings), got {dim}"
+                )
+            kernel = self.pixel_branch_kernel
+            if kernel is not None and (kernel <= 0 or kernel % 2 != 1):
+                raise ValueError(
+                    f"pixel_branch_kernel must be a positive odd number, got {kernel}"
+                )
+            if self.pixel_branch_depth is not None and self.pixel_branch_depth < 1:
+                raise ValueError(
+                    f"pixel_branch_depth must be >= 1, got {self.pixel_branch_depth}"
+                )
+        elif any(
+            v is not None
+            for v in (
+                self.pixel_branch_dim,
+                self.pixel_branch_depth,
+                self.pixel_branch_kernel,
+                self.pixel_branch_mlp_ratio,
+                self.pixel_branch_mask_normalized,
+                self.pixel_branch_grad_checkpointing,
+            )
+        ):
+            raise ValueError("pixel_branch_* settings need pixel_branch_type")
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2422,6 +2512,32 @@ class PerceiverConfig(Config):
             latent_stride_bias=(
                 self.latent_stride_bias if self.latent_stride_bias is not None else 0.0
             ),
+        )
+
+    def build_pixel_branch(
+        self,
+        *,
+        supported_modality_names: list[str],
+        tokenization_config: TokenizationConfig,
+    ) -> PixelRegisterBranch | None:
+        """Build the pixel branch (None without ``pixel_branch_type``)."""
+        if self.pixel_branch_type is None:
+            return None
+
+        def resolved(value: Any, default: Any) -> Any:
+            return default if value is None else value
+
+        return PixelRegisterBranch(
+            supported_modality_names=supported_modality_names,
+            register_dim=self.register_dim,
+            pixel_dim=resolved(self.pixel_branch_dim, 128),
+            branch_type=self.pixel_branch_type,
+            num_steps=resolved(self.pixel_branch_depth, 4),
+            kernel_size=resolved(self.pixel_branch_kernel, 3),
+            mlp_ratio=resolved(self.pixel_branch_mlp_ratio, 4.0),
+            mask_normalized=resolved(self.pixel_branch_mask_normalized, False),
+            tokenization_config=tokenization_config,
+            grad_checkpointing=resolved(self.pixel_branch_grad_checkpointing, True),
         )
 
 
@@ -2609,6 +2725,9 @@ class Encoder(FlexiVitBase):
         # dims[0] and the smaller entries are Matryoshka prefixes of its output.
         self.register_student_dims: list[int] | None = None
         self.register_student: nn.Sequential | None = None
+        # Conv branch whose output initializes the Perceiver's sub-patch latents
+        # (nn/pixel_branch.py). The encoder drives it because it needs the raw sample.
+        self.pixel_branch: PixelRegisterBranch | None = None
         if perceiver_config is not None:
             perceiver_config.validate(
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
@@ -2631,6 +2750,11 @@ class Encoder(FlexiVitBase):
                 rope_temporal_base=self.rope_temporal_base,
                 drop_path=drop_path,
             )
+            if isinstance(perceiver_config, PerceiverConfig):
+                self.pixel_branch = perceiver_config.build_pixel_branch(
+                    supported_modality_names=self.supported_modality_names,
+                    tokenization_config=self.tokenization_config,
+                )
             self.register_student_dims = perceiver_config.sorted_student_dims
             if self.register_student_dims is not None:
                 student_dim = self.register_student_dims[0]
@@ -2657,6 +2781,9 @@ class Encoder(FlexiVitBase):
         )
 
         self.apply(self._init_weights)
+        if self.pixel_branch is not None:
+            # After the blanket init: the model equals the branch-free one at step 0.
+            self.pixel_branch.zero_init()
 
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
@@ -2926,8 +3053,13 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        input_sample: MaskedOlmoEarthSample | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``input_sample`` is the RAW (unpatchified) sample; only the pixel branch reads
+        it, since the patchified ``x`` no longer carries pixel-level values or masks.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -3092,6 +3224,18 @@ class Encoder(FlexiVitBase):
                     * self.rope_coordinate_scale,
                 )
             else:
+                # Pixel branch: draw the latent stride here so the branch can run at
+                # the latent grid's resolution, then hand its output to the Perceiver
+                # as an additive init of the cloned latent.
+                latent_stride: int | None = None
+                register_init: Tensor | None = None
+                if self.pixel_branch is not None and input_sample is not None:
+                    latent_stride = self.perceiver.choose_latent_stride(
+                        spatial_grid, patch_size
+                    )
+                    register_init = self.pixel_branch(
+                        input_sample, patch_size, latent_stride
+                    )
                 registers, register_positions = self.perceiver(
                     patch_tokens=tokens,
                     patch_positions=positions,
@@ -3104,6 +3248,8 @@ class Encoder(FlexiVitBase):
                         input_res, patch_size
                     )
                     * self.rope_coordinate_scale,
+                    latent_stride=latent_stride,
+                    register_init=register_init,
                 )
             register_output = {
                 "registers": registers,
@@ -3164,6 +3310,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    input_sample=x if self.pixel_branch is not None else None,
                 )
             )
         else:

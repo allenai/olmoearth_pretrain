@@ -1788,6 +1788,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        within_bandset_encode_ratio_range: tuple[float, float] | None = None,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,6 +1797,13 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        within_bandset_encode_ratio_range: if set, ``(lo, hi)``: each instance draws
+            ``r ~ U[lo, hi]`` and uses it instead of ``encode_ratio`` for the random /
+            time encode ratio applied within the encoded band sets (the fraction of
+            their tokens, or of the present timesteps, that are encoded). The split of
+            band sets into encode / decode keeps ``encode_ratio``. In time masking the
+            timesteps not encoded are the decode band sets' targets, so a larger ``r``
+            also leaves those band sets fewer decoded timesteps.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -1803,6 +1811,22 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         self.random_ratio = random_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
+        if within_bandset_encode_ratio_range is not None:
+            lo, hi = within_bandset_encode_ratio_range
+            if not 0 <= lo <= hi <= 1:
+                raise ValueError(
+                    "within_bandset_encode_ratio_range must satisfy 0 <= lo <= hi <= 1, "
+                    f"got {within_bandset_encode_ratio_range}"
+                )
+            within_bandset_encode_ratio_range = (float(lo), float(hi))
+        self.within_bandset_encode_ratio_range = within_bandset_encode_ratio_range
+
+    def _draw_within_bandset_encode_ratio(self) -> float:
+        """The random / time encode ratio for one instance."""
+        if self.within_bandset_encode_ratio_range is None:
+            return self.encode_ratio
+        lo, hi = self.within_bandset_encode_ratio_range
+        return float(np.random.uniform(lo, hi))
 
     @staticmethod
     def _bandset_has_data_at_timestamps(
@@ -1896,6 +1920,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
             missing_per_time: torch.Tensor | None = None
+            within_encode_ratio = self._draw_within_bandset_encode_ratio()
 
             for modality_name in encode_decode_modalities:
                 not_missing = (
@@ -1932,7 +1957,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     not_missing_t = not_missing_t[
                         torch.randperm(len(not_missing_t), device=not_missing_t.device)
                     ]
-                    num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
+                    num_encode = math.ceil(len(not_missing_t) * within_encode_ratio)
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
 
@@ -1950,8 +1975,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     ],  # type: ignore
                     Modality.get(modality_name),
                     patch_size,
-                    self.encode_ratio,
-                    self.decode_ratio,
+                    within_encode_ratio,
+                    # The encoded and decoded tokens must fit in the band set.
+                    min(self.decode_ratio, 1.0 - within_encode_ratio),
                 )
             else:
                 np.random.shuffle(encode_decode_bandsets)
@@ -1986,7 +2012,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             ],
                             Modality.get(modality_name),
                             patch_size,
-                            self.encode_ratio,
+                            within_encode_ratio,
                             0,
                         )
                     else:

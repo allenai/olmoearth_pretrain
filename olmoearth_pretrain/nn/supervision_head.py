@@ -6,6 +6,10 @@ downstream probes consume. Per-modality linear heads predict a
 max_patch_size x max_patch_size sub-patch grid per register cell, unfolded and
 then bilinearly resized to the target's pixel resolution; non-spatial modalities
 read the mean-pooled grid and predict one vector per sample.
+
+Time-conditioned heads (``SupervisionModalityConfig.time_conditioned``) reconstruct a
+multitemporal input modality per (pixel, timestep) from the cell covering each pixel:
+see :class:`TimeConditionedPixelHead`.
 """
 
 from __future__ import annotations
@@ -17,14 +21,39 @@ from enum import StrEnum
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from einops import rearrange
+from einops import rearrange, reduce, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.nn.encodings import (
+    get_2d_sincos_pos_encoding,
+    timestamps_to_day_of_year,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _day_of_year_encoding(timestamps: Tensor, num_harmonics: int) -> Tensor:
+    """Fixed sincos day-of-year basis for the time-conditioned heads.
+
+    ``phi(t) = [sin(2*pi*k*doy/365.25), cos(2*pi*k*doy/365.25)] for k = 1..K``:
+    periodic across year boundaries and year-invariant.
+
+    Args:
+        timestamps: ``[B, T, 3]`` ``(day, month, year)`` timestamps.
+        num_harmonics: Number of annual harmonics K.
+
+    Returns:
+        ``[B, T, 2 * num_harmonics]`` float tensor.
+    """
+    doy = timestamps_to_day_of_year(timestamps)  # [B, T]
+    k = torch.arange(
+        1, num_harmonics + 1, device=timestamps.device, dtype=torch.float32
+    )
+    angles = 2.0 * torch.pi * doy.unsqueeze(-1) * k / 365.25  # [B, T, K]
+    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
 
 class SupervisionTaskType(StrEnum):
@@ -61,6 +90,28 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
+        time_conditioned: For MULTITEMPORAL spatial input modalities (e.g. the raw S2
+            bands): reconstruct the modality per (pixel, timestep) with a
+            :class:`TimeConditionedPixelHead` -- an MLP on the covering register cell,
+            a fixed day-of-year basis ``phi(t)`` and the pixel's offset inside the
+            cell. Regression only; the loss is MSE.
+        time_harmonics: Annual harmonics K of ``phi(t)`` (2K features).
+        time_mlp_hidden_dim: Hidden width of the time-conditioned MLP. Kept small: the
+            register must store the trajectory, not the head.
+        offset_encoding_dim: Width of the sincos encoding of the pixel's offset inside
+            its register cell (multiple of 4).
+        band_indices: Indices (into the modality's band order) of the bands to
+            reconstruct; ``num_output_channels`` must equal its length. None = all.
+        masked_timesteps_only: Score only the (pixel, timestep) units the online
+            encoder did NOT see (mask ``DECODER`` / ``TARGET_ENCODER_ONLY``).
+        highpass_patch_mean: Reconstruct each pixel MINUS the mean of its token
+            patch (the valid pixels of its ``P x P`` patch at that timestep, ``P`` the
+            forward pass's patch size), i.e. only the sub-patch detail the trunk token
+            does not already carry. At ``P = 1`` there is no such detail and the loss
+            is zero.
+        normalize_by_target_variance: Divide each band's MSE by the batch's
+            (detached) variance of that band's target over the valid units, so the
+            loss starts near 1 whatever the target's scale.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -70,6 +121,14 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    time_conditioned: bool = False
+    time_harmonics: int = 4
+    time_mlp_hidden_dim: int = 64
+    offset_encoding_dim: int = 16
+    band_indices: list[int] | None = None
+    masked_timesteps_only: bool = False
+    highpass_patch_mean: bool = False
+    normalize_by_target_variance: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -84,6 +143,40 @@ class SupervisionModalityConfig(Config):
             raise ValueError(
                 f"regression_loss_type must be 'mse' or 'l1', got "
                 f"{self.regression_loss_type!r}"
+            )
+        if self.time_conditioned:
+            if self.task_type != SupervisionTaskType.REGRESSION:
+                raise ValueError(
+                    "time_conditioned supervision only supports regression, got "
+                    f"{self.task_type}"
+                )
+            if self.time_harmonics < 1 or self.time_mlp_hidden_dim < 1:
+                raise ValueError(
+                    "time_harmonics and time_mlp_hidden_dim must be >= 1, got "
+                    f"{self.time_harmonics} and {self.time_mlp_hidden_dim}"
+                )
+            if self.offset_encoding_dim < 4 or self.offset_encoding_dim % 4 != 0:
+                raise ValueError(
+                    "offset_encoding_dim must be a positive multiple of 4, got "
+                    f"{self.offset_encoding_dim}"
+                )
+            if (
+                self.band_indices is not None
+                and len(self.band_indices) != self.num_output_channels
+            ):
+                raise ValueError(
+                    f"band_indices has {len(self.band_indices)} bands but "
+                    f"num_output_channels is {self.num_output_channels}"
+                )
+        elif (
+            self.band_indices is not None
+            or self.masked_timesteps_only
+            or self.highpass_patch_mean
+            or self.normalize_by_target_variance
+        ):
+            raise ValueError(
+                "band_indices, masked_timesteps_only, highpass_patch_mean and "
+                "normalize_by_target_variance require time_conditioned=True"
             )
 
 
@@ -132,6 +225,67 @@ class SupervisionHeadConfig(Config):
         )
 
 
+class TimeConditionedPixelHead(nn.Module):
+    """Per-(pixel, timestep) reconstruction from the register cell covering the pixel.
+
+    ``out(GELU(W_z z[cell] + W_t phi(t) + W_o enc(offset)))``, where ``z[cell]`` is the
+    cell of an ``s x s``-pixel register grid that contains the pixel, ``phi(t)`` the
+    fixed day-of-year basis and ``enc(offset)`` a sincos encoding of the pixel's offset
+    from the cell centre. This is a two-layer MLP on the concatenation
+    ``[z ; phi ; enc]`` with its first layer computed per factor and broadcast-added, so
+    the ``[B, H, W, T, D + ...]`` concatenation is never built. The offset term lets one
+    cell describe its ``s x s`` pixels individually; at ``s = 1`` it is a constant.
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_harmonics: int,
+        offset_encoding_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+    ) -> None:
+        """Initialize the head."""
+        super().__init__()
+        self.num_harmonics = num_harmonics
+        self.offset_encoding_dim = offset_encoding_dim
+        self.z_proj = nn.Linear(embedding_dim, hidden_dim)
+        self.t_proj = nn.Linear(2 * num_harmonics, hidden_dim, bias=False)
+        self.o_proj = nn.Linear(offset_encoding_dim, hidden_dim, bias=False)
+        self.act = nn.GELU()
+        self.out = nn.Linear(hidden_dim, out_dim)
+
+    def forward(
+        self, register_grid: Tensor, timestamps: Tensor, target_hw: tuple[int, int]
+    ) -> Tensor:
+        """Predict ``[B, H, W, T, C]`` from ``[B, n_h, n_w, D]`` registers.
+
+        ``target_hw`` must be an integer multiple ``s`` of the grid on both axes.
+        """
+        _, n_h, n_w, _ = register_grid.shape
+        height, width = target_hw
+        stride = height // n_h
+        if stride < 1 or height != n_h * stride or width != n_w * stride:
+            raise ValueError(
+                f"target {target_hw} is not a common integer multiple of the "
+                f"register grid {(n_h, n_w)}"
+            )
+        z = self.z_proj(register_grid)  # [B, n_h, n_w, hid]
+        z = repeat(z, "b h w d -> b (h i) (w j) d", i=stride, j=stride)
+        phi = _day_of_year_encoding(timestamps, self.num_harmonics)
+        t = self.t_proj(phi.to(register_grid.dtype))  # [B, T, hid]
+        offset = (
+            torch.arange(stride, device=register_grid.device, dtype=torch.float32)
+            - (stride - 1) / 2
+        )
+        grid = torch.stack(torch.meshgrid(offset, offset, indexing="ij"), dim=0)
+        enc = get_2d_sincos_pos_encoding(grid, self.offset_encoding_dim)  # [s*s, E]
+        o = self.o_proj(enc.to(register_grid.dtype)).view(stride, stride, -1)
+        o = repeat(o, "i j d -> (h i) (w j) d", h=n_h, w=n_w)  # [H, W, hid]
+        hidden = (z + o[None])[:, :, :, None, :] + t[:, None, None, :, :]
+        return self.out(self.act(hidden))  # [B, H, W, T, C]
+
+
 class SupervisionHead(nn.Module):
     """Per-modality linear heads on the encoder register grid.
 
@@ -142,6 +296,8 @@ class SupervisionHead(nn.Module):
       4. Bilinearly resize to the target's pixel resolution.
 
     Non-spatial modalities read the mean-pooled grid and predict ``[B, C]``.
+    Time-conditioned modalities predict ``[B, H, W, T, C]`` with a
+    :class:`TimeConditionedPixelHead`.
     """
 
     def __init__(
@@ -155,9 +311,25 @@ class SupervisionHead(nn.Module):
         self.modality_configs = modality_configs
         self.max_patch_size = max_patch_size
         self._non_spatial_modalities: set[str] = set()
+        self._time_conditioned_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
             modality_spec = Modality.get(name)
+            if cfg.time_conditioned:
+                if not (modality_spec.is_spatial and modality_spec.is_multitemporal):
+                    raise ValueError(
+                        "time_conditioned supervision requires a spatial multitemporal "
+                        f"modality, got {name}"
+                    )
+                self._time_conditioned_modalities.add(name)
+                self.heads[name] = TimeConditionedPixelHead(
+                    embedding_dim=embedding_dim,
+                    num_harmonics=cfg.time_harmonics,
+                    offset_encoding_dim=cfg.offset_encoding_dim,
+                    hidden_dim=cfg.time_mlp_hidden_dim,
+                    out_dim=cfg.num_output_channels,
+                )
+                continue
             if modality_spec.is_spatial:
                 # The max_patch_size^2 unfold predates register supervision (each decoder
                 # token was one real patch of up to max_patch_size px). The registers are
@@ -221,6 +393,30 @@ class SupervisionHead(nn.Module):
         mps = self.max_patch_size
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
+            if sup_name in self._time_conditioned_modalities:
+                target = getattr(batch, sup_name, None)
+                if target is None or batch.timestamps is None:
+                    # No target this batch: a zero-cost prediction keeps every
+                    # parameter on the graph.
+                    output = head(
+                        register_grid,
+                        torch.zeros(
+                            register_grid.shape[0],
+                            1,
+                            3,
+                            dtype=torch.long,
+                            device=register_grid.device,
+                        ),
+                        (register_grid.shape[1], register_grid.shape[2]),
+                    )
+                else:
+                    output = head(
+                        register_grid,
+                        batch.timestamps[:, : target.shape[3]],
+                        (target.shape[1], target.shape[2]),
+                    )
+                predictions[sup_name] = output
+                continue
             if sup_name in self._non_spatial_modalities:
                 output = head(register_grid.mean(dim=(1, 2)))  # [B, C]
             else:
@@ -252,6 +448,7 @@ def _compute_per_modality_losses(
     predictions: dict[str, Tensor],
     batch: MaskedOlmoEarthSample,
     supervision_head: SupervisionHead,
+    patch_size: int | None = None,
 ) -> dict[str, Tensor]:
     """Compute per-modality supervision losses (non-detached, unweighted).
 
@@ -270,6 +467,12 @@ def _compute_per_modality_losses(
 
         if raw_target is None:
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
+            continue
+
+        if cfg.time_conditioned:
+            per_modality_losses[name] = _time_conditioned_loss(
+                pred, raw_target, batch, name, cfg, patch_size
+            ).to(dtype)
             continue
 
         # No early exit on an all-missing target (that needed a host sync): the losses
@@ -305,6 +508,7 @@ def compute_supervision_loss(
     predictions: dict[str, Tensor],
     batch: MaskedOlmoEarthSample,
     supervision_head: SupervisionHead,
+    patch_size: int | None = None,
 ) -> tuple[Tensor, dict[str, Tensor]]:
     """Compute the combined supervision loss across all supervised modalities.
 
@@ -312,12 +516,16 @@ def compute_supervision_loss(
         predictions: Per-modality predictions from SupervisionHead.forward.
         batch: The original batch containing raw pixel targets.
         supervision_head: The supervision head (used for configs and cached buffers).
+        patch_size: Patch size of the forward pass (required by
+            ``highpass_patch_mean`` heads).
 
     Returns:
         total_loss: Weighted sum of per-modality losses.
         per_modality_losses: Dict of unweighted per-modality loss values (detached).
     """
-    raw_losses = _compute_per_modality_losses(predictions, batch, supervision_head)
+    raw_losses = _compute_per_modality_losses(
+        predictions, batch, supervision_head, patch_size
+    )
     modality_configs = supervision_head.modality_configs
     first_pred = next(iter(predictions.values()))
     device = first_pred.device
@@ -347,6 +555,81 @@ def _masked_mean(values: Tensor, mask: Tensor) -> Tensor:
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
+
+
+def _build_non_online_mask(batch: MaskedOlmoEarthSample, name: str) -> Tensor:
+    """Bool ``[B, H, W, T]``, True where the online encoder did NOT see the unit.
+
+    A pixel-timestep counts as unseen if ANY of its band sets was hidden from the
+    online encoder (``MISSING`` excluded).
+    """
+    mask = getattr(batch, batch.get_masked_modality_name(name), None)
+    if mask is None:
+        raise ValueError(
+            f"masked_timesteps_only supervision ({name}) requires the batch to carry "
+            f"{batch.get_masked_modality_name(name)}"
+        )
+    non_online = (mask != MaskValue.ONLINE_ENCODER.value) & (
+        mask != MaskValue.MISSING.value
+    )
+    return non_online.any(dim=-1)
+
+
+def highpass_patch_target(target: Tensor, valid: Tensor, patch_size: int) -> Tensor:
+    """``target`` minus the mean of the valid pixels of its ``P x P`` patch.
+
+    Args:
+        target: ``[B, H, W, T, C]`` float target.
+        valid: ``[B, H, W, T]`` bool.
+        patch_size: Token patch size ``P`` (divides ``H`` and ``W``).
+    """
+    p = patch_size
+    validf = valid.to(target.dtype)[..., None]
+    total = reduce(target * validf, "b (h i) (w j) t c -> b h w t c", "sum", i=p, j=p)
+    count = reduce(validf, "b (h i) (w j) t c -> b h w t c", "sum", i=p, j=p)
+    mean = total / count.clamp(min=1)
+    return target - repeat(mean, "b h w t c -> b (h i) (w j) t c", i=p, j=p)
+
+
+def _time_conditioned_loss(
+    pred: Tensor,
+    raw_target: Tensor,
+    batch: MaskedOlmoEarthSample,
+    name: str,
+    cfg: SupervisionModalityConfig,
+    patch_size: int | None,
+) -> Tensor:
+    """MSE of a time-conditioned head (``[B, H, W, T, C]``) on its selected bands."""
+    if cfg.band_indices is not None:
+        raw_target = raw_target[..., cfg.band_indices]
+    valid = _build_valid_mask(raw_target)  # [B, H, W, T]
+    if cfg.masked_timesteps_only:
+        valid = valid & _build_non_online_mask(batch, name)
+    target = torch.where(
+        valid[..., None], raw_target.float(), torch.zeros_like(raw_target).float()
+    )
+    if cfg.highpass_patch_mean:
+        if patch_size is None:
+            raise ValueError(
+                f"highpass_patch_mean supervision ({name}) needs the patch size"
+            )
+        if patch_size == 1:
+            # A 1x1 patch carries no sub-patch detail.
+            return 0 * pred.float().sum()
+        target = highpass_patch_target(target, valid, patch_size)
+    validc = valid[..., None].expand_as(target)
+    sq = (pred.float() - target) ** 2
+    if not cfg.normalize_by_target_variance:
+        return _masked_mean(sq, validc)
+    with torch.no_grad():
+        validf = validc.float()
+        n = validf.sum(dim=(0, 1, 2, 3)).clamp(min=1)  # [C]
+        mean = (target * validf).sum(dim=(0, 1, 2, 3)) / n
+        var = (((target - mean) ** 2) * validf).sum(dim=(0, 1, 2, 3)) / n
+    per_band = (torch.where(validc, sq, torch.zeros_like(sq))).sum(dim=(0, 1, 2, 3))
+    per_band = per_band / n / var.clamp(min=1e-6)
+    has_valid = (validc.sum(dim=(0, 1, 2, 3)) > 0).float()
+    return (per_band * has_valid).sum() / has_valid.sum().clamp(min=1)
 
 
 def _classification_loss(

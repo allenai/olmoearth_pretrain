@@ -3,6 +3,7 @@
 import logging
 import random
 
+import numpy as np
 import torch
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
@@ -14,6 +15,7 @@ from olmoearth_pretrain.train.masking import (
     ModalityCrossSpaceMaskingStrategy,
     RandomMaskingStrategy,
     RandomRangeMaskingStrategy,
+    RandomTimeWithDecodeMaskingStrategy,
     RandomWithDecodeMaskingStrategy,
     SpaceMaskingStrategy,
     TimeMaskingStrategy,
@@ -1694,3 +1696,124 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def _s2_s1_batch(b: int, h: int, w: int, t: int) -> OlmoEarthSample:
+    """S2 (3 band sets) + S1 (1 band set), every timestep present."""
+    timestamps = torch.stack(
+        [
+            torch.ones(b, t, dtype=torch.long),
+            torch.arange(t).expand(b, -1) % 12,
+            torch.full((b, t), 2020, dtype=torch.long),
+        ],
+        dim=-1,
+    )
+    return OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        timestamps=timestamps,
+    )
+
+
+def _bandset_masks(masked: MaskedOlmoEarthSample, i: int) -> list[torch.Tensor]:
+    """Per-band-set ``[H, W, T]`` masks of instance ``i``."""
+    out: list[torch.Tensor] = []
+    for name in ("sentinel2_l2a", "sentinel1"):
+        mask = getattr(masked, masked.get_masked_modality_name(name))[i]
+        out.extend(mask[..., k] for k in range(mask.shape[-1]))
+    return out
+
+
+def test_within_bandset_encode_ratio_random_mode() -> None:
+    """Random mode: the band-set split keeps encode_ratio, the token ratio is drawn."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t, patch_size = 16, 8, 8, 4, 2
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        random_ratio=1.0,
+        within_bandset_encode_ratio_range=(0.5, 0.75),
+    )
+    masked = strategy.apply_mask(_s2_s1_batch(b, h, w, t), patch_size=patch_size)
+    fractions = []
+    for i in range(b):
+        encoded = []
+        for mask in _bandset_masks(masked, i):
+            tokens = mask[::patch_size, ::patch_size]
+            online = (tokens == MaskValue.ONLINE_ENCODER.value).float().mean().item()
+            if online > 0:
+                encoded.append(online)
+        # 4 band sets, ceil(4 * 0.5) = 2 of them encoded.
+        assert len(encoded) == 2
+        # Both encoded band sets share the instance's draw.
+        assert encoded[0] == encoded[1]
+        assert 0.5 <= encoded[0] <= 0.75
+        fractions.append(encoded[0])
+    assert len(set(fractions)) > 1
+
+
+def test_within_bandset_encode_ratio_time_mode() -> None:
+    """Time mode: the encoded share of present timesteps follows the drawn ratio."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t = 16, 4, 4, 8
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        random_ratio=0.0,
+        within_bandset_encode_ratio_range=(0.5, 0.75),
+    )
+    masked = strategy.apply_mask(_s2_s1_batch(b, h, w, t), patch_size=2)
+    counts = set()
+    for i in range(b):
+        for mask in _bandset_masks(masked, i):
+            online_t = (mask == MaskValue.ONLINE_ENCODER.value).any(dim=(0, 1))
+            if online_t.any():
+                counts.add(int(online_t.sum()))
+    assert counts <= set(range(4, 7))  # ceil(8 * r) for r in [0.5, 0.75]
+    assert len(counts) > 1
+
+
+def test_within_bandset_encode_ratio_single_bandset_fits() -> None:
+    """With one band set, encoded + decoded tokens never exceed the band set."""
+    np.random.seed(0)
+    torch.manual_seed(0)
+    b, h, w, t, patch_size = 8, 8, 8, 2, 2
+    timestamps = torch.tensor([[1, 0, 2020], [1, 1, 2020]]).expand(b, -1, -1)
+    batch = OlmoEarthSample(
+        sentinel1=torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands)),
+        timestamps=timestamps,
+    )
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        within_bandset_encode_ratio_range=(0.75, 0.75),
+    )
+    masked = strategy.apply_mask(batch, patch_size=patch_size)
+    assert masked.sentinel1_mask is not None
+    tokens = masked.sentinel1_mask[:, ::patch_size, ::patch_size]
+    for i in range(b):
+        n = tokens[i].numel()
+        n_online = int((tokens[i] == MaskValue.ONLINE_ENCODER.value).sum())
+        n_decode = int((tokens[i] == MaskValue.DECODER.value).sum())
+        assert n_online == int(n * 0.75)
+        assert n_online + n_decode <= n
+
+
+def test_within_bandset_encode_ratio_unset_is_unchanged() -> None:
+    """Without the range the strategy consumes the same RNG and gives the same masks."""
+    batch = _s2_s1_batch(4, 8, 8, 4)
+    strategies = [
+        RandomTimeWithDecodeMaskingStrategy(encode_ratio=0.5, decode_ratio=0.5),
+        RandomTimeWithDecodeMaskingStrategy(
+            encode_ratio=0.5, decode_ratio=0.5, within_bandset_encode_ratio_range=None
+        ),
+    ]
+    outs = []
+    for strategy in strategies:
+        np.random.seed(0)
+        torch.manual_seed(0)
+        outs.append(strategy.apply_mask(batch, patch_size=2))
+    assert torch.equal(outs[0].sentinel2_l2a_mask, outs[1].sentinel2_l2a_mask)
+    assert torch.equal(outs[0].sentinel1_mask, outs[1].sentinel1_mask)
