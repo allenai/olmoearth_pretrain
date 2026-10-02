@@ -90,6 +90,11 @@ class RCLighthouseSettings:
             with the full-domain forward to fp32 rounding.
         attn_dtype: Q/K/V dtype for the FlexAttention kernel (mixed RoPE returns fp32
             under autocast, which would run the kernel in fp32).
+        fov_quantum: Queries share their FOV over aligned tiles of this many cells
+            per side (see :func:`_fov_start`): 1 is exact Lighthouse; larger values
+            make every attention block full (no mask evaluated) at the price of a
+            FOV that moves in steps of ``fov_quantum`` cells and sits up to half a
+            step off-centre. Must divide the FOV.
         profile: Synchronize and record per-phase seconds in ``last_lighthouse_stats``.
         return_tokens: Also return the encoded tokens. Off by default: the embedding
             is the Perceiver output, and the extra copy costs ~3 KB per token. When
@@ -106,6 +111,7 @@ class RCLighthouseSettings:
     attn_dtype: str | None = "bfloat16"
     profile: bool = False
     return_tokens: bool = False
+    fov_quantum: int = 1
 
 
 def lighthouse_rc_reach_px(
@@ -129,9 +135,21 @@ def lighthouse_rc_reach_px(
 # --------------------------------------------------------------------------- layout
 
 
-def _fov_start(index: np.ndarray, fov: int, extent: int) -> np.ndarray:
-    """First cell of the half-open FOV ``[s, s + fov)``, shifted inward at edges."""
-    return np.clip(index - fov // 2, 0, extent - fov)
+def _fov_start(
+    index: np.ndarray, fov: int, extent: int, quantum: int = 1
+) -> np.ndarray:
+    """First cell of the half-open FOV ``[s, s + fov)``, shifted inward at edges.
+
+    ``quantum`` > 1: every query of a ``quantum``-aligned tile of cells shares one FOV,
+    the box around the tile's centre rounded down to the quantum grid, so the FOV is
+    a whole number of tiles (all attention blocks full) and sits at most
+    ``quantum / 2`` cells off-centre. ``quantum`` 1 is the exact per-cell FOV.
+    """
+    if quantum == 1:
+        return np.clip(index - fov // 2, 0, extent - fov)
+    base = (index // quantum) * quantum
+    start = ((base + quantum // 2 - fov // 2) // quantum) * quantum
+    return np.clip(start, 0, extent - fov)
 
 
 @dataclass
@@ -145,6 +163,7 @@ class _Slots:
     tile_h: int
     tile_w: int
     device_dest: Tensor | None = None
+    quantum: int = 1  # FOV quantum of these elements as queries (see _fov_start)
 
     @property
     def valid(self) -> np.ndarray:
@@ -199,8 +218,8 @@ def _block_tables(
     qr = q.row.reshape(nq, block)
     qc = q.col.reshape(nq, block)
     qv = qr >= 0
-    r0 = np.where(qv, _fov_start(np.maximum(qr, 0), fov, n_h), 0)
-    c0 = np.where(qv, _fov_start(np.maximum(qc, 0), fov, n_w), 0)
+    r0 = np.where(qv, _fov_start(np.maximum(qr, 0), fov, n_h, q.quantum), 0)
+    c0 = np.where(qv, _fov_start(np.maximum(qc, 0), fov, n_w, q.quantum), 0)
     any_q = qv.any(1)
     u_r0 = np.where(any_q, np.where(qv, r0, _BIG).min(1), 0)
     u_r1 = np.where(any_q, np.where(qv, r0, -1).max(1) + fov, fov)
@@ -308,10 +327,14 @@ def _block_tables(
 def _codes(
     q: _Slots, k: _Slots, fov: int, n_h: int, n_w: int, device: torch.device
 ) -> tuple[Tensor, Tensor]:
-    """Per-slot int64 codes: query ``r0 | c0 << 14 | valid << 28``, key the same."""
+    """Per-slot int32 codes: query ``r0 | c0 << 14 | valid << 28``, key the same.
+
+    int32, not int64: the mask runs per score of every partial block, and 64-bit
+    integer arithmetic is several times slower on the GPU.
+    """
     qv = q.valid
-    r0 = np.where(qv, _fov_start(np.maximum(q.row, 0), fov, n_h), 0)
-    c0 = np.where(qv, _fov_start(np.maximum(q.col, 0), fov, n_w), 0)
+    r0 = np.where(qv, _fov_start(np.maximum(q.row, 0), fov, n_h, q.quantum), 0)
+    c0 = np.where(qv, _fov_start(np.maximum(q.col, 0), fov, n_w, q.quantum), 0)
     q_code = r0 | (c0 << _BITS) | (qv.astype(np.int64) << (2 * _BITS))
     kv = k.valid
     k_code = (
@@ -320,8 +343,8 @@ def _codes(
         | (kv.astype(np.int64) << (2 * _BITS))
     )
     return (
-        torch.from_numpy(q_code).to(device),
-        torch.from_numpy(k_code).to(device),
+        torch.from_numpy(q_code.astype(np.int32)).to(device),
+        torch.from_numpy(k_code.astype(np.int32)).to(device),
     )
 
 
@@ -585,6 +608,9 @@ def encoder_lighthouse(
     if fov > n_h or fov > n_w:
         raise ValueError(f"FOV of {fov} cells exceeds the {n_h}x{n_w} cell domain")
     block = settings.block
+    quantum = settings.fov_quantum
+    if fov % quantum:
+        raise ValueError(f"fov_quantum {quantum} does not divide the {fov}-cell FOV")
     run = _Runner(settings)
     stats: dict[str, float] = {}
 
@@ -605,7 +631,11 @@ def encoder_lighthouse(
 
     # --- tokens -------------------------------------------------------------------
     t0 = time.perf_counter()
-    tok = _slot_layout(cells_np // n_w, cells_np % n_w, n_w, (1, n_w), block)
+    # Exact FOV: cell rows (a block's queries span ~2 cells). Quantized: the quantum
+    # tiles themselves, so a block never straddles two FOVs.
+    tok_tile = (1, n_w) if quantum == 1 else (quantum, quantum)
+    tok = _slot_layout(cells_np // n_w, cells_np % n_w, n_w, tok_tile, block)
+    tok.quantum = quantum
     tok_dest = torch.from_numpy(tok.dest).to(device)
     stats["tokens"] = float(vis_idx.numel())
     stats["token_slots"] = float(tok.length)
@@ -655,7 +685,9 @@ def encoder_lighthouse(
         lc = np.tile(np.arange(lat_w), lat_h)
         l_rows, l_cols = lr * stride // patch_size, lc * stride // patch_size
         tile = settings.latent_tile or _default_latent_tile(per_cell, block)
+        tile = (-(-tile[0] // quantum) * quantum, -(-tile[1] // quantum) * quantum)
         lat = _slot_layout(l_rows, l_cols, n_w, tile, block)
+        lat.quantum = quantum
         lat_dest = torch.from_numpy(lat.dest).to(device)
         read_plan = _make_plan(lat, tok, fov, n_h, n_w, settings, device)
         self_plan = _make_plan(lat, lat, fov, n_h, n_w, settings, device)

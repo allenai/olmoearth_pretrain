@@ -161,9 +161,10 @@ def _brute_rule(
     fov: int,
     n_h: int,
     n_w: int,
+    quantum: int = 1,
 ) -> np.ndarray:
-    r0 = _fov_start(q_rows, fov, n_h)[:, None]
-    c0 = _fov_start(q_cols, fov, n_w)[:, None]
+    r0 = _fov_start(q_rows, fov, n_h, quantum)[:, None]
+    c0 = _fov_start(q_cols, fov, n_w, quantum)[:, None]
     return (
         (k_rows[None] >= r0)
         & (k_rows[None] < r0 + fov)
@@ -173,31 +174,43 @@ def _brute_rule(
 
 
 @pytest.mark.parametrize(
-    ("n_h", "n_w", "fov", "per_cell", "q_tile", "block"),
+    ("n_h", "n_w", "fov", "per_cell", "q_tile", "block", "quantum", "drop"),
     [
-        (13, 10, 4, 5, (1, 10), 16),  # tokens x tokens
-        (9, 12, 4, 7, (2, 3), 16),  # tiled latents x tokens
-        (20, 20, 8, 3, (1, 20), 32),
-        (17, 23, 8, 1, (4, 8), 32),  # one latent per cell
+        (13, 10, 4, 5, (1, 10), 16, 1, 0.2),  # tokens x tokens
+        (9, 12, 4, 7, (2, 3), 16, 1, 0.2),  # tiled latents x tokens
+        (20, 20, 8, 3, (1, 20), 32, 1, 0.2),
+        (17, 23, 8, 1, (4, 8), 32, 1, 0.2),  # one latent per cell
+        (18, 22, 8, 2, (4, 4), 32, 4, 0.2),  # quantized FOV, missing tokens
+        (16, 24, 8, 2, (4, 4), 32, 4, 0.0),  # quantized, complete: all blocks full
+        (17, 21, 8, 1, (4, 8), 16, 2, 0.0),  # quantized latents x tokens
     ],
 )
 def test_block_tables_are_exact(
-    n_h: int, n_w: int, fov: int, per_cell: int, q_tile: tuple[int, int], block: int
+    n_h: int,
+    n_w: int,
+    fov: int,
+    per_cell: int,
+    q_tile: tuple[int, int],
+    block: int,
+    quantum: int,
+    drop: float,
 ) -> None:
     """Listed blocks cover every allowed pair; full blocks hold only allowed pairs."""
     rng = np.random.default_rng(0)
     cells = np.repeat(np.arange(n_h * n_w), per_cell)
-    cells = cells[rng.random(cells.size) > 0.2]  # missing tokens
+    cells = cells[rng.random(cells.size) >= drop]  # missing tokens
     cells = cells[rng.permutation(cells.size)]
-    k = _slot_layout(cells // n_w, cells % n_w, n_w, (1, n_w), block)
-    lat = np.arange(n_h * n_w)
+    k_tile = (1, n_w) if quantum == 1 else (quantum, quantum)
+    k = _slot_layout(cells // n_w, cells % n_w, n_w, k_tile, block)
+    lat = np.repeat(np.arange(n_h * n_w), per_cell if q_tile == k_tile else 1)
     q = _slot_layout(lat // n_w, lat % n_w, n_w, q_tile, block)
+    q.quantum = quantum
     tab = _block_tables(q, k, fov, n_h, n_w, block)
 
     allowed = np.zeros((q.length, k.length), dtype=bool)
     qv, kv = q.valid, k.valid
     allowed[np.ix_(qv, kv)] = _brute_rule(
-        q.row[qv], q.col[qv], k.row[kv], k.col[kv], fov, n_h, n_w
+        q.row[qv], q.col[qv], k.row[kv], k.col[kv], fov, n_h, n_w, quantum
     )
     nq, nk = q.length // block, k.length // block
     listed = np.zeros((nq, nk), dtype=bool)
@@ -210,6 +223,9 @@ def test_block_tables_are_exact(
     assert not (allowed & ~covered).any()
     full_px = np.kron(full, np.ones((block, block), dtype=bool))
     assert allowed[full_px & qv[:, None]].all()
+    if quantum > 1 and drop == 0 and (n_h % quantum, n_w % quantum) == (0, 0):
+        # Whole quantum tiles, no padding: nothing needs the mask.
+        assert not listed.any()
 
     # The packed rule the kernel evaluates equals the brute-force rule.
     q_code, k_code = _codes(q, k, fov, n_h, n_w, torch.device("cpu"))
@@ -219,10 +235,25 @@ def test_block_tables_are_exact(
     counts = allowed.sum(1)[qv]
     window = np.zeros((n_h, n_w), dtype=np.int64)
     np.add.at(window, (k.row[kv], k.col[kv]), 1)
-    r0 = _fov_start(q.row[qv], fov, n_h)
-    c0 = _fov_start(q.col[qv], fov, n_w)
+    r0 = _fov_start(q.row[qv], fov, n_h, quantum)
+    c0 = _fov_start(q.col[qv], fov, n_w, quantum)
     expect = [window[a : a + fov, b : b + fov].sum() for a, b in zip(r0, c0)]
     assert np.array_equal(counts, expect)
+    # The query's own cell is always inside its FOV, within the quantum of centre.
+    assert ((q.row[qv] >= r0) & (q.row[qv] < r0 + fov)).all()
+
+
+@pytest.mark.parametrize("pixel_latents", [False, True])
+def test_quantum_one_window_is_still_exact(pixel_latents: bool) -> None:
+    """A one-window domain has one FOV, so any quantum reproduces the stock forward."""
+    encoder = _encoder(pixel_latents)
+    sample = _sample(8, 8, missing=True)
+    ref = _run(encoder, sample, 1, None)
+    encoder.lighthouse = RCLighthouseSettings(fov_px=8, dense=True, fov_quantum=4)
+    with torch.no_grad():
+        out = encoder(sample, patch_size=1, input_res=10, fast_pass=False)
+    encoder.lighthouse = None
+    torch.testing.assert_close(out["student_registers"][0], ref, atol=1e-6, rtol=1e-6)
 
 
 def test_eval_wrapper_lighthouse_matches_per_sample_forward() -> None:
