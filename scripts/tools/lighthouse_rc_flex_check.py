@@ -33,7 +33,7 @@ def run_variant(name: str, side: int, per_cell: int) -> dict:
         _slot_layout,
     )
 
-    compile_mode, mask, chunks = name.split("/")
+    compile_mode, mask, chunks, *opts = name.split("/")
     dev = torch.device("cuda")
     rng = np.random.default_rng(0)
     cells = np.repeat(np.arange(side * side), per_cell)
@@ -43,6 +43,8 @@ def run_variant(name: str, side: int, per_cell: int) -> dict:
         fov_px=16,
         column_mask=(mask == "column"),
         q_chunk=(1 << 30) if chunks == "one" else 128 * 7,
+        full_blocks="nofull" not in opts,
+        pad_index_width="padwidth" in opts,
     )
     plan = _make_plan(lay, lay, 16, side, side, settings, dev)
     g = torch.Generator(device=dev).manual_seed(0)
@@ -87,13 +89,13 @@ def main() -> None:
     per_cell = int(sys.argv[2]) if len(sys.argv) > 2 else 36
     print(torch.cuda.get_device_name(), torch.__version__, flush=True)
     for name in (
-        "eager/packed/one",
         "dyn/packed/one",
-        "static/packed/one",
-        "dyn/packed/many",
-        "dyn/column/one",
-        "dyn/column/many",
-        "eager/column/one",
+        "dyn/packed/one/nofull",
+        "dyn/packed/one/padwidth",
+        "dyn/packed/one/nofull/padwidth",
+        "dyn/column/many/nofull",
+        "eager/packed/one",
+        "eager/packed/one/nofull",
     ):
         r = subprocess.run(  # nosec
             [sys.executable, __file__, "--variant", name, str(side), str(per_cell)],

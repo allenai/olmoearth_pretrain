@@ -96,6 +96,9 @@ class RCLighthouseSettings:
             FOV that moves in steps of ``fov_quantum`` cells and sits up to half a
             step off-centre. Must divide the FOV.
         code_dtype: Integer dtype of the mask codes (see :func:`_codes`).
+        full_blocks: Declare blocks inside every query's FOV *full* (skip
+            ``mask_mod``). False sends every listed block through the mask.
+        pad_index_width: Pad the block-index tables to the dense table width.
         column_mask: Use the column-only mask where the layout allows it (the
             exact ViT plan; see :func:`_column_codes`). False = packed codes.
         profile: Synchronize and record per-phase seconds in ``last_lighthouse_stats``.
@@ -117,6 +120,8 @@ class RCLighthouseSettings:
     fov_quantum: int = 1
     column_mask: bool = True
     code_dtype: str = "int64"
+    full_blocks: bool = True
+    pad_index_width: bool = False
 
 
 def lighthouse_rc_reach_px(
@@ -423,6 +428,28 @@ def _column_mask_mod(fov: int, q_c0: Tensor, k_col: Tensor) -> Callable[..., Ten
     return mask_mod
 
 
+def _merge_lists(
+    a_num: np.ndarray, a_idx: np.ndarray, b_num: np.ndarray, b_idx: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-row sorted union of two (num, idx) block lists."""
+    rows = [
+        np.sort(np.concatenate([a_idx[i, : a_num[i]], b_idx[i, : b_num[i]]]))
+        for i in range(a_num.size)
+    ]
+    num = np.array([r.size for r in rows], dtype=np.int32)
+    idx = np.zeros((num.size, max(int(num.max()) if num.size else 0, 1)), np.int32)
+    for i, r in enumerate(rows):
+        idx[i, : r.size] = r
+    return num, idx
+
+
+def _pad_width(idx: np.ndarray, width: int) -> np.ndarray:
+    """Pad a block-index table to ``width`` columns (the dense table's width)."""
+    out = np.zeros((idx.shape[0], max(width, idx.shape[1])), dtype=np.int32)
+    out[:, : idx.shape[1]] = idx
+    return out
+
+
 def _make_plan(
     q: _Slots,
     k: _Slots,
@@ -461,11 +488,21 @@ def _make_plan(
         def t(a: np.ndarray) -> Tensor:
             return torch.from_numpy(np.ascontiguousarray(a)).to(device)[None, None]
 
+        part_num, part_idx = tab["part_num"][qb0:qb1], tab["part_idx"][qb0:qb1]
+        full_num, full_idx = tab["full_num"][qb0:qb1], tab["full_idx"][qb0:qb1]
+        if not settings.full_blocks:
+            # Every listed block through mask_mod (diagnostic / fallback).
+            part_num, part_idx = _merge_lists(part_num, part_idx, full_num, full_idx)
+            full_num, full_idx = np.zeros_like(part_num), np.zeros_like(part_idx)
+        if settings.pad_index_width:
+            nk = k.length // block
+            part_idx = _pad_width(part_idx, nk)
+            full_idx = _pad_width(full_idx, nk)
         bm = BlockMask.from_kv_blocks(
-            t(tab["part_num"][qb0:qb1]),
-            t(tab["part_idx"][qb0:qb1]),
-            t(tab["full_num"][qb0:qb1]),
-            t(tab["full_idx"][qb0:qb1]),
+            t(part_num),
+            t(part_idx),
+            t(full_num),
+            t(full_idx),
             BLOCK_SIZE=block,
             mask_mod=mask_mod,
             seq_lengths=((qb1 - qb0) * block, k.length),
