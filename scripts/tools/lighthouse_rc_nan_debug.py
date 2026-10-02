@@ -56,23 +56,43 @@ def main() -> None:
         b.attn.proj.register_forward_hook(hook(f"lat{i}.attn.proj"))
         for i, b in enumerate(p.latent_blocks)
     ]
-    for quantum in (1, 2, 4, 8):
+    for quantum, column, dtype in (
+        (1, False, "int64"),
+        (1, True, "int64"),
+        (4, False, "int64"),
+        (8, False, "int64"),
+        (1, True, "int32"),
+        (1, False, "int32"),
+    ):
         outs = {}
-        for dense in (False, True):
+        tag = f"q{quantum} column={column} {dtype}"
+        for dense in (True, False):
             seen.clear()
-            enc.lighthouse = RCLighthouseSettings(16, fov_quantum=quantum, dense=dense)
-            with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-                o = enc(crop, patch_size=1, input_res=10, fast_pass=False)
-            enc.lighthouse = None
+            enc.lighthouse = RCLighthouseSettings(
+                16,
+                fov_quantum=quantum,
+                dense=dense,
+                column_mask=column,
+                code_dtype=dtype,
+            )
+            try:
+                with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+                    o = enc(crop, patch_size=1, input_res=10, fast_pass=False)
+                torch.cuda.synchronize()
+            except Exception as e:  # noqa: BLE001
+                print(f"{tag} dense={dense}: ERROR {type(e).__name__}", flush=True)
+                return
+            finally:
+                enc.lighthouse = None
             r = o["student_registers"][0].float()
             outs[dense] = r
             print(
-                f"q{quantum} dense={dense}: NaN px {int(torch.isnan(r).any(-1).sum())} / {r.shape[0] * r.shape[1]}",
+                f"{tag} dense={dense}: NaN px {int(torch.isnan(r).any(-1).sum())}",
                 flush=True,
             )
         cos = torch.nn.functional.cosine_similarity(outs[False], outs[True], dim=-1)
         print(
-            f"q{quantum} flex vs dense cos min {cos.nan_to_num(-9).min().item():.6f}",
+            f"{tag} flex vs dense cos min {cos.nan_to_num(-9).min().item():.6f} mean {cos.nan_to_num(-9).mean().item():.6f}",
             flush=True,
         )
     for h in hs:

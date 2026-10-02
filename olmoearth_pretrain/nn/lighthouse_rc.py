@@ -95,6 +95,7 @@ class RCLighthouseSettings:
             make every attention block full (no mask evaluated) at the price of a
             FOV that moves in steps of ``fov_quantum`` cells and sits up to half a
             step off-centre. Must divide the FOV.
+        code_dtype: Integer dtype of the mask codes (see :func:`_codes`).
         column_mask: Use the column-only mask where the layout allows it (the
             exact ViT plan; see :func:`_column_codes`). False = packed codes.
         profile: Synchronize and record per-phase seconds in ``last_lighthouse_stats``.
@@ -115,6 +116,7 @@ class RCLighthouseSettings:
     return_tokens: bool = False
     fov_quantum: int = 1
     column_mask: bool = True
+    code_dtype: str = "int64"
 
 
 def lighthouse_rc_reach_px(
@@ -328,12 +330,18 @@ def _block_tables(
 
 
 def _codes(
-    q: _Slots, k: _Slots, fov: int, n_h: int, n_w: int, device: torch.device
+    q: _Slots,
+    k: _Slots,
+    fov: int,
+    n_h: int,
+    n_w: int,
+    device: torch.device,
+    code_dtype: str = "int64",
 ) -> tuple[Tensor, Tensor]:
-    """Per-slot int32 codes: query ``r0 | c0 << 14 | valid << 28``, key the same.
+    """Per-slot codes: query ``r0 | c0 << 14 | valid << 28``, key the same.
 
-    int32, not int64: the mask runs per score of every partial block, and 64-bit
-    integer arithmetic is several times slower on the GPU.
+    int64 by default: int32 codes gave WRONG FlexAttention outputs on GPU (cos 0.15
+    vs the dense reference) and illegal memory accesses, torch 2.9.
     """
     qv = q.valid
     r0 = np.where(qv, _fov_start(np.maximum(q.row, 0), fov, n_h, q.quantum), 0)
@@ -346,8 +354,8 @@ def _codes(
         | (kv.astype(np.int64) << (2 * _BITS))
     )
     return (
-        torch.from_numpy(q_code.astype(np.int32)).to(device),
-        torch.from_numpy(k_code.astype(np.int32)).to(device),
+        torch.from_numpy(q_code.astype(np.dtype(code_dtype))).to(device),
+        torch.from_numpy(k_code.astype(np.dtype(code_dtype))).to(device),
     )
 
 
@@ -370,7 +378,13 @@ _NO_COL = 1 << 24  # column code of a padding key: inside no FOV
 
 
 def _column_codes(
-    q: _Slots, k: _Slots, fov: int, n_w: int, block: int, device: torch.device
+    q: _Slots,
+    k: _Slots,
+    fov: int,
+    n_w: int,
+    block: int,
+    device: torch.device,
+    code_dtype: str = "int64",
 ) -> tuple[Tensor, Tensor] | None:
     """Column-only mask codes when every query block lies in ONE cell row.
 
@@ -396,8 +410,8 @@ def _column_codes(
     c0 = np.maximum(c0[idx], 0)
     k_col = np.where(k.valid, k.col, _NO_COL)
     return (
-        torch.from_numpy(c0.astype(np.int32)).to(device),
-        torch.from_numpy(k_col.astype(np.int32)).to(device),
+        torch.from_numpy(c0.astype(np.dtype(code_dtype))).to(device),
+        torch.from_numpy(k_col.astype(np.dtype(code_dtype))).to(device),
     )
 
 
@@ -418,7 +432,7 @@ def _make_plan(
     settings: RCLighthouseSettings,
     device: torch.device,
 ) -> _Plan:
-    q_code, k_code = _codes(q, k, fov, n_h, n_w, device)
+    q_code, k_code = _codes(q, k, fov, n_h, n_w, device, settings.code_dtype)
     block = settings.block
     if settings.dense:
         mask = _rule(fov, q_code[:, None], k_code[None, :])
@@ -429,7 +443,9 @@ def _make_plan(
     t0 = time.perf_counter()
     tab = _block_tables(q, k, fov, n_h, n_w, block)
     columns = (
-        _column_codes(q, k, fov, n_w, block, device) if settings.column_mask else None
+        _column_codes(q, k, fov, n_w, block, device, settings.code_dtype)
+        if settings.column_mask
+        else None
     )
     per_chunk = max(settings.q_chunk // block, 1)
     nq = q.length // block
