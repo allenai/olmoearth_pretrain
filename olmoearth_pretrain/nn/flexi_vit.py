@@ -1106,6 +1106,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1118,10 +1119,18 @@ class FlexiVitBase(nn.Module):
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
+
+        ``query_pixel_shift`` (``[B, h_p, w_p, 2]``, patch units, 2D RoPE only)
+        moves every spatial token of cell ``(i, j)`` off its patch coordinate by that
+        cell's shift -- see ``olmoearth_pretrain.nn.pixel_targets``.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
+            if query_pixel_shift is not None:
+                raise ValueError("query_pixel_shift requires a RoPE position encoding")
             return None
         is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
+        if is_3d and query_pixel_shift is not None:
+            raise NotImplementedError("query_pixel_shift supports 2D RoPE only")
 
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
@@ -1167,6 +1176,7 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
+                    query_pixel_shift=query_pixel_shift,
                 )
             position_dict[modality_name] = positions
 
@@ -1261,8 +1271,13 @@ class FlexiVitBase(nn.Module):
         modality: ModalitySpec,
         tokens: Tensor,
         gsd_ratio: float,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor:
-        """Build ``(row, col)`` RoPE coordinates for one modality."""
+        """Build ``(row, col)`` RoPE coordinates for one modality.
+
+        ``query_pixel_shift``: optional ``[B, h, w, 2]`` per-cell shift in patch
+        units, added to every token of the cell (all timesteps and band sets).
+        """
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
 
@@ -1271,16 +1286,23 @@ class FlexiVitBase(nn.Module):
         )
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
+        grid = repeat(grid, "h w p -> b h w p", b=batch_size)
+        if query_pixel_shift is not None:
+            if query_pixel_shift.shape != grid.shape:
+                raise ValueError(
+                    f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
+                    f"the {modality_name} token grid {tuple(grid.shape)}"
+                )
+            grid = grid + query_pixel_shift.to(grid.dtype) * gsd_ratio
 
         if tokens.ndim == 5:
             bandsets = tokens.shape[3]
-            return repeat(grid, "h w p -> b h w b_s p", b=batch_size, b_s=bandsets)
+            return repeat(grid, "b h w p -> b h w b_s p", b_s=bandsets)
 
         timesteps, bandsets = tokens.shape[3], tokens.shape[4]
         return repeat(
             grid,
-            "h w p -> b h w t b_s p",
-            b=batch_size,
+            "b h w p -> b h w t b_s p",
             t=timesteps,
             b_s=bandsets,
         )
@@ -3487,6 +3509,7 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3501,6 +3524,7 @@ class Predictor(PredictorBase):
             patch_size,
             input_res,
             timestamps=timestamps,
+            query_pixel_shift=query_pixel_shift,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3645,6 +3669,7 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3659,6 +3684,9 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell query shift in
+                patch units (pixel-resolution targets; see
+                ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3689,6 +3717,7 @@ class Predictor(PredictorBase):
             input_res,
             registers=registers,
             register_positions=register_positions,
+            query_pixel_shift=query_pixel_shift,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
