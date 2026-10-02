@@ -25,11 +25,15 @@ from olmoearth_pretrain.nn.flexi_vit import (
 from olmoearth_pretrain.nn.joint_latent import build_pixel_latent_positions
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_targets import (
+    PooledPixelQueries,
     gather_pixels,
+    gather_pooled_pixels,
     offsets_to_query_shift,
     sample_independent_pixel_offsets,
     sample_pixel_offsets,
+    sample_pooled_pixel_queries,
     spatial_token_grid,
+    token_decode_mask,
 )
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.loss import LossConfig
@@ -406,3 +410,176 @@ def test_unknown_pixel_target_draw_is_refused() -> None:
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         with pytest.raises(ValueError, match="pixel_target_draw"):
             config.build(_model_config().build(), device=torch.device("cpu"))
+
+
+# --- pooled draw: targets drawn from all masked pixels -----------------------------------
+
+
+def _spatial_sample() -> MaskedOlmoEarthSample:
+    """S2 + WorldCover only (the pooled draw refuses non-spatial modalities).
+
+    Masks sit on 4x4 blocks so every tested patch size sees whole tokens; three S2
+    tokens and two WorldCover tokens are decoded at patch size 4.
+    """
+    base = _make_sample()
+    num_s2 = Modality.SENTINEL2_L2A.num_bands
+    s2_mask = torch.zeros(B, H, W, T, num_s2, dtype=torch.long)
+    for rows, cols, t in (
+        (slice(0, 4), slice(0, 4), 0),
+        (slice(4, 8), slice(4, 8), 1),
+        (slice(0, 4), slice(4, 8), 1),
+    ):
+        s2_mask[:, rows, cols, t] = MaskValue.DECODER.value
+    num_wc = Modality.WORLDCOVER.num_bands
+    wc_mask = torch.zeros(B, H, W, 1, num_wc, dtype=torch.long)
+    wc_mask[:, 4:8, 4:8] = MaskValue.DECODER.value
+    wc_mask[:, 0:4, 0:4] = MaskValue.DECODER.value
+    return MaskedOlmoEarthSample(
+        sentinel2_l2a=base.sentinel2_l2a,
+        sentinel2_l2a_mask=s2_mask,
+        worldcover=torch.randn(B, H, W, 1, num_wc),
+        worldcover_mask=wc_mask,
+        timestamps=base.timestamps,
+    )
+
+
+def _pooled_model() -> LatentMIM:
+    config = _model_config(S2_ONE_BANDSET)
+    names = [Modality.SENTINEL2_L2A.name, Modality.WORLDCOVER.name]
+    config.encoder_config.supported_modality_names = names
+    assert config.decoder_config is not None
+    config.decoder_config.supported_modality_names = names
+    return config.build()
+
+
+@pytest.mark.parametrize("patch_size", [2, 4])
+def test_pooled_draw_counts_and_units(patch_size: int) -> None:
+    """As many slots as masked tokens; each a distinct pixel of a masked token."""
+    torch.manual_seed(0)
+    sample = _spatial_sample()
+    max_per_token = 0
+    saw_empty_token = False
+    for _ in range(40):
+        pooled = sample_pooled_pixel_queries(sample, patch_size, torch.device("cpu"))
+        for name, slots in pooled.items():
+            decode = token_decode_mask(sample, name, patch_size)
+            counts = decode.flatten(1).sum(1)
+            assert torch.equal(slots.valid.sum(1), counts)
+            for b in range(B):
+                picked = slots.token_index[b][slots.valid[b]]
+                pix = slots.pixel[b][slots.valid[b]]
+                assert (pix >= 0).all() and (pix < patch_size).all()
+                assert decode[b, picked[:, 0], picked[:, 1], picked[:, 2]].all()
+                units = {tuple(u) for u in torch.cat([picked, pix], 1).tolist()}
+                assert len(units) == len(picked)  # without replacement
+                per_token: dict[tuple, int] = {}
+                for tok in picked.tolist():
+                    per_token[tuple(tok)] = per_token.get(tuple(tok), 0) + 1
+                max_per_token = max(max_per_token, max(per_token.values(), default=0))
+                saw_empty_token |= len(per_token) < int(counts[b])
+    # The point of the pooled draw: footprints get zero or several targets.
+    assert max_per_token >= 2
+    assert saw_empty_token
+
+
+def test_gather_pooled_pixels_picks_each_slot() -> None:
+    """Slot q of sample b holds pixel (i*p + r, j*p + c) at timestep t."""
+    torch.manual_seed(0)
+    sample = _spatial_sample()
+    patch_size = 4
+    pooled = sample_pooled_pixel_queries(sample, patch_size, torch.device("cpu"))
+    gathered = gather_pooled_pixels(sample, pooled, patch_size)
+    for name, slots in pooled.items():
+        field, picked = getattr(sample, name), getattr(gathered, name)
+        assert picked.shape[:4] == (B, slots.valid.shape[1], 1, 1)
+        for b in range(B):
+            for q in range(slots.valid.shape[1]):
+                i, j, t = slots.token_index[b, q].tolist()
+                r, c = slots.pixel[b, q].tolist()
+                assert torch.equal(
+                    picked[b, q, 0, 0],
+                    field[b, i * patch_size + r, j * patch_size + c, t],
+                )
+
+
+def test_forward_pooled_matches_the_standard_decoder() -> None:
+    """One slot per masked token at the shared pixel == the shared-draw decoder."""
+    torch.manual_seed(0)
+    model = _pooled_model().eval()
+    sample = _spatial_sample()
+    patch_size = 4
+    h_p, w_p = H // patch_size, W // patch_size
+    offsets = sample_pixel_offsets(B, (h_p, w_p), patch_size, torch.device("cpu"))
+    pooled = {}
+    for name in sample.modalities:
+        decode = token_decode_mask(sample, name, patch_size)
+        tok = decode.nonzero()  # [N, 4] (b, i, j, t), same count per sample here
+        per_sample = [tok[tok[:, 0] == b, 1:] for b in range(B)]
+        n = max(len(x) for x in per_sample)
+        index = torch.zeros(B, n, 3, dtype=torch.long)
+        valid = torch.zeros(B, n, dtype=torch.bool)
+        for b, x in enumerate(per_sample):
+            index[b, : len(x)] = x
+            valid[b, : len(x)] = True
+        pixel = offsets[torch.arange(B).view(-1, 1), index[..., 0], index[..., 1]]
+        pooled[name] = PooledPixelQueries(token_index=index, pixel=pixel, valid=valid)
+    with torch.no_grad():
+        standard = model.forward(
+            sample,
+            patch_size,
+            query_pixel_shift=offsets_to_query_shift(offsets, patch_size),
+        )[1]
+        flat = model.forward(sample, patch_size, pooled_queries=pooled)[1]
+    for name, slots in pooled.items():
+        ref, got = getattr(standard, name), getattr(flat, name)
+        assert ref is not None and got is not None
+        for b in range(B):
+            for q in range(slots.valid.shape[1]):
+                if not slots.valid[b, q]:
+                    continue
+                i, j, t = slots.token_index[b, q].tolist()
+                torch.testing.assert_close(got[b, q, 0, 0, 0], ref[b, i, j, t, 0])
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_train_module_pooled_draw_forward(patch_size: int) -> None:
+    """The pooled draw trains: finite loss, gradients, one target per masked token."""
+    torch.manual_seed(0)
+    model = _pooled_model()
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_draw="pooled",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = config.build(model, device=torch.device("cpu"))
+    sample = _spatial_sample()
+    loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
+        sample, patch_size, train_module.token_exit_cfg
+    )
+    assert torch.isfinite(loss)
+    for name in sample.modalities:
+        pred, tgt = getattr(decoded, name), getattr(target_output, name)
+        assert pred is not None and tgt is not None
+        assert tgt.shape[:-1] == pred.shape[:-1]
+        if patch_size > 1:
+            n_decoded = token_decode_mask(sample, name, patch_size).flatten(1).sum(1)
+            pred_mask = getattr(decoded, f"{name}_mask")
+            assert torch.equal(
+                (pred_mask == MaskValue.DECODER.value).flatten(1).sum(1), n_decoded
+            )
+    loss.backward()
+    grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)

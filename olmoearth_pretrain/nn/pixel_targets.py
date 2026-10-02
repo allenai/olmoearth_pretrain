@@ -18,16 +18,25 @@ Two draws, both uniform over the cell's pixels and redrawn every step:
   tokens of a cell may point at different pixels. Needs one band set per modality
   (the band sets of a token share its pixels).
 
-Either way there is one query and one target per masked token. The decoder has no
+* ``pooled``: per (sample, modality), draw as many targets as there are masked
+  tokens, uniformly and without replacement from ALL masked pixels (every pixel of
+  every masked token's footprint, at that token's timestep). A token's footprint can
+  then get zero, one or several target pixels. Queries no longer map one-to-one onto
+  tokens, so this mode decodes a flat list (:class:`PooledPixelQueries`, decoded by
+  ``Predictor.forward_pooled``).
+
+In every mode there is one query and one target per masked token in total. The decoder has no
 self-attention between queries, so decoding this subset is exact for the drawn
 pixels: only which pixel each masked token is scored on changes.
 """
+
+from dataclasses import dataclass
 
 import torch
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 
 
 def spatial_token_grid(
@@ -175,4 +184,105 @@ def gather_pixels(
         mask = getattr(sample, mask_name)
         if mask is not None:
             updates[mask_name] = _gather(mask, modality_offsets, patch_size)
+    return sample._replace(**updates)
+
+
+@dataclass
+class PooledPixelQueries:
+    """The pooled pixel targets of ONE modality, as ``Q`` slots per sample.
+
+    Slot ``q`` of sample ``b`` (where ``valid[b, q]``) asks for pixel
+    ``pixel[b, q]`` of the token at ``token_index[b, q] = (i, j, t)``: the pixel
+    ``(i * p + row, j * p + col)`` at timestep ``t`` (``t = 0`` for static maps).
+    Sample ``b`` has as many valid slots as it has masked tokens of this modality.
+    """
+
+    token_index: Tensor  # [B, Q, 3] int64 (i, j, t)
+    pixel: Tensor  # [B, Q, 2] int64 (row, col) inside the footprint
+    valid: Tensor  # [B, Q] bool
+
+
+def token_decode_mask(
+    sample: MaskedOlmoEarthSample, name: str, patch_size: int
+) -> Tensor:
+    """``[B, h_p, w_p, T]`` bool: which tokens of ``name`` the decoder predicts.
+
+    Reads band set 0's mask at each token's top-left pixel, as the patch embedding
+    does (one band set per modality is required by the pooled draw).
+    """
+    mask = getattr(sample, sample.get_masked_modality_name(name))
+    return mask[:, ::patch_size, ::patch_size, :, 0] == MaskValue.DECODER.value
+
+
+def sample_pooled_pixel_queries(
+    sample: MaskedOlmoEarthSample,
+    patch_size: int,
+    device: torch.device,
+    generator: torch.Generator | None = None,
+) -> dict[str, PooledPixelQueries]:
+    """Pooled draw for every spatial modality (see the module docstring)."""
+    pixels_per_token = patch_size * patch_size
+    out = {}
+    for name in sample.modalities:
+        if not Modality.get(name).is_spatial:
+            raise ValueError(
+                f"pixel_target_draw='pooled' supports spatial modalities only; got "
+                f"{name}"
+            )
+        decode = token_decode_mask(sample, name, patch_size).to(device)
+        batch_size, h_p, w_p, timesteps = decode.shape
+        counts = decode.flatten(1).sum(dim=1)  # [B] targets per sample
+        # At least one slot, so a modality with nothing masked still has a (fully
+        # invalid) entry and predictions and targets list the same modalities.
+        num_slots = max(int(counts.max().item()) if counts.numel() else 0, 1)
+        # Uniform scores over every (token, pixel) unit; non-decoded tokens sort last.
+        scores = torch.rand(
+            (batch_size, h_p, w_p, timesteps, pixels_per_token),
+            device=device,
+            generator=generator,
+        )
+        scores = scores.masked_fill(~decode.unsqueeze(-1), -1.0).flatten(1)
+        # Top-`count` scores per sample = `count` units drawn without replacement.
+        unit = scores.topk(num_slots, dim=1).indices  # [B, Q]
+        pixel_flat = unit % pixels_per_token
+        token_flat = unit // pixels_per_token
+        t = token_flat % timesteps
+        j = (token_flat // timesteps) % w_p
+        i = token_flat // (timesteps * w_p)
+        out[name] = PooledPixelQueries(
+            token_index=torch.stack([i, j, t], dim=-1),
+            pixel=torch.stack(
+                [pixel_flat // patch_size, pixel_flat % patch_size], dim=-1
+            ),
+            valid=torch.arange(num_slots, device=device).unsqueeze(0)
+            < counts.unsqueeze(1),
+        )
+    return out
+
+
+def gather_pooled_pixels(
+    sample: MaskedOlmoEarthSample,
+    queries: dict[str, PooledPixelQueries],
+    patch_size: int,
+) -> MaskedOlmoEarthSample:
+    """The drawn pixels as a ``[B, Q, 1, 1, ...]`` field per modality.
+
+    Laid out so the patch embedding at ``patch_size=1`` returns one target per slot,
+    in the ``[B, Q, 1, 1, band sets, D]`` layout ``Predictor.forward_pooled`` emits.
+    Invalid slots hold an arbitrary pixel; the decoded mask leaves them out of the
+    loss.
+    """
+    updates = {}
+    for name, q in queries.items():
+        batch_index = torch.arange(q.valid.shape[0], device=q.valid.device).view(-1, 1)
+        rows = q.token_index[..., 0] * patch_size + q.pixel[..., 0]
+        cols = q.token_index[..., 1] * patch_size + q.pixel[..., 1]
+        t = q.token_index[..., 2]
+        mask_name = sample.get_masked_modality_name(name)
+        for field_name in (name, mask_name):
+            field = getattr(sample, field_name)
+            if field is None:
+                continue
+            picked = field[batch_index, rows, cols, t]  # [B, Q, ...]
+            updates[field_name] = picked.unsqueeze(2).unsqueeze(3)
     return sample._replace(**updates)

@@ -3749,6 +3749,138 @@ class Predictor(PredictorBase):
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
+    def forward_pooled(
+        self,
+        x: TokensAndMasks,
+        timestamps: Tensor,
+        patch_size: int,
+        pooled: dict[str, Any],
+        input_res: int = BASE_GSD,
+        registers: Tensor | None = None,
+        register_positions: Tensor | None = None,
+    ) -> TokensAndMasks:
+        """Decode a flat list of pixel queries (the ``pooled`` pixel-target draw).
+
+        ``pooled`` maps each modality to a ``PooledPixelQueries``: ``Q`` slots per
+        sample, each naming a decoded token ``(i, j, t)`` and a pixel inside its
+        footprint. A slot's query is that token's decoder input exactly as
+        :meth:`forward` builds it (mask token + composite encodings), with its 2D
+        RoPE coordinate moved to the pixel's center; slots of one sample attend only
+        to that sample's latents, never to each other, so several slots of one token
+        are independent queries. Returns ``[B, Q, 1, 1, 1, D]`` per modality, masked
+        ``DECODER`` on valid slots and ``ONLINE_ENCODER`` elsewhere.
+        """
+        if registers is None:
+            raise ValueError("forward_pooled decodes against the Perceiver latents")
+        if self.register_to_decoder_embed is None:
+            raise ValueError(
+                "forward_pooled requires a decoder built with use_perceiver"
+            )
+        if PositionEncoding.is_3d_rope(self.position_encoding) or not (
+            PositionEncoding.is_rope(self.position_encoding)
+        ):
+            raise NotImplementedError("forward_pooled supports 2D RoPE decoders only")
+
+        decoder_embedded = x.as_dict()
+        for modality in get_modalities_to_process(
+            x.modalities, self.supported_modality_names
+        ):
+            decoder_embedded[modality] = self.encoder_to_decoder_embed(
+                self.input_norm(getattr(x, modality))
+            )
+        decoder_embedded.update(self.add_masks(decoder_embedded))
+        tokens_only, _, _ = self.split_tokens_masks_and_dims(decoder_embedded)
+        tokens = self.composite_encodings(
+            tokens_only, timestamps, patch_size, input_res
+        )
+        gsd_ratio = (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
+
+        names = list(pooled)
+        queries, query_positions, query_valid = [], [], []
+        for name in names:
+            slots = pooled[name]
+            if self.tokenization_config.get_num_bandsets(name) != 1:
+                raise ValueError(f"forward_pooled needs one band set; {name} has more")
+            batch_index = torch.arange(
+                slots.valid.shape[0], device=slots.valid.device
+            ).view(-1, 1)
+            i, j, t = slots.token_index.unbind(-1)
+            positions = self._build_2d_rope_positions_for_modality(
+                modality_name=name,
+                modality=Modality.get(name),
+                tokens=tokens_only[name],
+                gsd_ratio=gsd_ratio,
+            )
+            shift = (slots.pixel.to(torch.float32) + 0.5) / patch_size - 0.5
+            queries.append(tokens[name][batch_index, i, j, t, 0])  # [B, Q, D]
+            query_positions.append(
+                positions[batch_index, i, j, t, 0]
+                + shift.to(positions.dtype) * gsd_ratio
+            )
+            query_valid.append(slots.valid)
+        q = torch.cat(queries, dim=1)
+        q_pos = torch.cat(query_positions, dim=1)
+        q_valid = torch.cat(query_valid, dim=1)
+
+        context = self.register_to_decoder_embed(
+            rearrange(registers, "b h w d -> b (h w) d")
+        )
+        context_positions = register_positions
+        batch_size, num_registers = context.shape[0], context.shape[1]
+        if self.use_flash_attn:
+            og_shape = q.shape
+            q = self.pack_tokens(q, q_valid)
+            q_pos = self.pack_tokens(q_pos, q_valid)
+            seqlens_q = q_valid.sum(dim=1).to(torch.int32)
+            cu_seqlens_q = get_cumulative_sequence_lengths(seqlens_q)
+            max_seqlen_q = int(seqlens_q.max().item()) if seqlens_q.numel() else 0
+            context = torch.flatten(context, end_dim=1)
+            if context_positions is not None:
+                context_positions = torch.flatten(context_positions, end_dim=1)
+            cu_seqlens_k = get_cumulative_sequence_lengths(
+                torch.full(
+                    (batch_size,), num_registers, dtype=torch.int32, device=q.device
+                )
+            )
+        else:
+            cu_seqlens_q = cu_seqlens_k = None
+            max_seqlen_q = q.shape[1]
+        for blk in self.blocks:
+            q = blk(
+                x=q,
+                y=context,
+                attn_mask=None,
+                cu_seqlens_q=cu_seqlens_q,
+                cu_seqlens_k=cu_seqlens_k,
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=num_registers,
+                rope_positions=q_pos,
+                rope_positions_y=context_positions,
+            )
+        if self.use_flash_attn:
+            q = self.unpack_tokens(q, q_valid, og_shape)
+        out = self.to_output_embed(self.norm(q))
+
+        output_dict: dict[str, Tensor] = {}
+        start = 0
+        for name, valid in zip(names, query_valid):
+            num_slots = valid.shape[1]
+            output_dict[name] = out[:, start : start + num_slots].reshape(
+                batch_size, num_slots, 1, 1, 1, -1
+            )
+            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(name)] = (
+                torch.where(
+                    valid,
+                    MaskValue.DECODER.value,
+                    MaskValue.ONLINE_ENCODER.value,
+                ).reshape(batch_size, num_slots, 1, 1, 1)
+            )
+            start += num_slots
+        return TokensAndMasks(**output_dict)
+
 
 @dataclass
 class EncoderConfig(Config):

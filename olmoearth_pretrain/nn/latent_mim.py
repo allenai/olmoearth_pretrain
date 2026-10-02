@@ -126,6 +126,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         x: MaskedOlmoEarthSample,
         patch_size: int,
         query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None,
+        pooled_queries: dict[str, Any] | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -144,6 +145,9 @@ class LatentMIM(nn.Module, DistributedMixins):
                 targets, one ``[B, h_p, w_p, 2]`` tensor or a ``{modality: shift}``
                 dict (see ``olmoearth_pretrain.nn.pixel_targets``). None keeps the
                 queries on the patch grid.
+            pooled_queries: Optional ``{modality: PooledPixelQueries}`` for the
+                pooled pixel-target draw: the decoder then decodes these slots
+                (``Predictor.forward_pooled``) instead of one query per masked token.
 
         Returns:
             latent: embeddings from encoder
@@ -174,11 +178,20 @@ class LatentMIM(nn.Module, DistributedMixins):
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        if query_pixel_shift is not None:
-            decoder_kwargs["query_pixel_shift"] = query_pixel_shift
-        decoded = self.decoder(
-            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-        )
+        if pooled_queries is not None:
+            decoded = self.decoder.forward_pooled(
+                latent,
+                timestamps=x.timestamps,
+                patch_size=patch_size,
+                pooled=pooled_queries,
+                **decoder_kwargs,
+            )
+        else:
+            if query_pixel_shift is not None:
+                decoder_kwargs["query_pixel_shift"] = query_pixel_shift
+            decoded = self.decoder(
+                latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+            )
 
         # The encoder hands back the register grid as [B, n_h, n_w, D]; it is
         # otherwise visible only inside decoder_kwargs.
