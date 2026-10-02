@@ -20,9 +20,10 @@ taken from earthy's best long-sequence arm (``earthy-oe-4xh100-ts48-fact9k-v1``)
 Everything else is v1.2, for comparability with the other OlmoEarth models:
 single-bandset S2 tokenization, decode-only map targets, AdamW lr 1e-4 wd 0.02,
 CosWithWarmup(8000) with the cosine horizon pinned to v1.2's 667,200 steps (so
-the learning rate matches v1.2 at every step of a shorter run), the v1.2
-in-loop eval suite, and ``rope_mixed_base=10`` (the value the released v1.2 runs
-used; ``v1_2/base.py`` says 10000).
+the learning rate matches v1.2 at every step of a shorter run), and
+``rope_mixed_base=10`` (the value the released v1.2 runs used; ``v1_2/base.py``
+says 10000). In-loop evals: v1.2's m-eurosat and PASTIS task configs only, every
+5000 steps, run inside the training job.
 """
 
 import logging
@@ -55,8 +56,10 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-MODULE_PATH = "scripts/vnext/allcap_fact9k/base.py"
 WANDB_PROJECT = "2026_09_30_allcap_fact9k"
+# In-loop evals (run in the training job, not as separate Beaker jobs).
+EVAL_TASKS = ("m-eurosat", "pastis")
+EVAL_INTERVAL_STEPS = 5000
 
 ALLCAP_H5PY_DIR = (
     "/weka/dfive-default/helios/dataset/osm_allcaptures/"
@@ -146,11 +149,17 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents):
-    """base_faster's trainer (evals as Beaker jobs), 100k steps, own W&B project."""
+    """base_faster's trainer, 100k steps, own W&B project, in-loop eurosat + pastis."""
     config = v1_2_faster.build_trainer_config(common)
     config.max_duration = Duration.steps(MAX_STEPS)
     config.callbacks["wandb"].project = WANDB_PROJECT
-    config.callbacks["downstream_evaluator"].beaker_eval_module_path = MODULE_PATH
+    evaluator = config.callbacks["downstream_evaluator"]
+    evaluator.run_as_beaker_job = False
+    evaluator.tasks = {
+        name: task for name, task in evaluator.tasks.items() if name in EVAL_TASKS
+    }
+    for task in evaluator.tasks.values():
+        task.eval_interval = Duration.steps(EVAL_INTERVAL_STEPS)
     return config
 
 
