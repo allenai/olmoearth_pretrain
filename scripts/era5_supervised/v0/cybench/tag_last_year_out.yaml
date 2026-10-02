@@ -1,0 +1,35 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: "CY-Bench eval subset \u2014 last-year-out loyo_split tags for US, DE, AR (3k train + full last year, per crop) (0 GPU)"
+tasks:
+- name: cybench_tag_subset
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  envVars:
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: HELIOS_REF
+    value: __HELIOS_REF__
+  command:
+  - bash
+  - -c
+  - "set -euo pipefail\nROOT=/weka/dfive-default/helios/dataset/cybench\nconda install gh --channel conda-forge -y -q\ngh auth status\ngh repo clone allenai/olmoearth_pretrain .\ngit checkout \"$HELIOS_REF\"\npip install -q uv\nexport PATH=\"/root/.local/bin:$PATH\"\nuv sync --locked --all-extras\nvenv_path=$(uv run python -c 'import sys; print(sys.executable)')\nsource \"$(dirname \"$venv_path\")/activate\"\npython -m olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset \\\n  --labels-root \"$ROOT/raw/cybench-data/cybench-data\" --ds-path \"$ROOT/rslearn_dataset\" \\\n  --per-country US DE AR --n-train 3000 --lyo-tag loyo_split --seed 0 --workers 32 2>&1 | tee /outputs/tag.log\ncp \"$ROOT/meta/eval_subset_loyo_split.csv\" /outputs/\necho DONE\n"
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    cpuCount: 8
+    memory: 32 GiB
+  context:
+    priority: urgent
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+    - ai2/ceres
+    - ai2/saturn
+    - ai2/neptune
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default

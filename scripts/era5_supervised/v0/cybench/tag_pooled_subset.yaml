@@ -1,0 +1,49 @@
+version: v2
+budget: ai2/atec-olmoearth
+description: CY-Bench eval subset — tag 3k/1k/1k oep_eval windows per crop (0 GPU)
+tasks:
+- name: cybench_tag_subset
+  image:
+    beaker: petew/olmo-core-tch271cu128-2025-09-15
+  envVars:
+  - name: GITHUB_TOKEN
+    secret: gabrielt_GITHUB_TOKEN
+  - name: HELIOS_REF
+    value: __HELIOS_REF__
+  command:
+  - bash
+  - -c
+  - |
+    set -euo pipefail
+    ROOT=/weka/dfive-default/helios/dataset/cybench
+    conda install gh --channel conda-forge -y -q
+    gh auth status
+    gh repo clone allenai/olmoearth_pretrain .
+    git checkout "$HELIOS_REF"
+    pip install -q uv
+    export PATH="/root/.local/bin:$PATH"
+    uv sync --locked --all-extras
+    venv_path=$(uv run python -c 'import sys; print(sys.executable)')
+    source "$(dirname "$venv_path")/activate"
+    python -m olmoearth_pretrain.dataset_creation.cybench.tag_eval_subset \
+      --labels-root "$ROOT/raw/cybench-data/cybench-data" --ds-path "$ROOT/rslearn_dataset" \
+      --n-train 3000 --n-val 1000 --n-test 1000 --tag oep_eval --seed 0 --workers 32 2>&1 | tee /outputs/tag.log
+    cp "$ROOT/meta/eval_subset_oep_eval.csv" /outputs/
+    echo DONE
+  result:
+    path: /outputs
+  resources:
+    gpuCount: 0
+    cpuCount: 8
+    memory: 32 GiB
+  context:
+    priority: high
+    preemptible: true
+  constraints:
+    cluster:
+    - ai2/jupiter
+    - ai2/ceres
+  datasets:
+  - mountPath: /weka/dfive-default
+    source:
+      weka: dfive-default
