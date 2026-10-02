@@ -262,7 +262,9 @@ class JointLatentTransformer(nn.Module):
             max_latents: Latent budget per sample for ``random_latent_stride``: large
                 grids fall back to coarser strides instead of being excluded.
             eval_latent_stride: Stride used outside training (evals, inference); must
-                divide the patch size. 1 = per-pixel embeddings.
+                divide the patch size. 1 = per-pixel embeddings; 0 = the forward pass's
+                patch size, i.e. one latent per token cell (what the KNN/LP/finetune
+                sweeps use, since their tasks run at different patch sizes).
             latent_spatial_range: With ``pixel_latents``, encode every latent as the
                 SQUARE of pixels it stands for (side = its stride) rather than a point:
                 its RoPE pairs are sinc-gated on their row and col frequencies by the
@@ -435,6 +437,8 @@ class JointLatentTransformer(nn.Module):
         Otherwise: ``eval_latent_stride`` outside training, 1 in training.
         """
         if not self.training:
+            if self.eval_latent_stride == 0:
+                return patch_size
             if patch_size % self.eval_latent_stride != 0:
                 raise ValueError(
                     f"eval_latent_stride {self.eval_latent_stride} does not divide "
