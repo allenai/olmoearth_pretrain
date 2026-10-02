@@ -2614,6 +2614,9 @@ class Encoder(FlexiVitBase):
         # With a bottleneck the contrastive head projects from the register latents;
         # otherwise from the encoder patch-token output.
         self.contrastive_from_registers = self.perceiver is not None
+        # Inference-only sliding-FOV mode (olmoearth_pretrain.nn.lighthouse_rc); never
+        # set in training and not part of the state dict.
+        self.lighthouse: Any = None
         # When projecting from the register tokens the head operates at the width the
         # bottleneck ships (its register_dim); the head reads the returned grid, not the
         # stack's residual stream. Otherwise it reads the encoder's final-embedding-size
@@ -2895,6 +2898,49 @@ class Encoder(FlexiVitBase):
             tokens, _ = self.add_removed_tokens(tokens, indices, mask)
         return tokens
 
+    def _apply_attn_lighthouse(
+        self,
+        tokens: Tensor,
+        mask: Tensor,
+        positions: Tensor | None,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+        modalities_to_dims_dict: dict[str, Any],
+        patch_size: int,
+        input_res: int,
+    ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
+        """:meth:`apply_attn` under a sliding FOV (``nn/lighthouse_rc.py``)."""
+        from olmoearth_pretrain.nn.lighthouse_rc import encoder_lighthouse
+
+        if positions is None:
+            raise ValueError("Lighthouse needs RoPE positions")
+        cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
+        tokens_out, registers, register_positions, stats = encoder_lighthouse(
+            self,
+            tokens,
+            mask,
+            positions,
+            cell_ids[..., 0],
+            self._patch_grid_hw(tokens_only_dict),
+            patch_size,
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale,
+        )
+        self.last_lighthouse_stats = stats
+        register_output = None
+        if registers is not None:
+            register_output = {
+                "registers": registers,
+                "register_positions": register_positions,
+            }
+            if self.register_student is not None:
+                register_output["student_registers"] = self.register_student(registers)
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            tokens_out, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict, None, register_output
+
     def apply_attn(
         self,
         x: dict[str, Tensor],
@@ -2949,6 +2995,23 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        if self.lighthouse is not None and not isinstance(
+            self.perceiver, JointLatentTransformer
+        ):
+            # The encoded per-modality copy is not needed again; at ps1 every
+            # resident token copy costs ~3 KB per token.
+            del tokens_dict
+            return self._apply_attn_lighthouse(
+                tokens,
+                mask,
+                positions,
+                tokens_only_dict,
+                original_masks_dict,
+                modalities_to_dims_dict,
+                patch_size,
+                input_res,
+            )
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)

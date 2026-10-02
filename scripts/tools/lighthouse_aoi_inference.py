@@ -1,4 +1,4 @@
-"""Embed AOI windows with a joint-latent checkpoint, tiled vs Lighthouse, and time it.
+"""Embed AOI windows with a checkpoint, tiled vs Lighthouse, and time it.
 
 Reads whole windows of an rslearn dataset (S2 L2A + S1 + Landsat, twelve monthly
 mosaics) through the eval pipeline's own conversion
@@ -7,12 +7,14 @@ normalization, real mosaic timestamps), then runs any of four configurations:
 
 * ``tiled_ps{P}``: 16 px crops at overlap 4, stitched exactly like rslearn's
   ``get_window_crop_options`` + ``RasterMerger`` (the geometry of the AOI pages);
-* ``lh_ps{P}``: Lighthouse (``olmoearth_pretrain.nn.lighthouse``): one sliding
-  16 px FOV per query, run over spatial chunks whose halo is the exact receptive
-  field, so the stitched result equals one full-window forward.
+* ``lh_ps{P}[_h{halo}][_c{core}]``: Lighthouse (``nn/lighthouse.py`` for joint-latent
+  checkpoints, ``nn/lighthouse_rc.py`` for ViT + register-Perceiver ones such as the
+  v1.3 RC): one sliding 16 px FOV per query, run over spatial chunks. The default halo
+  is the exact receptive field (the stitched result equals one full-window forward);
+  ``_h`` sets a shorter halo, ``_c`` the chunk core, both in pixels.
 
-``P`` is the token patch size; latents are always per pixel (``eval_latent_stride``
-1), so every configuration outputs one 128-dim student embedding per 10 m pixel. The
+``P`` is the token patch size; the output must be one 128-dim student embedding per
+10 m pixel (per-pixel latents, or the RC at ps1). The
 output is L2-normalized and int8-quantized exactly like rslp's QuantizedEmbeddingHead
 and written as a 128-band GeoTIFF on the window's grid.
 
@@ -297,15 +299,46 @@ def run_lighthouse(
     ps: int,
     args: argparse.Namespace,
     device: torch.device,
+    halo: int | None = None,
+    core: int | None = None,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
-    """Core tiles + exact halo; each chunk is one Lighthouse forward."""
-    from olmoearth_pretrain.nn.lighthouse import LighthouseSettings, lighthouse_reach_px
+    """Core tiles + halo; each chunk is one Lighthouse forward.
 
+    Joint-latent checkpoints switch the Perceiver (``nn/lighthouse.py``); ViT +
+    register-Perceiver checkpoints (v1.3 RC, rc_pix512) switch the encoder
+    (``nn/lighthouse_rc.py``). ``halo`` None = the exact receptive-field reach.
+    """
     perceiver = encoder.perceiver
-    depth = len(perceiver.joint_blocks)
-    halo = lighthouse_reach_px(args.window_px, ps, depth, encoder.max_patch_size)
+    joint = JointLatentTransformer is not None and isinstance(
+        perceiver, JointLatentTransformer
+    )
+    if joint:
+        from olmoearth_pretrain.nn.lighthouse import (
+            LighthouseSettings,
+            lighthouse_reach_px,
+        )
+
+        reach = lighthouse_reach_px(
+            args.window_px, ps, len(perceiver.joint_blocks), encoder.max_patch_size
+        )
+        target = perceiver
+    else:
+        from olmoearth_pretrain.nn.lighthouse_rc import (
+            RCLighthouseSettings,
+            lighthouse_rc_reach_px,
+        )
+
+        reach = lighthouse_rc_reach_px(
+            args.window_px,
+            ps,
+            len(encoder.blocks),
+            len(perceiver.latent_blocks),
+            encoder.max_patch_size,
+        )
+        target = encoder
+    halo = reach if halo is None else halo
     halo = math.ceil(halo / ps) * ps
-    core = args.core_px[ps]
+    core = core or args.core_px[ps]
     out = torch.zeros(H, W, args.dim, device=device)
     chunks = []
     processed = 0
@@ -313,21 +346,34 @@ def run_lighthouse(
         for c in range(0, W, core):
             r0, c0 = max(r - halo, 0), max(c - halo, 0)
             r1, c1 = min(r + core + halo, H), min(c + core + halo, W)
-            perceiver.lighthouse = LighthouseSettings(
-                fov_px=args.window_px,
-                seq_chunk=args.seq_chunk,
-                origin_px=(r0, c0),
-            )
+            if joint:
+                target.lighthouse = LighthouseSettings(
+                    fov_px=args.window_px,
+                    seq_chunk=args.seq_chunk,
+                    origin_px=(r0, c0),
+                )
+            else:
+                target.lighthouse = RCLighthouseSettings(
+                    fov_px=args.window_px,
+                    origin_px=(r0, c0),
+                    profile=args.profile,
+                )
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
             try:
                 with Timer(device) as t:
                     emb = _student(
-                        encoder, _crop(full, slice(r0, r1), slice(c0, c1)), ps, args.dim
+                        encoder,
+                        _crop(full, slice(r0, r1), slice(c0, c1)),
+                        ps,
+                        args.dim,
+                        # RC Lighthouse drops MISSING tokens itself; the joint path
+                        # keeps its original fast_pass call.
+                        fast_pass=joint,
                     )
             finally:
-                perceiver.lighthouse = None
-            stats = dict(getattr(perceiver, "last_lighthouse_stats", {}))
+                target.lighthouse = None
+            stats = dict(getattr(target, "last_lighthouse_stats", {}))
             logger.info(
                 "  chunk %dx%d px: %.2f s, peak %.1f GiB, %s",
                 r1 - r0,
@@ -350,11 +396,14 @@ def run_lighthouse(
                     **stats,
                 }
             )
+            if args.warmup_only:
+                return out, {"forward_s": 0.0, "chunks": chunks, "processed_px": 0}
     return out, {
         "forward_s": sum(ch["seconds"] for ch in chunks),
         "chunks": chunks,
         "processed_px": processed,
         "halo_px": halo,
+        "exact_reach_px": reach,
         "core_px": core,
     }
 
@@ -392,11 +441,16 @@ def write_tif(path: Path, data: np.ndarray, geo: dict[str, Any]) -> None:
         dst.write(data)
 
 
-def parse_config(name: str) -> tuple[str, int]:
-    """``tiled_ps4`` -> ("tiled", 4)."""
-    mode, ps = name.split("_ps")
+def parse_config(name: str) -> tuple[str, int, dict[str, int]]:
+    """``tiled_ps4`` -> ("tiled", 4, {}); ``lh_ps1_h16_c256`` -> halo 16, core 256."""
+    mode, rest = name.split("_ps")
     assert mode in ("tiled", "lh"), name
-    return mode, int(ps)
+    ps, *opts = rest.split("_")
+    keys = {"h": "halo", "c": "core"}
+    extra = {keys[o[0]]: int(o[1:]) for o in opts}
+    if extra and mode != "lh":
+        raise ValueError(f"{name}: halo/core options are Lighthouse-only")
+    return mode, int(ps), extra
 
 
 def main() -> None:
@@ -435,6 +489,12 @@ def main() -> None:
         "--max_px", type=int, default=None, help="crop windows (smoke tests)"
     )
     p.add_argument("--no_write", action="store_true")
+    p.add_argument(
+        "--save_npy", action="store_true", help="also save float16 embeddings"
+    )
+    p.add_argument(
+        "--profile", action="store_true", help="RC Lighthouse per-phase timings"
+    )
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument(
         "--masked_attention",
@@ -443,6 +503,7 @@ def main() -> None:
         "mask-free dense inference attention (nn/dense_joint_attention.py)",
     )
     args = p.parse_args()
+    args.warmup_only = False
     args.core_px = {1: args.core_px_ps1, 2: args.core_px_ps2, 4: args.core_px_ps4}
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -457,15 +518,7 @@ def main() -> None:
     if getattr(encoder, "register_student", None) is None:
         OUTPUT_KEY = "registers"
     logger.info("embedding output: %s", OUTPUT_KEY)
-    if not joint:
-        # Register-bottleneck checkpoints (ViT + Perceiver, pixel registers, ...):
-        # tiled only; _student checks the output is one embedding per pixel.
-        bad = [c for c in args.configs if parse_config(c)[0] != "tiled"]
-        if bad:
-            raise ValueError(
-                f"non-joint checkpoints support tiled configs only, got {bad}"
-            )
-    else:
+    if joint:
         assert encoder.perceiver.eval_latent_stride == 1
     if joint and not args.masked_attention:
         # Not in this checkpoint's config.json (the flag postdates it); inference
@@ -521,12 +574,19 @@ def main() -> None:
         }
         logger.info("missing fraction: %s", rec["missing_frac"])
         for cfg in args.configs:
-            mode, ps = parse_config(cfg)
+            mode, ps, extra = parse_config(cfg)
             if cfg not in warmed:
                 logger.info("warm-up %s", cfg)
-                runners[mode](encoder, full, H, W, ps, args, device)
+                if mode == "lh":
+                    # One chunk compiles the kernels; a whole window would double
+                    # the job.
+                    args.warmup_only = True
+                    runners[mode](encoder, full, H, W, ps, args, device, **extra)
+                    args.warmup_only = False
+                else:
+                    runners[mode](encoder, full, H, W, ps, args, device)
                 warmed.add(cfg)
-            emb, info = runners[mode](encoder, full, H, W, ps, args, device)
+            emb, info = runners[mode](encoder, full, H, W, ps, args, device, **extra)
             info["peak_gib_window"] = max(
                 [c.get("peak_gib", 0.0) for c in info.get("chunks", [])] or [0.0]
             )
@@ -543,6 +603,9 @@ def main() -> None:
             rec["configs"][cfg] = info
             if not args.no_write:
                 write_tif(out_dir / cfg / f"{name}.tif", quantize(emb), geo)
+            if args.save_npy:
+                (out_dir / cfg).mkdir(parents=True, exist_ok=True)
+                np.save(out_dir / cfg / f"{name}.f16.npy", emb.half().cpu().numpy())
             del emb
         record["windows"][name] = rec
         (out_dir / args.timings_name).write_text(json.dumps(record, indent=1))
