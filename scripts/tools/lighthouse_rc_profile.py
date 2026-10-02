@@ -98,12 +98,13 @@ def main() -> None:
 
     # 1. Model forwards.
     ref = None
-    for quantum in (1, 2, 4, 8):
-        s = RCLighthouseSettings(fov_px=16, fov_quantum=quantum)
+    for quantum, column in ((1, True), (1, False), (4, True), (8, True)):
+        s = RCLighthouseSettings(fov_px=16, fov_quantum=quantum, column_mask=column)
         sec = bench(lambda: forward(encoder, crop, s), reps=2)
-        out = forward(
-            encoder, crop, RCLighthouseSettings(16, fov_quantum=quantum, profile=True)
+        prof = RCLighthouseSettings(
+            16, fov_quantum=quantum, column_mask=column, profile=True
         )
+        out = forward(encoder, crop, prof)
         stats = dict(encoder.last_lighthouse_stats)
         emb = out["student_registers"][0].float()
         if ref is None:
@@ -112,6 +113,8 @@ def main() -> None:
         emit(
             what="lighthouse_forward",
             quantum=quantum,
+            column_mask=column,
+            nan_px=int(torch.isnan(emb).any(-1).sum()),
             seconds=sec,
             s_per_processed_km2=sec / km2,
             cos_vs_exact_mean=cos.mean().item(),
@@ -193,11 +196,27 @@ def main() -> None:
             sec = bench(lambda: flex_attention_cuda(q, k, v, allfull))
             emit(what="flex_attention_same_blocks_no_mask", seconds=sec)
         torch.cuda.empty_cache()
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
     n_win = (side // 16) ** 2
-    qw = torch.randn(n_win, heads, 256 * per_cell, d, device=dev, dtype=torch.bfloat16)
+    qw = torch.randn(32, heads, 256 * per_cell, d, device=dev, dtype=torch.bfloat16)
     kw, vw = torch.randn_like(qw), torch.randn_like(qw)
-    sec = bench(lambda: torch.nn.functional.scaled_dot_product_attention(qw, kw, vw))
-    emit(what="sdpa_tiled_windows_ov0", windows=n_win, seconds=sec)
+    for backend in (SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION):
+        try:
+            with sdpa_kernel(backend):
+                sec = bench(
+                    lambda: torch.nn.functional.scaled_dot_product_attention(qw, kw, vw)
+                )
+            emit(
+                what="sdpa_tiled_windows_ov0",
+                backend=str(backend),
+                windows=n_win,
+                seconds=sec * n_win / 32,
+            )
+        except RuntimeError as e:
+            emit(
+                what="sdpa_tiled_windows_ov0", backend=str(backend), error=str(e)[:200]
+            )
     if a.out_json:
         with open(a.out_json, "w") as f:
             json.dump(RESULTS, f, indent=1)
