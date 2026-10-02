@@ -98,7 +98,10 @@ class RCLighthouseSettings:
         code_dtype: Integer dtype of the mask codes (see :func:`_codes`).
         full_blocks: Declare blocks inside every query's FOV *full* (skip
             ``mask_mod``). False sends every listed block through the mask.
-        pad_index_width: Pad the block-index tables to the dense table width.
+        pad_index_width: Pad the block-index tables to the dense table width (the
+            number of KV blocks). Required with full blocks: narrower partial + full
+            tables gave WRONG FlexAttention outputs on GPU (cos -0.48 vs dense,
+            torch 2.9.1; scripts/tools/lighthouse_rc_flex_check.py).
         column_mask: Use the column-only mask where the layout allows it (the
             exact ViT plan; see :func:`_column_codes`). False = packed codes.
         profile: Synchronize and record per-phase seconds in ``last_lighthouse_stats``.
@@ -121,7 +124,7 @@ class RCLighthouseSettings:
     column_mask: bool = True
     code_dtype: str = "int64"
     full_blocks: bool = True
-    pad_index_width: bool = False
+    pad_index_width: bool = True
 
 
 def lighthouse_rc_reach_px(

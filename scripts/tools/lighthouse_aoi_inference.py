@@ -301,6 +301,7 @@ def run_lighthouse(
     device: torch.device,
     halo: int | None = None,
     core: int | None = None,
+    quantum: int = 1,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Core tiles + halo; each chunk is one Lighthouse forward.
 
@@ -357,6 +358,7 @@ def run_lighthouse(
                     fov_px=args.window_px,
                     origin_px=(r0, c0),
                     profile=args.profile,
+                    fov_quantum=quantum,
                 )
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
@@ -405,6 +407,7 @@ def run_lighthouse(
         "halo_px": halo,
         "exact_reach_px": reach,
         "core_px": core,
+        "fov_quantum": quantum,
     }
 
 
@@ -442,11 +445,11 @@ def write_tif(path: Path, data: np.ndarray, geo: dict[str, Any]) -> None:
 
 
 def parse_config(name: str) -> tuple[str, int, dict[str, int]]:
-    """``tiled_ps4`` -> ("tiled", 4, {}); ``lh_ps1_h16_c256`` -> halo 16, core 256."""
+    """``tiled_ps4`` -> ("tiled", 4, {}); ``lh_ps1_h16_c256_q8`` -> halo, core, quantum."""
     mode, rest = name.split("_ps")
     assert mode in ("tiled", "lh"), name
     ps, *opts = rest.split("_")
-    keys = {"h": "halo", "c": "core"}
+    keys = {"h": "halo", "c": "core", "q": "quantum"}
     extra = {keys[o[0]]: int(o[1:]) for o in opts}
     if extra and mode != "lh":
         raise ValueError(f"{name}: halo/core options are Lighthouse-only")

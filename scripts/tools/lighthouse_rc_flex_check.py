@@ -38,13 +38,16 @@ def run_variant(name: str, side: int, per_cell: int) -> dict:
     rng = np.random.default_rng(0)
     cells = np.repeat(np.arange(side * side), per_cell)
     cells = cells[rng.random(cells.size) > 0.1]
-    lay = _slot_layout(cells // side, cells % side, side, (1, side), 128)
+    quantum = next((int(o[1:]) for o in opts if o.startswith("q")), 1)
+    tile = (1, side) if quantum == 1 else (quantum, quantum)
+    lay = _slot_layout(cells // side, cells % side, side, tile, 128)
+    lay.quantum = quantum
     settings = RCLighthouseSettings(
         fov_px=16,
         column_mask=(mask == "column"),
         q_chunk=(1 << 30) if chunks == "one" else 128 * 7,
         full_blocks="nofull" not in opts,
-        pad_index_width="padwidth" in opts,
+        pad_index_width="narrow" not in opts,
     )
     plan = _make_plan(lay, lay, 16, side, side, settings, dev)
     g = torch.Generator(device=dev).manual_seed(0)
@@ -90,12 +93,12 @@ def main() -> None:
     print(torch.cuda.get_device_name(), torch.__version__, flush=True)
     for name in (
         "dyn/packed/one",
-        "dyn/packed/one/nofull",
-        "dyn/packed/one/padwidth",
-        "dyn/packed/one/nofull/padwidth",
-        "dyn/column/many/nofull",
-        "eager/packed/one",
-        "eager/packed/one/nofull",
+        "dyn/packed/many",
+        "dyn/column/one",
+        "dyn/column/many",
+        "dyn/packed/one/narrow",
+        "dyn/packed/one/q4",
+        "dyn/packed/many/q8",
     ):
         r = subprocess.run(  # nosec
             [sys.executable, __file__, "--variant", name, str(side), str(per_cell)],
