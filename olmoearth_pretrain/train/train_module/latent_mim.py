@@ -20,6 +20,7 @@ from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
 from olmoearth_pretrain.nn.pixel_targets import (
     gather_pixels,
     offsets_to_query_shift,
+    sample_independent_pixel_offsets,
     sample_pixel_offsets,
     spatial_token_grid,
 )
@@ -48,6 +49,8 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
             cell instead of on the whole patch (see
             ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
             queries; requires the projection-only target.
+        pixel_target_draw: ``"shared"`` (one pixel per cell for all its tokens) or
+            ``"independent"`` (one pixel per token).
     """
 
     loss_config: LossConfig = field(
@@ -63,6 +66,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
+    pixel_target_draw: str = "shared"
 
     def build(
         self,
@@ -132,6 +136,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
+        pixel_target_draw: str = "shared",
     ):
         """Initialize the training module.
 
@@ -161,6 +166,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 its cell (decoder query at that pixel's center, target = the frozen
                 projection of that pixel). Requires the projection-only target: a
                 full target encoder would need a per-pixel forward.
+            pixel_target_draw: ``"shared"``: one pixel per (sample, cell), shared by
+                every token on the cell (all timesteps, band sets, modalities).
+                ``"independent"``: one pixel per token, i.e. per (sample, cell,
+                timestep, modality); needs one band set per modality.
         """
         super().__init__(
             model=model,
@@ -208,6 +217,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.model.target_encoder, FrozenTargetProjection
         ):
             raise ValueError("pixel_targets requires projection_only_target=True")
+        if pixel_target_draw not in ("shared", "independent"):
+            raise ValueError(
+                f"pixel_target_draw must be 'shared' or 'independent', got "
+                f"{pixel_target_draw!r}"
+            )
+        self.pixel_target_draw = pixel_target_draw
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -305,6 +320,19 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         del masked_batch
         del latent, decoded, target_output
 
+    def _check_single_bandsets(self, batch: MaskedOlmoEarthSample) -> None:
+        """The independent draw gives a token's band sets the same pixel: insist on one."""
+        tokenization = self.model.target_encoder.patch_embeddings.tokenization_config
+        for name in batch.modalities:
+            if (
+                Modality.get(name).is_spatial
+                and tokenization.get_num_bandsets(name) > 1
+            ):
+                raise ValueError(
+                    f"pixel_target_draw='independent' needs one band set per modality; "
+                    f"{name} has {tokenization.get_num_bandsets(name)}"
+                )
+
     def model_forward(
         self,
         batch: MaskedOlmoEarthSample,
@@ -320,16 +348,26 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         """Run a forward pass."""
         # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
         # the pixel, so the standard path is already pixel-resolution.
-        pixel_offsets = None
-        query_pixel_shift = None
+        pixel_offsets: torch.Tensor | dict[str, torch.Tensor] | None = None
+        query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None
         if self.pixel_targets and patch_size > 1:
-            pixel_offsets = sample_pixel_offsets(
-                batch.batch_size,
-                spatial_token_grid(batch, patch_size),
-                patch_size,
-                device=self.device,
-            )
-            query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
+            if self.pixel_target_draw == "independent":
+                self._check_single_bandsets(batch)
+                pixel_offsets = sample_independent_pixel_offsets(
+                    batch, patch_size, device=self.device
+                )
+                query_pixel_shift = {
+                    name: offsets_to_query_shift(offsets, patch_size)
+                    for name, offsets in pixel_offsets.items()
+                }
+            else:
+                pixel_offsets = sample_pixel_offsets(
+                    batch.batch_size,
+                    spatial_token_grid(batch, patch_size),
+                    patch_size,
+                    device=self.device,
+                )
+                query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
         with self._model_forward_context():
             (
                 latent,

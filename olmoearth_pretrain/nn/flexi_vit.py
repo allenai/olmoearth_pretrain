@@ -1106,7 +1106,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
-        query_pixel_shift: Tensor | None = None,
+        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1120,9 +1120,11 @@ class FlexiVitBase(nn.Module):
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
 
-        ``query_pixel_shift`` (``[B, h_p, w_p, 2]``, patch units, 2D RoPE only)
-        moves every spatial token of cell ``(i, j)`` off its patch coordinate by that
-        cell's shift -- see ``olmoearth_pretrain.nn.pixel_targets``.
+        ``query_pixel_shift`` (patch units, 2D RoPE only) moves spatial tokens off
+        their patch coordinates -- see ``olmoearth_pretrain.nn.pixel_targets``. One
+        ``[B, h_p, w_p, 2]`` tensor shifts every token of a cell alike; a
+        ``{modality: shift}`` dict gives each modality its own, ``[B, h_p, w_p, T, 2]``
+        for a per-timestep shift.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
             if query_pixel_shift is not None:
@@ -1176,7 +1178,11 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
-                    query_pixel_shift=query_pixel_shift,
+                    query_pixel_shift=(
+                        query_pixel_shift.get(modality_name)
+                        if isinstance(query_pixel_shift, dict)
+                        else query_pixel_shift
+                    ),
                 )
             position_dict[modality_name] = positions
 
@@ -1275,8 +1281,9 @@ class FlexiVitBase(nn.Module):
     ) -> Tensor:
         """Build ``(row, col)`` RoPE coordinates for one modality.
 
-        ``query_pixel_shift``: optional ``[B, h, w, 2]`` per-cell shift in patch
-        units, added to every token of the cell (all timesteps and band sets).
+        ``query_pixel_shift``: optional shift in patch units, ``[B, h, w, 2]`` (added
+        to every token of the cell) or ``[B, h, w, T, 2]`` (one per timestep of a
+        multitemporal modality); broadcast over band sets.
         """
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
@@ -1287,25 +1294,24 @@ class FlexiVitBase(nn.Module):
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
         grid = repeat(grid, "h w p -> b h w p", b=batch_size)
+        if tokens.ndim == 6:
+            # Multitemporal: lay the grid out per timestep so a shift can vary in t.
+            grid = repeat(grid, "b h w p -> b h w t p", t=tokens.shape[3])
         if query_pixel_shift is not None:
-            if query_pixel_shift.shape != grid.shape:
+            shift = query_pixel_shift
+            if shift.ndim == 4 and grid.ndim == 5:
+                shift = shift.unsqueeze(3)  # one shift for every timestep
+            if shift.ndim != grid.ndim or any(
+                s not in (1, g) for s, g in zip(shift.shape, grid.shape)
+            ):
                 raise ValueError(
                     f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
                     f"the {modality_name} token grid {tuple(grid.shape)}"
                 )
-            grid = grid + query_pixel_shift.to(grid.dtype) * gsd_ratio
+            grid = grid + shift.to(grid.dtype) * gsd_ratio
 
-        if tokens.ndim == 5:
-            bandsets = tokens.shape[3]
-            return repeat(grid, "b h w p -> b h w b_s p", b_s=bandsets)
-
-        timesteps, bandsets = tokens.shape[3], tokens.shape[4]
-        return repeat(
-            grid,
-            "b h w p -> b h w t b_s p",
-            t=timesteps,
-            b_s=bandsets,
-        )
+        bandsets = tokens.shape[-2]
+        return repeat(grid, "... p -> ... b_s p", b_s=bandsets)
 
     def _build_3d_rope_positions_for_modality(
         self,
@@ -3509,7 +3515,7 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | None = None,
+        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3669,7 +3675,7 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | None = None,
+        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3684,9 +3690,9 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
-            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell query shift in
-                patch units (pixel-resolution targets; see
-                ``olmoearth_pretrain.nn.pixel_targets``).
+            query_pixel_shift: Optional query shift in patch units for
+                pixel-resolution targets: one ``[B, h_p, w_p, 2]`` tensor, or a
+                ``{modality: shift}`` dict (see ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks

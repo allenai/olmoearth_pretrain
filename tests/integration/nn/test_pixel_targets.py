@@ -27,9 +27,11 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_targets import (
     gather_pixels,
     offsets_to_query_shift,
+    sample_independent_pixel_offsets,
     sample_pixel_offsets,
     spatial_token_grid,
 )
+from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
     MaskedOlmoEarthSample,
@@ -60,7 +62,19 @@ def _make_sample() -> MaskedOlmoEarthSample:
     )
 
 
-def _model_config() -> LatentMIMConfig:
+# v1.3 tokenizes Sentinel-2 as one band set (scripts/official/v1_2/base.py).
+S2_ONE_BANDSET = TokenizationConfig(
+    overrides={
+        "sentinel2_l2a": ModalityTokenization(
+            band_groups=[list(Modality.SENTINEL2_L2A.band_order)]
+        )
+    }
+)
+
+
+def _model_config(
+    tokenization_config: TokenizationConfig | None = None,
+) -> LatentMIMConfig:
     """Small rc_pix512-shaped model with a projection-only target.
 
     Per-pixel random-stride Perceiver latents and a 2D-RoPE decoder over them.
@@ -76,6 +90,7 @@ def _model_config() -> LatentMIMConfig:
         max_sequence_length=12,
         drop_path=0.0,
         position_encoding="rope",
+        tokenization_config=tokenization_config,
         perceiver_config=PerceiverConfig(
             register_dim=16,
             latent_depth=2,
@@ -97,6 +112,7 @@ def _model_config() -> LatentMIMConfig:
         position_encoding="rope",
         use_perceiver=True,
         register_dim=16,
+        tokenization_config=tokenization_config,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
@@ -250,3 +266,143 @@ def test_pixel_targets_require_projection_target() -> None:
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         with pytest.raises(ValueError, match="projection_only_target"):
             config.build(model, device=torch.device("cpu"))
+
+
+# --- independent draw: one pixel per token -----------------------------------------------
+
+
+def test_independent_gather_draws_per_timestep_and_per_modality() -> None:
+    """Multitemporal modalities get a pixel per (cell, timestep); static ones per cell."""
+    torch.manual_seed(0)
+    base = _make_sample()
+    num_wc = Modality.WORLDCOVER.num_bands
+    sample = base._replace(
+        worldcover=torch.randn(B, H, W, 1, num_wc),
+        worldcover_mask=torch.zeros(B, H, W, 1, num_wc, dtype=torch.long),
+    )
+    patch_size = 4
+    offsets = sample_independent_pixel_offsets(sample, patch_size, torch.device("cpu"))
+    h_p, w_p = H // patch_size, W // patch_size
+    assert set(offsets) == {"sentinel2_l2a", "worldcover"}
+    assert offsets["sentinel2_l2a"].shape == (B, h_p, w_p, T, 2)
+    assert offsets["worldcover"].shape == (B, h_p, w_p, 2)
+    gathered = gather_pixels(sample, offsets, patch_size)
+    assert gathered.sentinel2_l2a is not None and sample.sentinel2_l2a is not None
+    assert gathered.worldcover is not None and sample.worldcover is not None
+    s2_off, wc_off = offsets["sentinel2_l2a"], offsets["worldcover"]
+    for b in range(B):
+        for i in range(h_p):
+            for j in range(w_p):
+                for t in range(T):
+                    r = i * patch_size + int(s2_off[b, i, j, t, 0])
+                    c = j * patch_size + int(s2_off[b, i, j, t, 1])
+                    assert torch.equal(
+                        gathered.sentinel2_l2a[b, i, j, t],
+                        sample.sentinel2_l2a[b, r, c, t],
+                    )
+                r = i * patch_size + int(wc_off[b, i, j, 0])
+                c = j * patch_size + int(wc_off[b, i, j, 1])
+                assert torch.equal(
+                    gathered.worldcover[b, i, j], sample.worldcover[b, r, c]
+                )
+    assert gathered.latlon is sample.latlon
+
+
+@pytest.mark.parametrize("patch_size", [2, 4])
+def test_per_timestep_shift_lands_on_each_timesteps_pixel(patch_size: int) -> None:
+    """A [B, h, w, T, 2] shift moves each timestep's query to that timestep's pixel."""
+    torch.manual_seed(0)
+    model = _model_config().build()
+    decoder = model.decoder
+    h_p, w_p = H // patch_size, W // patch_size
+    offsets = torch.randint(0, patch_size, (B, h_p, w_p, T, 2))
+    gsd_ratio = (
+        CompositeEncodings.calculate_gsd_ratio(10, patch_size)
+        * decoder.rope_coordinate_scale
+    )
+    query_positions = decoder._build_2d_rope_positions_for_modality(
+        modality_name="sentinel2_l2a",
+        modality=Modality.SENTINEL2_L2A,
+        tokens=torch.zeros(B, h_p, w_p, T, 1, 16),
+        gsd_ratio=gsd_ratio,
+        query_pixel_shift=offsets_to_query_shift(offsets, patch_size),
+    )
+    latent_positions = build_pixel_latent_positions(
+        B, (H, W), patch_size, gsd_ratio, torch.device("cpu"), stride=1
+    ).view(B, H, W, 2)
+    for b in range(B):
+        for i in range(h_p):
+            for j in range(w_p):
+                for t in range(T):
+                    r = i * patch_size + int(offsets[b, i, j, t, 0])
+                    c = j * patch_size + int(offsets[b, i, j, t, 1])
+                    torch.testing.assert_close(
+                        query_positions[b, i, j, t, 0], latent_positions[b, r, c]
+                    )
+
+
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_train_module_independent_draw_forward(patch_size: int) -> None:
+    """The independent draw runs end to end with the same query/target count."""
+    torch.manual_seed(0)
+    model: LatentMIM = _model_config(S2_ONE_BANDSET).build()
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_draw="independent",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = config.build(model, device=torch.device("cpu"))
+    loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
+        _make_sample(), patch_size, train_module.token_exit_cfg
+    )
+    assert torch.isfinite(loss)
+    assert decoded.sentinel2_l2a is not None and target_output.sentinel2_l2a is not None
+    assert target_output.sentinel2_l2a.shape[:-1] == decoded.sentinel2_l2a.shape[:-1]
+    loss.backward()
+
+
+def test_independent_draw_refuses_multiple_bandsets() -> None:
+    """With several band sets a token's pixels would be ambiguous: refuse, don't guess."""
+    model: LatentMIM = _model_config().build()  # default tokenization: 3 S2 band sets
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_draw="independent",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = config.build(model, device=torch.device("cpu"))
+    with pytest.raises(ValueError, match="one band set"):
+        train_module.model_forward(_make_sample(), 2, train_module.token_exit_cfg)
+
+
+def test_unknown_pixel_target_draw_is_refused() -> None:
+    """A typo in the draw name fails at build time, not silently as 'shared'."""
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_draw="random",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        with pytest.raises(ValueError, match="pixel_target_draw"):
+            config.build(_model_config().build(), device=torch.device("cpu"))
