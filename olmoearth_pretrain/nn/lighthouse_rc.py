@@ -631,8 +631,12 @@ class _Runner:
         k_all: Tensor,
         v_all: Tensor,
         plan: _Plan,
+        tag: str = "",
     ) -> None:
-        """Queries, attention, projection and MLP of ``blk``, per chunk, in place."""
+        """Queries, attention, projection and MLP of ``blk``, per chunk, in place.
+
+        ``tag`` prefixes the profile keys (``vit_attention_s``, ...).
+        """
         attn = blk.attn
         for qs, mask in plan.chunks:
             h = blk.norm1(x[:, qs])
@@ -641,17 +645,17 @@ class _Runner:
             if self.dtype is not None:
                 q = q.to(self.dtype)
             del h
-            self.tick("q_s")
+            self.tick(f"{tag}q_s")
             o = self.attend(q, k_all, v_all, mask)
             del q
-            self.tick("attention_s")
+            self.tick(f"{tag}attention_s")
             o = rearrange(o, "b h n d -> b n (h d)")
             for s in _spans(o.shape[1], self.settings.mlp_chunk):
                 g = slice(qs.start + s.start, qs.start + s.stop)
                 xs = x[:, g] + blk.ls1(attn.proj(o[:, s]).to(x.dtype))
                 x[:, g] = xs + blk.ls2(blk.mlp(blk.norm2(xs))).to(x.dtype)
             del o
-            self.tick("proj_mlp_s")
+            self.tick(f"{tag}proj_mlp_s")
 
 
 def _check_supported(encoder: Encoder) -> None:
@@ -771,7 +775,7 @@ def encoder_lighthouse(
         h_src = lambda s, _b=blk: _b.norm1(x[:, s])  # noqa: E731
         k_all, v_all = run.kv(blk, h_src, pos, tok.length)
         run.tick("kv_s")
-        run.block(blk, x, pos, k_all, v_all, vit_plan)
+        run.block(blk, x, pos, k_all, v_all, vit_plan, "vit_")
         del k_all, v_all
     for s in _spans(tok.length, settings.mlp_chunk):
         x[:, s] = encoder.norm(x[:, s])
@@ -833,12 +837,12 @@ def encoder_lighthouse(
             src = lambda s, _n=norm, _p=proj: _p(_n(x[:, s]))  # noqa: E731
             k_all, v_all = run.kv(read_blk, src, key_pos, tok.length)
             run.tick("read_kv_s")
-            run.block(read_blk, reg, lpos, k_all, v_all, read_plan)
+            run.block(read_blk, reg, lpos, k_all, v_all, read_plan, "read_")
             del k_all, v_all
             l_src = lambda s, _b=lat_blk: _b.norm1(reg[:, s])  # noqa: E731
             k_all, v_all = run.kv(lat_blk, l_src, lpos, lat.length)
             run.tick("latent_kv_s")
-            run.block(lat_blk, reg, lpos, k_all, v_all, self_plan)
+            run.block(lat_blk, reg, lpos, k_all, v_all, self_plan, "latent_")
             del k_all, v_all
         out = p.norm(reg[0, lat_dest])
         registers = rearrange(out[None], "b (h w) d -> b h w d", h=lat_h, w=lat_w)
