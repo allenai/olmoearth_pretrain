@@ -152,6 +152,14 @@ class Era5SupervisedCommonComponents(CommonComponents):
     encoder_pooling: str = Era5Pooling.MEAN.value
     # Settled default (v0.3): the two-layer conv tokenizer stem was a large win.
     encoder_use_conv_stem: bool = True
+    # Conv-stem hidden widths: the patch Conv1D's output width, then one extra
+    # 1x1 Conv1D + GroupNorm + GELU layer per further entry. None (default)
+    # keeps the original stem, a single hidden layer of encoder_embedding_size // 2.
+    encoder_stem_hidden_dims: list[int] | None = None
+    # Temporal patch Conv1D kernel and stride, in days. Windows must patchify
+    # cleanly: (448 - kernel) % stride == 0. Default k14/s7 gives 63 tokens.
+    encoder_patch_kernel_size: int = 14
+    encoder_patch_stride: int = 7
     # "learned" adds an end-aligned learned position embedding per patch token;
     # "none" (default) leaves tokens distinguishable only by day of year.
     encoder_position_embedding: str = "none"
@@ -747,6 +755,9 @@ def build_model_config(
         pooling=common.encoder_pooling,
         use_mask_embed=common.enable_reconstruction,
         use_conv_stem=common.encoder_use_conv_stem,
+        stem_hidden_dims=common.encoder_stem_hidden_dims,
+        patch_kernel_size=common.encoder_patch_kernel_size,
+        patch_stride=common.encoder_patch_stride,
         position_embedding=common.encoder_position_embedding,
         pooled_norm=common.encoder_pooled_norm,
         is_swt_input=common.encoder_swt_input,

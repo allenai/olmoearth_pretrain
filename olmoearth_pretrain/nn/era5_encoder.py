@@ -178,6 +178,11 @@ class Era5DailyEncoderConfig(Config):
         use_conv_stem: When True, replace the single Conv1D patch embedding
             with a two-layer stem (Conv1D + GroupNorm + GELU + 1x1 Conv1D)
             that has enough nonlinear capacity to gate out masked channels.
+        stem_hidden_dims: Hidden widths of the conv stem (needs
+            ``use_conv_stem``). The first entry is the patch Conv1D's output
+            width; each further entry adds a 1x1 Conv1D + GroupNorm + GELU
+            layer. ``None`` (default) means ``[embedding_size // 2]``, the
+            original stem, so older checkpoints still load.
         is_swt_input: When True, the encoder works directly in wavelet space
         swt_input_levels: Which detail levels to include (0-indexed).
         swt_input_include_approx: When True, append the deepest level's
@@ -206,6 +211,7 @@ class Era5DailyEncoderConfig(Config):
     pooled_norm: str = "none"
     use_mask_embed: bool = False
     use_conv_stem: bool = False
+    stem_hidden_dims: list[int] | None = None
     is_swt_input: bool = False
     swt_input_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     swt_input_include_approx: bool = True
@@ -245,6 +251,14 @@ class Era5DailyEncoderConfig(Config):
                 "position_embedding='learned' needs max_sequence_length >= "
                 "patch_kernel_size"
             )
+        if self.stem_hidden_dims is not None:
+            if not self.use_conv_stem:
+                raise ValueError("stem_hidden_dims needs use_conv_stem=True")
+            if not self.stem_hidden_dims or min(self.stem_hidden_dims) < 1:
+                raise ValueError(
+                    f"stem_hidden_dims must be non-empty positive widths, got "
+                    f"{self.stem_hidden_dims!r}"
+                )
         if self.is_swt_input and not self.swt_input_levels:
             raise ValueError(
                 "swt_input_levels must be non-empty when is_swt_input=True"
@@ -370,18 +384,27 @@ class Era5DailyEncoder(nn.Module):
 
         # Patch embedding: [B, C, T] -> [B, d_model, N]
         if config.use_conv_stem:
-            mid = d_model // 2
-            self.patch_embed: nn.Module = nn.Sequential(
+            hidden = list(config.stem_hidden_dims or [d_model // 2])
+            layers: list[nn.Module] = [
                 nn.Conv1d(
                     patch_in_channels,
-                    mid,
+                    hidden[0],
                     kernel_size=config.patch_kernel_size,
                     stride=config.patch_stride,
                 ),
-                nn.GroupNorm(1, mid),
+                nn.GroupNorm(1, hidden[0]),
                 nn.GELU(),
-                nn.Conv1d(mid, d_model, kernel_size=1),
-            )
+            ]
+            # Extra per-token hidden layers; with the default single entry the
+            # module indices match the original stem (0 conv .. 3 1x1 conv).
+            for h_in, h_out in zip(hidden[:-1], hidden[1:]):
+                layers += [
+                    nn.Conv1d(h_in, h_out, kernel_size=1),
+                    nn.GroupNorm(1, h_out),
+                    nn.GELU(),
+                ]
+            layers.append(nn.Conv1d(hidden[-1], d_model, kernel_size=1))
+            self.patch_embed: nn.Module = nn.Sequential(*layers)
         else:
             self.patch_embed = nn.Conv1d(
                 in_channels=patch_in_channels,

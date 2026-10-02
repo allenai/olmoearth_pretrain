@@ -1995,6 +1995,108 @@ class TestPooledLayerNorm:
         assert cfg.encoder_config.pooled_norm == "layernorm"
 
 
+class TestTokenizerOptions:
+    """Conv-stem hidden widths and the patch kernel / stride."""
+
+    def test_default_stem_is_the_original(self):
+        """None and [D // 2] build the original stem, with the same state-dict keys."""
+        default = _small_encoder_cfg().build()
+        explicit = _small_encoder_cfg(stem_hidden_dims=[D // 2]).build()
+        stem = default.patch_embed
+        assert [type(m).__name__ for m in stem] == [
+            "Conv1d",
+            "GroupNorm",
+            "GELU",
+            "Conv1d",
+        ]
+        assert stem[0].out_channels == D // 2 and stem[3].out_channels == D
+        stem_keys = {k for k in default.state_dict() if k.startswith("patch_embed.")}
+        assert stem_keys == {
+            f"patch_embed.{i}.{p}" for i in (0, 1, 3) for p in ("weight", "bias")
+        }
+        explicit.load_state_dict(default.state_dict(), strict=True)
+
+    @pytest.mark.parametrize("hidden", [[96], [96, 96], [128, 96]])
+    def test_hidden_dims_shapes_and_forward(self, hidden):
+        encoder = _small_encoder_cfg(stem_hidden_dims=hidden).build()
+        convs = [m for m in encoder.patch_embed if isinstance(m, torch.nn.Conv1d)]
+        assert [c.out_channels for c in convs] == hidden + [D]
+        assert convs[0].kernel_size == (encoder.patch_kernel_size,)
+        assert all(c.kernel_size == (1,) for c in convs[1:])
+        norms = [m for m in encoder.patch_embed if isinstance(m, torch.nn.GroupNorm)]
+        assert [n.num_channels for n in norms] == hidden
+        batch = _make_batch()
+        out = encoder(era5=batch.era5, timestamps=batch.timestamps)
+        assert out["tokens"].shape == (B, 63, D)
+        out["pooled"].sum().backward()
+        assert convs[0].weight.grad.abs().sum() > 0
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            dict(stem_hidden_dims=[96], use_conv_stem=False),
+            dict(stem_hidden_dims=[]),
+            dict(stem_hidden_dims=[96, 0]),
+        ],
+    )
+    def test_invalid_hidden_dims_raise(self, overrides):
+        with pytest.raises(ValueError, match="stem_hidden_dims"):
+            _small_encoder_cfg(**overrides).build()
+
+    @pytest.mark.parametrize(
+        "kernel,stride,num_tokens", [(14, 7, 63), (8, 8, 56), (8, 4, 111), (4, 4, 112)]
+    )
+    def test_patch_geometry_token_count(self, kernel, stride, num_tokens):
+        encoder = _small_encoder_cfg(
+            patch_kernel_size=kernel, patch_stride=stride
+        ).build()
+        batch = _make_batch()
+        out = encoder(era5=batch.era5, timestamps=batch.timestamps)
+        assert out["tokens"].shape == (B, num_tokens, D)
+        assert out["pooled"].shape == (B, D)
+
+    def test_launcher_knobs(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(
+            [
+                "encoder_stem_hidden_dims=[768,768]",
+                "encoder_patch_kernel_size=8",
+                "encoder_patch_stride=4",
+                "encoder_embedding_size=128",
+                "encoder_num_heads=2",
+                "recon_decoder_num_heads=2",
+            ]
+        )
+        cfg = era5_launch_script.build_model_config(common)
+        enc = cfg.encoder_config
+        assert enc.stem_hidden_dims == [768, 768]
+        assert (enc.patch_kernel_size, enc.patch_stride) == (8, 4)
+        assert (enc.embedding_size, enc.num_heads) == (128, 2)
+        decoder = cfg.reconstruction_objective.decoder
+        assert (decoder.embedding_size, decoder.num_heads) == (128, 2)
+        encoder = enc.build()
+        convs = [m for m in encoder.patch_embed if isinstance(m, torch.nn.Conv1d)]
+        assert [c.out_channels for c in convs] == [768, 768, 128]
+        decoder.build()
+
+    def test_launcher_defaults_unchanged(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        )
+        enc = era5_launch_script.build_model_config(common).encoder_config
+        assert enc.stem_hidden_dims is None
+        assert (enc.patch_kernel_size, enc.patch_stride) == (14, 7)
+
+
 class TestCollapseMetrics:
     """Training-step and eval-time collapse monitors."""
 
