@@ -13,6 +13,7 @@ from typing import Any
 
 import numpy as np
 import torch
+from einops import rearrange
 from olmo_core.distributed.utils import get_rank
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.callbacks.checkpointer import CheckpointerCallback
@@ -96,6 +97,29 @@ class EvalMode(StrEnum):
     EMBEDDING_DIAGNOSTICS = "embedding_diagnostics"
 
 
+def retile_dense(
+    embeddings: torch.Tensor, labels: torch.Tensor, window: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cut ``[N, H, W, ...]`` embeddings and ``[N, H, W]`` labels into windows.
+
+    Row-major windows per sample, the order ``tile_samples`` loads them in.
+    """
+    n, h, w = labels.shape[:3]
+    if h % window or w % window:
+        raise ValueError(f"{h}x{w} samples are not divisible into {window} px windows")
+    if embeddings.shape[1:3] != (h, w):
+        raise ValueError(
+            f"embeddings {tuple(embeddings.shape)} are not per pixel of {h}x{w} labels"
+        )
+
+    def cut(t: torch.Tensor) -> torch.Tensor:
+        return rearrange(
+            t, "n (gh wh) (gw ww) ... -> (n gh gw) wh ww ...", wh=window, ww=window
+        )
+
+    return cut(embeddings), cut(labels)
+
+
 @dataclass
 class DownstreamTaskConfig:
     """Config for a downstream task."""
@@ -161,6 +185,15 @@ class DownstreamTaskConfig:
     # windows (the pastis convention above) instead of center-cropping one
     # window per sample. Mutually exclusive with label_at_center_pixel.
     tile_samples: bool = False
+    # Lighthouse inference (olmoearth_pretrain.nn.lighthouse_rc): embed each stored
+    # sample whole, one forward per sample, with every query seeing its own sliding
+    # lighthouse_fov_px x lighthouse_fov_px field of view instead of a fixed tile.
+    # With lighthouse_retile_px the embeddings (and labels) are then cut into the
+    # non-overlapping windows the tiled convention probes, so only the embeddings
+    # differ from a window_size=lighthouse_retile_px, tile_samples run. Requires a
+    # ViT + register-Perceiver encoder; window_size / tile_samples must be unset.
+    lighthouse_fov_px: int | None = None
+    lighthouse_retile_px: int | None = None
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -279,6 +312,17 @@ class DownstreamEvaluator:
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
         self.tile_samples = task.tile_samples
+        self.lighthouse_fov_px = task.lighthouse_fov_px
+        self.lighthouse_retile_px = task.lighthouse_retile_px
+        if self.lighthouse_fov_px is not None and (
+            task.window_size is not None or task.tile_samples
+        ):
+            raise ValueError(
+                "lighthouse_fov_px embeds whole samples; unset window_size and "
+                "tile_samples (use lighthouse_retile_px for the probe windows)"
+            )
+        if self.lighthouse_retile_px is not None and self.lighthouse_fov_px is None:
+            raise ValueError("lighthouse_retile_px requires lighthouse_fov_px")
         if self.tile_samples:
             if not self._is_registry_dataset:
                 raise ValueError(
@@ -630,8 +674,10 @@ class DownstreamEvaluator:
             "eval_student_dim": self.eval_student_dim,
             "use_center_token": self.use_center_token,
         }
+        if self.lighthouse_fov_px is not None:
+            wrapper_kwargs["lighthouse_fov_px"] = self.lighthouse_fov_px
         model = get_eval_wrapper(model, **wrapper_kwargs)
-        return get_embeddings(
+        embeddings, labels = get_embeddings(
             data_loader=data_loader,
             model=model,
             is_train=is_train,
@@ -643,6 +689,11 @@ class DownstreamEvaluator:
             normalizer=normalizer,
             diagnostics_out=diagnostics_out,
         )
+        if self.lighthouse_retile_px is not None:
+            embeddings, labels = retile_dense(
+                embeddings, labels, self.lighthouse_retile_px
+            )
+        return embeddings, labels
 
     def _val_embed_probe(self) -> EvalTaskResult:
         """Validate the model using embeddings and probe (knn or linear probe)."""

@@ -223,3 +223,48 @@ def test_block_tables_are_exact(
     c0 = _fov_start(q.col[qv], fov, n_w)
     expect = [window[a : a + fov, b : b + fov].sum() for a, b in zip(r0, c0)]
     assert np.array_equal(counts, expect)
+
+
+def test_eval_wrapper_lighthouse_matches_per_sample_forward() -> None:
+    """The eval wrapper's Lighthouse path = one Lighthouse forward per sample."""
+    from olmoearth_pretrain.evals.datasets.configs import TaskType
+    from olmoearth_pretrain.evals.eval_wrapper import OlmoEarthEvalWrapper
+    from olmoearth_pretrain.nn.pooling import PoolingType
+
+    encoder = _encoder(pixel_latents=False)
+    encoder.use_perceiver = True  # what the wrapper checks on the full model
+    samples = [_sample(12, 12, seed=s) for s in (1, 2)]
+    batch = MaskedOlmoEarthSample(
+        **{
+            k: torch.cat([s.as_dict()[k] for s in samples])
+            for k, v in samples[0].as_dict().items()
+            if v is not None
+        }
+    )
+    wrapper = OlmoEarthEvalWrapper(
+        model=encoder,
+        task_type=TaskType.SEGMENTATION,
+        patch_size=1,
+        pooling_type=PoolingType.MEAN,
+        eval_on_student_registers=True,
+        lighthouse_fov_px=8,
+    )
+    labels = torch.zeros(2, 12, 12)
+    with torch.no_grad():
+        emb, _ = wrapper(batch, labels, is_train=False)
+    ref = torch.stack([_run(encoder, s, 1, fov_px=8) for s in samples])
+    torch.testing.assert_close(emb, ref)
+    assert encoder.lighthouse is None
+
+
+def test_retile_dense_matches_tile_order() -> None:
+    """Row-major windows per sample, embeddings and labels cut identically."""
+    from olmoearth_pretrain.train.callbacks.evaluator_callback import retile_dense
+
+    emb = torch.arange(2 * 4 * 6 * 3).reshape(2, 4, 6, 3)
+    lab = emb[..., 0]
+    e, lb = retile_dense(emb, lab, 2)
+    assert e.shape == (12, 2, 2, 3) and lb.shape == (12, 2, 2)
+    torch.testing.assert_close(e[1], emb[0, 0:2, 2:4])
+    torch.testing.assert_close(e[3], emb[0, 2:4, 0:2])
+    torch.testing.assert_close(lb, e[..., 0])

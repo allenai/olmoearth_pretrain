@@ -1575,6 +1575,26 @@ EMBEDDING_EVAL_TASKS.update(
     }
 )
 
+# The same task under Lighthouse inference: each 128x128 stored sample is embedded
+# whole with a sliding 16 px field of view per query, then cut into the same 16x16
+# probe windows, so only the embeddings differ from the ws16 task above.
+EMBEDDING_EVAL_TASKS.update(
+    {
+        "pastis_year_aligned_lh16_ps1_sentinel1_sentinel2_landsat": replace(
+            EMBEDDING_EVAL_TASKS[
+                "pastis_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat"
+            ],
+            window_size=None,
+            tile_samples=False,
+            lighthouse_fov_px=16,
+            lighthouse_retile_px=16,
+            # One stored sample = one Lighthouse forward (the wrapper loops per
+            # sample); 64 tiled windows per batch was one stored sample too.
+            embedding_batch_size=1,
+        ),
+    }
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

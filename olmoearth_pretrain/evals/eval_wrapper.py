@@ -53,6 +53,7 @@ class EvalWrapper:
         eval_on_student_registers: bool = False,
         eval_student_dim: int | None = None,
         use_center_token: bool = False,
+        lighthouse_fov_px: int | None = None,
     ):
         """Initialize the eval wrapper.
 
@@ -78,6 +79,9 @@ class EvalWrapper:
                 full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
+            lighthouse_fov_px: OlmoEarth ViT + register-Perceiver encoders only: run
+                each sample whole under Lighthouse (``nn/lighthouse_rc.py``) with
+                this sliding field of view, one forward per sample.
         """
         super().__init__()
         self.model = model
@@ -97,6 +101,7 @@ class EvalWrapper:
         self.eval_on_student_registers = eval_on_student_registers
         self.eval_student_dim = eval_student_dim
         self.use_center_token = use_center_token
+        self.lighthouse_fov_px = lighthouse_fov_px
         if self.eval_on_student_registers and self.eval_on_encoder_tokens:
             raise ValueError(
                 "eval_on_student_registers and eval_on_encoder_tokens are mutually "
@@ -172,6 +177,28 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     return True
         return False
 
+    def _lighthouse_forward(self, sample: MaskedOlmoEarthSample) -> dict[str, Any]:
+        """One Lighthouse forward per sample; the register outputs, re-batched."""
+        from olmoearth_pretrain.nn.lighthouse_rc import RCLighthouseSettings
+
+        assert self.lighthouse_fov_px is not None
+        fields = {k: v for k, v in sample.as_dict().items() if v is not None}
+        batch = next(iter(fields.values())).shape[0]
+        outs = []
+        self.model.lighthouse = RCLighthouseSettings(fov_px=self.lighthouse_fov_px)
+        try:
+            for b in range(batch):
+                one = MaskedOlmoEarthSample(
+                    **{k: v[b : b + 1] for k, v in fields.items()}
+                )
+                out = self.model(one, patch_size=self.patch_size, fast_pass=False)
+                outs.append(
+                    {k: out[k] for k in ("registers", "student_registers") if k in out}
+                )
+        finally:
+            self.model.lighthouse = None
+        return {k: torch.cat([o[k] for o in outs]) for k in outs[0]}
+
     def _pool_registers(self, encoder_output: dict[str, Any]) -> torch.Tensor:
         """Pool the register grid into the eval embedding.
 
@@ -213,10 +240,15 @@ class OlmoEarthEvalWrapper(EvalWrapper):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
-            fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
-            encoder_output = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
-            )
+            if self.lighthouse_fov_px is not None:
+                encoder_output = self._lighthouse_forward(masked_olmoearth_sample)
+            else:
+                fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
+                encoder_output = self.model(
+                    masked_olmoearth_sample,
+                    patch_size=self.patch_size,
+                    fast_pass=fast_pass,
+                )
             if (
                 not self.eval_on_encoder_tokens
                 and getattr(self.model, "use_perceiver", False)

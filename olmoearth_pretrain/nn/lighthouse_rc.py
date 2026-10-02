@@ -34,6 +34,7 @@ residual stream plus one layer's K/V.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 from collections.abc import Callable
@@ -81,7 +82,8 @@ class RCLighthouseSettings:
         latent_tile: ``(rows, cols)`` of token cells per latent layout tile. None picks
             the smallest square-ish tile with at least ``block`` latents.
         dense: Dense boolean masks + SDPA instead of FlexAttention (the reference;
-            CPU tests and small parity checks only).
+            small parity checks only). Always on for CPU tensors: the compiled
+            FlexAttention kernel is CUDA-only.
         origin_px: ``(row, col)`` pixel offset of this chunk in the domain. RoPE is
             relative, but mixed RoPE forms one fp32 angle from ``(t, row, col)``, so
             giving every chunk its domain coordinates keeps chunk outputs consistent
@@ -571,6 +573,8 @@ def encoder_lighthouse(
 
     settings: RCLighthouseSettings = encoder.lighthouse  # type: ignore[assignment]
     _check_supported(encoder)
+    if tokens.device.type != "cuda" and not settings.dense:
+        settings = dataclasses.replace(settings, dense=True)
     if tokens.shape[0] != 1:
         raise ValueError("Lighthouse runs one domain per call (batch size 1)")
     if settings.fov_px % patch_size:
