@@ -1,12 +1,14 @@
 """Code for configuring and running OlmoEarth Pretrain experiments."""
 
 import logging
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
 import numpy as np
+import torch
 from beaker import Beaker
 from beaker.types import BeakerWorkload
 from gantry.api import Recipe as GantryRecipe
@@ -42,6 +44,30 @@ from olmoearth_pretrain.train.train_module.train_module import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def reset_third_party_torch_side_effects() -> None:
+    """Undo global torch/cuDNN settings that third-party imports may have changed.
+
+    Some baseline packages (``claymodel``, ``terratorch``) mutate process-global
+    state at import time: they set ``TORCH_CUDNN_V8_API_DISABLED=1`` and call
+    ``torch.set_float32_matmul_precision("medium")``. Forcing the legacy cuDNN
+    API breaks bf16 channels-last depthwise convolutions on torch>=2.9 / cuDNN 9.10
+    (``CUDNN_STATUS_BAD_PARAM`` in the pixel branch), and the matmul precision
+    change silently lowers fp32 accuracy everywhere.
+
+    The baselines now import those packages lazily, but this guard makes the
+    training environment independent of whatever happens to be imported. It must
+    run after all imports and before the first cuDNN convolution: PyTorch reads the
+    env var once, on first use, and caches the result for the process lifetime.
+    """
+    if os.environ.pop("TORCH_CUDNN_V8_API_DISABLED", None) is not None:
+        logger.warning(
+            "TORCH_CUDNN_V8_API_DISABLED was set (likely by a third-party import); "
+            "unsetting it so cuDNN uses the v8 API."
+        )
+    # torch's default; restores whatever a third-party import may have lowered.
+    torch.set_float32_matmul_precision("highest")
 
 
 @dataclass
@@ -435,6 +461,7 @@ class SubCmd(StrEnum):
 
     def prepare_environment(self) -> None:
         """Prepare the environment for the given subcommand."""
+        reset_third_party_torch_side_effects()
         if self in (
             SubCmd.launch,
             SubCmd.dry_run,

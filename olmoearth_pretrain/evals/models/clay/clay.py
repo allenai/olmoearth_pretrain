@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 import yaml
-from claymodel.module import ClayMAEModule
 from einops import rearrange
 from torch import nn
 
@@ -65,6 +64,13 @@ class Clay(nn.Module):
     supports_multiple_modalities_at_once = True
 
     def _load_model(self, size: str, path: str, metadata: str) -> nn.Module:
+        # Imported lazily: importing ``claymodel`` sets
+        # ``TORCH_CUDNN_V8_API_DISABLED=1`` and calls
+        # ``torch.set_float32_matmul_precision("medium")`` as import-time side
+        # effects, which must not leak into processes that merely import this
+        # module (e.g. pretraining, which pulls in ``evals.models`` via callbacks).
+        from claymodel.module import ClayMAEModule
+
         if size == "large":
             return ClayMAEModule.load_from_checkpoint(
                 checkpoint_path=path,

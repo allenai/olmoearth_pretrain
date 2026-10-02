@@ -7,7 +7,6 @@ from dataclasses import dataclass
 import torch
 import torch.nn.functional as F
 from einops import rearrange
-from terratorch.registry import BACKBONE_REGISTRY
 from torch import nn
 
 from olmoearth_pretrain.config import Config
@@ -125,6 +124,12 @@ class Terramind(nn.Module):
         return set(modalities) == set(self.current_modalities)
 
     def _init_model(self, size: str, supported_modalities: list[str]) -> None:
+        # Imported lazily: importing ``terratorch`` (via its Clay backbone) sets
+        # ``TORCH_CUDNN_V8_API_DISABLED=1`` as an import-time side effect, which
+        # must not leak into processes that merely import this module (e.g.
+        # pretraining, which pulls in ``evals.models`` via callbacks).
+        from terratorch.registry import BACKBONE_REGISTRY
+
         modalities = [self.tm_modalities[m] for m in supported_modalities]
         if size == "base":
             self.model = BACKBONE_REGISTRY.build(

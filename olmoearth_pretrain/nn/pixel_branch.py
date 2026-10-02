@@ -337,13 +337,16 @@ class ThinConvStep(nn.Module):
     def _spatial(self, y: Tensor, valid: Tensor | None, scale: Tensor | None) -> Tensor:
         assert self.dwconv is not None
         n = y.shape[0]
+        # Conv inputs are made contiguous: with TORCH_CUDNN_V8_API_DISABLED=1 (set at
+        # import by claymodel / terratorch), torch 2.9 + cuDNN 9.10 fail bf16
+        # depthwise convs on this channels-last view with CUDNN_STATUS_BAD_PARAM.
         y = rearrange(y, "n t h w d -> (n t) d h w")
         if not self.mask_normalized:
-            y = self.dwconv(y)
+            y = self.dwconv(y.contiguous())
             return rearrange(y, "(n t) d h w -> n t h w d", n=n)
         assert valid is not None and scale is not None
         y = F.conv2d(
-            y * rearrange(valid, "n t h w 1 -> (n t) 1 h w"),
+            (y * rearrange(valid, "n t h w 1 -> (n t) 1 h w")).contiguous(),
             self.dwconv.weight,
             None,
             padding=self.dwconv.padding,
