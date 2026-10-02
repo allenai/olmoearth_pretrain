@@ -57,7 +57,7 @@ def main() -> None:
         ref = na3d(q, kk, v, kernel_size=kernel)
         sec = bench(lambda: na3d(q, kk, v, kernel_size=kernel))
         emit(layout=layout, backend="default", seconds_per_layer=sec)
-        for backend in ("cutlass-fna", "hopper-fna", "blackwell-fna", "flex-fna"):
+        for backend in ("hopper-fna", "cutlass-fna"):
             try:
                 out = na3d(q, kk, v, kernel_size=kernel, backend=backend)
                 cos = F.cosine_similarity(out.float(), ref.float(), dim=-1).min().item()
@@ -75,11 +75,16 @@ def main() -> None:
             if fn is None:
                 continue
             try:
-                configs = list(fn(q, kk))
+                configs = list(fn(q, kk, v))
             except Exception as e:  # noqa: BLE001
                 emit(layout=layout, backend=backend, configs_error=repr(e)[:240])
                 continue
-            emit(layout=layout, backend=backend, n_configs=len(configs))
+            emit(
+                layout=layout,
+                backend=backend,
+                n_configs=len(configs),
+                first=repr(configs[:2])[:300],
+            )
             for cfg in itertools.islice(configs, 40):
                 kwargs = {}
                 if isinstance(cfg, dict):
