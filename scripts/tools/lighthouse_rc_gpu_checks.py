@@ -99,7 +99,8 @@ def main() -> None:
             lh = student(encoder, win, ps, RCLighthouseSettings(fov_px=16))
             ok &= compare(f"parity ps{ps} @{r0}", lh, ref, 0.999)
         ref_fp = student(encoder, win, 1, fast_pass=True)
-        compare(f"(info) stock fast_pass vs masked ps1 @{r0}", ref_fp, ref, 0.0)
+        ref1 = student(encoder, win, 1)
+        compare(f"(info) stock fast_pass vs masked ps1 @{r0}", ref_fp, ref1, 0.0)
 
     # 2. Flex vs dense (dense mask is quadratic: 24 px at ps1, 48 px at ps2).
     for ps, side in ((1, 24), (2, 48)):
