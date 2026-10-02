@@ -163,6 +163,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+        modality_timestamps = x.modality_timestamps()
+        if modality_timestamps is not None:
+            decoder_kwargs["modality_timestamps"] = modality_timestamps
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )

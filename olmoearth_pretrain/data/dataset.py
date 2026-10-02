@@ -34,7 +34,9 @@ from olmoearth_pretrain.data.constants import (
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
+    TIME_INDEXED_MODALITIES,
     OlmoEarthSample,
+    time_index_field,
 )
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
@@ -1025,17 +1027,17 @@ class OlmoEarthDataset(Dataset):
 
         1. Random spatial crop of ``sampled_hw_p * patch_size`` pixels.
         2. Random time range of ``args.time_range_days``; every capture in it.
-        3. The kept captures are merged into a shared union timeline (see
-           ``build_union_timeline``); each modality is MISSING at the steps where
-           it has no capture, so the downstream shared-timestamps code (masking,
-           month encodings, 3D RoPE) applies unchanged.
+        3. The kept captures are merged into a union timeline (see
+           ``build_union_timeline``) that defines which captures share a timestep.
         4. Token budget on REAL tokens: a step costs ``hw_p**2 * bandsets`` for
            each encoded modality captured at it. The kept steps are the run that
            starts at a uniformly random step and extends forward while the running
            total fits ``args.token_budget`` (always at least one step).
-
-        Only real captures are normalized (before they are placed on the
-        timeline), so the MISSING padding costs no normalization work.
+        5. Each multitemporal modality is returned on its OWN time axis (only its
+           captures in the run, chronological; one MISSING slot if it has none),
+           with ``{modality}_time_index`` giving each slot's row in ``timestamps``
+           (the run's union timeline). Masking, month encodings and 3D RoPE read
+           a modality's dates through that index.
         """
 
         def prepare(modality: str, values: np.ndarray) -> np.ndarray:
@@ -1087,8 +1089,6 @@ class OlmoEarthDataset(Dataset):
             ):
                 last_step += 1
                 total += step_tokens[last_step]
-        num_steps = last_step - first_step + 1
-
         sample_dict: dict[str, Any] = {
             "timestamps": union_ts[first_step : last_step + 1]
         }
@@ -1101,19 +1101,27 @@ class OlmoEarthDataset(Dataset):
                     f"(image_tile_size_factor={spec.image_tile_size_factor})"
                 )
             if spec.is_spacetime_varying:
-                out = np.full(
-                    (sampled_hw, sampled_hw, num_steps, spec.num_bands),
-                    MISSING_VALUE,
-                    dtype=self.dtype,
-                )
+                if modality not in TIME_INDEXED_MODALITIES:
+                    raise NotImplementedError(
+                        f"per_modality_timestamps has no time-index field for {modality}"
+                    )
                 steps = step_index.get(modality, np.zeros(0, dtype=np.int64))
                 in_run = (steps >= first_step) & (steps <= last_step)
                 if in_run.any():
                     captures = kept[modality][in_run]
-                    out[:, :, steps[in_run] - first_step] = prepare(
+                    sample_dict[modality] = prepare(
                         modality, data[modality][crop][:, :, captures]
                     )
-                sample_dict[modality] = out
+                    sample_dict[time_index_field(modality)] = steps[in_run] - first_step
+                else:
+                    sample_dict[modality] = np.full(
+                        (sampled_hw, sampled_hw, 1, spec.num_bands),
+                        MISSING_VALUE,
+                        dtype=self.dtype,
+                    )
+                    sample_dict[time_index_field(modality)] = np.full(
+                        1, -1, dtype=np.int64
+                    )
             elif spec.is_space_only_varying:
                 if modality in data:
                     sample_dict[modality] = prepare(modality, data[modality][crop])

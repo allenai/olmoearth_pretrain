@@ -38,6 +38,21 @@ class MaskValue(Enum):
 # timestamps is never considered a "modality" - it's metadata about when samples were captured
 TIMESTAMPS_FIELD = "timestamps"
 
+# Multitemporal modalities that may be stored on their OWN time axis (every-capture
+# data): ``{modality}_time_index`` [B, T_m] maps each of the modality's timestep
+# slots to its row in ``timestamps`` (-1 = padding slot). When it is None the
+# modality's slots ARE the ``timestamps`` rows (the shared-grid layout).
+TIME_INDEXED_MODALITIES = ("sentinel2_l2a", "sentinel1", "landsat", "landsat_l2")
+TIME_INDEX_SUFFIX = "_time_index"
+
+
+def time_index_field(modality: str) -> str:
+    """Name of the per-modality time-index field."""
+    return f"{modality}{TIME_INDEX_SUFFIX}"
+
+
+TIME_INDEX_FIELDS = tuple(time_index_field(m) for m in TIME_INDEXED_MODALITIES)
+
 
 # =============================================================================
 # Shared standalone helpers (called by NamedTuple methods to avoid duplication)
@@ -55,14 +70,35 @@ def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
 
 
 def _modalities(obj: NamedTuple) -> list[str]:
-    """Get present modalities (excludes masks and timestamps)."""
+    """Get present modalities (excludes masks, timestamps and time indices)."""
     return [
         name
         for name in obj._fields
         if not name.endswith("_mask")
+        and not name.endswith(TIME_INDEX_SUFFIX)
         and name != TIMESTAMPS_FIELD
         and getattr(obj, name) is not None
     ]
+
+
+def _modality_timestamps(obj: NamedTuple) -> dict[str, Any] | None:
+    """Per-modality ``[B, T_m, 3]`` timestamps for modalities on their own time axis.
+
+    Gathers ``timestamps`` rows by each set ``{modality}_time_index`` (padding
+    slots, index -1, read row 0; their data is MISSING). None when no modality
+    has a time index (the shared-grid layout).
+    """
+    timestamps = getattr(obj, TIMESTAMPS_FIELD)
+    out = {}
+    for modality in TIME_INDEXED_MODALITIES:
+        index = getattr(obj, time_index_field(modality))
+        if index is None:
+            continue
+        index = index.long().clamp(min=0)
+        out[modality] = timestamps.gather(
+            1, index.unsqueeze(-1).expand(-1, -1, timestamps.shape[-1])
+        )
+    return out or None
 
 
 def _get_masked_modality_name(modality: str) -> str:
@@ -109,6 +145,11 @@ class OlmoEarthSample(NamedTuple):
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
+    # Own-time-axis layout (see TIME_INDEXED_MODALITIES): [B, T_m] rows of timestamps.
+    sentinel2_l2a_time_index: ArrayTensor | None = None
+    sentinel1_time_index: ArrayTensor | None = None
+    landsat_time_index: ArrayTensor | None = None
+    landsat_l2_time_index: ArrayTensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
         """Convert to a dictionary.
@@ -161,8 +202,9 @@ class OlmoEarthSample(NamedTuple):
         """Get the number of channels for a given attribute."""
         if attribute == "timestamps":
             return len(TIMESTAMPS)
-        else:
-            return Modality.get(attribute).num_bands
+        if attribute.endswith(TIME_INDEX_SUFFIX):
+            return 1  # one timeline row per timestep slot
+        return Modality.get(attribute).num_bands
 
     def to_device(
         self, device: torch.device, non_blocking: bool = True
@@ -394,6 +436,11 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
+    # Own-time-axis layout (see TIME_INDEXED_MODALITIES): [B, T_m] rows of timestamps.
+    sentinel2_l2a_time_index: Tensor | None = None
+    sentinel1_time_index: Tensor | None = None
+    landsat_time_index: Tensor | None = None
+    landsat_l2_time_index: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -441,6 +488,10 @@ class MaskedOlmoEarthSample(NamedTuple):
             moved[key] = val
         return MaskedOlmoEarthSample(**moved)
 
+    def modality_timestamps(self) -> dict[str, Tensor] | None:
+        """Per-modality [B, T_m, 3] timestamps (own-time-axis layout), else None."""
+        return _modality_timestamps(self)
+
     def with_uint8_masks(self) -> MaskedOlmoEarthSample:
         """Cast masks to uint8 (values 0-3) to shrink dataloader payloads 8x.
 
@@ -477,7 +528,7 @@ class MaskedOlmoEarthSample(NamedTuple):
         """
         masked_sample_dict: dict[str, Any] = {}
         for key, t in sample.as_dict(include_nones=True).items():
-            if key == "timestamps":
+            if key == "timestamps" or key.endswith(TIME_INDEX_SUFFIX):
                 masked_sample_dict[key] = t
             else:
                 if t is None:

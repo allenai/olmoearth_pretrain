@@ -140,31 +140,51 @@ def _real_tokens(sample: OlmoEarthSample, hw_p: int, exclude: set[str]) -> int:
     return total
 
 
+TEMPORAL = ("sentinel2_l2a", "sentinel1", "landsat_l2")
+
+
+def _dense(sample: OlmoEarthSample) -> dict[str, np.ndarray]:
+    """Unbatched compact sample -> each temporal modality on the union timeline."""
+    num_steps = _field(sample, "timestamps").shape[0]
+    dense = {}
+    for name in TEMPORAL:
+        data = _field(sample, name)
+        index = _field(sample, f"{name}_time_index")
+        out = np.full((*data.shape[:2], num_steps, data.shape[3]), MISSING_VALUE)
+        out[:, :, index[index >= 0]] = data[:, :, index >= 0]
+        dense[name] = out.astype(np.float32)
+    return dense
+
+
 def test_whole_span_keeps_every_capture(allcap_h5py_dir: UPath) -> None:
-    """No budget, no range: every capture lands on the union timeline."""
+    """No budget, no range: each modality keeps all its captures, in order."""
     dataset = _dataset(allcap_h5py_dir)
     _, sample = dataset[GetItemArgs(idx=0, patch_size=4, sampled_hw_p=4)]
-    assert _field(sample, "sentinel2_l2a").shape[:3] == (
-        16,
-        16,
-        _field(sample, "timestamps").shape[0],
-    )
+    num_steps = _field(sample, "timestamps").shape[0]
     with h5py.File(allcap_h5py_dir / "sample_0.h5") as f:
-        for name in ("sentinel2_l2a", "sentinel1", "landsat_l2"):
-            present = (getattr(sample, name) != MISSING_VALUE).all(axis=(0, 1, 3))
-            assert present.sum() == f[name].shape[2]
-            # Data land on the right steps, in order.
+        for name in TEMPORAL:
+            # Compact: exactly the file's captures, chronological.
             np.testing.assert_array_equal(
-                getattr(sample, name)[:, :, present], f[name][()].astype(np.float32)
+                _field(sample, name), f[name][()].astype(np.float32)
+            )
+            index = _field(sample, f"{name}_time_index")
+            assert index.shape == (f[name].shape[2],)
+            assert (np.diff(index) > 0).all() and 0 <= index.min()
+            assert index.max() < num_steps
+            # The indexed timeline rows are the modality's own dates.
+            np.testing.assert_array_equal(
+                _field(sample, "timestamps")[index], f[f"timestamps_{name}"][()]
             )
     assert _field(sample, "srtm").shape == (16, 16, 1, 1)
 
 
 def test_missing_modality_is_filled(allcap_h5py_dir: UPath) -> None:
-    """A modality absent from the file is all MISSING."""
+    """A modality absent from the file is one MISSING padding slot."""
     dataset = _dataset(allcap_h5py_dir, normalize=True)
     _, sample = dataset[GetItemArgs(idx=1, patch_size=2, sampled_hw_p=4)]
+    assert _field(sample, "landsat_l2").shape == (8, 8, 1, 8)
     assert (_field(sample, "landsat_l2") == MISSING_VALUE).all()
+    assert _field(sample, "landsat_l2_time_index").tolist() == [-1]
     assert (_field(sample, "sentinel2_l2a") != MISSING_VALUE).any()
 
 
@@ -186,12 +206,16 @@ def test_budget_counts_real_tokens_in_a_contiguous_run(
                 budget_exclude_modalities=frozenset({"srtm"}),
             )
         ]
-        assert _field(sample, "sentinel2_l2a").shape[:2] == (2 * hw_p, 2 * hw_p)
-        assert _real_tokens(sample, hw_p, {"srtm"}) <= max(budget, 3 * hw_p * hw_p)
+        dense = _dense(sample)
+        assert dense["sentinel2_l2a"].shape[:2] == (2 * hw_p, 2 * hw_p)
+        real = sum(
+            int((d != MISSING_VALUE).any(axis=(0, 1, 3)).sum()) for d in dense.values()
+        )
+        assert real * hw_p * hw_p <= max(budget, 3 * hw_p * hw_p)
         # Every step of the run holds at least one capture.
         any_present = np.zeros(_field(sample, "timestamps").shape[0], dtype=bool)
-        for name in ("sentinel2_l2a", "sentinel1", "landsat_l2"):
-            any_present |= (getattr(sample, name) != MISSING_VALUE).any(axis=(0, 1, 3))
+        for d in dense.values():
+            any_present |= (d != MISSING_VALUE).any(axis=(0, 1, 3))
         assert any_present.all()
 
 
@@ -207,25 +231,26 @@ def test_time_range_limits_the_span(allcap_h5py_dir: UPath) -> None:
         assert 1 <= len(ordinals) and ordinals[-1] - ordinals[0] <= 30
 
 
-def test_collate_pads_to_the_longest_sample(allcap_h5py_dir: UPath) -> None:
-    """Different-length samples stack with MISSING-padded tails."""
+def test_collate_pads_each_modality_to_its_longest(allcap_h5py_dir: UPath) -> None:
+    """Each modality pads to its own batch max (MISSING data, -1 time index)."""
     dataset = _dataset(allcap_h5py_dir)
     np.random.seed(1)
     batch = [
         dataset[GetItemArgs(idx=0, patch_size=2, sampled_hw_p=2, time_range_days=r)]
         for r in (7, 365)
     ]
-    lengths = [_field(s, "timestamps").shape[0] for _, s in batch]
-    assert lengths[0] < lengths[1]
     _, collated = collate_olmoearth_pretrain(batch)
-    assert _field(collated, "timestamps").shape == (2, lengths[1], 3)
-    short = _field(collated, "sentinel2_l2a")[0, :, :, lengths[0] :]
-    assert (short == MISSING_VALUE).all()
-    # Padded timestamps repeat the last real one.
-    assert (
-        _field(collated, "timestamps")[0, lengths[0] :]
-        == _field(collated, "timestamps")[0, lengths[0] - 1]
-    ).all()
+    for name in TEMPORAL:
+        lengths = [_field(s, name).shape[2] for _, s in batch]
+        assert _field(collated, name).shape[3] == max(lengths)
+        assert _field(collated, f"{name}_time_index").shape == (2, max(lengths))
+        short = int(np.argmin(lengths))
+        if lengths[short] < max(lengths):
+            tail = slice(lengths[short], None)
+            assert (_field(collated, name)[short, :, :, tail] == MISSING_VALUE).all()
+            assert (_field(collated, f"{name}_time_index")[short, tail] == -1).all()
+    t_lengths = [_field(s, "timestamps").shape[0] for _, s in batch]
+    assert _field(collated, "timestamps").shape == (2, max(t_lengths), 3)
 
 
 def test_uint8_masks_round_trip(allcap_h5py_dir: UPath) -> None:
@@ -259,3 +284,216 @@ def test_uint8_masks_round_trip(allcap_h5py_dir: UPath) -> None:
             restored = getattr(moved, name)
             assert restored.dtype == value.dtype, name
             assert torch.equal(restored, value), name
+
+
+def test_microbatches_trim_shared_time_padding(allcap_h5py_dir: UPath) -> None:
+    """Each microbatch keeps only its own longest per-modality time axis."""
+    import torch
+
+    from olmoearth_pretrain.data.collate import collate_double_masked_batched
+    from olmoearth_pretrain.train.masking import MaskingConfig
+    from olmoearth_pretrain.train.utils import split_masked_batch
+
+    dataset = _dataset(allcap_h5py_dir, normalize=True)
+    np.random.seed(4)
+    batch = [
+        dataset[GetItemArgs(idx=0, patch_size=2, sampled_hw_p=2, time_range_days=r)]
+        for r in (7, 365)
+    ]
+    masking = MaskingConfig(strategy_config={"type": "random_time_with_decode"}).build()
+    _, masked, _ = collate_double_masked_batched(batch, None, masking, None)
+    for i, micro in enumerate(split_masked_batch(masked, microbatch_size=1)):
+        for name in TEMPORAL:
+            length = max(_field(batch[i][1], name).shape[2], 1)
+            mask_name = f"{name}_mask"
+            assert _field(micro, f"{name}_time_index").shape == (1, length)
+            assert _field(micro, name).shape[3] == length
+            assert _field(micro, mask_name).shape[3] == length
+            for field in (name, mask_name, f"{name}_time_index"):
+                assert torch.equal(
+                    getattr(micro, field),
+                    _field(masked, field)[i : i + 1, ..., :length]
+                    if field.endswith("_time_index")
+                    else _field(masked, field)[i : i + 1, :, :, :length],
+                ), field
+
+
+def _densify(batch: OlmoEarthSample) -> OlmoEarthSample:
+    """Batched compact sample -> the previous union-timeline layout (no time index)."""
+    import torch
+
+    timestamps = _field(batch, "timestamps")
+    num_steps = timestamps.shape[1]
+    fields = {k: v for k, v in batch.as_dict().items() if not k.endswith("_time_index")}
+    for name in TEMPORAL:
+        data = _field(batch, name)
+        index = _field(batch, f"{name}_time_index")
+        out = torch.full(
+            (*data.shape[:3], num_steps, data.shape[4]), MISSING_VALUE, dtype=data.dtype
+        )
+        for b in range(data.shape[0]):
+            valid = index[b] >= 0
+            out[b][:, :, index[b][valid]] = data[b][:, :, valid]
+        fields[name] = out
+    return OlmoEarthSample(**fields)
+
+
+def _densify_mask(mask: Any, index: Any, num_steps: int) -> Any:
+    """[B, H, W, T_m, bs] compact mask -> [B, H, W, T_u, bs] (MISSING elsewhere)."""
+    import torch
+
+    from olmoearth_pretrain.datatypes import MaskValue
+
+    out = torch.full(
+        (*mask.shape[:3], num_steps, mask.shape[4]),
+        MaskValue.MISSING.value,
+        dtype=mask.dtype,
+    )
+    for b in range(mask.shape[0]):
+        valid = index[b] >= 0
+        out[b][:, :, index[b][valid]] = mask[b][:, :, valid]
+    return out
+
+
+def _densify_tokens(tokens: Any, index: Any, num_steps: int) -> Any:
+    """[B, H, W, T_m, bs, D] compact tokens -> [B, H, W, T_u, bs, D] (zeros)."""
+    import torch
+
+    out = torch.zeros((*tokens.shape[:3], num_steps, *tokens.shape[4:]))
+    for b in range(tokens.shape[0]):
+        valid = index[b] >= 0
+        out[b][:, :, index[b][valid]] = tokens[b][:, :, valid].float()
+    return out
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("random_ratio", [0.0, 1.0])  # time / random masking
+def test_compact_layout_is_equivalent_to_union_layout(
+    allcap_h5py_dir: UPath, seed: int, random_ratio: float
+) -> None:
+    """Own-time-axis tensors give the same masks, model outputs and loss.
+
+    The previous layout put every modality on the union timeline with MISSING
+    elsewhere; the compact layout drops those slots and keeps a time index. Real
+    tokens, their order, dates and masking RNG draws are unchanged, so masking
+    (random_time_with_decode, both its random and time branches), the factorized
+    encoder, the decoder, pooling and the patch-discrimination loss must agree.
+    """
+    import torch
+
+    from olmoearth_pretrain.datatypes import (
+        MaskedOlmoEarthSample,
+        MaskValue,
+        time_index_field,
+    )
+    from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
+    from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
+    from olmoearth_pretrain.train.loss import LossConfig
+    from olmoearth_pretrain.train.masking import MaskingConfig
+
+    dataset = _dataset(allcap_h5py_dir, normalize=True)
+    np.random.seed(seed)
+    items = [
+        dataset[
+            GetItemArgs(idx=i % 2, patch_size=2, sampled_hw_p=4, time_range_days=90)
+        ]
+        for i in range(3)
+    ]
+    _, compact = collate_olmoearth_pretrain(items)
+    dense = _densify(compact)
+    num_steps = _field(compact, "timestamps").shape[1]
+
+    masking = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "only_decode_modalities": ["srtm"],
+            "random_ratio": random_ratio,
+        }
+    ).build()
+    masked: dict[str, MaskedOlmoEarthSample] = {}
+    for name, batch in (("dense", dense), ("compact", compact)):
+        np.random.seed(100 + seed)
+        torch.manual_seed(100 + seed)
+        out = masking.apply_mask(batch, patch_size=2)
+        if name == "compact":
+            out = out._replace(
+                **{
+                    time_index_field(m): getattr(compact, time_index_field(m))
+                    for m in TEMPORAL
+                }
+            )
+        masked[name] = out
+    for m in TEMPORAL:
+        index = _field(compact, f"{m}_time_index")
+        torch.testing.assert_close(
+            _densify_mask(_field(masked["compact"], f"{m}_mask"), index, num_steps),
+            _field(masked["dense"], f"{m}_mask"),
+        )
+    # Non-trivial masks: some tokens are encoded and some decoded.
+    all_masks = torch.cat(
+        [_field(masked["dense"], f"{m}_mask").flatten() for m in TEMPORAL]
+    )
+    assert (all_masks == MaskValue.ONLINE_ENCODER.value).any()
+    assert (all_masks == MaskValue.DECODER.value).any()
+
+    modalities = [*TEMPORAL, "srtm"]
+    model = LatentMIMConfig(
+        encoder_config=EncoderConfig(
+            supported_modality_names=modalities,
+            embedding_size=16,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=2.0,
+            drop_path=0.0,
+            position_encoding="rope_3d_mixed",
+            rope_temporal_coordinate_scale=1.0 / 30.0,
+            attention_mode="factorized",
+        ),
+        decoder_config=PredictorConfig(
+            supported_modality_names=modalities,
+            encoder_embedding_size=16,
+            decoder_embedding_size=16,
+            depth=2,
+            mlp_ratio=2.0,
+            num_heads=2,
+            position_encoding="rope_3d_mixed",
+            rope_temporal_coordinate_scale=1.0 / 30.0,
+        ),
+        projection_only_target=True,
+    ).build()
+    model.train()
+    loss_fn = LossConfig(
+        loss_config={
+            "type": "modality_patch_discrimination_masked_negatives_vec",
+            "mask_negatives_for_modalities": ["srtm"],
+        }
+    ).build()
+    outputs: dict[str, tuple[Any, Any, Any, Any]] = {}
+    for name in ("dense", "compact"):
+        masked_batch = masked[name]
+        latent, decoded, pooled, *_ = model(masked_batch, patch_size=2)
+        target = model.target_encoder(masked_batch.unmask(), patch_size=2)[
+            "tokens_and_masks"
+        ]
+        outputs[name] = (latent, decoded, pooled, loss_fn.compute(decoded, target))
+
+    (lat_d, dec_d, pool_d, loss_d), (lat_c, dec_c, pool_c, loss_c) = (
+        outputs["dense"],
+        outputs["compact"],
+    )
+    torch.testing.assert_close(pool_c, pool_d, rtol=1e-4, atol=1e-5)
+    torch.testing.assert_close(loss_c, loss_d, rtol=1e-4, atol=1e-5)
+    for m in TEMPORAL:
+        index = _field(compact, f"{m}_time_index")
+        mask = _field(masked["dense"], f"{m}_mask")[:, ::2, ::2]
+        for got, want, value in (
+            (lat_c, lat_d, MaskValue.ONLINE_ENCODER),
+            (dec_c, dec_d, MaskValue.DECODER),
+        ):
+            sel = mask == value.value
+            torch.testing.assert_close(
+                _densify_tokens(getattr(got, m), index, num_steps)[sel],
+                getattr(want, m)[sel].float(),
+                rtol=1e-4,
+                atol=1e-5,
+            )

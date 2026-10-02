@@ -13,9 +13,11 @@ from einops import rearrange, repeat
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.datatypes import (
+    TIME_INDEXED_MODALITIES,
     MaskedOlmoEarthSample,
     MaskValue,
     OlmoEarthSample,
+    time_index_field,
 )
 from olmoearth_pretrain.decorators import experimental
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
@@ -1805,6 +1807,29 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
 
     @staticmethod
+    def _per_slot_to_union_steps(
+        per_slot: torch.Tensor, time_index: torch.Tensor | None, num_steps: int
+    ) -> torch.Tensor:
+        """Map a modality's per-slot counts (T_m,) onto the union timeline (T_u,).
+
+        Without a time index the modality's slots are the timeline's rows.
+        """
+        if time_index is None:
+            return per_slot
+        valid = time_index >= 0
+        out = per_slot.new_zeros(num_steps)
+        return out.index_add_(0, time_index[valid].long(), per_slot[valid])
+
+    @staticmethod
+    def _union_steps_to_slots(
+        steps: torch.Tensor, time_index: torch.Tensor | None
+    ) -> torch.Tensor:
+        """A modality's timestep slots that lie on the given union-timeline steps."""
+        if time_index is None:
+            return steps
+        return torch.isin(time_index, steps).nonzero().squeeze(1)
+
+    @staticmethod
     def _bandset_has_data_at_timestamps(
         output_dict: dict[str, ArrayTensor | None],
         modality_name: str,
@@ -1893,6 +1918,18 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
             > 0
         )
 
+        # Modalities on their own time axis: [B, T_m] rows of batch.timestamps.
+        time_index = {
+            m: getattr(batch, time_index_field(m))
+            for m in TIME_INDEXED_MODALITIES
+            if getattr(batch, time_index_field(m)) is not None
+        }
+        num_union_steps = batch.time
+
+        def instance_time_index(modality_name: str, i: int) -> torch.Tensor | None:
+            index = time_index.get(modality_name)
+            return None if index is None else index[i]
+
         for i in range(batch.batch_size):
             encode_decode_bandsets: list[tuple[str, int]] = []
             missing_per_time: torch.Tensor | None = None
@@ -1912,6 +1949,11 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             # H, W, T
                             not_missing_t = not_missing[:, :, :, bandset_idx].sum(
                                 dim=[0, 1]
+                            )
+                            not_missing_t = self._per_slot_to_union_steps(
+                                not_missing_t,
+                                instance_time_index(modality_name, i),
+                                num_union_steps,
                             )
                             if missing_per_time is None:
                                 missing_per_time = not_missing_t
@@ -1966,12 +2008,15 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     )
                     if not randomly_mask_bandset:
                         assert encode_timestamps is not None
+                        encode_slots = self._union_steps_to_slots(
+                            encode_timestamps, instance_time_index(modality_name, i)
+                        )
                         if not self._bandset_has_data_at_timestamps(
                             output_dict,
                             modality_name,
                             bandset_idx,
                             i,
-                            encode_timestamps,
+                            encode_slots,
                         ):
                             randomly_mask_bandset = True
                     masked_modality_name = (
@@ -1996,7 +2041,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             output_dict[masked_modality_name][
                                 i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
                             ],
-                            encode_timestamps,
+                            encode_slots,
                             MaskValue.ONLINE_ENCODER.value,
                         )
                 for modality_name, bandset_idx in decode_bandsets:
@@ -2006,12 +2051,15 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     )
                     if not randomly_mask_bandset:
                         assert decode_timestamps is not None
+                        decode_slots = self._union_steps_to_slots(
+                            decode_timestamps, instance_time_index(modality_name, i)
+                        )
                         if not self._bandset_has_data_at_timestamps(
                             output_dict,
                             modality_name,
                             bandset_idx,
                             i,
-                            decode_timestamps,
+                            decode_slots,
                         ):
                             randomly_mask_bandset = True
                     masked_modality_name = (
@@ -2036,7 +2084,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             output_dict[masked_modality_name][
                                 i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
                             ],
-                            decode_timestamps,
+                            decode_slots,
                             MaskValue.DECODER.value,
                         )
 

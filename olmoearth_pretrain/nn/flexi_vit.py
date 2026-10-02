@@ -905,6 +905,7 @@ class CompositeEncodings(nn.Module):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> dict[str, Tensor]:
         """Apply the encodings to the patchified data.
 
@@ -913,6 +914,8 @@ class CompositeEncodings(nn.Module):
             timestamps: Timestamps of the data
             patch_size: Size of patches
             input_res: Resolution of the input data
+            modality_timestamps: Optional per-modality ``[B, T_m, 3]`` timestamps
+                for modalities on their own time axis; others use ``timestamps``.
 
         Returns:
             Tokens only for each modality
@@ -926,7 +929,7 @@ class CompositeEncodings(nn.Module):
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
                 per_modality_input_tokens[modality_name],
-                timestamps=timestamps,
+                timestamps=(modality_timestamps or {}).get(modality_name, timestamps),
                 patch_size=patch_size,
                 input_res=input_res,
             )
@@ -1098,6 +1101,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1109,7 +1113,8 @@ class FlexiVitBase(nn.Module):
         Under 3D RoPE the temporal coordinate is days-since-2000 derived from
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
-        keep ``t=0`` (no temporal anchor).
+        keep ``t=0`` (no temporal anchor). Modalities in ``modality_timestamps``
+        (own time axis) take their days from their own ``[B, T_m, 3]`` dates.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
             return None
@@ -1146,12 +1151,18 @@ class FlexiVitBase(nn.Module):
             tokens = tokens_only_dict[modality_name]
             modality = Modality.get(modality_name)
             if is_3d:
+                modality_days = days_per_timestep
+                if modality_timestamps and modality_name in modality_timestamps:
+                    modality_days = timestamps_to_days(
+                        modality_timestamps[modality_name]
+                    ).to(torch.float32) * (self.rope_temporal_coordinate_scale)
+                assert modality_days is not None
                 positions = self._build_3d_rope_positions_for_modality(
                     modality_name=modality_name,
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
-                    days_per_timestep=days_per_timestep,
+                    days_per_timestep=modality_days,
                 )
             else:
                 positions = self._build_2d_rope_positions_for_modality(
@@ -2440,6 +2451,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -2457,6 +2469,7 @@ class Encoder(FlexiVitBase):
             timestamps,
             patch_size,
             input_res,
+            modality_timestamps=modality_timestamps,
         )
         positions = self.build_rope_positions(
             tokens_only_dict,
@@ -2464,6 +2477,7 @@ class Encoder(FlexiVitBase):
             patch_size,
             input_res,
             timestamps=timestamps,
+            modality_timestamps=modality_timestamps,
         )
         # Full (pre-masking) positions in collapsed order, kept for the register
         # bottleneck read so registers attend over the encoded *visible* patch tokens
@@ -2659,6 +2673,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    modality_timestamps=x.modality_timestamps(),
                 )
             )
         else:
@@ -3010,13 +3025,18 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
         tokens_dict = self.composite_encodings(
-            tokens_only_dict, timestamps, patch_size, input_res
+            tokens_only_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            modality_timestamps=modality_timestamps,
         )
         positions = self.build_rope_positions(
             tokens_only_dict,
@@ -3024,6 +3044,7 @@ class Predictor(PredictorBase):
             patch_size,
             input_res,
             timestamps=timestamps,
+            modality_timestamps=modality_timestamps,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3168,6 +3189,7 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3182,6 +3204,8 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
+            modality_timestamps: Optional per-modality ``[B, T_m, 3]`` timestamps
+                for modalities on their own time axis.
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3212,6 +3236,7 @@ class Predictor(PredictorBase):
             input_res,
             registers=registers,
             register_positions=register_positions,
+            modality_timestamps=modality_timestamps,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}

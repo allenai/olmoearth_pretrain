@@ -7,10 +7,27 @@ import torch
 from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.data.transform import Transform
 from olmoearth_pretrain.datatypes import (
+    TIME_INDEX_FIELDS,
+    TIME_INDEX_SUFFIX,
     MaskedOlmoEarthSample,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
+
+
+def _with_time_indices(
+    masked: MaskedOlmoEarthSample, sample: OlmoEarthSample
+) -> MaskedOlmoEarthSample:
+    """Carry ``{modality}_time_index`` fields over to the masked sample.
+
+    Masking strategies rebuild the sample from modalities, masks and timestamps.
+    """
+    updates = {
+        name: getattr(sample, name)
+        for name in TIME_INDEX_FIELDS
+        if getattr(sample, name) is not None
+    }
+    return masked._replace(**updates) if updates else masked
 
 
 def collate_olmoearth_pretrain(
@@ -30,11 +47,11 @@ def collate_olmoearth_pretrain(
             return torch.stack(arrays, dim=0)
         # Samples assembled on per-sample timelines (per_modality_timestamps
         # datasets) differ in length: pad modalities with MISSING_VALUE (so the
-        # padded steps become MISSING tokens) and timestamps with copies of the
-        # last timestamp, as the dataset does when padding to max_sequence_length.
-        stacked = torch.full(
-            (len(arrays), *shape), MISSING_VALUE, dtype=arrays[0].dtype
-        )
+        # padded steps become MISSING tokens), time indices with -1 (padding
+        # slot) and timestamps with copies of the last timestamp, as the dataset
+        # does when padding to max_sequence_length.
+        fill = -1 if attr.endswith(TIME_INDEX_SUFFIX) else MISSING_VALUE
+        stacked = torch.full((len(arrays), *shape), fill, dtype=arrays[0].dtype)
         for i, array in enumerate(arrays):
             stacked[i][tuple(slice(0, n) for n in array.shape)] = array
             if attr == "timestamps":
@@ -79,7 +96,9 @@ def collate_single_masked_batched(
         stacked_sample = transform.apply(stacked_sample)
 
     # Apply masking to the batch
-    masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+    masked_sample = _with_time_indices(
+        masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
+    )
     if uint8_masks:
         masked_sample = masked_sample.with_uint8_masks()
 
@@ -117,11 +136,15 @@ def collate_double_masked_batched(
         stacked_sample = transform.apply(stacked_sample)
 
     # Apply both masking strategies to the batch
-    masked_sample_a = masking_strategy.apply_mask(stacked_sample, patch_size)
+    masked_sample_a = _with_time_indices(
+        masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
+    )
     strategy_b = (
         masking_strategy_b if masking_strategy_b is not None else masking_strategy
     )
-    masked_sample_b = strategy_b.apply_mask(stacked_sample, patch_size)
+    masked_sample_b = _with_time_indices(
+        strategy_b.apply_mask(stacked_sample, patch_size), stacked_sample
+    )
     if uint8_masks:
         masked_sample_a = masked_sample_a.with_uint8_masks()
         masked_sample_b = masked_sample_b.with_uint8_masks()
