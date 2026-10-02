@@ -7,17 +7,25 @@ Covers the ``rc_tconv_*_pix512`` arms:
 * the leakage guard (values at non-ONLINE pixels, or a fully masked band set, never
   reach the latent init), for the plain and the mask-normalized convolutions;
 * the mask-normalized convolution's independence from masked neighbours;
+* the locality of the space / space_time / time conv steps;
+* the per-modality (``modality_concat``) register init;
 * the latent grid following the drawn stride in training and gradient into the branch.
+
+The encoder-level tests run every branch variant in ``VARIANTS``.
 """
+
+from dataclasses import dataclass
+from typing import Any
 
 import pytest
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 from olmoearth_pretrain.nn.pixel_branch import (
     PixelRegisterBranch,
+    ThinConvStep,
     pool_online_pixels,
 )
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -32,10 +40,28 @@ MODALITIES = [
 ]
 
 
-def _build_encoder(
-    branch: bool = False, mask_normalized: bool = False, seed: int = 0
-) -> Encoder:
-    """Small rc_pix512-shaped encoder, optionally with the pixel branch."""
+@dataclass(frozen=True)
+class Variant:
+    """One pixel-branch configuration (the ``rc_tconv_*`` arms)."""
+
+    mask_normalized: bool = False
+    mixing: str | None = None
+    register_pool: str | None = None
+
+
+VARIANTS = {
+    "space": Variant(),
+    "space_mnorm": Variant(mask_normalized=True),
+    "space_time_concat": Variant(mixing="space_time", register_pool="modality_concat"),
+    "time_concat": Variant(mixing="time", register_pool="modality_concat"),
+}
+variants = pytest.mark.parametrize(
+    "variant", list(VARIANTS.values()), ids=list(VARIANTS)
+)
+
+
+def _build_encoder(variant: Variant | None = None, seed: int = 0) -> Encoder:
+    """Small rc_pix512-shaped encoder, with the pixel branch when ``variant`` is set."""
     torch.manual_seed(seed)
     perceiver = PerceiverConfig(
         register_dim=REGISTER_DIM,
@@ -45,12 +71,14 @@ def _build_encoder(
         max_latents=32,
         eval_latent_stride=1,
     )
-    if branch:
+    if variant is not None:
         perceiver.pixel_branch_type = "thinconv"
         perceiver.pixel_branch_dim = PIXEL_DIM
         perceiver.pixel_branch_depth = 2
-        if mask_normalized:
+        if variant.mask_normalized:
             perceiver.pixel_branch_mask_normalized = True
+        perceiver.pixel_branch_mixing = variant.mixing
+        perceiver.pixel_branch_register_pool = variant.register_pool
     return EncoderConfig(
         supported_modality_names=MODALITIES,
         embedding_size=32,
@@ -145,11 +173,11 @@ def test_pool_online_pixels(stride: int) -> None:
                         assert torch.equal(pooled[b, i, j, t], torch.zeros(3))
 
 
-@pytest.mark.parametrize("mask_normalized", [False, True])
-def test_init_equivalence(mask_normalized: bool) -> None:
+@variants
+def test_init_equivalence(variant: Variant) -> None:
     """At init the branch encoder equals the branch-free one exactly."""
     plain = _build_encoder()
-    branch = _build_encoder(branch=True, mask_normalized=mask_normalized)
+    branch = _build_encoder(variant)
     missing, unexpected = branch.load_state_dict(plain.state_dict(), strict=False)
     assert not unexpected
     assert missing and all(k.startswith("pixel_branch.") for k in missing)
@@ -163,11 +191,11 @@ def test_init_equivalence(mask_normalized: bool) -> None:
         assert torch.equal(regs_plain, regs_branch)
 
 
-@pytest.mark.parametrize("mask_normalized", [False, True])
+@variants
 @pytest.mark.parametrize("stride", [1, 2, 4])
-def test_branch_ignores_masked_values(mask_normalized: bool, stride: int) -> None:
+def test_branch_ignores_masked_values(variant: Variant, stride: int) -> None:
     """Values at non-ONLINE pixels (incl. the fully decoded S1) never reach the init."""
-    encoder = _build_encoder(branch=True, mask_normalized=mask_normalized)
+    encoder = _build_encoder(variant)
     branch = _open(encoder)
     sample = _make_sample()
     with torch.no_grad():
@@ -179,9 +207,10 @@ def test_branch_ignores_masked_values(mask_normalized: bool, stride: int) -> Non
     assert torch.equal(init_a, init_b)
 
 
-def test_masked_band_set_contributes_nothing() -> None:
+@variants
+def test_masked_band_set_contributes_nothing(variant: Variant) -> None:
     """Dropping the fully decoded S1 leaves the latent init unchanged."""
-    encoder = _build_encoder(branch=True)
+    encoder = _build_encoder(variant)
     branch = _open(encoder)
     sample = _make_sample()
     without_s1 = sample._replace(sentinel1=None, sentinel1_mask=None)
@@ -189,9 +218,10 @@ def test_masked_band_set_contributes_nothing() -> None:
         torch.testing.assert_close(branch(sample, 4, 2), branch(without_s1, 4, 2))
 
 
-def test_cell_with_no_online_unit_gets_zero_init() -> None:
+@variants
+def test_cell_with_no_online_unit_gets_zero_init(variant: Variant) -> None:
     """A cell masked at every timestep starts from the bare learned latent."""
-    encoder = _build_encoder(branch=True)
+    encoder = _build_encoder(variant)
     branch = _open(encoder)
     sample = _make_sample()
     assert sample.sentinel2_l2a_mask is not None
@@ -218,28 +248,107 @@ def test_mask_normalized_conv_ignores_masked_neighbours() -> None:
         grad_checkpointing=False,
     )
     step = branch.steps[0]
-    frames = torch.randn(1, 5, 5, PIXEL_DIM)
-    valid = torch.ones(1, 5, 5, 1)
-    valid[0, 2, 2] = 0
+    assert isinstance(step, ThinConvStep) and step.dwconv is not None
+    frames = torch.randn(1, 1, 5, 5, PIXEL_DIM)
+    valid = torch.ones(1, 1, 5, 5, 1)
+    valid[0, 0, 2, 2] = 0
     scale = branch._partial_conv_scale(valid)
     out = step(frames, valid, scale)
-    # Reference at the centre's right neighbour (1, 2, 3): weighted sum over its
-    # ONLINE window cells, rescaled by 9 / 8.
-    y = step.norm(frames)
+    # Reference at the centre's right neighbour (2, 3): weighted sum over its ONLINE
+    # window cells, rescaled by 9 / 8.
+    y = step.norm(frames)[0, 0]
     w = step.dwconv.weight[:, 0]  # [D, 3, 3]
     acc = torch.zeros(PIXEL_DIM)
     for di in range(3):
         for dj in range(3):
             r, c = 2 - 1 + di, 3 - 1 + dj
-            if valid[0, r, c, 0] > 0:
-                acc = acc + w[:, di, dj] * y[0, r, c]
-    expected = frames[0, 2, 3] + step.mlp(acc * 9 / 8 + step.dwconv.bias)
-    torch.testing.assert_close(out[0, 2, 3], expected)
+            if valid[0, 0, r, c, 0] > 0:
+                acc = acc + w[:, di, dj] * y[r, c]
+    expected = frames[0, 0, 2, 3] + step.mlp(acc * 9 / 8 + step.dwconv.bias)
+    torch.testing.assert_close(out[0, 0, 2, 3], expected)
 
 
-def test_training_grid_follows_stride_and_branch_gets_gradient() -> None:
+def test_space_step_is_the_ported_per_frame_unit() -> None:
+    """``"space"`` is ``x + mlp(dwconv2d(norm(x)))`` on every frame independently."""
+    torch.manual_seed(0)
+    step = ThinConvStep(PIXEL_DIM, 3, 2.0, mixing="space")
+    assert step.dwconv is not None and step.dwconv_t is None
+    frames = torch.randn(2, 3, 5, 5, PIXEL_DIM)
+    out = step(frames)
+    for n in range(2):
+        for t in range(3):
+            x = frames[n, t][None]  # [1, h, w, D]
+            y = step.dwconv(step.norm(x).permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            torch.testing.assert_close(out[n, t], (x + step.mlp(y))[0])
+
+
+@pytest.mark.parametrize("mixing", ["space", "space_time", "time"])
+def test_step_locality(mixing: str) -> None:
+    """Perturbing one (t=0, cell) reaches exactly the cells and timesteps each mixing reads.
+
+    Kernels 3 x 3 in space and 3 in time, one step: ``space`` stays in frame 0 within the
+    3 x 3 window; ``time`` stays at the cell and reaches t=1; ``space_time`` reaches the
+    window at t=0 and t=1. Nothing reaches t=2 or another series.
+    """
+    torch.manual_seed(0)
+    step = ThinConvStep(PIXEL_DIM, 3, 2.0, mixing=mixing)
+    frames = torch.randn(2, 4, 5, 5, PIXEL_DIM)
+    bumped = frames.clone()
+    bumped[0, 0, 2, 2] += torch.randn(PIXEL_DIM)  # not constant: LayerNorm removes that
+    with torch.no_grad():
+        changed = (step(bumped) - step(frames)).abs().amax(dim=-1) > 1e-6
+    expected = torch.zeros(2, 4, 5, 5, dtype=torch.bool)
+    spatial = slice(1, 4) if mixing != "time" else slice(2, 3)
+    timesteps = [0] if mixing == "space" else [0, 1]
+    for t in timesteps:
+        expected[0, t, spatial, spatial] = True
+    assert torch.equal(changed, expected)
+
+
+def _concat_slots(branch: PixelRegisterBranch, sample: MaskedOlmoEarthSample) -> Tensor:
+    """The ``[B, h, w, M * Dp]`` input of the register projection (stride 1)."""
+    captured: list[Tensor] = []
+    handle = branch.to_register.register_forward_hook(
+        lambda _m, inputs, _o: captured.append(inputs[0])
+    )
+    with torch.no_grad():
+        branch(sample, 4, 1)
+    handle.remove()
+    return captured[0]
+
+
+def test_modality_concat_slots() -> None:
+    """Each modality fills its own slot; a modality with no ONLINE unit gives zeros."""
+    encoder = _build_encoder(VARIANTS["space_time_concat"])
+    branch = _open(encoder)
+    assert branch.pixel_modality_names == [
+        Modality.SENTINEL2_L2A.name,
+        Modality.SENTINEL1.name,
+    ]
+    assert branch.to_register.in_features == 2 * PIXEL_DIM
+    sample = _make_sample()  # S1 fully decoded
+    slots = _concat_slots(branch, sample)
+    assert slots.shape == (B, H, W, 2 * PIXEL_DIM)
+    assert slots[..., :PIXEL_DIM].abs().amax(dim=-1).gt(0).all()
+    assert not slots[..., PIXEL_DIM:].any()
+    # With S1 ONLINE everywhere its slot is filled, and S2's slot is unchanged.
+    assert sample.sentinel1_mask is not None
+    online_s1 = sample._replace(
+        sentinel1_mask=torch.full_like(
+            sample.sentinel1_mask, MaskValue.ONLINE_ENCODER.value
+        )
+    )
+    slots_s1 = _concat_slots(branch, online_s1)
+    assert slots_s1[..., PIXEL_DIM:].abs().amax(dim=-1).gt(0).all()
+    torch.testing.assert_close(slots_s1[..., :PIXEL_DIM], slots[..., :PIXEL_DIM])
+
+
+@variants
+def test_training_grid_follows_stride_and_branch_gets_gradient(
+    variant: Variant,
+) -> None:
     """In training the latent grid follows the drawn stride; the branch is on the graph."""
-    encoder = _build_encoder(branch=True)
+    encoder = _build_encoder(variant)
     branch = _open(encoder)
     encoder.train()
     sample = _make_sample()
@@ -267,7 +376,31 @@ def test_config_validation() -> None:
         PerceiverConfig(
             register_dim=8, pixel_latents=True, pixel_branch_type="conv"
         ).validate(encoder_num_heads=2, position_encoding="rope")
-    with pytest.raises(ValueError, match="pixel_branch_type"):
-        PerceiverConfig(
-            register_dim=8, pixel_latents=True, pixel_branch_mask_normalized=True
-        ).validate(encoder_num_heads=2, position_encoding="rope")
+    needs_type: list[dict[str, Any]] = [
+        {"pixel_branch_mask_normalized": True},
+        {"pixel_branch_mixing": "time"},
+        {"pixel_branch_time_kernel": 3},
+        {"pixel_branch_register_pool": "modality_concat"},
+    ]
+    for setting in needs_type:
+        with pytest.raises(ValueError, match="pixel_branch_type"):
+            PerceiverConfig(register_dim=8, pixel_latents=True, **setting).validate(
+                encoder_num_heads=2, position_encoding="rope"
+            )
+    invalid: list[tuple[dict[str, Any], str]] = [
+        ({"pixel_branch_mixing": "spacetime"}, "pixel_branch_mixing"),
+        ({"pixel_branch_time_kernel": 2}, "pixel_branch_time_kernel"),
+        ({"pixel_branch_register_pool": "concat"}, "pixel_branch_register_pool"),
+        (
+            {"pixel_branch_mixing": "time", "pixel_branch_mask_normalized": True},
+            "mask_normalized",
+        ),
+    ]
+    for setting, match in invalid:
+        with pytest.raises(ValueError, match=match):
+            PerceiverConfig(
+                register_dim=8,
+                pixel_latents=True,
+                pixel_branch_type="thinconv",
+                **setting,
+            ).validate(encoder_num_heads=2, position_encoding="rope")

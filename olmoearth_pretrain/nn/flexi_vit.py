@@ -46,7 +46,12 @@ from olmoearth_pretrain.nn.joint_latent import (
     sort_tokens_by_cell,
     token_mix_attention_kwargs,
 )
-from olmoearth_pretrain.nn.pixel_branch import PIXEL_BRANCH_TYPES, PixelRegisterBranch
+from olmoearth_pretrain.nn.pixel_branch import (
+    PIXEL_BRANCH_MIXINGS,
+    PIXEL_BRANCH_REGISTER_POOLS,
+    PIXEL_BRANCH_TYPES,
+    PixelRegisterBranch,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -2285,9 +2290,20 @@ class PerceiverConfig(Config):
         pixel_branch_kernel: Depthwise kernel size (odd). None = 3.
         pixel_branch_mlp_ratio: Pointwise MLP ratio of the conv steps. None = 4.0.
         pixel_branch_mask_normalized: Mask-normalized (partial) depthwise
-            convolutions that read only the ONLINE cells of each window. None = False.
+            convolutions that read only the ONLINE cells of each window. Spatial
+            mixing only. None = False.
         pixel_branch_grad_checkpointing: Recompute each conv step in backward.
             None = True.
+        pixel_branch_mixing: What each conv step mixes: ``"space"`` (depthwise 2D
+            conv per frame), ``"space_time"`` (that conv, then a depthwise 1D conv
+            over the timesteps of each modality / band set / cell) or ``"time"`` (the
+            1D conv alone). None = ``"space"``.
+        pixel_branch_time_kernel: Temporal depthwise kernel size (odd). None = 3.
+        pixel_branch_register_pool: How the final features become the latent init:
+            ``"mean"`` (ONLINE mean over timesteps, band sets and modalities, then a
+            linear) or ``"modality_concat"`` (ONLINE mean within each modality, a
+            per-modality linear + GELU, concatenated across modalities, then a
+            linear). None = ``"mean"``.
     """
 
     register_dim: int
@@ -2318,6 +2334,9 @@ class PerceiverConfig(Config):
     pixel_branch_mlp_ratio: float | None = None
     pixel_branch_mask_normalized: bool | None = None
     pixel_branch_grad_checkpointing: bool | None = None
+    pixel_branch_mixing: str | None = None
+    pixel_branch_time_kernel: int | None = None
+    pixel_branch_register_pool: str | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2441,6 +2460,29 @@ class PerceiverConfig(Config):
                 raise ValueError(
                     f"pixel_branch_depth must be >= 1, got {self.pixel_branch_depth}"
                 )
+            mixing = self.pixel_branch_mixing
+            if mixing is not None and mixing not in PIXEL_BRANCH_MIXINGS:
+                raise ValueError(
+                    f"pixel_branch_mixing must be one of {PIXEL_BRANCH_MIXINGS}, got "
+                    f"{mixing!r}"
+                )
+            if self.pixel_branch_mask_normalized and mixing not in (None, "space"):
+                raise ValueError(
+                    "pixel_branch_mask_normalized supports only "
+                    f"pixel_branch_mixing='space', got {mixing!r}"
+                )
+            time_kernel = self.pixel_branch_time_kernel
+            if time_kernel is not None and (time_kernel <= 0 or time_kernel % 2 != 1):
+                raise ValueError(
+                    "pixel_branch_time_kernel must be a positive odd number, got "
+                    f"{time_kernel}"
+                )
+            pool = self.pixel_branch_register_pool
+            if pool is not None and pool not in PIXEL_BRANCH_REGISTER_POOLS:
+                raise ValueError(
+                    "pixel_branch_register_pool must be one of "
+                    f"{PIXEL_BRANCH_REGISTER_POOLS}, got {pool!r}"
+                )
         elif any(
             v is not None
             for v in (
@@ -2450,6 +2492,9 @@ class PerceiverConfig(Config):
                 self.pixel_branch_mlp_ratio,
                 self.pixel_branch_mask_normalized,
                 self.pixel_branch_grad_checkpointing,
+                self.pixel_branch_mixing,
+                self.pixel_branch_time_kernel,
+                self.pixel_branch_register_pool,
             )
         ):
             raise ValueError("pixel_branch_* settings need pixel_branch_type")
@@ -2536,6 +2581,9 @@ class PerceiverConfig(Config):
             kernel_size=resolved(self.pixel_branch_kernel, 3),
             mlp_ratio=resolved(self.pixel_branch_mlp_ratio, 4.0),
             mask_normalized=resolved(self.pixel_branch_mask_normalized, False),
+            mixing=resolved(self.pixel_branch_mixing, "space"),
+            time_kernel=resolved(self.pixel_branch_time_kernel, 3),
+            register_pool=resolved(self.pixel_branch_register_pool, "mean"),
             tokenization_config=tokenization_config,
             grad_checkpointing=resolved(self.pixel_branch_grad_checkpointing, True),
         )

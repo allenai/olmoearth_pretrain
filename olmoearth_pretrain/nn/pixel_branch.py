@@ -12,13 +12,26 @@ the patch size, drawn per forward pass in training, 1 at eval), each
 the convolutions, and the final per-cell features initialize the latent covering
 that cell. At ``s = 1`` this is the original pixel-resolution branch.
 
+**Mixing** (``mixing``). Each step is one ConvNeXt-style unit,
+``x += mlp(mix(norm(x)))``, where ``mix`` is a depthwise spatial convolution over each
+frame (``"space"``, the ported branch), that convolution followed by a depthwise 1D
+convolution over the timesteps of each ``(modality, band set, cell)`` series
+(``"space_time"``), or the temporal convolution alone (``"time"``). Nothing ever mixes
+band sets or modalities.
+
+**Register init** (``register_pool``). ``"mean"`` (the ported branch) averages the final
+features over the ONLINE ``(timestep, band set, modality)`` units of each cell and
+projects them. ``"modality_concat"`` averages over the ONLINE ``(timestep, band set)``
+units of each modality, applies a per-modality ``Linear + GELU``, concatenates the
+modalities (a modality with no ONLINE unit at the cell fills its slot with zeros) and
+projects the concatenation.
+
 **Leakage guard.** Masking is per token (``P x P`` pixels) and ``s`` divides ``P``, so
 every ``s x s`` cell lies inside one token. The pooling averages ONLINE pixels only and
 every cell with no ONLINE pixel is zeroed BEFORE the first convolution, so nothing the
-depthwise convolutions propagate is derived from masked values. Frames are convolved
-independently (no mixing across timesteps, band sets or modalities), and the final
-register-init pooling over ``(timestep, band set, modality)`` is ONLINE-only, so a
-masked band set or timestep contributes exactly nothing.
+convolutions propagate -- through space or time -- is derived from masked values. The
+register-init pooling is ONLINE-only, so a masked band set or timestep contributes
+exactly nothing.
 
 **Mask-normalized convolutions** (``mask_normalized``). Random-mode masking leaves
 token-shaped holes (zeros) in a frame that inference never has. With this option each
@@ -27,6 +40,7 @@ depthwise convolution sees only the ONLINE cells of its window and rescales by
 cell's output does not depend on how many of its neighbours were masked. The mask is
 held fixed through the stack (holes are never filled), and the zero padding at the
 frame border is treated as missing too, so border cells are renormalized as well.
+Spatial mixing only.
 
 **Init equivalence.** ``zero_init`` zeroes the register-init projection, so at
 initialization a model with this branch is EXACTLY the model without it.
@@ -53,6 +67,8 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 logger = logging.getLogger(__name__)
 
 PIXEL_BRANCH_TYPES = ("thinconv",)
+PIXEL_BRANCH_MIXINGS = ("space", "space_time", "time")
+PIXEL_BRANCH_REGISTER_POOLS = ("mean", "modality_concat")
 
 
 def get_pixel_branch_modalities(supported_modalities: list[ModalitySpec]) -> list[str]:
@@ -96,21 +112,23 @@ class PixelModalityFrames:
 class PixelFrameContext:
     """Fixed per-forward bookkeeping for the pixel branch.
 
-    All cross-modality tensors concatenate the modalities in ``states`` iteration
-    order; ``frame_splits`` splits them back.
+    The frame tensor is ``[N, T, H / s, W / s, Dp]``: one ``T``-frame series per
+    ``(modality, instance, band set)``, the modalities concatenated along ``N`` in
+    ``states`` iteration order; ``series_splits`` splits them back.
 
     Attributes:
         states: Per-modality frame bookkeeping.
-        frame_splits: Frames (``B * T * band_sets``) per modality in the concatenated
-            frame tensor.
+        series_splits: Series (``B * band_sets``) per modality along ``N``.
         cell_hw: ``(H / s, W / s)`` shared cell grid.
-        frame_online: ``[F, H / s, W / s, 1]`` ONLINE indicator of every frame cell,
-            in the frame tensor's dtype.
+        batch_size: ``B``.
+        frame_online: ``[N, T, H / s, W / s, 1]`` ONLINE indicator of every frame
+            cell, in the frame tensor's dtype.
     """
 
     states: dict[str, PixelModalityFrames]
-    frame_splits: list[int]
+    series_splits: list[int]
     cell_hw: tuple[int, int]
+    batch_size: int
     frame_online: Tensor
 
 
@@ -247,16 +265,21 @@ class PixelPatchEmbed(nn.Module):
         return tokens + enc.to(tokens.dtype)[None]
 
 
-class PlainConvStep(nn.Module):
-    """One unconditioned ConvNeXt-style unit on the frames.
+class ThinConvStep(nn.Module):
+    """One unconditioned ConvNeXt-style unit on the ``[N, T, h, w, Dp]`` frames.
 
-    ``frames += mlp(dwconv(norm(frames)))``: a depthwise spatial convolution followed
-    by a pointwise MLP. Affine-free LayerNorm: the affine is redundant before the
+    ``frames += mlp(mix(norm(frames)))`` with ``mix`` a depthwise spatial convolution
+    (``"space"``), that convolution then a depthwise temporal convolution
+    (``"space_time"``), or the temporal convolution alone (``"time"``). One MLP per
+    unit whatever the mixing. Affine-free LayerNorm: the affine is redundant before the
     convolution / MLP that follow.
 
-    With ``mask_normalized`` the depthwise convolution is a partial convolution: it
-    reads only the ONLINE cells of its window and rescales by ``k**2 / count`` before
-    the bias (``scale`` below), see the module docstring.
+    The spatial convolution runs on every ``(series, timestep)`` frame; the temporal
+    one on every ``(series, cell)`` sequence of ``T`` frames, zero-padded at both ends.
+
+    With ``mask_normalized`` the spatial convolution is a partial convolution: it reads
+    only the ONLINE cells of its window and rescales by ``k**2 / count`` before the bias
+    (``scale`` below), see the module docstring.
     """
 
     def __init__(
@@ -264,29 +287,76 @@ class PlainConvStep(nn.Module):
         pixel_dim: int,
         kernel_size: int,
         mlp_ratio: float,
+        mixing: str = "space",
+        time_kernel: int = 3,
         mask_normalized: bool = False,
     ) -> None:
         """Initialize the step.
 
         Args:
             pixel_dim: Pixel embedding dimension.
-            kernel_size: Depthwise convolution kernel size (odd).
+            kernel_size: Spatial depthwise convolution kernel size (odd).
             mlp_ratio: Pointwise MLP hidden-dim ratio.
-            mask_normalized: Use the mask-normalized (partial) depthwise convolution.
+            mixing: One of :data:`PIXEL_BRANCH_MIXINGS`.
+            time_kernel: Temporal depthwise convolution kernel size (odd).
+            mask_normalized: Use the mask-normalized (partial) spatial convolution.
         """
         super().__init__()
+        if mixing not in PIXEL_BRANCH_MIXINGS:
+            raise ValueError(
+                f"mixing must be one of {PIXEL_BRANCH_MIXINGS}, got {mixing!r}"
+            )
         if kernel_size % 2 != 1:
             raise ValueError(f"kernel_size must be odd, got {kernel_size}")
+        if time_kernel % 2 != 1:
+            raise ValueError(f"time_kernel must be odd, got {time_kernel}")
+        if mask_normalized and mixing != "space":
+            raise ValueError("mask_normalized supports only mixing='space'")
         self.mask_normalized = mask_normalized
         self.norm = nn.LayerNorm(pixel_dim, elementwise_affine=False)
-        self.dwconv = nn.Conv2d(
-            pixel_dim,
-            pixel_dim,
-            kernel_size,
-            padding=kernel_size // 2,
-            groups=pixel_dim,
-        )
+        self.dwconv: nn.Conv2d | None = None
+        self.dwconv_t: nn.Conv1d | None = None
+        if mixing in ("space", "space_time"):
+            self.dwconv = nn.Conv2d(
+                pixel_dim,
+                pixel_dim,
+                kernel_size,
+                padding=kernel_size // 2,
+                groups=pixel_dim,
+            )
+        if mixing in ("space_time", "time"):
+            self.dwconv_t = nn.Conv1d(
+                pixel_dim,
+                pixel_dim,
+                time_kernel,
+                padding=time_kernel // 2,
+                groups=pixel_dim,
+            )
         self.mlp = Mlp(pixel_dim, hidden_features=int(pixel_dim * mlp_ratio))
+
+    def _spatial(self, y: Tensor, valid: Tensor | None, scale: Tensor | None) -> Tensor:
+        assert self.dwconv is not None
+        n = y.shape[0]
+        y = rearrange(y, "n t h w d -> (n t) d h w")
+        if not self.mask_normalized:
+            y = self.dwconv(y)
+            return rearrange(y, "(n t) d h w -> n t h w d", n=n)
+        assert valid is not None and scale is not None
+        y = F.conv2d(
+            y * rearrange(valid, "n t h w 1 -> (n t) 1 h w"),
+            self.dwconv.weight,
+            None,
+            padding=self.dwconv.padding,
+            groups=self.dwconv.groups,
+        )
+        y = rearrange(y, "(n t) d h w -> n t h w d", n=n)
+        return y * scale + self.dwconv.bias
+
+    def _temporal(self, y: Tensor) -> Tensor:
+        assert self.dwconv_t is not None
+        n, _, h, w, _ = y.shape
+        y = self.dwconv_t(rearrange(y, "n t h w d -> (n h w) d t"))
+        return rearrange(y, "(n h w) d t -> n t h w d", n=n, h=h, w=w)
 
     def forward(
         self,
@@ -294,43 +364,34 @@ class PlainConvStep(nn.Module):
         valid: Tensor | None = None,
         scale: Tensor | None = None,
     ) -> Tensor:
-        """Run the step on ``[F, h, w, Dp]`` frames.
+        """Run the step on ``[N, T, h, w, Dp]`` frames.
 
         Args:
-            frames: ``[F, h, w, Dp]`` frames.
-            valid: ``[F, h, w, 1]`` ONLINE indicator (``mask_normalized`` only).
-            scale: ``[F, h, w, 1]`` partial-convolution rescale ``k**2 / count``
+            frames: ``[N, T, h, w, Dp]`` frames.
+            valid: ``[N, T, h, w, 1]`` ONLINE indicator (``mask_normalized`` only).
+            scale: ``[N, T, h, w, 1]`` partial-convolution rescale ``k**2 / count``
                 (``mask_normalized`` only).
         """
         y = self.norm(frames)
-        if not self.mask_normalized:
-            y = self.dwconv(y.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
-            return frames + self.mlp(y)
-        assert valid is not None and scale is not None
-        y = F.conv2d(
-            (y * valid).permute(0, 3, 1, 2),
-            self.dwconv.weight,
-            None,
-            padding=self.dwconv.padding,
-            groups=self.dwconv.groups,
-        ).permute(0, 2, 3, 1)
-        y = y * scale + self.dwconv.bias
+        if self.dwconv is not None:
+            y = self._spatial(y, valid, scale)
+        if self.dwconv_t is not None:
+            y = self._temporal(y)
         return frames + self.mlp(y)
 
 
 class PixelRegisterBranch(nn.Module):
     """Convolutional branch whose output initializes the Perceiver's latent grid.
 
-    Owns the cell embedding, the conv steps, and the zero-initialized
-    ``pixel -> register_dim`` projection. :meth:`forward` runs the three stages:
+    Owns the cell embedding, the conv steps, and the register-init head ending in the
+    zero-initialized projection. :meth:`forward` runs the three stages:
 
     1. :meth:`build_frames` pools and embeds the sample's ONLINE pixels per
        ``s x s`` cell, zeroes cells with no ONLINE pixel (the leakage guard) and
-       returns the concatenated frames + bookkeeping.
+       returns the ``[N, T, h, w, Dp]`` frames + bookkeeping.
     2. :meth:`run_thin_steps` runs the whole conv stack once.
-    3. :meth:`register_init` pools the final frames per cell over the
-       ``(timestep, band set, modality)`` axes -- ONLINE-only -- and projects them
-       (zero-init) to the register width.
+    3. :meth:`register_init` pools the final frames per cell -- ONLINE-only -- and
+       maps them (zero-init) to the register width, see ``register_pool``.
     """
 
     def __init__(
@@ -343,6 +404,9 @@ class PixelRegisterBranch(nn.Module):
         kernel_size: int = 3,
         mlp_ratio: float = 4.0,
         mask_normalized: bool = False,
+        mixing: str = "space",
+        time_kernel: int = 3,
+        register_pool: str = "mean",
         tokenization_config: TokenizationConfig | None = None,
         grad_checkpointing: bool = True,
     ) -> None:
@@ -355,9 +419,13 @@ class PixelRegisterBranch(nn.Module):
             pixel_dim: Per-cell embedding dimension (Dp).
             branch_type: Only ``"thinconv"`` (standalone unconditioned stack).
             num_steps: Depth of the conv stack.
-            kernel_size: Depthwise convolution kernel size (odd).
+            kernel_size: Spatial depthwise convolution kernel size (odd).
             mlp_ratio: Pointwise MLP hidden-dim ratio.
-            mask_normalized: Mask-normalized (partial) depthwise convolutions.
+            mask_normalized: Mask-normalized (partial) spatial convolutions.
+            mixing: One of :data:`PIXEL_BRANCH_MIXINGS`, see the module docstring.
+            time_kernel: Temporal depthwise convolution kernel size (odd).
+            register_pool: One of :data:`PIXEL_BRANCH_REGISTER_POOLS`, see the module
+                docstring.
             tokenization_config: Band-grouping config (shared with the coarse embed).
             grad_checkpointing: Recompute each step in backward instead of storing its
                 activations. The steps have no dropout, so recomputation is
@@ -368,12 +436,18 @@ class PixelRegisterBranch(nn.Module):
             raise ValueError(
                 f"branch_type must be one of {PIXEL_BRANCH_TYPES}, got {branch_type!r}"
             )
+        if register_pool not in PIXEL_BRANCH_REGISTER_POOLS:
+            raise ValueError(
+                f"register_pool must be one of {PIXEL_BRANCH_REGISTER_POOLS}, got "
+                f"{register_pool!r}"
+            )
         if num_steps < 1:
             raise ValueError(f"num_steps must be >= 1, got {num_steps}")
         self.branch_type = branch_type
         self.pixel_dim = pixel_dim
         self.kernel_size = kernel_size
         self.mask_normalized = mask_normalized
+        self.register_pool = register_pool
         self.grad_checkpointing = grad_checkpointing
         self.embed = PixelPatchEmbed(
             supported_modality_names,
@@ -383,12 +457,27 @@ class PixelRegisterBranch(nn.Module):
         self.pixel_modality_names = self.embed.pixel_modality_names
         self.steps = nn.ModuleList(
             [
-                PlainConvStep(pixel_dim, kernel_size, mlp_ratio, mask_normalized)
+                ThinConvStep(
+                    pixel_dim,
+                    kernel_size,
+                    mlp_ratio,
+                    mixing=mixing,
+                    time_kernel=time_kernel,
+                    mask_normalized=mask_normalized,
+                )
                 for _ in range(num_steps)
             ]
         )
         self.norm_register = nn.LayerNorm(pixel_dim, elementwise_affine=False)
-        self.to_register = nn.Linear(pixel_dim, register_dim)
+        self.per_modality_proj: nn.ModuleDict | None = None
+        if register_pool == "modality_concat":
+            self.per_modality_proj = nn.ModuleDict(
+                {m: nn.Linear(pixel_dim, pixel_dim) for m in self.pixel_modality_names}
+            )
+            register_in = pixel_dim * len(self.pixel_modality_names)
+        else:
+            register_in = pixel_dim
+        self.to_register = nn.Linear(register_in, register_dim)
 
     def zero_init(self) -> None:
         """Zero the register-init projection: the model equals the branch-free one at init.
@@ -402,7 +491,7 @@ class PixelRegisterBranch(nn.Module):
     def build_frames(
         self, input_data: MaskedOlmoEarthSample, patch_size: int, stride: int
     ) -> tuple[Tensor | None, PixelFrameContext | None]:
-        """Embed the sample into ``[F, H / s, W / s, Dp]`` frames (masked cells zeroed).
+        """Embed the sample into ``[N, T, H / s, W / s, Dp]`` frames (masked cells zeroed).
 
         Returns ``(None, None)`` when no pixel modality is present.
         """
@@ -414,44 +503,45 @@ class PixelRegisterBranch(nn.Module):
         states: dict[str, PixelModalityFrames] = {}
         frames: list[Tensor] = []
         onlines: list[Tensor] = []
-        cell_hw: tuple[int, int] | None = None
+        grid: tuple[int, int, int, int] | None = None
         for modality in self.pixel_modality_names:
             if modality not in pixel_x:
                 continue
             tokens = pixel_x[modality]  # [B, H/s, W/s, T, bs, Dp]
             online = pixel_x[MaskedOlmoEarthSample.get_masked_modality_name(modality)]
             b, h, w, t, bs, _ = tokens.shape
-            if cell_hw is None:
-                cell_hw = (h, w)
-            elif cell_hw != (h, w):
+            if grid is None:
+                grid = (b, h, w, t)
+            elif grid != (b, h, w, t):
                 raise NotImplementedError(
                     "the pixel branch requires all pixel modalities to share one "
-                    f"pixel grid, got {cell_hw} and {(h, w)} cells"
+                    f"(B, H / s, W / s, T) grid, got {grid} and {(b, h, w, t)}"
                 )
             tokens = tokens * online[..., None].to(tokens.dtype)
-            frames.append(rearrange(tokens, "b h w t bs d -> (b t bs) h w d"))
-            onlines.append(rearrange(online, "b h w t bs -> (b t bs) h w"))
+            frames.append(rearrange(tokens, "b h w t bs d -> (b bs) t h w d"))
+            onlines.append(rearrange(online, "b h w t bs -> (b bs) t h w"))
             states[modality] = PixelModalityFrames(grid=(b, h, w, t, bs), online=online)
         if not states:
             return None, None
-        assert cell_hw is not None
+        assert grid is not None
         frame_tensor = torch.cat(frames, dim=0)
         return frame_tensor, PixelFrameContext(
             states=states,
-            frame_splits=[
-                st.grid[0] * st.grid[3] * st.grid[4] for st in states.values()
-            ],
-            cell_hw=cell_hw,
+            series_splits=[st.grid[0] * st.grid[4] for st in states.values()],
+            cell_hw=(grid[1], grid[2]),
+            batch_size=grid[0],
             frame_online=torch.cat(onlines, dim=0)[..., None].to(frame_tensor.dtype),
         )
 
     def _partial_conv_scale(self, valid: Tensor) -> Tensor:
         """``k**2 / count`` per cell (0 where no ONLINE cell is in the window)."""
         k = self.kernel_size
+        n = valid.shape[0]
         ones = valid.new_ones(1, 1, k, k)
-        count = F.conv2d(valid.permute(0, 3, 1, 2), ones, padding=k // 2).permute(
-            0, 2, 3, 1
+        count = F.conv2d(
+            rearrange(valid, "n t h w 1 -> (n t) 1 h w"), ones, padding=k // 2
         )
+        count = rearrange(count, "(n t) 1 h w -> n t h w 1", n=n)
         return torch.where(
             count > 0, (k * k) / count.clamp(min=1), torch.zeros_like(count)
         )
@@ -472,31 +562,59 @@ class PixelRegisterBranch(nn.Module):
                 frames = step(frames, valid, scale)
         return frames
 
+    def _modality_sums(
+        self, frames: Tensor, ctx: PixelFrameContext
+    ) -> dict[str, tuple[Tensor, Tensor]]:
+        """Per modality, the ONLINE-masked sum and count over ``(timestep, band set)``.
+
+        Returns ``{modality: ([B, h, w, Dp] sum, [B, h, w, 1] count)}``.
+        """
+        b = ctx.batch_size
+        out = {}
+        for (name, st), frames_m in zip(
+            ctx.states.items(), frames.split(ctx.series_splits)
+        ):
+            bs = st.grid[4]
+            fr = rearrange(frames_m, "(b bs) t h w d -> b t bs h w d", b=b, bs=bs)
+            m = rearrange(st.online, "b h w t bs -> b t bs h w")[..., None]
+            m = m.to(frames.dtype)
+            out[name] = ((fr * m).sum(dim=(1, 2)), m.sum(dim=(1, 2)))
+        return out
+
     def register_init(self, frames: Tensor, ctx: PixelFrameContext) -> Tensor:
         """Pool the final frames per cell (ONLINE-only) into the latent init.
 
-        Mask-weighted mean over the ``(timestep, band set, modality)`` axes at each
-        cell, then the zero-initialized projection. A cell with no ONLINE unit
-        anywhere contributes exactly zero (its latent starts from the bare learned
-        latent).
+        ``"mean"``: mask-weighted mean over the ``(timestep, band set, modality)``
+        units of each cell, then the zero-initialized projection.
+        ``"modality_concat"``: per modality the mask-weighted mean over its
+        ``(timestep, band set)`` units, ``Linear + GELU``, zeroed where the modality
+        has no ONLINE unit; concatenated over :attr:`pixel_modality_names` (absent
+        modalities give zero slots), then the zero-initialized projection. Either way a
+        cell with no ONLINE unit anywhere contributes exactly zero.
 
         Returns:
             ``[B, (H / s) * (W / s), register_dim]`` additive init, rows in row-major
             ``(h, w)`` order (matching the Perceiver's latent grid layout).
         """
+        sums = self._modality_sums(frames, ctx)
+        if self.per_modality_proj is None:
+            total = sum(s for s, _ in sums.values())
+            count = sum(c for _, c in sums.values())
+            assert isinstance(total, Tensor) and isinstance(count, Tensor)
+            pooled = total / count.clamp(min=1)
+            init = self.to_register(self.norm_register(pooled))
+            return init.flatten(1, 2)
         h, w = ctx.cell_hw
-        b = next(iter(ctx.states.values())).grid[0]
-        total = frames.new_zeros(b, h, w, self.pixel_dim)
-        count = frames.new_zeros(b, h, w, 1)
-        for st, frames_m in zip(ctx.states.values(), frames.split(ctx.frame_splits)):
-            _, _, _, t, bs = st.grid
-            fr = rearrange(frames_m, "(b t bs) h w d -> b t bs h w d", b=b, t=t, bs=bs)
-            m = rearrange(st.online, "b h w t bs -> b t bs h w")[..., None]
-            m = m.to(frames.dtype)
-            total = total + (fr * m).sum(dim=(1, 2))
-            count = count + m.sum(dim=(1, 2))
-        pooled = total / count.clamp(min=1)
-        init = self.to_register(self.norm_register(pooled))  # [B, h, w, D_reg]
+        slots = []
+        for name in self.pixel_modality_names:
+            if name not in sums:
+                slots.append(frames.new_zeros(ctx.batch_size, h, w, self.pixel_dim))
+                continue
+            total_m, count_m = sums[name]
+            pooled = self.norm_register(total_m / count_m.clamp(min=1))
+            slot = F.gelu(self.per_modality_proj[name](pooled))
+            slots.append(slot * (count_m > 0).to(slot.dtype))
+        init = self.to_register(torch.cat(slots, dim=-1))  # [B, h, w, D_reg]
         return init.flatten(1, 2)
 
     def forward(

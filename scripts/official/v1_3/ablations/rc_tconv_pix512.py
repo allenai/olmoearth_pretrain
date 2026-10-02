@@ -22,7 +22,8 @@ nothing. The zero-init handoff makes step 0 exactly ``rc_pix512``.
 W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_rc_tconv_pix512``.
 Siblings: ``rc_tconv_mnorm_pix512`` (mask-normalized convs), ``rc_tconv_mr5075_pix512``
 (within-band-set encode ratio U[0.5, 0.75]), ``rc_tconv_hp10_pix512`` (high-pass
-reconstruction) and its control ``rc_tconv_fullrecon10_pix512``.
+reconstruction) and its control ``rc_tconv_fullrecon10_pix512``, ``rc_tconv_st_pix512``
+(space + time convs) and ``rc_tconv_t_pix512`` (time convs only).
 """
 
 import logging
@@ -59,9 +60,17 @@ PIXEL_BRANCH_MLP_RATIO = 4.0
 
 
 def apply_thin_conv(
-    config: LatentMIMConfig, mask_normalized: bool = False
+    config: LatentMIMConfig,
+    mask_normalized: bool = False,
+    mixing: str | None = None,
+    register_pool: str | None = None,
+    time_kernel: int | None = None,
 ) -> LatentMIMConfig:
-    """Attach the thin conv branch to the Perceiver's latent init, in place."""
+    """Attach the thin conv branch to the Perceiver's latent init, in place.
+
+    ``mixing`` / ``register_pool`` / ``time_kernel`` are set only when given, so the
+    arms that leave them out keep their configs (and checkpoints) unchanged.
+    """
     perceiver = config.encoder_config.perceiver_config
     assert isinstance(perceiver, PerceiverConfig) and perceiver.pixel_latents
     perceiver.pixel_branch_type = PIXEL_BRANCH_TYPE
@@ -71,6 +80,12 @@ def apply_thin_conv(
     perceiver.pixel_branch_mlp_ratio = PIXEL_BRANCH_MLP_RATIO
     if mask_normalized:
         perceiver.pixel_branch_mask_normalized = True
+    if mixing is not None:
+        perceiver.pixel_branch_mixing = mixing
+    if register_pool is not None:
+        perceiver.pixel_branch_register_pool = register_pool
+    if time_kernel is not None:
+        perceiver.pixel_branch_time_kernel = time_kernel
     return config
 
 
