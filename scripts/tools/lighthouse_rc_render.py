@@ -42,7 +42,12 @@ def main() -> None:
     analysis_path = run_dir / "rc_analysis.json"
     analysis = json.loads(analysis_path.read_text()) if analysis_path.exists() else {}
     manifest_path = out / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
+    manifest = (
+        json.loads(manifest_path.read_text())
+        if manifest_path.exists()
+        else {"windows": {}}
+    )
+    out.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
     for w, rec in timings["windows"].items():
         cfgs = [c for c in rec["configs"] if (run_dir / c / f"{w}.tif").exists()]
