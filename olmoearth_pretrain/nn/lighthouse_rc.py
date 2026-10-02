@@ -95,6 +95,8 @@ class RCLighthouseSettings:
             make every attention block full (no mask evaluated) at the price of a
             FOV that moves in steps of ``fov_quantum`` cells and sits up to half a
             step off-centre. Must divide the FOV.
+        column_mask: Use the column-only mask where the layout allows it (the
+            exact ViT plan; see :func:`_column_codes`). False = packed codes.
         profile: Synchronize and record per-phase seconds in ``last_lighthouse_stats``.
         return_tokens: Also return the encoded tokens. Off by default: the embedding
             is the Perceiver output, and the extra copy costs ~3 KB per token. When
@@ -112,6 +114,7 @@ class RCLighthouseSettings:
     profile: bool = False
     return_tokens: bool = False
     fov_quantum: int = 1
+    column_mask: bool = True
 
 
 def lighthouse_rc_reach_px(
@@ -363,6 +366,49 @@ def _mask_mod(fov: int, q_code: Tensor, k_code: Tensor) -> Callable[..., Tensor]
     return mask_mod
 
 
+_NO_COL = 1 << 24  # column code of a padding key: inside no FOV
+
+
+def _column_codes(
+    q: _Slots, k: _Slots, fov: int, n_w: int, block: int, device: torch.device
+) -> tuple[Tensor, Tensor] | None:
+    """Column-only mask codes when every query block lies in ONE cell row.
+
+    Then the FOV's row test is the same for the whole block and the block tables
+    already enforce it (only blocks of rows inside the FOV are listed), so the mask
+    only has to test the key's column against the query's FOV: one load and two
+    compares per score instead of decoding packed codes. Padding queries take the
+    FOV of the block's last valid query so no row is left without keys. Returns
+    None when the layout does not qualify (several rows per block, or a quantum).
+    """
+    if q.quantum != 1 or q.tile_h != 1 or k.tile_h != 1:
+        return None
+    rows = q.row.reshape(-1, block)
+    valid = rows >= 0
+    lo = np.where(valid, rows, _BIG).min(1)
+    hi = np.where(valid, rows, -1).max(1)
+    if not (lo[valid.any(1)] == hi[valid.any(1)]).all():
+        return None
+    c0 = np.where(q.valid, _fov_start(np.maximum(q.col, 0), fov, n_w), -1)
+    # Forward-fill padding queries (each row's padding follows its valid queries).
+    idx = np.where(c0 >= 0, np.arange(c0.size), 0)
+    np.maximum.accumulate(idx, out=idx)
+    c0 = np.maximum(c0[idx], 0)
+    k_col = np.where(k.valid, k.col, _NO_COL)
+    return (
+        torch.from_numpy(c0.astype(np.int32)).to(device),
+        torch.from_numpy(k_col.astype(np.int32)).to(device),
+    )
+
+
+def _column_mask_mod(fov: int, q_c0: Tensor, k_col: Tensor) -> Callable[..., Tensor]:
+    def mask_mod(b: Tensor, h: Tensor, qi: Tensor, ki: Tensor) -> Tensor:
+        c0, kc = q_c0[qi], k_col[ki]
+        return (kc >= c0) & (kc < c0 + fov)
+
+    return mask_mod
+
+
 def _make_plan(
     q: _Slots,
     k: _Slots,
@@ -382,12 +428,19 @@ def _make_plan(
 
     t0 = time.perf_counter()
     tab = _block_tables(q, k, fov, n_h, n_w, block)
+    columns = (
+        _column_codes(q, k, fov, n_w, block, device) if settings.column_mask else None
+    )
     per_chunk = max(settings.q_chunk // block, 1)
     nq = q.length // block
     chunks = []
     for qb0 in range(0, nq, per_chunk):
         qb1 = min(qb0 + per_chunk, nq)
-        mask_mod = _mask_mod(fov, q_code[qb0 * block : qb1 * block], k_code)
+        qs = slice(qb0 * block, qb1 * block)
+        if columns is not None:
+            mask_mod = _column_mask_mod(fov, columns[0][qs], columns[1])
+        else:
+            mask_mod = _mask_mod(fov, q_code[qs], k_code)
 
         def t(a: np.ndarray) -> Tensor:
             return torch.from_numpy(np.ascontiguousarray(a)).to(device)[None, None]
@@ -413,6 +466,7 @@ def _make_plan(
             "full_block_frac": float(full_frac),
             "scored_vs_ideal": float(overscore),
             "plan_s": time.perf_counter() - t0,
+            "column_mask": float(columns is not None),
         },
     )
 

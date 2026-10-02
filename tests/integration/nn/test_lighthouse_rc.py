@@ -299,3 +299,48 @@ def test_retile_dense_matches_tile_order() -> None:
     torch.testing.assert_close(e[1], emb[0, 0:2, 2:4])
     torch.testing.assert_close(e[3], emb[0, 2:4, 0:2])
     torch.testing.assert_close(lb, e[..., 0])
+
+
+@pytest.mark.parametrize(
+    ("n_h", "n_w", "fov", "per_cell", "block"), [(13, 10, 4, 5, 16), (20, 23, 8, 3, 32)]
+)
+def test_column_mask_equals_full_rule_on_listed_blocks(
+    n_h: int, n_w: int, fov: int, per_cell: int, block: int
+) -> None:
+    """On the blocks the tables list, the column-only mask = the full FOV rule."""
+    from olmoearth_pretrain.nn.lighthouse_rc import _column_codes
+
+    rng = np.random.default_rng(1)
+    cells = np.repeat(np.arange(n_h * n_w), per_cell)
+    cells = cells[rng.random(cells.size) > 0.2]
+    lay = _slot_layout(cells // n_w, cells % n_w, n_w, (1, n_w), block)
+    tab = _block_tables(lay, lay, fov, n_h, n_w, block)
+    cols = _column_codes(lay, lay, fov, n_w, block, torch.device("cpu"))
+    assert cols is not None
+    c0, kcol = cols[0].numpy(), cols[1].numpy()
+    q_code, k_code = _codes(lay, lay, fov, n_h, n_w, torch.device("cpu"))
+    full_rule = _rule(fov, q_code[:, None], k_code[None, :]).numpy()
+    col_rule = (kcol[None, :] >= c0[:, None]) & (kcol[None, :] < c0[:, None] + fov)
+    qv = lay.valid
+    for qb in range(lay.length // block):
+        qs = slice(qb * block, (qb + 1) * block)
+        rows_q = qv[qs]
+        for kb in tab["part_idx"][qb, : tab["part_num"][qb]]:
+            ks = slice(kb * block, (kb + 1) * block)
+            assert np.array_equal(col_rule[qs, ks][rows_q], full_rule[qs, ks][rows_q])
+        # Every query (padding too) keeps at least one key.
+        listed = np.concatenate(
+            [
+                tab["part_idx"][qb, : tab["part_num"][qb]],
+                tab["full_idx"][qb, : tab["full_num"][qb]],
+            ]
+        )
+        keys = np.zeros(lay.length, bool)
+        for kb in listed:
+            keys[kb * block : (kb + 1) * block] = True
+        part_keys = np.zeros(lay.length, bool)
+        for kb in tab["part_idx"][qb, : tab["part_num"][qb]]:
+            part_keys[kb * block : (kb + 1) * block] = True
+        full_keys = keys & ~part_keys
+        seen = col_rule[qs][:, part_keys].sum(1) + full_keys.sum()
+        assert (seen > 0).all()
