@@ -47,8 +47,13 @@ from rslearn.train.all_crops_dataset import get_window_crop_options
 
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import RslearnToOlmoEarthDataset
 from olmoearth_pretrain.model_loader import load_pretrain_checkpoint
-from olmoearth_pretrain.nn.joint_latent import JointLatentTransformer
-from olmoearth_pretrain.nn.lighthouse import LighthouseSettings, lighthouse_reach_px
+
+# Optional on older / other branches (e.g. timing other architectures at their own ref):
+# the joint-latent module and Lighthouse are only needed for joint-arm features.
+try:
+    from olmoearth_pretrain.nn.joint_latent import JointLatentTransformer
+except ImportError:  # pragma: no cover - branches without the joint arm
+    JointLatentTransformer = None  # type: ignore[assignment,misc]
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger("lighthouse_aoi")
@@ -227,12 +232,22 @@ class Timer:
         self.seconds = time.perf_counter() - self.t0
 
 
+OUTPUT_KEY = "student_registers"
+
+
 def _student(
     encoder: torch.nn.Module, sample: MaskedOlmoEarthSample, ps: int, dim: int
 ) -> torch.Tensor:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         out = encoder(sample, patch_size=ps, input_res=10, fast_pass=True)
-    return out["student_registers"][..., :dim].float()
+    emb = out[OUTPUT_KEY][..., :dim].float()
+    h, w = sample.sentinel2_l2a.shape[1:3]
+    if emb.shape[1:3] != (h, w):
+        raise ValueError(
+            f"{OUTPUT_KEY} is {tuple(emb.shape)} for a {h}x{w} input at ps{ps}: "
+            "not one embedding per pixel"
+        )
+    return emb
 
 
 def run_tiled(
@@ -278,7 +293,9 @@ def run_lighthouse(
     device: torch.device,
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Core tiles + exact halo; each chunk is one Lighthouse forward."""
-    perceiver: JointLatentTransformer = encoder.perceiver
+    from olmoearth_pretrain.nn.lighthouse import LighthouseSettings, lighthouse_reach_px
+
+    perceiver = encoder.perceiver
     depth = len(perceiver.joint_blocks)
     halo = lighthouse_reach_px(args.window_px, ps, depth, encoder.max_patch_size)
     halo = math.ceil(halo / ps) * ps
@@ -420,13 +437,22 @@ def main() -> None:
     device = torch.device("cuda")
     model = load_pretrain_checkpoint(args.checkpoint, device=device)
     encoder = model.encoder
-    joint = isinstance(encoder.perceiver, JointLatentTransformer)
+    global OUTPUT_KEY
+    joint = JointLatentTransformer is not None and isinstance(
+        encoder.perceiver, JointLatentTransformer
+    )
+    # Models without a student head (e.g. pixel-register arms) ship the register grid.
+    if getattr(encoder, "register_student", None) is None:
+        OUTPUT_KEY = "registers"
+    logger.info("embedding output: %s", OUTPUT_KEY)
     if not joint:
-        # A register-bottleneck checkpoint such as the RC (ViT blocks + Perceiver):
-        # tiled only, and only at ps1, where its student grid is per pixel too.
-        bad = [c for c in args.configs if parse_config(c) != ("tiled", 1)]
+        # Register-bottleneck checkpoints (ViT + Perceiver, pixel registers, ...):
+        # tiled only; _student checks the output is one embedding per pixel.
+        bad = [c for c in args.configs if parse_config(c)[0] != "tiled"]
         if bad:
-            raise ValueError(f"non-joint checkpoints support tiled_ps1 only, got {bad}")
+            raise ValueError(
+                f"non-joint checkpoints support tiled configs only, got {bad}"
+            )
     else:
         assert encoder.perceiver.eval_latent_stride == 1
     if joint and not args.masked_attention:
@@ -454,6 +480,7 @@ def main() -> None:
         "checkpoint": args.checkpoint,
         "gpu": torch.cuda.get_device_name(device),
         "torch": torch.__version__,
+        "output_key": OUTPUT_KEY,
         "tiled_attention": "n/a (not joint)"
         if not joint
         else ("masked_flex" if args.masked_attention else "dense_flash"),
