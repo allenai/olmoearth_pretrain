@@ -54,7 +54,7 @@ try:
     from olmoearth_pretrain.nn.joint_latent import JointLatentTransformer
 except ImportError:  # pragma: no cover - branches without the joint arm
     JointLatentTransformer = None  # type: ignore[assignment,misc]
-from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = logging.getLogger("lighthouse_aoi")
 
@@ -236,10 +236,14 @@ OUTPUT_KEY = "student_registers"
 
 
 def _student(
-    encoder: torch.nn.Module, sample: MaskedOlmoEarthSample, ps: int, dim: int
+    encoder: torch.nn.Module,
+    sample: MaskedOlmoEarthSample,
+    ps: int,
+    dim: int,
+    fast_pass: bool = True,
 ) -> torch.Tensor:
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
-        out = encoder(sample, patch_size=ps, input_res=10, fast_pass=True)
+        out = encoder(sample, patch_size=ps, input_res=10, fast_pass=fast_pass)
     emb = out[OUTPUT_KEY][..., :dim].float()
     h, w = sample.sentinel2_l2a.shape[1:3]
     if emb.shape[1:3] != (h, w):
@@ -271,7 +275,9 @@ def run_tiled(
         chunk = boxes[i : i + args.tiled_batch]
         batch = _stack_crops(full, chunk)
         with Timer(device) as t:
-            emb = _student(encoder, batch, ps, args.dim)
+            emb = _student(
+                encoder, batch, ps, args.dim, fast_pass=not args.respect_masks
+            )
         times.append(t.seconds)
         for (c0, r0, c1, r1), e in zip(chunk, emb):
             dr = trim if r0 != 0 else 0
@@ -413,6 +419,12 @@ def main() -> None:
     p.add_argument("--core_px_ps2", type=int, default=256)
     p.add_argument("--core_px_ps4", type=int, default=512)
     p.add_argument(
+        "--respect_masks",
+        action="store_true",
+        help="tiled configs: forward with fast_pass=False, so MISSING tokens are "
+        "removed and masked instead of entering as zero-valued tokens",
+    )
+    p.add_argument(
         "--timings_name",
         default="timings.json",
         help="so jobs sharing an out_dir do not overwrite each other's timings",
@@ -484,6 +496,7 @@ def main() -> None:
         "tiled_attention": "n/a (not joint)"
         if not joint
         else ("masked_flex" if args.masked_attention else "dense_flash"),
+        "fast_pass": not args.respect_masks,
         "args": {k: v for k, v in vars(args).items() if k != "core_px"},
         "windows": {},
     }
@@ -499,6 +512,14 @@ def main() -> None:
         H, W = full["sentinel2_l2a"].shape[1:3]
         logger.info("window %s: %dx%d px", name, H, W)
         rec: dict[str, Any] = {"H": int(H), "W": int(W), "configs": {}}
+        # Fraction of MISSING entries per modality: with fast_pass these enter the
+        # model as zero-valued tokens; with --respect_masks they are masked out.
+        rec["missing_frac"] = {
+            k[: -len("_mask")]: float((v == MaskValue.MISSING.value).float().mean())
+            for k, v in full.items()
+            if k.endswith("_mask")
+        }
+        logger.info("missing fraction: %s", rec["missing_frac"])
         for cfg in args.configs:
             mode, ps = parse_config(cfg)
             if cfg not in warmed:

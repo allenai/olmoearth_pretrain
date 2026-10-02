@@ -2779,8 +2779,13 @@ class Encoder(FlexiVitBase):
         new_mask: Tensor,
         fast_pass: bool,
     ) -> Tensor | None:
-        """Get the attention mask or None if we should pass None to the transformer."""
-        if fast_pass or not self.training:
+        """Get the attention mask or None if we should pass None to the transformer.
+
+        Only ``fast_pass`` drops the mask. It used to be dropped in eval mode too, so
+        eval/inference batches with MISSING tokens let the padded slots attend
+        (fixed on main in c3c1f9215; this is that one line only).
+        """
+        if fast_pass:
             return None
         else:
             return new_mask
