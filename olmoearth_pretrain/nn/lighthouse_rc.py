@@ -446,13 +446,6 @@ def _merge_lists(
     return num, idx
 
 
-def _pad_width(idx: np.ndarray, width: int) -> np.ndarray:
-    """Pad a block-index table to ``width`` columns (the dense table's width)."""
-    out = np.zeros((idx.shape[0], max(width, idx.shape[1])), dtype=np.int32)
-    out[:, : idx.shape[1]] = idx
-    return out
-
-
 def _make_plan(
     q: _Slots,
     k: _Slots,
@@ -491,21 +484,33 @@ def _make_plan(
         def t(a: np.ndarray) -> Tensor:
             return torch.from_numpy(np.ascontiguousarray(a)).to(device)[None, None]
 
+        def t_idx(a: np.ndarray, width: int | None) -> Tensor:
+            """Index table on device, zero-padded to ``width`` columns there.
+
+            Padding on the host and copying (Q x KV blocks int32, ~1 GB per table
+            for a 2M-token chunk) cost ~6 s per forward; on the GPU it is free.
+            """
+            narrow = t(a)
+            if width is None or width <= a.shape[1]:
+                return narrow
+            out = torch.zeros(
+                (1, 1, a.shape[0], width), dtype=narrow.dtype, device=device
+            )
+            out[..., : a.shape[1]] = narrow
+            return out
+
         part_num, part_idx = tab["part_num"][qb0:qb1], tab["part_idx"][qb0:qb1]
         full_num, full_idx = tab["full_num"][qb0:qb1], tab["full_idx"][qb0:qb1]
         if not settings.full_blocks:
             # Every listed block through mask_mod (diagnostic / fallback).
             part_num, part_idx = _merge_lists(part_num, part_idx, full_num, full_idx)
             full_num, full_idx = np.zeros_like(part_num), np.zeros_like(part_idx)
-        if settings.pad_index_width:
-            nk = k.length // block
-            part_idx = _pad_width(part_idx, nk)
-            full_idx = _pad_width(full_idx, nk)
+        width = k.length // block if settings.pad_index_width else None
         bm = BlockMask.from_kv_blocks(
             t(part_num),
-            t(part_idx),
+            t_idx(part_idx, width),
             t(full_num),
-            t(full_idx),
+            t_idx(full_idx, width),
             BLOCK_SIZE=block,
             mask_mod=mask_mod,
             seq_lengths=((qb1 - qb0) * block, k.length),
