@@ -6,7 +6,7 @@ learned per-timestep queries back into the encoder output.
 
 Architecture::
 
-    Encoder tokens  H ∈ R^{B × N × D}
+    Encoder tokens  H ∈ R^{B × N × D}   (+ optional learned key positions)
                        ↑ cross-attention
     Time queries    Q ∈ R^{B × T × D}   (learned positional + day-of-year)
                        ↓
@@ -111,6 +111,15 @@ class Era5TimeQueryDecoderConfig(Config):
         num_output_channels: V — number of reconstructed bands.
         add_day_of_year_features: Inject sin/cos day-of-year into queries.
         dropout: Dropout in FFN and attention.
+        key_position_embedding: ``"none"`` (default) or ``"learned"``.
+            ``"learned"`` adds a decoder-owned learned position embedding to
+            the encoder's patch tokens before they are cross-attended, one row
+            per patch token, end-aligned like the encoder's own table. CLS /
+            prior tokens get none. Independent of the encoder's
+            ``position_embedding``.
+        patch_kernel_size: The encoder's patch kernel; sizes the key table
+            and locates the patch tokens (must match the encoder).
+        patch_stride: The encoder's patch stride (must match the encoder).
     """
 
     embedding_size: int = 128
@@ -121,6 +130,9 @@ class Era5TimeQueryDecoderConfig(Config):
     num_output_channels: int = Modality.ERA5L_DAY_10.num_bands
     add_day_of_year_features: bool = True
     dropout: float = 0.0
+    key_position_embedding: str = "none"
+    patch_kernel_size: int = 14
+    patch_stride: int = 7
     extras: dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -131,6 +143,20 @@ class Era5TimeQueryDecoderConfig(Config):
             raise ValueError("depth must be >= 1")
         if self.embedding_size % self.num_heads != 0:
             raise ValueError("embedding_size must be divisible by num_heads")
+        if self.key_position_embedding not in ("none", "learned"):
+            raise ValueError(
+                f"key_position_embedding must be 'none' or 'learned', got "
+                f"{self.key_position_embedding!r}"
+            )
+        if self.key_position_embedding == "learned" and (
+            self.patch_kernel_size < 1
+            or self.patch_stride < 1
+            or self.max_sequence_length < self.patch_kernel_size
+        ):
+            raise ValueError(
+                "key_position_embedding='learned' needs patch_kernel_size >= 1, "
+                "patch_stride >= 1 and max_sequence_length >= patch_kernel_size"
+            )
 
     def build(self) -> Era5TimeQueryDecoder:
         """Build the decoder module from this config."""
@@ -166,6 +192,18 @@ class Era5TimeQueryDecoder(nn.Module):
         self.doy_proj: nn.Linear | None = (
             nn.Linear(2, d) if self.add_day_of_year else None
         )
+
+        # Optional learned position embedding on the encoder's patch tokens
+        # (the cross-attention keys/values): one row per patch token of a
+        # max-length window, added end-aligned (see _add_key_positions).
+        if config.key_position_embedding == "learned":
+            num_positions = (T - config.patch_kernel_size) // config.patch_stride + 1
+            self.key_pos_embed: nn.Parameter | None = nn.Parameter(
+                torch.zeros(1, num_positions, d)
+            )
+            nn.init.trunc_normal_(self.key_pos_embed, std=0.02)
+        else:
+            self.key_pos_embed = None
 
         # Cross-attention blocks
         self.blocks = nn.ModuleList(
@@ -219,12 +257,48 @@ class Era5TimeQueryDecoder(nn.Module):
             doy_feat = torch.stack([torch.sin(angle), torch.cos(angle)], dim=-1)
             queries = queries + self.doy_proj(doy_feat)
 
+        if self.key_pos_embed is not None:
+            tokens = self._add_key_positions(tokens, timestamps.shape[1])
+
         # Cross-attend into encoder tokens
         for block in self.blocks:
             queries = block(queries, tokens)
 
         # Project to output channels
         return self.head(queries)
+
+    def _add_key_positions(self, tokens: Tensor, t: int) -> Tensor:
+        """Add the learned key positions to the patch tokens only.
+
+        The encoder emits ``[CLS, prior..., patches...]``, so the patch tokens
+        are the last ``(t - kernel) // stride + 1`` of ``tokens``; any prefix
+        is left unchanged. Rows are end-aligned: a shorter input uses the last
+        rows.
+
+        Args:
+            tokens: ``[B, N_total, D]`` encoder output.
+            t: Number of days the encoder consumed.
+
+        Returns:
+            ``[B, N_total, D]``: ``tokens`` with the key positions added to the
+            patch tokens.
+        """
+        assert self.key_pos_embed is not None
+        num_patches = (
+            t - self.config.patch_kernel_size
+        ) // self.config.patch_stride + 1
+        n_total = tokens.shape[1]
+        if num_patches > min(n_total, self.key_pos_embed.shape[1]):
+            raise ValueError(
+                f"{num_patches} patch tokens for {t} days, but the encoder "
+                f"emitted {n_total} tokens and the key table has "
+                f"{self.key_pos_embed.shape[1]} rows; check that the decoder's "
+                "patch_kernel_size / patch_stride / max_sequence_length match "
+                "the encoder"
+            )
+        num_prefix = n_total - num_patches
+        patches = tokens[:, num_prefix:] + self.key_pos_embed[:, -num_patches:]
+        return torch.cat([tokens[:, :num_prefix], patches], dim=1)
 
     def apply_compile(self) -> None:
         """Apply torch.compile for parity with the encoder."""

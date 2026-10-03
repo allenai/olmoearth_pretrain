@@ -64,6 +64,7 @@ from olmoearth_pretrain.internal.experiment import (
 )
 from olmoearth_pretrain.nn.era5_decoder import Era5TimeQueryDecoderConfig
 from olmoearth_pretrain.nn.era5_encoder import Era5DailyEncoderConfig, Era5Pooling
+from olmoearth_pretrain.nn.transforms.era5_corruption import GROUP_RECON_MODE
 from olmoearth_pretrain.train.callbacks import (
     OlmoEarthWandBCallback,
 )
@@ -98,9 +99,15 @@ class Era5SupervisedCommonComponents(CommonComponents):
     (`evals/studio_ingest/registry.json`). All other per-task knobs
     (`task_type`, `num_classes`, sampling weight, ...) are looked up from
     the registry at build time so this script stays declarative.
+
+    The defaults reproduce the baseline run ``era5enc_1504_ln_shd1536``
+    (v1.5.4, default seed): raw-only reconstruction with halo75 span masking
+    and no per-group gating on SWT input, conv stem [1536], mean pooling with
+    pooled LayerNorm, LR 1e-5, batch 32, 50k steps, the six in-loop evals
+    with probe seed 1202. A bare launch needs only the run name and cluster.
     """
 
-    tasks: list[str] = field(default_factory=list)
+    tasks: list[str] = field(default_factory=lambda: ["era5enc_pretrain_ssl"])
     task_weights: dict[str, float] = field(default_factory=dict)
     # Per-run overrides of the registry entry's split selection, keyed by
     # nickname (mirrors ``task_weights``). Use these to restrict a task to a
@@ -153,9 +160,10 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # Settled default (v0.3): the two-layer conv tokenizer stem was a large win.
     encoder_use_conv_stem: bool = True
     # Conv-stem hidden widths: the patch Conv1D's output width, then one extra
-    # 1x1 Conv1D + GroupNorm + GELU layer per further entry. None (default)
-    # keeps the original stem, a single hidden layer of encoder_embedding_size // 2.
-    encoder_stem_hidden_dims: list[int] | None = None
+    # 1x1 Conv1D + GroupNorm + GELU layer per further entry. Default [1536]
+    # (1504). None gives the original stem, a single hidden layer of
+    # encoder_embedding_size // 2 (192 at width 384, as in 1407).
+    encoder_stem_hidden_dims: list[int] | None = field(default_factory=lambda: [1536])
     # Temporal patch Conv1D kernel and stride, in days. Windows must patchify
     # cleanly: (448 - kernel) % stride == 0. Default k14/s7 gives 63 tokens.
     encoder_patch_kernel_size: int = 14
@@ -163,39 +171,46 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # "learned" adds an end-aligned learned position embedding per patch token;
     # "none" (default) leaves tokens distinguishable only by day of year.
     encoder_position_embedding: str = "none"
-    # "layernorm" applies a parameter-free LayerNorm to the pooled embedding
-    # (every pooling mode); "none" (default) keeps the raw pooled vector.
-    encoder_pooled_norm: str = "none"
+    # Day of year that represents each patch token. "center" uses the patch's
+    # center day; "mean" (default) averages the day numbers, which puts a patch
+    # spanning Jan 1 in early July. Kept as the default so earlier runs reproduce.
+    encoder_patch_day_of_year: str = "mean"
+    # "layernorm" (default) applies a parameter-free LayerNorm to the pooled
+    # embedding (every pooling mode); "none" keeps the raw pooled vector.
+    encoder_pooled_norm: str = "layernorm"
     # ------------------------------------------------------------------
-    # SWT-input encoder (objective B in wavelet space).  When enabled, the
-    # encoder decomposes the raw input into V*n_bands band channels before
-    # patchifying, and masking happens in that band space.  Off by default so
-    # raw-input behavior is unchanged.
+    # SWT-input encoder (objective B in wavelet space).  When enabled (the
+    # default), the encoder decomposes the raw input into V*n_bands band
+    # channels before patchifying, and masking happens in that band space.
+    # Reconstruction requires it; supervised-only runs can turn it off to
+    # train on raw input.
     # ------------------------------------------------------------------
-    encoder_swt_input: bool = False
+    encoder_swt_input: bool = True
     encoder_swt_input_levels: list[int] = field(
         default_factory=lambda: [0, 1, 2, 3, 4, 5]
     )
     encoder_swt_input_include_approx: bool = True
-    encoder_swt_input_stats_path: str | None = None
-    global_batch_size: int = 64
+    encoder_swt_input_stats_path: str | None = (
+        "scripts/era5_supervised/v0/norm_configs/swt_input_stats.json"
+    )
+    global_batch_size: int = 32
     rank_microbatch_size: int = 32
     num_workers: int = 4
-    learning_rate: float = 1.0e-4
+    learning_rate: float = 1.0e-5
     weight_decay: float = 0.02
     warmup_steps: int = 500
     max_epochs: int = 50
     # If > 0, training runs for this many optimizer steps and `max_epochs` is
     # ignored. Useful for step-matched runs across datasets of different sizes.
-    max_steps: int = -1
+    max_steps: int = 50000
     save_interval: int = 1000
     eval_interval: int = 1000
     # ------------------------------------------------------------------
-    # Objective selection.  Both default to True/False respectively so
-    # existing A-only launches are unaffected.
+    # Objective selection.  Defaults to reconstruction only (B); set
+    # enable_supervised=True for objective A.
     # ------------------------------------------------------------------
-    enable_supervised: bool = True
-    enable_reconstruction: bool = False
+    enable_supervised: bool = False
+    enable_reconstruction: bool = True
     # ------------------------------------------------------------------
     # Reconstruction objective (B) knobs.
     # ------------------------------------------------------------------
@@ -203,12 +218,18 @@ class Era5SupervisedCommonComponents(CommonComponents):
     recon_decoder_depth: int = 1
     recon_decoder_num_heads: int = 6
     recon_decoder_dropout: float = 0.0
+    # "learned" adds a decoder-owned, end-aligned learned position embedding to
+    # the encoder's patch tokens before cross-attention (CLS/prior tokens get
+    # none), independent of encoder_position_embedding. "none" (default) adds
+    # nothing, so the keys carry only what the encoder put in them.
+    recon_decoder_key_position_embedding: str = "none"
     recon_huber_delta: float = 1.0
     recon_raw_loss_on_masked_only: bool = True
-    # Settled default (v0.2.4xx-7xx): wavelet-only reconstruction (swt 1.0 /
-    # raw 0.0) was the LFMC/F1 winner.
-    recon_raw_lambda: float = 0.0
-    recon_swt_lambda: float = 1.0
+    # Raw-only reconstruction (raw 1.0 / swt 0.0), the recipe since v1.2. Every
+    # variable group gets the raw loss (no per-group gating; see
+    # build_model_config).
+    recon_raw_lambda: float = 1.0
+    recon_swt_lambda: float = 0.0
     recon_swt_levels: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4, 5])
     # Pooled InfoNCE over independently masked views, local to each microbatch.
     # Zero lambda retains the single-view path without allocating a projector.
@@ -226,18 +247,20 @@ class Era5SupervisedCommonComponents(CommonComponents):
     #   * "swt_naive"     — per-element budget masking (baseline). Masks a
     #                       ``recon_swt_naive_budget`` fraction of all
     #                       (timestep x var x swt_band) elements at random.
-    #   * "swt_halo_span" — halo-corrected contiguous-span masking (no-leak).
+    #   * "swt_halo_span" — halo-corrected contiguous-span masking (no-leak),
+    #                       the default.
     # ------------------------------------------------------------------
-    recon_mask_policy: str = "swt_naive"
+    recon_mask_policy: str = "swt_halo_span"
     recon_swt_naive_budget: float = 0.5
     # Halo-span policy knobs (used when recon_mask_policy == "swt_halo_span").
     # Per sample, a span count in this inclusive range is drawn; each span
     # draws a length (days) and a random subset of variables (count in
     # recon_span_num_variables). Each span is expanded across bands with a
     # per-band causal right halo so the span days are genuinely hidden.
-    recon_span_num_spans: list[int] = field(default_factory=lambda: [1, 5])
-    recon_span_days: list[int] = field(default_factory=lambda: [7, 60])
-    recon_span_num_variables: list[int] = field(default_factory=lambda: [1, 14])
+    # Default halo75: (4,10) spans of (30,120) days over (9,14) variables.
+    recon_span_num_spans: list[int] = field(default_factory=lambda: [4, 10])
+    recon_span_days: list[int] = field(default_factory=lambda: [30, 120])
+    recon_span_num_variables: list[int] = field(default_factory=lambda: [9, 14])
     # "inside" (default, spans stay in the window: edges rarely masked) or
     # "pin" (overhangs shifted flush with the edge at full length: near-uniform
     # coverage). recon_mask_buffer=True lets masks fall in the first 83 buffer
@@ -262,7 +285,7 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # When set, the probe's weight init and training-batch shuffle order are
     # pinned to this seed at every eval (see Era5DownstreamEvaluatorCallback),
     # making probe results comparable across runs / probe-LR values.
-    eval_probe_seed: int | None = None
+    eval_probe_seed: int | None = 1202
     # Extra probe LRs to sweep at every eval, on the same embeddings; results go
     # to eval_lrsweep/<task>/lr<LR> plus best / best_lr. Empty: no sweep.
     eval_probe_lr_grid: list[float] = field(default_factory=list)
@@ -270,8 +293,18 @@ class Era5SupervisedCommonComponents(CommonComponents):
     eval_probe_batch_size: int = 256
     eval_embedding_batch_size: int = 128
     eval_run_on_test: bool = False
-    eval_on_startup: bool = False
-    eval_tasks: list[str] = field(default_factory=list)
+    # Step 0 probes the untrained encoder: the random-projection floor.
+    eval_on_startup: bool = True
+    eval_tasks: list[str] = field(
+        default_factory=lambda: [
+            "dfmc1000h_grav_eval",
+            "lfmc_woody_eval",
+            "cybench_wheat_eval",
+            "cybench_maize_eval",
+            "burnrisk_canada_nbac_eval",
+            "landslide_era5_eval",
+        ]
+    )
     eval_max_samples: int | None = None
     # Checkpoint-sweep mode (eval-only runs): when set, iterate over the
     # ``step*`` checkpoints saved under this run folder
@@ -286,6 +319,13 @@ def build_common_components(
 ) -> Era5SupervisedCommonComponents:
     """Build the common components for the ERA5 supervised pretraining run."""
     base = build_common_components_default(script, cmd, run_name, cluster, overrides)
+    if base.launch is not None:
+        # ERA5 scheduling (since 2026-09-29): urgent, protected from preemption
+        # for 90 minutes; preempted launches requeue and resume.
+        base.launch.priority = "urgent"
+        base.launch.min_runtime = "90m"
+        if cmd == SubCmd.launch:
+            base.launch.retries = 3
     return Era5SupervisedCommonComponents(
         run_name=base.run_name,
         save_folder=base.save_folder,
@@ -294,7 +334,6 @@ def build_common_components(
         tokenization_config=base.tokenization_config,
         # Objective A only consumes the daily ERA5 modality at the encoder.
         training_modalities=[Modality.ERA5L_DAY_10.name],
-        tasks=[],
     )
 
 
@@ -711,11 +750,20 @@ def build_model_config(
             num_output_channels=Modality.ERA5L_DAY_10.num_bands,
             add_day_of_year_features=True,
             dropout=common.recon_decoder_dropout,
+            key_position_embedding=common.recon_decoder_key_position_embedding,
+            patch_kernel_size=common.encoder_patch_kernel_size,
+            patch_stride=common.encoder_patch_stride,
         )
         reconstruction_objective = ReconstructionObjectiveConfig(
             name="reconstruction",
             weight=common.recon_weight,
             decoder=decoder_config,
+            # No per-group gating ("nogate", since 1306): pressure gets the same
+            # raw + all-SWT loss as thermo. The gated table's pressure mode
+            # drops the raw loss, so in a raw-only run pressure would get no
+            # loss at all. Restore it with
+            # --model.reconstruction_objective.group_recon_mode.pressure=lowpass_plus_slow_swt
+            group_recon_mode={**GROUP_RECON_MODE, "pressure": "raw_plus_all_swt"},
             huber_delta=common.recon_huber_delta,
             raw_loss_on_masked_only=common.recon_raw_loss_on_masked_only,
             raw_lambda=common.recon_raw_lambda,
@@ -759,6 +807,7 @@ def build_model_config(
         patch_kernel_size=common.encoder_patch_kernel_size,
         patch_stride=common.encoder_patch_stride,
         position_embedding=common.encoder_position_embedding,
+        patch_day_of_year=common.encoder_patch_day_of_year,
         pooled_norm=common.encoder_pooled_norm,
         is_swt_input=common.encoder_swt_input,
         swt_input_levels=common.encoder_swt_input_levels,
@@ -823,7 +872,7 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
     checkpointer_config = CheckpointerConfig(work_dir=common.save_folder)
     wandb_callback = OlmoEarthWandBCallback(
         name=common.run_name,
-        project="2026_05_21_era5_supervised",
+        project="era5_encoder_v2_evals",
         entity="eai-ai2",  # nosec
         enabled=True,
         upload_dataset_distribution_pre_train=False,

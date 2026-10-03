@@ -1,5 +1,25 @@
 # ERA5 reconstruction and pooled InfoNCE
 
+## Baseline defaults
+
+The `script.py` defaults reproduce the baseline run `era5enc_1504_ln_shd1536`
+(v1.5.4, default seed): reconstruction only, on SWT input, raw-only loss
+(`recon_raw_lambda=1`, `recon_swt_lambda=0`) with no per-group gating, halo75
+span masking (`swt_halo_span`, spans (4,10) × (30,120) days × (9,14)
+variables), conv stem `[1536]`, mean pooling with pooled LayerNorm, LR 1e-5,
+batch 32, 50k steps, the six in-loop evals with `eval_probe_seed=1202` and a
+step-0 eval, logged to W&B `era5_encoder_v2_evals`, scheduled urgent with a
+90-minute minimum runtime and 3 retries. A bare launch needs only the run name
+and cluster:
+
+```bash
+python3 scripts/era5_supervised/v0/base.py launch era5enc_<id>_<desc> ai2/saturn
+```
+
+The `_seedN` runs add `--init_seed=N --data_loader.seed=N`.
+
+## Pooled InfoNCE
+
 Objective B can combine reconstruction with symmetric instance InfoNCE over two
 independently masked views of each sample. Both views use the configured SWT
 masking policy and reconstruct the same clean ERA5 sequence, with their own loss
@@ -18,8 +38,8 @@ at least two samples when InfoNCE is enabled.
 
 ## Configuration
 
-These overrides are added to an existing reconstruction launch with
-`common.enable_reconstruction=True` and `common.encoder_swt_input=True`.
+These overrides are added to a reconstruction launch on SWT input (the
+default).
 
 | `common` field | Default | Meaning |
 |---|---|---|
@@ -108,8 +128,20 @@ Logged for every reconstruction run, contrastive or not, averaged over views
 - `common.encoder_position_embedding=learned`: a learned, end-aligned position
   embedding per patch token. Without it, tokens carry only day-of-year features,
   which repeat within a 448-day window, and mean pooling ignores order.
-- `common.encoder_pooled_norm=layernorm`: a parameter-free LayerNorm on the
-  pooled embedding (each half separately for `cls_mean_concat`). Older
-  checkpoints still load.
+- `common.encoder_pooled_norm`: `layernorm` (default since the baseline moved
+  to 1504) applies a parameter-free LayerNorm to the pooled embedding (each half
+  separately for `cls_mean_concat`); `none` keeps the raw pooled vector, as in
+  runs before 1407. It adds no parameters, so checkpoints load either way:
+  re-probing a pre-1407 checkpoint needs an explicit `none`.
+- `common.encoder_patch_day_of_year=center`: each patch token's day-of-year
+  feature uses the patch's center day. The default, `mean`, averages the day
+  numbers, so a patch spanning Jan 1 (days 359-365 and 1-7) gets day 183, early
+  July. Every 448-day window crosses at least one Jan 1. Adds no parameters.
+- `common.recon_decoder_key_position_embedding=learned`: the reconstruction
+  decoder adds its own learned, end-aligned position embedding to the encoder's
+  patch tokens before cross-attending to them (CLS/prior tokens get none). It is
+  independent of `encoder_position_embedding`, and sized from the encoder's
+  patch kernel and stride.
 
-Both default to `none`, which reproduces earlier runs.
+The position embeddings and the day-of-year fix default to the baseline's
+behavior (`none`, or `mean` for the day of year).

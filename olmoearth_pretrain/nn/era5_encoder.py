@@ -158,6 +158,12 @@ class Era5DailyEncoderConfig(Config):
         attention_dropout: Dropout inside multi-head attention.
         drop_path_rate: Stochastic depth rate (linearly increased per layer).
         add_day_of_year_features: Add sin/cos day-of-year features to tokens.
+        patch_day_of_year: Which day of year represents a patch token.
+            ``"mean"`` (default) averages the day numbers in the patch, which
+            is wrong for a patch spanning Jan 1 (days 359-365 and 1-7 average
+            to 183, early July); kept so earlier runs reproduce. ``"center"``
+            uses the patch's center day (between the two middle days for an
+            even kernel).
         add_relative_position_features: Add sin/cos relative index features.
             Legacy: the encoding spans a full circle, so the first and last
             tokens get identical features; prefer ``position_embedding``.
@@ -206,6 +212,7 @@ class Era5DailyEncoderConfig(Config):
     attention_dropout: float = 0.0
     drop_path_rate: float = 0.0
     add_day_of_year_features: bool = True
+    patch_day_of_year: str = "mean"
     add_relative_position_features: bool = False
     position_embedding: str = "none"
     pooled_norm: str = "none"
@@ -238,6 +245,11 @@ class Era5DailyEncoderConfig(Config):
             raise ValueError(
                 f"position_embedding must be 'none' or 'learned', got "
                 f"{self.position_embedding!r}"
+            )
+        if self.patch_day_of_year not in ("mean", "center"):
+            raise ValueError(
+                f"patch_day_of_year must be 'mean' or 'center', got "
+                f"{self.patch_day_of_year!r}"
             )
         if self.pooled_norm not in ("none", "layernorm"):
             raise ValueError(
@@ -323,6 +335,7 @@ class Era5DailyEncoder(nn.Module):
         self.pooling = Era5Pooling(config.pooling)
         self.pooled_norm = config.pooled_norm
         self.add_day_of_year_features = config.add_day_of_year_features
+        self.patch_day_of_year = config.patch_day_of_year
         self.add_relative_position_features = config.add_relative_position_features
 
         # --- Optional SWT input adapter (raw [B,T,V] -> band channels) ---
@@ -706,10 +719,9 @@ class Era5DailyEncoder(nn.Module):
         """Encode one representative timestamp per patch token.
 
         Rather than averaging per-day sin/cos features, we derive a single
-        representative date for each patch and encode that. For day-of-year we
-        take the mean day-of-year of the days in the patch's receptive field
-        (its center date); for relative position we use the token's own index.
-        Both are mapped through sin/cos and projected.
+        representative date for each patch and encode that. For day-of-year
+        see :meth:`_patch_day_of_year`; for relative position we use the
+        token's own index. Both are mapped through sin/cos and projected.
 
         Returns ``[B, N, D]`` additive contribution to token embeddings, or
         None if no time features are configured.
@@ -717,8 +729,6 @@ class Era5DailyEncoder(nn.Module):
         if self.time_embed is None:
             return None
 
-        kernel = self.patch_kernel_size
-        stride = self.patch_stride
         b, t, _ = timestamps.shape
         self._check_clean_patchify(t)
         num_tokens = self._num_patches(t)
@@ -726,11 +736,8 @@ class Era5DailyEncoder(nn.Module):
         feats: list[Tensor] = []
 
         if self.add_day_of_year_features:
-            doy = timestamps[..., 0].float()  # [B, T]
-            # Mean day-of-year within each patch -> [B, N]
-            patch_doy = doy.unfold(dimension=1, size=kernel, step=stride)
-            center_doy = patch_doy.mean(dim=-1)  # [B, N]
-            angle = 2.0 * math.pi * (center_doy - 1.0) / 365.0
+            patch_doy = self._patch_day_of_year(timestamps[..., 0].float())
+            angle = 2.0 * math.pi * (patch_doy - 1.0) / 365.0
             feats.extend([torch.sin(angle), torch.cos(angle)])
 
         if self.add_relative_position_features:
@@ -748,6 +755,27 @@ class Era5DailyEncoder(nn.Module):
 
         patch_time = torch.stack(feats, dim=-1)  # [B, N, F]
         return self.time_embed(patch_time)  # [B, N, D]
+
+    def _patch_day_of_year(self, doy: Tensor) -> Tensor:
+        """Representative day of year of each patch token.
+
+        Args:
+            doy: ``[B, T]`` per-day day of year (1-based), as floats.
+
+        Returns:
+            ``[B, N]``. ``"mean"`` averages the day numbers in the patch
+            (legacy: a patch spanning Jan 1 lands mid-year). ``"center"`` takes
+            the center day, half a day past the earlier middle day for an even
+            kernel; a center between Dec 31 and Jan 1 comes out as 365.5,
+            which the sin/cos encoding wraps correctly.
+        """
+        kernel = self.patch_kernel_size
+        stride = self.patch_stride
+        if self.patch_day_of_year == "mean":
+            return doy.unfold(dimension=1, size=kernel, step=stride).mean(dim=-1)
+        num_tokens = self._num_patches(doy.shape[1])
+        mid = (kernel - 1) // 2
+        return doy[:, mid::stride][:, :num_tokens] + ((kernel - 1) % 2) / 2
 
     def _layernorm_pooled(self, pooled: Tensor) -> Tensor:
         """Parameter-free LayerNorm over each ``embedding_size`` chunk of ``pooled``.

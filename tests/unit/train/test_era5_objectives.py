@@ -1953,6 +1953,181 @@ class TestLearnedPositionEmbedding:
         assert cfg.encoder_config.position_embedding == "learned"
 
 
+def _patch_doy_angle_error(**encoder_overrides: Any) -> Tensor:
+    """Per-patch angular error of the day-of-year feature vs the true center.
+
+    The window starts on day 300 of a non-leap year, so it crosses Jan 1 twice.
+
+    Args:
+        **encoder_overrides: Passed to ``_small_encoder_cfg``.
+
+    Returns:
+        ``[N]`` absolute angular error per patch token, in radians.
+    """
+    encoder = _small_encoder_cfg(**encoder_overrides).build()
+    k, s = encoder.patch_kernel_size, encoder.patch_stride
+    days = 299 + torch.arange(T)  # days since Jan 1, 0-based
+    doy = (days % 365 + 1).float().unsqueeze(0)  # [1, T], 1-based
+    patch_doy = encoder._patch_day_of_year(doy)[0]
+    true_center = 299 + torch.arange((T - k) // s + 1) * s + (k - 1) / 2
+    diff = 2 * math.pi * ((patch_doy - 1) - true_center) / 365
+    return (torch.remainder(diff + math.pi, 2 * math.pi) - math.pi).abs()
+
+
+class TestPatchDayOfYear:
+    """Which day of year represents a patch token, across Jan 1."""
+
+    @pytest.mark.parametrize("kernel,stride", [(14, 7), (7, 7), (28, 14)])
+    def test_center_matches_true_center(self, kernel, stride):
+        error = _patch_doy_angle_error(
+            patch_day_of_year="center", patch_kernel_size=kernel, patch_stride=stride
+        )
+        assert error.max() < 1e-4
+
+    def test_mean_is_wrong_only_across_jan_1(self):
+        """The legacy average puts a patch spanning Jan 1 months off.
+
+        How far depends on where Jan 1 falls in the patch (half a year when it
+        is central); here the two straddling patches are 104 and 78 days off.
+        """
+        error = _patch_doy_angle_error()
+        bad = (error > 1e-4).nonzero().flatten().tolist()
+        assert bad == [8, 9, 60, 61]  # the patches straddling each Jan 1
+        assert error.min() < 1e-6 and error[bad].min() > 1.0
+
+    def test_default_is_mean_and_adds_no_parameters(self):
+        mean = _small_encoder_cfg().build()
+        center = _small_encoder_cfg(patch_day_of_year="center").build()
+        assert mean.patch_day_of_year == "mean"
+        center.load_state_dict(mean.state_dict(), strict=True)
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="patch_day_of_year"):
+            _small_encoder_cfg(patch_day_of_year="median").build()
+
+    def test_launcher_knob(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(["encoder_patch_day_of_year=center"])
+        cfg = era5_launch_script.build_model_config(common)
+        assert cfg.encoder_config.patch_day_of_year == "center"
+
+
+class TestDecoderKeyPositionEmbedding:
+    """The decoder's optional learned position embedding on the encoder tokens."""
+
+    NUM_PATCHES = (T - 14) // 7 + 1  # 63 with the default kernel / stride
+
+    def test_default_adds_no_parameters(self):
+        decoder = _small_decoder_cfg().build()
+        assert decoder.key_pos_embed is None
+        assert not any("key_pos_embed" in key for key in decoder.state_dict())
+
+    def test_learned_shape_and_gradient(self):
+        decoder = _small_decoder_cfg(key_position_embedding="learned").build()
+        assert decoder.key_pos_embed.shape == (1, self.NUM_PATCHES, D)
+        batch = _make_batch()
+        tokens = torch.randn(B, 1 + self.NUM_PATCHES, D)  # CLS + patches
+        decoder(tokens=tokens, timestamps=batch.timestamps).sum().backward()
+        assert decoder.key_pos_embed.grad.abs().sum() > 0
+
+    @pytest.mark.parametrize("num_prefix", [0, 1, 3])
+    @pytest.mark.parametrize("fewer_patches", [0, 2])
+    def test_only_patch_tokens_shifted_end_aligned(self, num_prefix, fewer_patches):
+        decoder = _small_decoder_cfg(key_position_embedding="learned").build()
+        num_patches = self.NUM_PATCHES - fewer_patches
+        tokens = torch.randn(B, num_prefix + num_patches, D)
+        out = decoder._add_key_positions(tokens, T - 7 * fewer_patches)
+        torch.testing.assert_close(out[:, :num_prefix], tokens[:, :num_prefix])
+        torch.testing.assert_close(
+            out[:, num_prefix:],
+            tokens[:, num_prefix:] + decoder.key_pos_embed[:, -num_patches:],
+        )
+
+    def test_zero_table_matches_plain_decoder(self):
+        torch.manual_seed(0)
+        plain = _small_decoder_cfg().build().eval()
+        learned = _small_decoder_cfg(key_position_embedding="learned").build().eval()
+        missing, _ = learned.load_state_dict(plain.state_dict(), strict=False)
+        assert missing == ["key_pos_embed"]
+        batch = _make_batch()
+        tokens = torch.randn(B, self.NUM_PATCHES, D)
+        with torch.no_grad():
+            learned.key_pos_embed.zero_()
+            a = plain(tokens=tokens, timestamps=batch.timestamps)
+            b = learned(tokens=tokens, timestamps=batch.timestamps)
+            torch.testing.assert_close(a, b)
+            learned.key_pos_embed.normal_()
+            c = learned(tokens=tokens, timestamps=batch.timestamps)
+        assert not torch.allclose(a, c)
+
+    def test_too_few_tokens_raises(self):
+        decoder = _small_decoder_cfg(key_position_embedding="learned").build()
+        batch = _make_batch()
+        with pytest.raises(ValueError, match="patch tokens"):
+            decoder(
+                tokens=torch.randn(B, self.NUM_PATCHES - 1, D),
+                timestamps=batch.timestamps,
+            )
+
+    def test_invalid_value_raises(self):
+        with pytest.raises(ValueError, match="key_position_embedding"):
+            _small_decoder_cfg(key_position_embedding="sincos").build()
+
+    def test_patching_mismatch_with_encoder_raises(self):
+        cfg = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(patch_kernel_size=28, patch_stride=14),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(key_position_embedding="learned"),
+            ),
+        )
+        with pytest.raises(ValueError, match="kernel/stride"):
+            cfg.build()
+
+    @pytest.mark.parametrize("pooling", ["mean", "cls"])
+    def test_reconstruction_backward(self, pooling):
+        """End to end through the objective, with and without a CLS prefix."""
+        torch.manual_seed(0)
+        model = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(
+                pooling=pooling,
+                is_swt_input=True,
+                swt_input_stats_path=SWT_STATS_REL,
+            ),
+            reconstruction_objective=ReconstructionObjectiveConfig(
+                decoder=_small_decoder_cfg(key_position_embedding="learned"),
+            ),
+        ).build()
+        obj = model.objective_list[0]
+        loss, _ = obj.compute(model.encoder, _make_batch())
+        assert torch.isfinite(loss)
+        loss.backward()
+        assert obj._module.decoder.key_pos_embed.grad.abs().sum() > 0
+
+    def test_launcher_knob(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test",
+            save_folder="unused",
+            training_modalities=[],
+            enable_supervised=False,
+            enable_reconstruction=True,
+        ).merge(
+            [
+                "recon_decoder_key_position_embedding=learned",
+                "encoder_patch_kernel_size=28",
+                "encoder_patch_stride=14",
+            ]
+        )
+        cfg = era5_launch_script.build_model_config(common)
+        decoder = cfg.reconstruction_objective.decoder
+        assert decoder.key_position_embedding == "learned"
+        assert (decoder.patch_kernel_size, decoder.patch_stride) == (28, 14)
+
+
 class TestPooledLayerNorm:
     """The encoder's optional parameter-free LayerNorm on the pooled embedding."""
 
@@ -2084,17 +2259,75 @@ class TestTokenizerOptions:
         assert [c.out_channels for c in convs] == [768, 768, 128]
         decoder.build()
 
-    def test_launcher_defaults_unchanged(self, era5_launch_script):
+    def test_launcher_defaults(self, era5_launch_script):
         common = era5_launch_script.Era5SupervisedCommonComponents(
             run_name="test",
             save_folder="unused",
             training_modalities=[],
-            enable_supervised=False,
-            enable_reconstruction=True,
         )
         enc = era5_launch_script.build_model_config(common).encoder_config
-        assert enc.stem_hidden_dims is None
+        assert enc.stem_hidden_dims == [1536]
         assert (enc.patch_kernel_size, enc.patch_stride) == (14, 7)
+
+
+class TestBaselineDefaults:
+    """A bare launch reproduces the baseline run era5enc_1504_ln_shd1536."""
+
+    def test_common_defaults(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test", save_folder="unused", training_modalities=[]
+        )
+        assert common.tasks == ["era5enc_pretrain_ssl"]
+        assert common.eval_tasks == [
+            "dfmc1000h_grav_eval",
+            "lfmc_woody_eval",
+            "cybench_wheat_eval",
+            "cybench_maize_eval",
+            "burnrisk_canada_nbac_eval",
+            "landslide_era5_eval",
+        ]
+        assert common.learning_rate == 1e-5
+        assert (common.global_batch_size, common.rank_microbatch_size) == (32, 32)
+        assert common.max_steps == 50000
+        assert (common.eval_interval, common.eval_on_startup) == (1000, True)
+        assert common.eval_probe_seed == 1202
+        assert common.enable_downstream_eval is True
+
+    def test_model_defaults(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test", save_folder="unused", training_modalities=[]
+        )
+        cfg = era5_launch_script.build_model_config(common)
+        assert cfg.supervised_objective is None
+        enc = cfg.encoder_config
+        assert enc.is_swt_input and enc.swt_input_include_approx
+        assert enc.swt_input_stats_path == SWT_STATS_REL
+        assert (enc.use_conv_stem, enc.stem_hidden_dims) == (True, [1536])
+        assert (enc.pooling, enc.pooled_norm) == ("mean", "layernorm")
+        assert (enc.embedding_size, enc.depth, enc.num_heads) == (384, 8, 6)
+        assert enc.position_embedding == "none"
+        assert enc.patch_day_of_year == "mean"
+        recon = cfg.reconstruction_objective
+        assert (recon.raw_lambda, recon.swt_lambda) == (1.0, 0.0)
+        assert recon.mask_policy == "swt_halo_span"
+        assert recon.span_num_spans == [4, 10]
+        assert recon.span_days == [30, 120]
+        assert recon.span_num_variables == [9, 14]
+        assert (recon.span_placement, recon.mask_buffer) == ("inside", False)
+        assert recon.group_recon_mode["pressure"] == "raw_plus_all_swt"
+        assert recon.decoder.key_position_embedding == "none"
+        assert recon.contrastive_lambda == 0.0
+
+    def test_gating_override_still_merges(self, era5_launch_script):
+        common = era5_launch_script.Era5SupervisedCommonComponents(
+            run_name="test", save_folder="unused", training_modalities=[]
+        )
+        cfg = era5_launch_script.build_model_config(common).merge(
+            ["reconstruction_objective.group_recon_mode.pressure=lowpass_plus_slow_swt"]
+        )
+        modes = cfg.reconstruction_objective.group_recon_mode
+        assert modes["pressure"] == "lowpass_plus_slow_swt"
+        assert modes["thermo"] == "raw_plus_all_swt"
 
 
 class TestCollapseMetrics:

@@ -1067,6 +1067,18 @@ class Era5MultiObjectiveModelConfig(Config):
 
     def build(self) -> Era5MultiObjectiveModel:
         """Build the encoder, build each objective, return the wrapped model."""
+        recon = self.reconstruction_objective
+        if recon is not None and recon.decoder.key_position_embedding != "none":
+            enc_patching = (
+                self.encoder_config.patch_kernel_size,
+                self.encoder_config.patch_stride,
+            )
+            dec_patching = (recon.decoder.patch_kernel_size, recon.decoder.patch_stride)
+            if dec_patching != enc_patching:
+                raise ValueError(
+                    f"Decoder key positions use patch kernel/stride {dec_patching} "
+                    f"but the encoder uses {enc_patching}"
+                )
         encoder = self.encoder_config.build()
         objectives: list[_Objective] = []
         if self.supervised_objective is not None:
