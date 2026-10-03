@@ -704,12 +704,26 @@ class _Runner:
         assert q_all is not None and k_all is not None and v_all is not None
         self.tick(f"{tag}qkv_s")
         grid_shape = (1, *grid, heads, head_dim)
-        o = na3d(
-            q_all.view(grid_shape),
-            k_all.view(grid_shape),
-            v_all.view(grid_shape),
-            kernel_size=(fov, fov, grid[2]),
-        ).reshape(1, length, heads * head_dim)
+        if grid[2] == 1:
+            # One element per cell (e.g. v1.3's patch-stride latents): NATTEN
+            # rejects kernel sizes < 2, and the problem is plain 2D anyway.
+            import natten
+
+            flat_shape = (1, grid[0], grid[1], heads, head_dim)
+            o = natten.na2d(
+                q_all.view(flat_shape),
+                k_all.view(flat_shape),
+                v_all.view(flat_shape),
+                kernel_size=(fov, fov),
+            )
+        else:
+            o = na3d(
+                q_all.view(grid_shape),
+                k_all.view(grid_shape),
+                v_all.view(grid_shape),
+                kernel_size=(fov, fov, grid[2]),
+            )
+        o = o.reshape(1, length, heads * head_dim)
         del q_all, k_all, v_all
         self.tick(f"{tag}attention_s")
         for s in _spans(length, self.settings.mlp_chunk):
