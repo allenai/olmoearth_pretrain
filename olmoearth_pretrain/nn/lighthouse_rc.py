@@ -96,6 +96,15 @@ class RCLighthouseSettings:
             FOV that moves in steps of ``fov_quantum`` cells and sits up to half a
             step off-centre. Must divide the FOV.
         code_dtype: Integer dtype of the mask codes (see :func:`_codes`).
+        attention_backend: ``"flex"``, ``"natten"`` or ``"auto"`` for the ViT and the
+            latent self-attention (the Perceiver reads always use FlexAttention:
+            their query and key grids differ). NATTEN (``natten.na3d``, kernel
+            ``(W, W, K)`` over the ``(rows, cols, K tokens per cell)`` grid) computes
+            exactly the Lighthouse rule without a mask; it needs the same K tokens in
+            every cell, which holds when missing data is per scene (whole
+            timesteps), and falls back to flex otherwise. ``"auto"`` = NATTEN on
+            Hopper or newer when it imports (it is faster than flex there and
+            slower on A100).
         full_blocks: Declare blocks inside every query's FOV *full* (skip
             ``mask_mod``). False sends every listed block through the mask.
         pad_index_width: Pad the block-index tables to the dense table width (the
@@ -125,6 +134,7 @@ class RCLighthouseSettings:
     code_dtype: str = "int64"
     full_blocks: bool = True
     pad_index_width: bool = True
+    attention_backend: str = "flex"
 
 
 def lighthouse_rc_reach_px(
@@ -566,6 +576,36 @@ def _spans(length: int, size: int) -> list[slice]:
     return [slice(s, min(s + size, length)) for s in range(0, length, size)]
 
 
+def _natten_na3d(backend: str, device: torch.device) -> Callable[..., Tensor] | None:
+    """``natten.na3d`` if this forward should use NATTEN, else None."""
+    if backend == "flex" or device.type != "cuda":
+        if backend == "natten" and device.type != "cuda":
+            raise RuntimeError("attention_backend='natten' needs CUDA tensors")
+        return None
+    if backend == "auto" and torch.cuda.get_device_capability(device)[0] < 9:
+        return None
+    try:
+        import natten
+    except ImportError:
+        if backend == "natten":
+            raise
+        return None
+    return natten.na3d
+
+
+def _grid_order(cells: np.ndarray, n_cells: int) -> np.ndarray | None:
+    """Element order that makes ``(cell, k)`` a dense ``[n_cells, K]`` grid.
+
+    Elements of each cell keep their relative order (their (t, bandset) order from
+    the collapse), so slot k means the same token type in every cell. None when the
+    cells do not all hold the same number of elements (per-pixel missing data).
+    """
+    counts = np.bincount(cells, minlength=n_cells)
+    if counts.min() != counts.max() or counts[0] == 0:
+        return None
+    return np.argsort(cells, kind="stable")
+
+
 class _Runner:
     """Shared attention / profiling machinery for one forward."""
 
@@ -622,6 +662,61 @@ class _Runner:
             k_all[:, :, s], v_all[:, :, s] = k, v
         assert k_all is not None and v_all is not None
         return k_all, v_all
+
+    def natten_block(
+        self,
+        blk: Block,
+        x: Tensor,
+        positions: Tensor,
+        grid: tuple[int, int, int],
+        fov: int,
+        na3d: Callable[..., Tensor],
+        tag: str,
+    ) -> None:
+        """Self-attention block over a dense ``(rows, cols, K)`` grid with NATTEN.
+
+        ``x`` and ``positions`` are in grid order (row-major cells, K per cell); the
+        kernel ``(fov, fov, K)`` is the Lighthouse window (all K elements of every
+        cell in the box, shifted inward at the edges). In place.
+        """
+        attn = blk.attn
+        heads, head_dim = attn.num_heads, attn.head_dim
+        length = x.shape[1]
+        q_all = k_all = v_all = None
+        for s in _spans(length, self.settings.mlp_chunk):
+            h = blk.norm1(x[:, s])
+            q = attn.q_norm(self.heads(attn, attn.q(h)))
+            k = attn.k_norm(self.heads(attn, attn.k(h)))
+            v = self.heads(attn, attn.v(h))
+            q = _rope(attn, q, positions[:, s])
+            k = _rope(attn, k, positions[:, s])
+            # The kernel dtype (bf16 on GPU); the computation's own without a cast.
+            dtype = self.dtype or q.dtype
+            if q_all is None:
+                shape = (1, length, heads, head_dim)
+                q_all = torch.empty(shape, dtype=dtype, device=x.device)
+                k_all, v_all = torch.empty_like(q_all), torch.empty_like(q_all)
+            assert k_all is not None and v_all is not None
+            # [1, H, n, D] -> [1, n, H, D]
+            q_all[:, s] = q.transpose(1, 2).to(dtype)
+            k_all[:, s] = k.transpose(1, 2).to(dtype)
+            v_all[:, s] = v.transpose(1, 2).to(dtype)
+        assert q_all is not None and k_all is not None and v_all is not None
+        self.tick(f"{tag}qkv_s")
+        grid_shape = (1, *grid, heads, head_dim)
+        o = na3d(
+            q_all.view(grid_shape),
+            k_all.view(grid_shape),
+            v_all.view(grid_shape),
+            kernel_size=(fov, fov, grid[2]),
+        ).reshape(1, length, heads * head_dim)
+        del q_all, k_all, v_all
+        self.tick(f"{tag}attention_s")
+        for s in _spans(length, self.settings.mlp_chunk):
+            xs = x[:, s] + blk.ls1(attn.proj(o[:, s]).to(x.dtype))
+            x[:, s] = xs + blk.ls2(blk.mlp(blk.norm2(xs))).to(x.dtype)
+        del o
+        self.tick(f"{tag}proj_mlp_s")
 
     def block(
         self,
@@ -766,17 +861,38 @@ def encoder_lighthouse(
     pos[0, tok_dest] = positions[0, vis_idx]
     if shift is not None:
         pos[..., -2:] += shift
-    vit_plan = _make_plan(tok, tok, fov, n_h, n_w, settings, device)
-    stats.update({f"vit_{k}": v for k, v in vit_plan.stats.items()})
+    na3d = _natten_na3d(settings.attention_backend, device) if quantum == 1 else None
+    vit_order = _grid_order(cells_np, n_h * n_w) if na3d is not None else None
+    stats["vit_natten"] = float(vit_order is not None)
+    vit_plan = None
+    if vit_order is None:
+        vit_plan = _make_plan(tok, tok, fov, n_h, n_w, settings, device)
+        stats.update({f"vit_{k}": v for k, v in vit_plan.stats.items()})
     stats["layout_s"] = time.perf_counter() - t0
     run._t = time.perf_counter()
 
-    for blk in encoder.blocks:
-        h_src = lambda s, _b=blk: _b.norm1(x[:, s])  # noqa: E731
-        k_all, v_all = run.kv(blk, h_src, pos, tok.length)
-        run.tick("kv_s")
-        run.block(blk, x, pos, k_all, v_all, vit_plan, "vit_")
-        del k_all, v_all
+    if vit_order is not None:
+        # NATTEN: run the ViT in dense (rows, cols, K) grid order, then scatter back.
+        k_per_cell = cells_np.size // (n_h * n_w)
+        assert na3d is not None
+        g_dest = tok_dest[torch.from_numpy(vit_order).to(device)]
+        xg, pg = x[:, g_dest], pos[:, g_dest]
+        # The slot-layout residual is not read until the Perceiver: free it meanwhile.
+        x_shape, x_dtype = x.shape, x.dtype
+        del x
+        for blk in encoder.blocks:
+            run.natten_block(blk, xg, pg, (n_h, n_w, k_per_cell), fov, na3d, "vit_")
+        x = torch.zeros(x_shape, dtype=x_dtype, device=device)
+        x[:, g_dest] = xg
+        del xg, pg
+    else:
+        assert vit_plan is not None
+        for blk in encoder.blocks:
+            h_src = lambda s, _b=blk: _b.norm1(x[:, s])  # noqa: E731
+            k_all, v_all = run.kv(blk, h_src, pos, tok.length)
+            run.tick("kv_s")
+            run.block(blk, x, pos, k_all, v_all, vit_plan, "vit_")
+            del k_all, v_all
     for s in _spans(tok.length, settings.mlp_chunk):
         x[:, s] = encoder.norm(x[:, s])
 
@@ -809,9 +925,19 @@ def encoder_lighthouse(
         lat.quantum = quantum
         lat_dest = torch.from_numpy(lat.dest).to(device)
         read_plan = _make_plan(lat, tok, fov, n_h, n_w, settings, device)
-        self_plan = _make_plan(lat, lat, fov, n_h, n_w, settings, device)
+        # Latents of one cell share its FOV: as a (rows, cols, per_cell) grid the
+        # latent self-attention is na3d with kernel (W, W, per_cell).
+        lat_cells = l_rows * n_w + l_cols
+        lat_order = _grid_order(lat_cells, n_h * n_w) if na3d is not None else None
+        stats["latent_natten"] = float(lat_order is not None)
+        self_plan = (
+            _make_plan(lat, lat, fov, n_h, n_w, settings, device)
+            if lat_order is None
+            else None
+        )
         stats.update({f"read_{k}": v for k, v in read_plan.stats.items()})
-        stats.update({f"latself_{k}": v for k, v in self_plan.stats.items()})
+        if self_plan is not None:
+            stats.update({f"latself_{k}": v for k, v in self_plan.stats.items()})
         stats["latent_slots"] = float(lat.length)
 
         # Latent positions: pixel latent centres (at stride == patch they are the
@@ -839,11 +965,28 @@ def encoder_lighthouse(
             run.tick("read_kv_s")
             run.block(read_blk, reg, lpos, k_all, v_all, read_plan, "read_")
             del k_all, v_all
-            l_src = lambda s, _b=lat_blk: _b.norm1(reg[:, s])  # noqa: E731
-            k_all, v_all = run.kv(lat_blk, l_src, lpos, lat.length)
-            run.tick("latent_kv_s")
-            run.block(lat_blk, reg, lpos, k_all, v_all, self_plan, "latent_")
-            del k_all, v_all
+            if lat_order is not None:
+                assert na3d is not None
+                lg_dest = lat_dest[torch.from_numpy(lat_order).to(device)]
+                rg = reg[:, lg_dest]
+                run.natten_block(
+                    lat_blk,
+                    rg,
+                    lpos[:, lg_dest],
+                    (n_h, n_w, per_cell),
+                    fov,
+                    na3d,
+                    "latent_",
+                )
+                reg[:, lg_dest] = rg
+                del rg
+            else:
+                assert self_plan is not None
+                l_src = lambda s, _b=lat_blk: _b.norm1(reg[:, s])  # noqa: E731
+                k_all, v_all = run.kv(lat_blk, l_src, lpos, lat.length)
+                run.tick("latent_kv_s")
+                run.block(lat_blk, reg, lpos, k_all, v_all, self_plan, "latent_")
+                del k_all, v_all
         out = p.norm(reg[0, lat_dest])
         registers = rearrange(out[None], "b (h w) d -> b h w d", h=lat_h, w=lat_w)
     if run.timings is not None:

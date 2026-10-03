@@ -344,3 +344,62 @@ def test_column_mask_equals_full_rule_on_listed_blocks(
         full_keys = keys & ~part_keys
         seen = col_rule[qs][:, part_keys].sum(1) + full_keys.sum()
         assert (seen > 0).all()
+
+
+def _reference_na3d(
+    q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, kernel_size: tuple
+) -> torch.Tensor:
+    """NATTEN na3d semantics for kernel (W, W, Z): dense SDPA with the window mask."""
+    _, n_h, n_w, z, heads, d = q.shape
+    fov = kernel_size[0]
+    assert kernel_size == (fov, fov, z)
+    idx = torch.arange(n_h * n_w * z)
+    cell = idx // z
+    r, c = cell // n_w, cell % n_w
+    r0 = (r - fov // 2).clamp(0, n_h - fov)
+    c0 = (c - fov // 2).clamp(0, n_w - fov)
+    mask = (
+        (r[None] >= r0[:, None])
+        & (r[None] < r0[:, None] + fov)
+        & (c[None] >= c0[:, None])
+        & (c[None] < c0[:, None] + fov)
+    )
+
+    def flat(t: torch.Tensor) -> torch.Tensor:
+        return t.reshape(1, -1, heads, d).transpose(1, 2)
+
+    out = torch.nn.functional.scaled_dot_product_attention(
+        flat(q), flat(k), flat(v), attn_mask=mask
+    )
+    return out.transpose(1, 2).reshape(q.shape)
+
+
+@pytest.mark.parametrize("pixel_latents", [False, True])
+@pytest.mark.parametrize("patch_size", [1, 2])
+@pytest.mark.parametrize("missing", [False, True])
+def test_natten_path_equals_flex_path(
+    monkeypatch: pytest.MonkeyPatch, pixel_latents: bool, patch_size: int, missing: bool
+) -> None:
+    """The NATTEN grid path (with a reference na3d) = the masked path, multi-window.
+
+    ``missing`` drops one S1 timestep over part of the domain (per-pixel counts
+    differ), so the ViT must fall back to the masked path there while the latent
+    self-attention (always complete) still takes the grid path.
+    """
+    import olmoearth_pretrain.nn.lighthouse_rc as lrc
+
+    encoder = _encoder(pixel_latents)
+    sample = _sample(12 * patch_size, 10 * patch_size, missing=missing)
+    fov_px = 4 * patch_size
+    ref = _run(encoder, sample, patch_size, fov_px)
+    monkeypatch.setattr(lrc, "_natten_na3d", lambda backend, device: _reference_na3d)
+    encoder.lighthouse = RCLighthouseSettings(
+        fov_px=fov_px, dense=True, attention_backend="natten"
+    )
+    with torch.no_grad():
+        out = encoder(sample, patch_size=patch_size, input_res=10, fast_pass=False)
+    stats = encoder.last_lighthouse_stats
+    encoder.lighthouse = None
+    torch.testing.assert_close(out["student_registers"][0], ref, atol=1e-6, rtol=1e-6)
+    assert stats["vit_natten"] == float(not missing)
+    assert stats["latent_natten"] == 1.0

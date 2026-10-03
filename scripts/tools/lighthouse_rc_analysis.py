@@ -59,6 +59,7 @@ def main() -> None:
     p.add_argument("--out_dir", required=True)
     p.add_argument("--timings", default="timings.json")
     p.add_argument("--reference", default=None, help="config to compare against")
+    p.add_argument("--out_name", default="rc_analysis.json")
     a = p.parse_args()
     out = Path(a.out_dir)
     timings = json.loads((out / a.timings).read_text())
@@ -117,7 +118,7 @@ def main() -> None:
                 for k in keys
             )
             print(c.ljust(22) + vals)
-    (out / "rc_analysis.json").write_text(json.dumps(result, indent=1))
+    (out / a.out_name).write_text(json.dumps(result, indent=1))
 
 
 if __name__ == "__main__":
