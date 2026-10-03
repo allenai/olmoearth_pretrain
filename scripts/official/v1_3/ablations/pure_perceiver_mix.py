@@ -58,6 +58,13 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 
 # v1.2 catalog tasks scored on the d768 register grid (not the student).
 REGISTER_EVAL_TASKS = ("m-eurosat", "pastis")
+# Datasets also scored at patch size 2 (``ps2_student_evals``): PASTIS plus the two
+# fastest AEF-trial tasks (~3.5 min each per checkpoint, vs 15-50 min for the rest).
+PS2_STUDENT_EVAL_DATASETS = (
+    "pastis_year_aligned",
+    "africa_crop_mask_year_aligned",
+    "ethiopia_crops_year_aligned",
+)
 
 
 def interleaved_layout(n_mix: int, n_read: int) -> str:
@@ -116,13 +123,18 @@ def build_mix_model_config(
 
 
 def build_mix_trainer_config(
-    common: CommonComponents, module_path: str, *, ps4_student_evals: bool = False
+    common: CommonComponents,
+    module_path: str,
+    *,
+    ps4_student_evals: bool = False,
+    ps2_student_evals: bool = False,
 ):
     """``trope_ld12``'s student evals + m-eurosat / pastis on the d768 registers.
 
     ``ps4_student_evals`` adds the d128 student at patch size 4 on the AEF + PASTIS
     tasks (named ``*_ws16_ps4_*_proj128``), for arms whose latents stay per pixel at a
-    coarse patch size.
+    coarse patch size. ``ps2_student_evals`` adds the same at patch size 2 on
+    ``PS2_STUDENT_EVAL_DATASETS`` only (named ``*_ws16_ps2_*_proj128``).
     """
     v1_2_trainer = _v1_2_build_trainer_config(common)
     catalog = v1_2_trainer.callbacks["downstream_evaluator"].tasks
@@ -143,6 +155,15 @@ def build_mix_trainer_config(
             assert "_ps1_" in name, name
             evaluator.tasks[name.replace("_ps1_", "_ps4_") + "_proj128"] = replace(
                 task, patch_size=4, eval_on_student_registers=True, eval_student_dim=128
+            )
+    if ps2_student_evals:
+        for name, task in aeftrial_loop_eval_tasks(
+            STUDENT_LOOP_EVAL_INTERVAL_STEPS
+        ).items():
+            if not name.startswith(PS2_STUDENT_EVAL_DATASETS):
+                continue
+            evaluator.tasks[name.replace("_ps1_", "_ps2_") + "_proj128"] = replace(
+                task, patch_size=2, eval_on_student_registers=True, eval_student_dim=128
             )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
     return trainer_config
