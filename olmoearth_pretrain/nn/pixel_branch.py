@@ -42,8 +42,21 @@ held fixed through the stack (holes are never filled), and the zero padding at t
 frame border is treated as missing too, so border cells are renormalized as well.
 Spatial mixing only.
 
-**Init equivalence.** ``zero_init`` zeroes the register-init projection, so at
-initialization a model with this branch is EXACTLY the model without it.
+**Cell reads** (``cell_read_depth``). The register init averages the final features
+over time, so a latent only ever sees its pixel's time series as a mean. With cell
+reads the branch also keeps the final features of every ONLINE ``(timestep, band set,
+modality)`` unit of each cell, and after each of the Perceiver's global reads every
+latent cross-attends the units of ITS OWN cell (:class:`PixelCellRead`). One query per
+cell over at most ``T * band_sets * modalities`` keys, so this is a dense batched
+weighted sum (two einsums) rather than a masked attention over a long sequence. The
+keys carry the branch's additive timestep encoding plus a learned per-modality
+embedding; the K/V projection is shared by all reads, the query and output
+projections are per read. Non-ONLINE units are never valid keys, and a cell with no
+ONLINE unit gets no update.
+
+**Init equivalence.** ``zero_init`` zeroes the register-init projection and the cell
+reads' output projections, so at initialization a model with this branch is EXACTLY
+the model without it.
 """
 
 import logging
@@ -130,6 +143,66 @@ class PixelFrameContext:
     cell_hw: tuple[int, int]
     batch_size: int
     frame_online: Tensor
+
+
+@dataclass
+class PixelCellKV:
+    """Per-cell keys and values for the cell reads, built once per forward pass.
+
+    Attributes:
+        k: ``[B, cells, U, heads, head_dim]`` keys, ``U`` units per cell (every
+            ``(timestep, band set)`` of every present pixel modality).
+        v: ``[B, cells, U, heads, head_dim]`` values.
+        valid: ``[B, cells, U]`` bool, True at ONLINE units.
+        any_valid: ``[B, cells]`` bool, True at cells with an ONLINE unit.
+    """
+
+    k: Tensor
+    v: Tensor
+    valid: Tensor
+    any_valid: Tensor
+
+
+class PixelCellRead(nn.Module):
+    """One latent query per cell over the branch features of that cell's units.
+
+    ``registers + out(attend(q(norm(registers)), k, v))`` with the attention restricted
+    to the latent's own cell. Each cell has one query, so the scores are only
+    ``[B, cells, heads, U]``. ``out`` is zeroed by :meth:`PixelRegisterBranch.zero_init`.
+    """
+
+    def __init__(self, register_dim: int, pixel_dim: int, num_heads: int) -> None:
+        """Initialize the read.
+
+        Args:
+            register_dim: Width of the latents (the queries).
+            pixel_dim: Width of the branch features and of the attention.
+            num_heads: Attention heads (divides ``pixel_dim``).
+        """
+        super().__init__()
+        if pixel_dim % num_heads != 0:
+            raise ValueError(
+                f"pixel_dim {pixel_dim} must be divisible by {num_heads} cell read heads"
+            )
+        self.num_heads = num_heads
+        self.head_dim = pixel_dim // num_heads
+        self.norm = nn.LayerNorm(register_dim)
+        self.q = nn.Linear(register_dim, pixel_dim)
+        self.out = nn.Linear(pixel_dim, register_dim)
+
+    def forward(self, registers: Tensor, kv: PixelCellKV) -> Tensor:
+        """Update ``[B, cells, register_dim]`` latents from their own cell's units."""
+        b, n, _ = registers.shape
+        q = self.q(self.norm(registers)).view(b, n, self.num_heads, self.head_dim)
+        scores = torch.einsum("bnhd,bnuhd->bnhu", q, kv.k).float()
+        scores = scores * self.head_dim**-0.5
+        scores = scores.masked_fill(
+            ~kv.valid[:, :, None, :], torch.finfo(scores.dtype).min
+        )
+        attn = scores.softmax(dim=-1).to(kv.v.dtype)
+        read = torch.einsum("bnhu,bnuhd->bnhd", attn, kv.v).reshape(b, n, -1)
+        update = self.out(read) * kv.any_valid[..., None].to(read.dtype)
+        return registers + update.to(registers.dtype)
 
 
 class PixelPatchEmbed(nn.Module):
@@ -395,6 +468,10 @@ class PixelRegisterBranch(nn.Module):
     2. :meth:`run_thin_steps` runs the whole conv stack once.
     3. :meth:`register_init` pools the final frames per cell -- ONLINE-only -- and
        maps them (zero-init) to the register width, see ``register_pool``.
+
+    With ``cell_read_depth > 0``, :meth:`forward_with_cell_kv` also returns the
+    per-cell keys and values (:meth:`cell_kv`) that :meth:`cell_read` reads after each
+    of the Perceiver's global reads.
     """
 
     def __init__(
@@ -412,6 +489,8 @@ class PixelRegisterBranch(nn.Module):
         register_pool: str = "mean",
         tokenization_config: TokenizationConfig | None = None,
         grad_checkpointing: bool = True,
+        cell_read_depth: int = 0,
+        cell_read_heads: int = 4,
     ) -> None:
         """Initialize the branch.
 
@@ -433,6 +512,9 @@ class PixelRegisterBranch(nn.Module):
             grad_checkpointing: Recompute each step in backward instead of storing its
                 activations. The steps have no dropout, so recomputation is
                 deterministic.
+            cell_read_depth: Number of cell reads (one per Perceiver global read), 0
+                for none. See the module docstring.
+            cell_read_heads: Attention heads of the cell reads (divides ``pixel_dim``).
         """
         super().__init__()
         if branch_type not in PIXEL_BRANCH_TYPES:
@@ -446,6 +528,8 @@ class PixelRegisterBranch(nn.Module):
             )
         if num_steps < 1:
             raise ValueError(f"num_steps must be >= 1, got {num_steps}")
+        if cell_read_depth < 0:
+            raise ValueError(f"cell_read_depth must be >= 0, got {cell_read_depth}")
         self.branch_type = branch_type
         self.pixel_dim = pixel_dim
         self.kernel_size = kernel_size
@@ -481,15 +565,38 @@ class PixelRegisterBranch(nn.Module):
         else:
             register_in = pixel_dim
         self.to_register = nn.Linear(register_in, register_dim)
+        self.cell_reads = nn.ModuleList(
+            [
+                PixelCellRead(register_dim, pixel_dim, cell_read_heads)
+                for _ in range(cell_read_depth)
+            ]
+        )
+        self.cell_read_heads = cell_read_heads
+        if cell_read_depth > 0:
+            self.cell_norm = nn.LayerNorm(pixel_dim)
+            self.cell_kv_proj = nn.Linear(pixel_dim, 2 * pixel_dim)
+            self.cell_modality_embed = nn.Parameter(
+                torch.empty(len(self.pixel_modality_names), pixel_dim)
+            )
+            nn.init.trunc_normal_(self.cell_modality_embed, std=0.02)
+
+    @property
+    def cell_read_depth(self) -> int:
+        """Number of cell reads (0 without them)."""
+        return len(self.cell_reads)
 
     def zero_init(self) -> None:
-        """Zero the register-init projection: the model equals the branch-free one at init.
+        """Zero the handoff projections: the model equals the branch-free one at init.
 
+        Zeroes the register-init projection and every cell read's output projection.
         Call AFTER any blanket weight init. Gradients still reach every branch
-        parameter through the zeroed projection once its weight moves off zero.
+        parameter through the zeroed projections once their weights move off zero.
         """
         nn.init.zeros_(self.to_register.weight)
         nn.init.zeros_(self.to_register.bias)
+        for cell_read in self.cell_reads:
+            nn.init.zeros_(cell_read.out.weight)
+            nn.init.zeros_(cell_read.out.bias)
 
     def build_frames(
         self, input_data: MaskedOlmoEarthSample, patch_size: int, stride: int
@@ -620,11 +727,56 @@ class PixelRegisterBranch(nn.Module):
         init = self.to_register(torch.cat(slots, dim=-1))  # [B, h, w, D_reg]
         return init.flatten(1, 2)
 
+    def cell_kv(self, frames: Tensor, ctx: PixelFrameContext) -> PixelCellKV:
+        """Keys and values of every cell's ``(timestep, band set, modality)`` units.
+
+        Units are ordered modality-major (in ``ctx.states`` order), then timestep, then
+        band set; cells row-major ``(h, w)``, matching the latent grid.
+        """
+        b = ctx.batch_size
+        units: list[Tensor] = []
+        valids: list[Tensor] = []
+        for (name, st), frames_m in zip(
+            ctx.states.items(), frames.split(ctx.series_splits)
+        ):
+            modality_embed = self.cell_modality_embed[
+                self.pixel_modality_names.index(name)
+            ]
+            units.append(
+                rearrange(
+                    frames_m, "(b bs) t h w d -> b (h w) (t bs) d", b=b, bs=st.grid[4]
+                )
+                + modality_embed.to(frames.dtype)
+            )
+            valids.append(rearrange(st.online, "b h w t bs -> b (h w) (t bs)"))
+        kv = self.cell_kv_proj(self.cell_norm(torch.cat(units, dim=2)))
+        k, v = rearrange(
+            kv, "b n u (two h d) -> two b n u h d", two=2, h=self.cell_read_heads
+        )
+        valid = torch.cat(valids, dim=2)
+        return PixelCellKV(k=k, v=v, valid=valid, any_valid=valid.any(dim=-1))
+
+    def cell_read(self, kv: PixelCellKV, index: int, registers: Tensor) -> Tensor:
+        """Apply cell read ``index`` to the ``[B, cells, register_dim]`` latents."""
+        return self.cell_reads[index](registers, kv)
+
+    def forward_with_cell_kv(
+        self, input_data: MaskedOlmoEarthSample, patch_size: int, stride: int
+    ) -> tuple[Tensor | None, PixelCellKV | None]:
+        """The latent init and, with cell reads, the per-cell keys and values.
+
+        Returns ``(None, None)`` when no pixel modality is present; the keys and values
+        are None without cell reads.
+        """
+        frames, ctx = self.build_frames(input_data, patch_size, stride)
+        if frames is None or ctx is None:
+            return None, None
+        frames = self.run_thin_steps(frames, ctx)
+        kv = self.cell_kv(frames, ctx) if self.cell_read_depth > 0 else None
+        return self.register_init(frames, ctx), kv
+
     def forward(
         self, input_data: MaskedOlmoEarthSample, patch_size: int, stride: int
     ) -> Tensor | None:
         """The additive latent init ``[B, (H / s) * (W / s), register_dim]`` (or None)."""
-        frames, ctx = self.build_frames(input_data, patch_size, stride)
-        if frames is None or ctx is None:
-            return None
-        return self.register_init(self.run_thin_steps(frames, ctx), ctx)
+        return self.forward_with_cell_kv(input_data, patch_size, stride)[0]

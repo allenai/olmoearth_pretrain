@@ -3,7 +3,9 @@
 import logging
 import math
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import torch
@@ -1951,6 +1953,7 @@ class Perceiver(nn.Module):
         patch_spacing: float | None = None,
         latent_stride: int | None = None,
         register_init: Tensor | None = None,
+        cell_read: Callable[[int, Tensor], Tensor] | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1977,6 +1980,9 @@ class Perceiver(nn.Module):
                 branch). None draws it here with :meth:`choose_latent_stride`.
             register_init: Optional ``[B, num_registers, register_dim]`` added to the
                 cloned latent before the first read (the pixel branch's handoff).
+            cell_read: Optional ``(read_index, registers) -> registers`` applied after
+                each global read, before its latent block (the pixel branch's cell
+                reads). Not supported with ``token_mix_layout``.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
@@ -2142,9 +2148,15 @@ class Perceiver(nn.Module):
             )
             return out
 
+        if cell_read is not None and self.token_mix_layout is not None:
+            raise NotImplementedError(
+                "cell_read is not supported with token_mix_layout"
+            )
         if self.token_mix_layout is None:
             for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
                 registers = read(registers, i, read_blk, kv)
+                if cell_read is not None:
+                    registers = cell_read(i, registers)
                 registers = self.latent_blocks[i](
                     x=registers,
                     rope_positions=register_positions,
@@ -2304,6 +2316,12 @@ class PerceiverConfig(Config):
             linear) or ``"modality_concat"`` (ONLINE mean within each modality, a
             per-modality linear + GELU, concatenated across modalities, then a
             linear). None = ``"mean"``.
+        pixel_branch_cell_read: After each global read, every latent also
+            cross-attends the branch features of its own cell's ONLINE
+            ``(timestep, band set, modality)`` units (zero-init output, see
+            ``nn/pixel_branch.py``). Not with ``token_mix_layout``. None = False.
+        pixel_branch_cell_read_heads: Heads of the cell reads (divides the branch
+            width). None = 4.
     """
 
     register_dim: int
@@ -2337,6 +2355,8 @@ class PerceiverConfig(Config):
     pixel_branch_mixing: str | None = None
     pixel_branch_time_kernel: int | None = None
     pixel_branch_register_pool: str | None = None
+    pixel_branch_cell_read: bool | None = None
+    pixel_branch_cell_read_heads: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2483,6 +2503,22 @@ class PerceiverConfig(Config):
                     "pixel_branch_register_pool must be one of "
                     f"{PIXEL_BRANCH_REGISTER_POOLS}, got {pool!r}"
                 )
+            if self.pixel_branch_cell_read_heads is not None:
+                if not self.pixel_branch_cell_read:
+                    raise ValueError(
+                        "pixel_branch_cell_read_heads needs pixel_branch_cell_read"
+                    )
+                cell_heads = self.pixel_branch_cell_read_heads
+                width = dim if dim is not None else 128
+                if cell_heads < 1 or width % cell_heads != 0:
+                    raise ValueError(
+                        f"pixel_branch_cell_read_heads ({cell_heads}) must divide the "
+                        f"branch width ({width})"
+                    )
+            if self.pixel_branch_cell_read and self.token_mix_layout is not None:
+                raise ValueError(
+                    "pixel_branch_cell_read is not supported with token_mix_layout"
+                )
         elif any(
             v is not None
             for v in (
@@ -2495,6 +2531,8 @@ class PerceiverConfig(Config):
                 self.pixel_branch_mixing,
                 self.pixel_branch_time_kernel,
                 self.pixel_branch_register_pool,
+                self.pixel_branch_cell_read,
+                self.pixel_branch_cell_read_heads,
             )
         ):
             raise ValueError("pixel_branch_* settings need pixel_branch_type")
@@ -2586,6 +2624,8 @@ class PerceiverConfig(Config):
             register_pool=resolved(self.pixel_branch_register_pool, "mean"),
             tokenization_config=tokenization_config,
             grad_checkpointing=resolved(self.pixel_branch_grad_checkpointing, True),
+            cell_read_depth=self.latent_depth if self.pixel_branch_cell_read else 0,
+            cell_read_heads=resolved(self.pixel_branch_cell_read_heads, 4),
         )
 
 
@@ -3277,13 +3317,16 @@ class Encoder(FlexiVitBase):
                 # as an additive init of the cloned latent.
                 latent_stride: int | None = None
                 register_init: Tensor | None = None
+                cell_read: Callable[[int, Tensor], Tensor] | None = None
                 if self.pixel_branch is not None and input_sample is not None:
                     latent_stride = self.perceiver.choose_latent_stride(
                         spatial_grid, patch_size
                     )
-                    register_init = self.pixel_branch(
+                    register_init, cell_kv = self.pixel_branch.forward_with_cell_kv(
                         input_sample, patch_size, latent_stride
                     )
+                    if cell_kv is not None:
+                        cell_read = partial(self.pixel_branch.cell_read, cell_kv)
                 registers, register_positions = self.perceiver(
                     patch_tokens=tokens,
                     patch_positions=positions,
@@ -3298,6 +3341,7 @@ class Encoder(FlexiVitBase):
                     * self.rope_coordinate_scale,
                     latent_stride=latent_stride,
                     register_init=register_init,
+                    cell_read=cell_read,
                 )
             register_output = {
                 "registers": registers,

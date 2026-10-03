@@ -9,6 +9,7 @@ Covers the ``rc_tconv_*_pix512`` arms:
 * the mask-normalized convolution's independence from masked neighbours;
 * the locality of the space / space_time / time conv steps;
 * the per-modality (``modality_concat``) register init;
+* the cell reads: ONLINE-only keys, per-cell locality, no update without ONLINE units;
 * the latent grid following the drawn stride in training and gradient into the branch.
 
 The encoder-level tests run every branch variant in ``VARIANTS``.
@@ -24,6 +25,7 @@ from torch import Tensor, nn
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 from olmoearth_pretrain.nn.pixel_branch import (
+    PixelCellKV,
     PixelRegisterBranch,
     ThinConvStep,
     pool_online_pixels,
@@ -47,6 +49,7 @@ class Variant:
     mask_normalized: bool = False
     mixing: str | None = None
     register_pool: str | None = None
+    cell_read: bool = False
 
 
 VARIANTS = {
@@ -54,6 +57,7 @@ VARIANTS = {
     "space_mnorm": Variant(mask_normalized=True),
     "space_time_concat": Variant(mixing="space_time", register_pool="modality_concat"),
     "time_concat": Variant(mixing="time", register_pool="modality_concat"),
+    "space_cellread": Variant(cell_read=True),
 }
 variants = pytest.mark.parametrize(
     "variant", list(VARIANTS.values()), ids=list(VARIANTS)
@@ -79,6 +83,9 @@ def _build_encoder(variant: Variant | None = None, seed: int = 0) -> Encoder:
             perceiver.pixel_branch_mask_normalized = True
         perceiver.pixel_branch_mixing = variant.mixing
         perceiver.pixel_branch_register_pool = variant.register_pool
+        if variant.cell_read:
+            perceiver.pixel_branch_cell_read = True
+            perceiver.pixel_branch_cell_read_heads = 2
     return EncoderConfig(
         supported_modality_names=MODALITIES,
         embedding_size=32,
@@ -133,10 +140,12 @@ def _perturb_masked(sample: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
 
 
 def _open(encoder: Encoder) -> PixelRegisterBranch:
-    """Open the zero-init handoff so the branch actually contributes."""
+    """Open the zero-init handoffs so the branch actually contributes."""
     assert encoder.pixel_branch is not None
     torch.manual_seed(7)
     nn.init.normal_(encoder.pixel_branch.to_register.weight, std=0.05)
+    for cell_read in encoder.pixel_branch.cell_reads:
+        nn.init.normal_(cell_read.out.weight, std=0.05)
     return encoder.pixel_branch
 
 
@@ -183,6 +192,9 @@ def test_init_equivalence(variant: Variant) -> None:
     assert missing and all(k.startswith("pixel_branch.") for k in missing)
     assert branch.pixel_branch is not None
     assert not branch.pixel_branch.to_register.weight.any()
+    assert branch.pixel_branch.cell_read_depth == (2 if variant.cell_read else 0)
+    for cell_read in branch.pixel_branch.cell_reads:
+        assert not cell_read.out.weight.any()
     sample = _make_sample()
     for patch_size in (1, 2, 4):
         regs_plain = _eval_registers(plain, sample, patch_size)
@@ -366,6 +378,106 @@ def test_training_grid_follows_stride_and_branch_gets_gradient(
     assert sum(g.abs().sum() for g in grads) > 0
 
 
+def _cell_kv(
+    branch: PixelRegisterBranch, sample: MaskedOlmoEarthSample, stride: int
+) -> PixelCellKV:
+    with torch.no_grad():
+        _, kv = branch.forward_with_cell_kv(sample, 4, stride)
+    assert kv is not None
+    return kv
+
+
+def _apply_cell_reads(
+    branch: PixelRegisterBranch, kv: PixelCellKV, registers: Tensor
+) -> Tensor:
+    with torch.no_grad():
+        for i in range(branch.cell_read_depth):
+            registers = branch.cell_read(kv, i, registers)
+    return registers
+
+
+@pytest.mark.parametrize("stride", [1, 2, 4])
+def test_cell_read_ignores_masked_values(stride: int) -> None:
+    """Values at non-ONLINE pixels never change what a cell read returns."""
+    encoder = _build_encoder(VARIANTS["space_cellread"])
+    branch = _open(encoder)
+    sample = _make_sample()
+    kv_a = _cell_kv(branch, sample, stride)
+    kv_b = _cell_kv(branch, _perturb_masked(sample), stride)
+    cells = (H // stride) * (W // stride)
+    tokenization = branch.embed.tokenization_config
+    s2_units = T * tokenization.get_num_bandsets(Modality.SENTINEL2_L2A.name)
+    s1_units = T * tokenization.get_num_bandsets(Modality.SENTINEL1.name)
+    # S2's units, then S1's.
+    assert kv_a.k.shape == (B, cells, s2_units + s1_units, 2, PIXEL_DIM // 2)
+    assert not kv_a.valid[..., s2_units:].any()  # S1 is fully decoded
+    torch.manual_seed(0)
+    registers = torch.randn(B, cells, REGISTER_DIM)
+    out_a = _apply_cell_reads(branch, kv_a, registers)
+    out_b = _apply_cell_reads(branch, kv_b, registers)
+    assert (out_a - registers).abs().sum() > 0
+    torch.testing.assert_close(out_a, out_b)
+
+
+def test_cell_read_is_local_to_its_cell() -> None:
+    """Changing one cell's keys and values only updates that cell's latent."""
+    encoder = _build_encoder(VARIANTS["space_cellread"])
+    branch = _open(encoder)
+    kv = _cell_kv(branch, _make_sample(), 1)
+    bumped = PixelCellKV(
+        k=kv.k.clone(), v=kv.v.clone(), valid=kv.valid, any_valid=kv.any_valid
+    )
+    cell = int(kv.any_valid[0].nonzero()[0])
+    bumped.k[0, cell] += torch.randn_like(bumped.k[0, cell])
+    bumped.v[0, cell] += torch.randn_like(bumped.v[0, cell])
+    torch.manual_seed(0)
+    registers = torch.randn(B, H * W, REGISTER_DIM)
+    with torch.no_grad():
+        changed = (
+            branch.cell_read(bumped, 0, registers) - branch.cell_read(kv, 0, registers)
+        ).abs().amax(dim=-1) > 1e-6
+    expected = torch.zeros(B, H * W, dtype=torch.bool)
+    expected[0, cell] = True
+    assert torch.equal(changed, expected)
+
+
+def test_cell_read_skips_cells_with_no_online_unit() -> None:
+    """A cell masked at every timestep and modality gets no cell read update."""
+    encoder = _build_encoder(VARIANTS["space_cellread"])
+    branch = _open(encoder)
+    sample = _make_sample()
+    assert sample.sentinel2_l2a_mask is not None
+    s2_mask = sample.sentinel2_l2a_mask.clone()
+    s2_mask[:, 0:4, 0:4] = MaskValue.DECODER.value
+    sample = sample._replace(sentinel2_l2a_mask=s2_mask)
+    kv = _cell_kv(branch, sample, 1)
+    torch.manual_seed(0)
+    registers = torch.randn(B, H * W, REGISTER_DIM)
+    delta = (_apply_cell_reads(branch, kv, registers) - registers).view(
+        B, H, W, REGISTER_DIM
+    )
+    assert torch.isfinite(delta).all()
+    assert not delta[:, 0:4, 0:4].any()
+    assert delta[:, 4:, 4:].abs().sum() > 0
+
+
+def test_cell_reads_get_gradient_in_training() -> None:
+    """With the handoffs open, every cell read parameter is on the training graph."""
+    encoder = _build_encoder(VARIANTS["space_cellread"])
+    branch = _open(encoder)
+    encoder.train()
+    regs = encoder(_make_sample(), patch_size=4, input_res=10)["registers"]
+    (regs * torch.randn_like(regs)).sum().backward()
+    params = [
+        *branch.cell_reads.parameters(),
+        *branch.cell_kv_proj.parameters(),
+        branch.cell_modality_embed,
+    ]
+    for p in params:
+        assert p.grad is not None and torch.isfinite(p.grad).all()
+        assert p.grad.abs().sum() > 0
+
+
 def test_config_validation() -> None:
     """The branch needs pixel latents; its settings need the branch."""
     with pytest.raises(ValueError, match="pixel_latents"):
@@ -381,6 +493,7 @@ def test_config_validation() -> None:
         {"pixel_branch_mixing": "time"},
         {"pixel_branch_time_kernel": 3},
         {"pixel_branch_register_pool": "modality_concat"},
+        {"pixel_branch_cell_read": True},
     ]
     for setting in needs_type:
         with pytest.raises(ValueError, match="pixel_branch_type"):
@@ -394,6 +507,11 @@ def test_config_validation() -> None:
         (
             {"pixel_branch_mixing": "time", "pixel_branch_mask_normalized": True},
             "mask_normalized",
+        ),
+        ({"pixel_branch_cell_read_heads": 4}, "needs pixel_branch_cell_read"),
+        (
+            {"pixel_branch_cell_read": True, "pixel_branch_cell_read_heads": 3},
+            "must divide",
         ),
     ]
     for setting, match in invalid:
