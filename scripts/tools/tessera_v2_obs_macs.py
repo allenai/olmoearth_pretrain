@@ -19,6 +19,7 @@ import random
 
 import numpy as np
 import torch
+from rslearn.dataset import Dataset
 from torch.utils.flop_counter import FlopCounterMode
 from upath import UPath
 
@@ -26,9 +27,6 @@ from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
     DATASETS,
     build_dpixel_inputs,
     resolve_spec,
-)
-from olmoearth_pretrain.evals.embedding_materializer.providers import (
-    RslearnWindowProvider,
 )
 from olmoearth_pretrain.evals.models.tessera.tessera_v2_infer import _vec_get_bin_size
 from olmoearth_pretrain.evals.models.tessera.tessera_v2_model import load_model
@@ -72,23 +70,37 @@ def main() -> None:
             continue
         spec = resolve_spec(name)
         paths = CANDIDATE_PATHS.get(name, [f"{STAGE_ROOT}/{name}"])
-        windows = None
+        rng = random.Random(args.seed)
+        sample = None
         for path in paths:
+            group_dir = UPath(path) / "windows" / spec.fetch_group
             try:
-                provider = RslearnWindowProvider(UPath(path), groups=[spec.fetch_group])
-                windows = provider.load_windows()
-                if windows:
-                    break
+                # One directory listing, then load only the sampled windows: loading
+                # every window's metadata from weka just to sample 40 takes hours.
+                names = sorted(x.name for x in group_dir.iterdir())
             except Exception as e:  # noqa: BLE001
-                print(f"{name}: {path} unusable ({e})", flush=True)
-        if not windows:
+                print(f"{name}: {group_dir} unusable ({e})", flush=True)
+                continue
+            if not names:
+                continue
+            picked = rng.sample(names, min(args.windows_per_dataset, len(names)))
+            storage = Dataset(UPath(path)).storage
+            sample = storage.get_windows(
+                groups=[spec.fetch_group], names=picked, workers=8
+            )
+            print(
+                f"{name}: {len(names)} fetch windows in {path}, sampled {len(sample)}",
+                flush=True,
+            )
+            break
+        if not sample:
             print(f"{name}: no fetch windows found", flush=True)
             continue
-        rng = random.Random(args.seed)
-        sample = rng.sample(windows, min(args.windows_per_dataset, len(windows)))
         n2_all, n1_all, b2_all, b1_all, macs_all = [], [], [], [], []
         failed = 0
-        for w in sample:
+        for wi, w in enumerate(sample):
+            if wi % 10 == 0:
+                print(f"{name}: window {wi}/{len(sample)}", flush=True)
             try:
                 x = build_dpixel_inputs(w, allow_unmaterialized_s1=True)
             except Exception as e:  # noqa: BLE001
