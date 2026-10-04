@@ -16,6 +16,7 @@ pixel, scaled to a 16x16 window (256 pixels) for comparison with OlmoEarth.
 import argparse
 import json
 import random
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import torch
@@ -58,6 +59,10 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--windows_per_dataset", type=int, default=40)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--datasets", default="", help="comma-separated subset (default: all)"
+    )
+    p.add_argument("--read_workers", type=int, default=16)
     args = p.parse_args()
 
     torch.backends.mha.set_fastpath_enabled(False)  # so the counter sees attention
@@ -65,8 +70,9 @@ def main() -> None:
     print("tessera params", sum(x.numel() for x in model.parameters()), flush=True)
     cache: dict = {}
     results = {}
+    wanted = [d for d in args.datasets.split(",") if d]
     for name in sorted(DATASETS):
-        if name == "pastis_rslearn":
+        if name == "pastis_rslearn" or (wanted and name not in wanted):
             continue
         spec = resolve_spec(name)
         paths = CANDIDATE_PATHS.get(name, [f"{STAGE_ROOT}/{name}"])
@@ -98,14 +104,21 @@ def main() -> None:
             continue
         n2_all, n1_all, b2_all, b1_all, macs_all = [], [], [], [], []
         failed = 0
-        for wi, w in enumerate(sample):
-            if wi % 10 == 0:
-                print(f"{name}: window {wi}/{len(sample)}", flush=True)
+
+        def read(w):
             try:
-                x = build_dpixel_inputs(w, allow_unmaterialized_s1=True)
+                return w, build_dpixel_inputs(w, allow_unmaterialized_s1=True), None
             except Exception as e:  # noqa: BLE001
+                return w, None, e
+
+        # Reads are many small weka files and latency-bound, so read windows in
+        # parallel (32 read workers ran ~3x faster than 8 during inference).
+        with ThreadPoolExecutor(max_workers=args.read_workers) as pool:
+            loaded = list(pool.map(read, sample))
+        for wi, (w, x, err) in enumerate(loaded):
+            if err is not None:
                 failed += 1
-                print(f"{name}/{w.name}: {type(e).__name__}: {e}", flush=True)
+                print(f"{name}/{w.name}: {type(err).__name__}: {err}", flush=True)
                 continue
             n2 = x["s2_masks"].astype(bool).sum(axis=0).reshape(-1)  # (H*W,)
             s1_valid = []
