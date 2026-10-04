@@ -1,5 +1,7 @@
 """Tests for RC Lighthouse inference (``nn/lighthouse_rc.py``), on the dense CPU path."""
 
+import types
+
 import numpy as np
 import pytest
 import torch
@@ -392,7 +394,18 @@ def test_natten_path_equals_flex_path(
     sample = _sample(12 * patch_size, 10 * patch_size, missing=missing)
     fov_px = 4 * patch_size
     ref = _run(encoder, sample, patch_size, fov_px)
-    monkeypatch.setattr(lrc, "_natten_na3d", lambda backend, device: _reference_na3d)
+
+    def reference_na2d(
+        q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, kernel_size: tuple
+    ) -> torch.Tensor:
+        fov = kernel_size[0]
+        out = _reference_na3d(
+            q[:, :, :, None], k[:, :, :, None], v[:, :, :, None], (fov, fov, 1)
+        )
+        return out[:, :, :, 0]
+
+    stub = types.SimpleNamespace(na3d=_reference_na3d, na2d=reference_na2d)
+    monkeypatch.setattr(lrc, "_natten_na3d", lambda backend, device: stub)
     encoder.lighthouse = RCLighthouseSettings(
         fov_px=fov_px, dense=True, attention_backend="natten"
     )
@@ -403,3 +416,42 @@ def test_natten_path_equals_flex_path(
     torch.testing.assert_close(out["student_registers"][0], ref, atol=1e-6, rtol=1e-6)
     assert stats["vit_natten"] == float(not missing)
     assert stats["latent_natten"] == 1.0
+
+
+def test_inference_drops_all_true_attention_masks() -> None:
+    """Eval: an all-True mask (no padding) becomes None; padding keeps the mask."""
+    encoder = _encoder(pixel_latents=False)
+    full = torch.ones(2, 5, dtype=torch.bool)
+    assert encoder._maybe_get_attn_mask(full, fast_pass=False) is None
+    padded = full.clone()
+    padded[1, -1] = False
+    assert encoder._maybe_get_attn_mask(padded, fast_pass=False) is padded
+    encoder.train()
+    assert encoder._maybe_get_attn_mask(full, fast_pass=False) is full
+
+
+def test_scene_level_missing_batch_equals_each_sample_alone() -> None:
+    """Crops of one window miss the same timesteps: batched masked path == batch 1."""
+    encoder = _encoder(pixel_latents=True)
+    samples = []
+    for seed in (1, 2):
+        s = _sample(8, 8, seed=seed)
+        assert s.sentinel1_mask is not None
+        s.sentinel1_mask[:, :, :, 1] = MaskValue.MISSING.value  # whole timestep
+        samples.append(s)
+    batch = MaskedOlmoEarthSample(
+        **{
+            k: torch.cat([s.as_dict()[k] for s in samples])
+            for k, v in samples[0].as_dict().items()
+            if v is not None
+        }
+    )
+    with torch.no_grad():
+        both = encoder(batch, patch_size=2, input_res=10, fast_pass=False)
+        alone = [
+            encoder(s, patch_size=2, input_res=10, fast_pass=False) for s in samples
+        ]
+    for i, out in enumerate(alone):
+        torch.testing.assert_close(
+            both["student_registers"][i], out["student_registers"][0]
+        )

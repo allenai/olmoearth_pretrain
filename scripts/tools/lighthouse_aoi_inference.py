@@ -278,7 +278,11 @@ def run_tiled(
         batch = _stack_crops(full, chunk)
         with Timer(device) as t:
             emb = _student(
-                encoder, batch, ps, args.dim, fast_pass=not args.respect_masks
+                getattr(args, "tiled_encoder", None) or encoder,
+                batch,
+                ps,
+                args.dim,
+                fast_pass=not args.respect_masks,
             )
         times.append(t.seconds)
         for (c0, r0, c1, r1), e in zip(chunk, emb):
@@ -303,6 +307,8 @@ def run_lighthouse(
     core: int | None = None,
     quantum: int = 1,
     backend: str = "flex",
+    compile_math: bool = False,
+    flex_compile: str = "dynamic",
 ) -> tuple[torch.Tensor, dict[str, Any]]:
     """Core tiles + halo; each chunk is one Lighthouse forward.
 
@@ -361,6 +367,8 @@ def run_lighthouse(
                     profile=args.profile,
                     fov_quantum=quantum,
                     attention_backend=backend,
+                    compile_math=compile_math,
+                    flex_compile=flex_compile,
                 )
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
@@ -411,6 +419,8 @@ def run_lighthouse(
         "core_px": core,
         "fov_quantum": quantum,
         "attention_backend": backend,
+        "compile_math": compile_math,
+        "flex_compile": flex_compile,
     }
 
 
@@ -447,6 +457,19 @@ def write_tif(path: Path, data: np.ndarray, geo: dict[str, Any]) -> None:
         dst.write(data)
 
 
+def _random_init_model(config_path: str, latent_depth: int | None) -> torch.nn.Module:
+    """A model built from a checkpoint's config.json, random weights (speed only)."""
+    from olmoearth_pretrain.config import Config
+    from olmoearth_pretrain.model_loader import patch_legacy_encoder_config
+
+    torch.manual_seed(0)
+    config = patch_legacy_encoder_config(json.loads(Path(config_path).read_text()))
+    if latent_depth is not None:
+        perceiver = config["model"]["encoder_config"]["perceiver_config"]
+        perceiver["latent_depth"] = latent_depth
+    return Config.from_dict(config["model"]).build()
+
+
 def parse_config(name: str) -> tuple[str, int, dict[str, Any]]:
     """``tiled_ps4`` -> ("tiled", 4, {}); ``lh_ps1_h16_c256_natten`` -> halo, core, backend.
 
@@ -461,6 +484,10 @@ def parse_config(name: str) -> tuple[str, int, dict[str, Any]]:
     for o in opts:
         if o in ("natten", "flex", "auto"):
             extra["backend"] = o
+        elif o == "cm":
+            extra["compile_math"] = True
+        elif o in ("fst", "fat"):
+            extra["flex_compile"] = "static" if o == "fst" else "max-autotune"
         else:
             extra[keys[o[0]]] = int(o[1:])
     if extra and mode != "lh":
@@ -471,7 +498,7 @@ def parse_config(name: str) -> tuple[str, int, dict[str, Any]]:
 def main() -> None:
     """Run the configurations over every window."""
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--checkpoint", required=True)
+    p.add_argument("--checkpoint", default=None)
     p.add_argument("--dataset", required=True)
     p.add_argument("--group", default="predict")
     p.add_argument("--names", nargs="*", default=None)
@@ -505,6 +532,28 @@ def main() -> None:
     )
     p.add_argument("--no_write", action="store_true")
     p.add_argument(
+        "--bf16_weights", action="store_true", help="cast the encoder to bfloat16"
+    )
+    p.add_argument(
+        "--compile_encoder",
+        choices=["none", "blocks", "full"],
+        default="none",
+        help="tiled forwards: compile each block (as training does) or the whole "
+        "encoder (torch.compile, static shapes)",
+    )
+    p.add_argument(
+        "--random_init_config",
+        default=None,
+        help="build the model from this config.json with random weights "
+        "(speed only); --checkpoint is then ignored",
+    )
+    p.add_argument(
+        "--latent_depth",
+        type=int,
+        default=None,
+        help="with --random_init_config: override the Perceiver depth",
+    )
+    p.add_argument(
         "--save_npy", action="store_true", help="also save float16 embeddings"
     )
     p.add_argument(
@@ -523,8 +572,21 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     device = torch.device("cuda")
-    model = load_pretrain_checkpoint(args.checkpoint, device=device)
+    if args.random_init_config:
+        model = _random_init_model(args.random_init_config, args.latent_depth)
+        model.to(device).eval()
+    else:
+        if not args.checkpoint:
+            raise ValueError("--checkpoint or --random_init_config is required")
+        model = load_pretrain_checkpoint(args.checkpoint, device=device)
     encoder = model.encoder
+    if args.bf16_weights:
+        encoder.to(torch.bfloat16)
+    args.tiled_encoder = None
+    if args.compile_encoder == "blocks":
+        encoder.apply_compile()
+    elif args.compile_encoder == "full":
+        args.tiled_encoder = torch.compile(encoder, dynamic=False)
     global OUTPUT_KEY
     joint = JointLatentTransformer is not None and isinstance(
         encoder.perceiver, JointLatentTransformer

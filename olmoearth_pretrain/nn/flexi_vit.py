@@ -2065,6 +2065,13 @@ class Perceiver(nn.Module):
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
+        if (
+            read_attn_mask is not None
+            and not self.training
+            and bool(read_attn_mask.all())
+        ):
+            # Every key valid (no padding): an all-True mask only disables flash.
+            read_attn_mask = None
 
         def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
@@ -2790,8 +2797,12 @@ class Encoder(FlexiVitBase):
         """
         if fast_pass:
             return None
-        else:
-            return new_mask
+        # No padding (every sample kept the same number of tokens -- always the
+        # case for one window, where missing data is whole timesteps): the mask is
+        # all True, and passing it only forces SDPA off its flash kernel.
+        if not self.training and bool(new_mask.all()):
+            return None
+        return new_mask
 
     def add_register_tokens_and_masks(
         self,

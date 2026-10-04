@@ -105,6 +105,12 @@ class RCLighthouseSettings:
             timesteps), and falls back to flex otherwise. ``"auto"`` = NATTEN on
             Hopper or newer when it imports (it is faster than flex there and
             slower on A100).
+        compile_math: ``torch.compile`` the per-chunk block math (norm + Q/K/V
+            projections + RoPE, and output projection + MLP), fusing the
+            elementwise work around each attention.
+        flex_compile: How FlexAttention is compiled: ``"dynamic"`` (shape-generic,
+            the default), ``"static"`` (one kernel per shape) or ``"max-autotune"``
+            (static + Inductor autotuning of the kernel tiles).
         full_blocks: Declare blocks inside every query's FOV *full* (skip
             ``mask_mod``). False sends every listed block through the mask.
         pad_index_width: Pad the block-index tables to the dense table width (the
@@ -135,6 +141,8 @@ class RCLighthouseSettings:
     full_blocks: bool = True
     pad_index_width: bool = True
     attention_backend: str = "flex"
+    compile_math: bool = False
+    flex_compile: str = "dynamic"
 
 
 def lighthouse_rc_reach_px(
@@ -576,8 +584,8 @@ def _spans(length: int, size: int) -> list[slice]:
     return [slice(s, min(s + size, length)) for s in range(0, length, size)]
 
 
-def _natten_na3d(backend: str, device: torch.device) -> Callable[..., Tensor] | None:
-    """``natten.na3d`` if this forward should use NATTEN, else None."""
+def _natten_na3d(backend: str, device: torch.device) -> Any | None:
+    """The ``natten`` module (``na2d`` / ``na3d``) if this forward uses NATTEN."""
     if backend == "flex" or device.type != "cuda":
         if backend == "natten" and device.type != "cuda":
             raise RuntimeError("attention_backend='natten' needs CUDA tensors")
@@ -590,7 +598,7 @@ def _natten_na3d(backend: str, device: torch.device) -> Callable[..., Tensor] | 
         if backend == "natten":
             raise
         return None
-    return natten.na3d
+    return natten
 
 
 def _grid_order(cells: np.ndarray, n_cells: int) -> np.ndarray | None:
@@ -606,6 +614,67 @@ def _grid_order(cells: np.ndarray, n_cells: int) -> np.ndarray | None:
     return np.argsort(cells, kind="stable")
 
 
+def _heads(attn: Any, t: Tensor) -> Tensor:
+    return rearrange(t, "b n (h d) -> b h n d", h=attn.num_heads)
+
+
+def _project(
+    attn: Any,
+    norm: Any,
+    x: Tensor,
+    positions: Tensor,
+    want_q: bool,
+    want_kv: bool,
+    dtype: torch.dtype | None,
+) -> tuple[Tensor | None, Tensor | None, Tensor | None]:
+    """``norm`` (if any), then rotated Q and/or K, V in ``[1, H, n, D]``."""
+    y = norm(x) if norm is not None else x
+    q = k = v = None
+    if want_q:
+        q = _rope(attn, attn.q_norm(_heads(attn, attn.q(y))), positions)
+        q = q.to(dtype) if dtype is not None else q
+    if want_kv:
+        k = _rope(attn, attn.k_norm(_heads(attn, attn.k(y))), positions)
+        v = _heads(attn, attn.v(y))
+        if dtype is not None:
+            k, v = k.to(dtype), v.to(dtype)
+    return q, k, v
+
+
+def _tail(blk: Any, x: Tensor, o: Tensor) -> Tensor:
+    """Output projection + residual, then the MLP + residual."""
+    xs = x + blk.ls1(blk.attn.proj(o).to(x.dtype))
+    return xs + blk.ls2(blk.mlp(blk.norm2(xs))).to(x.dtype)
+
+
+_COMPILED: dict[str, Callable[..., Any]] = {}
+
+
+def _compiled(name: str, fn: Callable[..., Any], **kwargs: Any) -> Callable[..., Any]:
+    """``torch.compile(fn, **kwargs)``, once per process per ``name``."""
+    if name not in _COMPILED:
+        _COMPILED[name] = torch.compile(fn, **kwargs)
+    return _COMPILED[name]
+
+
+def _flex(mode: str) -> Callable[..., Tensor]:
+    """FlexAttention compiled for ``mode`` (see ``RCLighthouseSettings.flex_compile``)."""
+    from torch.nn.attention.flex_attention import flex_attention
+
+    if mode == "dynamic":
+        return _compiled("flex_dynamic", flex_attention, dynamic=True)
+    if mode == "static":
+        return _compiled("flex_static", flex_attention, dynamic=False)
+    if mode == "max-autotune":
+        return _compiled(
+            "flex_autotune",
+            flex_attention,
+            dynamic=False,
+            mode="max-autotune-no-cudagraphs",
+        )
+    raise ValueError(f"unknown flex_compile {mode!r}")
+
+
 class _Runner:
     """Shared attention / profiling machinery for one forward."""
 
@@ -618,6 +687,11 @@ class _Runner:
         )
         self.timings: dict[str, float] | None = {} if settings.profile else None
         self._t = time.perf_counter()
+        if settings.compile_math and not settings.dense:
+            self.project = _compiled("project", _project, dynamic=True)
+            self.tail = _compiled("tail", _tail, dynamic=True)
+        else:
+            self.project, self.tail = _project, _tail
 
     def tick(self, key: str) -> None:
         if self.timings is None:
@@ -630,12 +704,7 @@ class _Runner:
     def attend(self, q: Tensor, k: Tensor, v: Tensor, mask: Any) -> Tensor:
         if self.settings.dense:
             return F.scaled_dot_product_attention(q, k, v, attn_mask=mask[None, None])
-        from olmoearth_pretrain.nn.joint_latent import flex_attention_cuda
-
-        return flex_attention_cuda(q, k, v, mask)
-
-    def heads(self, attn: Any, t: Tensor) -> Tensor:
-        return rearrange(t, "b n (h d) -> b h n d", h=attn.num_heads)
+        return _flex(self.settings.flex_compile)(q, k, v, block_mask=mask)
 
     def kv(
         self,
@@ -649,11 +718,10 @@ class _Runner:
         k_all = v_all = None
         for s in _spans(length, self.settings.mlp_chunk):
             y = source(s)
-            k = attn.k_norm(self.heads(attn, attn.k(y)))
-            v = self.heads(attn, attn.v(y))
-            k = _rope(attn, k, positions[:, s])
-            if self.dtype is not None:
-                k, v = k.to(self.dtype), v.to(self.dtype)
+            _, k, v = self.project(
+                attn, None, y, positions[:, s], False, True, self.dtype
+            )
+            assert k is not None and v is not None
             if k_all is None:
                 shape = (y.shape[0], attn.num_heads, length, attn.head_dim)
                 k_all = torch.empty(shape, dtype=k.dtype, device=y.device)
@@ -670,7 +738,7 @@ class _Runner:
         positions: Tensor,
         grid: tuple[int, int, int],
         fov: int,
-        na3d: Callable[..., Tensor],
+        na: Any,
         tag: str,
     ) -> None:
         """Self-attention block over a dense ``(rows, cols, K)`` grid with NATTEN.
@@ -684,12 +752,10 @@ class _Runner:
         length = x.shape[1]
         q_all = k_all = v_all = None
         for s in _spans(length, self.settings.mlp_chunk):
-            h = blk.norm1(x[:, s])
-            q = attn.q_norm(self.heads(attn, attn.q(h)))
-            k = attn.k_norm(self.heads(attn, attn.k(h)))
-            v = self.heads(attn, attn.v(h))
-            q = _rope(attn, q, positions[:, s])
-            k = _rope(attn, k, positions[:, s])
+            q, k, v = self.project(
+                attn, blk.norm1, x[:, s], positions[:, s], True, True, self.dtype
+            )
+            assert q is not None and k is not None and v is not None
             # The kernel dtype (bf16 on GPU); the computation's own without a cast.
             dtype = self.dtype or q.dtype
             if q_all is None:
@@ -707,17 +773,15 @@ class _Runner:
         if grid[2] == 1:
             # One element per cell (e.g. v1.3's patch-stride latents): NATTEN
             # rejects kernel sizes < 2, and the problem is plain 2D anyway.
-            import natten
-
             flat_shape = (1, grid[0], grid[1], heads, head_dim)
-            o = natten.na2d(
+            o = na.na2d(
                 q_all.view(flat_shape),
                 k_all.view(flat_shape),
                 v_all.view(flat_shape),
                 kernel_size=(fov, fov),
             )
         else:
-            o = na3d(
+            o = na.na3d(
                 q_all.view(grid_shape),
                 k_all.view(grid_shape),
                 v_all.view(grid_shape),
@@ -727,8 +791,7 @@ class _Runner:
         del q_all, k_all, v_all
         self.tick(f"{tag}attention_s")
         for s in _spans(length, self.settings.mlp_chunk):
-            xs = x[:, s] + blk.ls1(attn.proj(o[:, s]).to(x.dtype))
-            x[:, s] = xs + blk.ls2(blk.mlp(blk.norm2(xs))).to(x.dtype)
+            x[:, s] = self.tail(blk, x[:, s], o[:, s])
         del o
         self.tick(f"{tag}proj_mlp_s")
 
@@ -748,12 +811,9 @@ class _Runner:
         """
         attn = blk.attn
         for qs, mask in plan.chunks:
-            h = blk.norm1(x[:, qs])
-            q = attn.q_norm(self.heads(attn, attn.q(h)))
-            q = _rope(attn, q, x_positions[:, qs])
-            if self.dtype is not None:
-                q = q.to(self.dtype)
-            del h
+            q, _, _ = self.project(
+                attn, blk.norm1, x[:, qs], x_positions[:, qs], True, False, self.dtype
+            )
             self.tick(f"{tag}q_s")
             o = self.attend(q, k_all, v_all, mask)
             del q
@@ -761,8 +821,7 @@ class _Runner:
             o = rearrange(o, "b h n d -> b n (h d)")
             for s in _spans(o.shape[1], self.settings.mlp_chunk):
                 g = slice(qs.start + s.start, qs.start + s.stop)
-                xs = x[:, g] + blk.ls1(attn.proj(o[:, s]).to(x.dtype))
-                x[:, g] = xs + blk.ls2(blk.mlp(blk.norm2(xs))).to(x.dtype)
+                x[:, g] = self.tail(blk, x[:, g], o[:, s])
             del o
             self.tick(f"{tag}proj_mlp_s")
 
@@ -875,8 +934,10 @@ def encoder_lighthouse(
     pos[0, tok_dest] = positions[0, vis_idx]
     if shift is not None:
         pos[..., -2:] += shift
-    na3d = _natten_na3d(settings.attention_backend, device) if quantum == 1 else None
-    vit_order = _grid_order(cells_np, n_h * n_w) if na3d is not None else None
+    natten_mod = (
+        _natten_na3d(settings.attention_backend, device) if quantum == 1 else None
+    )
+    vit_order = _grid_order(cells_np, n_h * n_w) if natten_mod is not None else None
     stats["vit_natten"] = float(vit_order is not None)
     vit_plan = None
     if vit_order is None:
@@ -888,14 +949,16 @@ def encoder_lighthouse(
     if vit_order is not None:
         # NATTEN: run the ViT in dense (rows, cols, K) grid order, then scatter back.
         k_per_cell = cells_np.size // (n_h * n_w)
-        assert na3d is not None
+        assert natten_mod is not None
         g_dest = tok_dest[torch.from_numpy(vit_order).to(device)]
         xg, pg = x[:, g_dest], pos[:, g_dest]
         # The slot-layout residual is not read until the Perceiver: free it meanwhile.
         x_shape, x_dtype = x.shape, x.dtype
         del x
         for blk in encoder.blocks:
-            run.natten_block(blk, xg, pg, (n_h, n_w, k_per_cell), fov, na3d, "vit_")
+            run.natten_block(
+                blk, xg, pg, (n_h, n_w, k_per_cell), fov, natten_mod, "vit_"
+            )
         x = torch.zeros(x_shape, dtype=x_dtype, device=device)
         x[:, g_dest] = xg
         del xg, pg
@@ -942,7 +1005,9 @@ def encoder_lighthouse(
         # Latents of one cell share its FOV: as a (rows, cols, per_cell) grid the
         # latent self-attention is na3d with kernel (W, W, per_cell).
         lat_cells = l_rows * n_w + l_cols
-        lat_order = _grid_order(lat_cells, n_h * n_w) if na3d is not None else None
+        lat_order = (
+            _grid_order(lat_cells, n_h * n_w) if natten_mod is not None else None
+        )
         stats["latent_natten"] = float(lat_order is not None)
         self_plan = (
             _make_plan(lat, lat, fov, n_h, n_w, settings, device)
@@ -980,7 +1045,7 @@ def encoder_lighthouse(
             run.block(read_blk, reg, lpos, k_all, v_all, read_plan, "read_")
             del k_all, v_all
             if lat_order is not None:
-                assert na3d is not None
+                assert natten_mod is not None
                 lg_dest = lat_dest[torch.from_numpy(lat_order).to(device)]
                 rg = reg[:, lg_dest]
                 run.natten_block(
@@ -989,7 +1054,7 @@ def encoder_lighthouse(
                     lpos[:, lg_dest],
                     (n_h, n_w, per_cell),
                     fov,
-                    na3d,
+                    natten_mod,
                     "latent_",
                 )
                 reg[:, lg_dest] = rg
