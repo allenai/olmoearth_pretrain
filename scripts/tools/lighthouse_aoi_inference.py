@@ -277,8 +277,9 @@ def run_tiled(
         chunk = boxes[i : i + args.tiled_batch]
         batch = _stack_crops(full, chunk)
         with Timer(device) as t:
+            compiled = getattr(args, "tiled_encoder", None)
             emb = _student(
-                getattr(args, "tiled_encoder", None) or encoder,
+                compiled if compiled is not None else encoder,
                 batch,
                 ps,
                 args.dim,
@@ -627,7 +628,9 @@ def main() -> None:
         if not joint
         else ("masked_flex" if args.masked_attention else "dense_flash"),
         "fast_pass": not args.respect_masks,
-        "args": {k: v for k, v in vars(args).items() if k != "core_px"},
+        "args": {
+            k: v for k, v in vars(args).items() if k not in ("core_px", "tiled_encoder")
+        },
         "windows": {},
     }
     warmed: set[str] = set()
