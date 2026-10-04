@@ -1,7 +1,9 @@
 """Render a model-comparison viewer: one panel per run per AOI window, own colour frames.
 
 Each run is ``label=out_dir:config`` -- the rasters ``<out_dir>/<config>/<window>.tif``
-and the timings file in ``<out_dir>`` written by ``lighthouse_aoi_inference.py``.
+and the timings file in ``<out_dir>`` written by ``lighthouse_aoi_inference.py`` -- or
+``label=layer:<name>``, an embedding layer already stored in the AOI dataset
+(``<dataset>/windows/predict/<window>/layers/<name>/*/geotiff.tif``, no timings).
 Different runs are different models, so each panel gets its OWN PCA frame (basis and
 2/98 stretch fitted on that raster): colours are comparable within a panel, not
 across panels. Writes ``<out>/<window>/{s2,<label>}.jpg`` at native resolution and
@@ -30,16 +32,33 @@ def main() -> None:
     p.add_argument("--out", required=True)
     a = p.parse_args()
     runs = {}
+    layers: dict[str, str] = {}
     for spec in a.run:
         label, rest = spec.split("=", 1)
+        if rest.startswith("layer:"):
+            layers[label] = rest[len("layer:") :]
+            runs[label] = (Path(a.dataset), layers[label], {"windows": {}})
+            continue
         out_dir, config = rest.rsplit(":", 1)
         timings = sorted(Path(out_dir).glob("timings*.json"))
         rec = json.loads(timings[0].read_text()) if timings else {"windows": {}}
         runs[label] = (Path(out_dir), config, rec)
+
+    def raster(label: str, window: str) -> Path | None:
+        d, cfg, _ = runs[label]
+        if label in layers:
+            hits = sorted(
+                (d / "windows" / "predict" / window / "layers" / cfg).glob(
+                    "*/geotiff.tif"
+                )
+            )
+            return hits[0] if hits else None
+        return d / cfg / f"{window}.tif"
+
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    first = next(iter(runs.values()))
-    names = sorted(f.stem for f in (first[0] / first[1]).glob("*.tif"))
+    first = next(lab for lab in runs if lab not in layers)
+    names = sorted(f.stem for f in (runs[first][0] / runs[first][1]).glob("*.tif"))
     manifest: dict = {"runs": {}, "windows": {}}
     for label, (_, config, rec) in runs.items():
         manifest["runs"][label] = {
@@ -47,11 +66,12 @@ def main() -> None:
             "gpu": rec.get("gpu"),
             "torch": rec.get("torch"),
             "checkpoint": rec.get("checkpoint"),
+            "source": "dataset layer" if label in layers else "inference run",
         }
     rng = np.random.default_rng(0)
     for w in names:
-        paths = {lab: d / cfg / f"{w}.tif" for lab, (d, cfg, _) in runs.items()}
-        if not all(pth.exists() for pth in paths.values()):
+        paths = {lab: raster(lab, w) for lab in runs}
+        if not all(pth is not None and pth.exists() for pth in paths.values()):
             print("skip (incomplete)", w, flush=True)
             continue
         panels = [
