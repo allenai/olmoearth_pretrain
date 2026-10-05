@@ -35,7 +35,9 @@ What changes, and why:
 Between the first release cut and the student's move onto the Perceiver, the student
 briefly lived on the encoder as ``encoder.register_student``. A checkpoint written (or
 converted) under that interim layout is converted as well: its config is already
-current, and only those two parameters are renamed.
+current, and only those two parameters are renamed. The per-pixel-latent runs
+(``v1_3_rc_*pix512``) were trained in that layout; their configs additionally carry
+inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped.
 
 The mapping is pinned by ``tests/unit/test_convert_legacy_checkpoint.py`` against the
 release checkpoint's original config.
@@ -86,6 +88,13 @@ REMOVED_ENCODER_FIELDS: dict[str, tuple[Any, ...]] = {
     "register_latent_self_attn": (True, None),  # no-latent-self-attention (nolsa)
     "register_learned_read_weighting": (False,),  # learned per-read gates
 }
+#: Perceiver fields of the per-pixel-latent (``*pix512*``) training runs whose feature
+#: was never released.
+REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
+    "read_time_range": (False, None),  # time-interval RoPE on the reads
+    "read_time_rope": (False, None),  # temporal RoPE on the reads
+    "share_read_kv": (False, None),  # one K/V projection shared by every read
+}
 REMOVED_MODEL_FIELDS: dict[str, tuple[Any, ...]] = {
     "supervision_source": ("registers", None),  # heads on the student instead
 }
@@ -130,6 +139,12 @@ def convert_model_config(model: dict) -> dict:
     dec = model.get("decoder_config")
 
     _strip_removed(enc, REMOVED_ENCODER_FIELDS, "model.encoder_config")
+    if isinstance(enc.get("perceiver_config"), dict):
+        _strip_removed(
+            enc["perceiver_config"],
+            REMOVED_PERCEIVER_FIELDS,
+            "model.encoder_config.perceiver_config",
+        )
     _strip_removed(model, REMOVED_MODEL_FIELDS, "model")
     head = model.get("supervision_head_config")
     if isinstance(head, dict):

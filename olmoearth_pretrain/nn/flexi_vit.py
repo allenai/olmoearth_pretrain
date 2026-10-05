@@ -1098,6 +1098,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1110,10 +1111,18 @@ class FlexiVitBase(nn.Module):
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
+
+        ``query_pixel_shift`` (``[B, h_p, w_p, 2]``, patch units, 2D RoPE only)
+        moves every spatial token of cell ``(i, j)`` off its patch coordinate by that
+        cell's shift -- see ``olmoearth_pretrain.nn.pixel_targets``.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
+            if query_pixel_shift is not None:
+                raise ValueError("query_pixel_shift requires a RoPE position encoding")
             return None
         is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
+        if is_3d and query_pixel_shift is not None:
+            raise NotImplementedError("query_pixel_shift supports 2D RoPE only")
 
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
@@ -1159,6 +1168,7 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
+                    query_pixel_shift=query_pixel_shift,
                 )
             position_dict[modality_name] = positions
 
@@ -1217,8 +1227,13 @@ class FlexiVitBase(nn.Module):
         modality: ModalitySpec,
         tokens: Tensor,
         gsd_ratio: float,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor:
-        """Build ``(row, col)`` RoPE coordinates for one modality."""
+        """Build ``(row, col)`` RoPE coordinates for one modality.
+
+        ``query_pixel_shift``: optional ``[B, h, w, 2]`` per-cell shift in patch
+        units, added to every token of the cell (all timesteps and band sets).
+        """
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
 
@@ -1227,16 +1242,23 @@ class FlexiVitBase(nn.Module):
         )
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
+        grid = repeat(grid, "h w p -> b h w p", b=batch_size)
+        if query_pixel_shift is not None:
+            if query_pixel_shift.shape != grid.shape:
+                raise ValueError(
+                    f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
+                    f"the {modality_name} token grid {tuple(grid.shape)}"
+                )
+            grid = grid + query_pixel_shift.to(grid.dtype) * gsd_ratio
 
         if tokens.ndim == 5:
             bandsets = tokens.shape[3]
-            return repeat(grid, "h w p -> b h w b_s p", b=batch_size, b_s=bandsets)
+            return repeat(grid, "b h w p -> b h w b_s p", b_s=bandsets)
 
         timesteps, bandsets = tokens.shape[3], tokens.shape[4]
         return repeat(
             grid,
-            "h w p -> b h w t b_s p",
-            b=batch_size,
+            "b h w p -> b h w t b_s p",
             t=timesteps,
             b_s=bandsets,
         )
@@ -1457,6 +1479,76 @@ class FlexiVitBase(nn.Module):
             block.apply_compile()
 
 
+def build_pixel_latent_positions(
+    batch_size: int,
+    latent_grid: tuple[int, int],
+    patch_size: int,
+    patch_spacing: float,
+    device: torch.device,
+    stride: int = 1,
+) -> Tensor:
+    """Sub-patch latent centre coordinates in the patch RoPE frame.
+
+    Patch ``i`` sits at ``i * patch_spacing``. With latents every ``stride`` pixels,
+    latent ``k`` of an axis covers pixels ``[k * stride, (k + 1) * stride)`` and has its
+    centre at ``((k + 0.5) * stride / patch_size - 0.5) * patch_spacing``. At
+    ``stride = 1`` these are pixel centres; at ``stride = patch_size`` they are exactly
+    the patch coordinates.
+
+    Returns:
+        ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
+    """
+    lat_h, lat_w = latent_grid
+
+    def axis(n: int) -> Tensor:
+        k = torch.arange(n, device=device, dtype=torch.float32)
+        return ((k + 0.5) * stride / patch_size - 0.5) * patch_spacing
+
+    grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
+    grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+    return grid.unsqueeze(0).expand(batch_size, -1, -1)
+
+
+def choose_latent_stride(
+    *,
+    training: bool,
+    spatial_grid: tuple[int, int],
+    patch_size: int,
+    random_latent_stride: bool,
+    max_latents: int | None,
+    eval_latent_stride: int,
+) -> int:
+    """Latent stride (pixels per latent along each axis) for one forward pass.
+
+    Training with ``random_latent_stride``: drawn uniformly among the divisors ``s`` of
+    ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
+    ``max_latents``; the patch stride is always allowed, so every grid has an option.
+    Training without random strides uses stride 1. Outside training:
+    ``eval_latent_stride``.
+    """
+    if not training:
+        if patch_size % eval_latent_stride != 0:
+            raise ValueError(
+                f"eval_latent_stride {eval_latent_stride} does not divide "
+                f"patch_size {patch_size}"
+            )
+        return eval_latent_stride
+    if not random_latent_stride:
+        return 1
+    n_h, n_w = spatial_grid
+    assert max_latents is not None
+    allowed = [
+        s
+        for s in range(1, patch_size + 1)
+        if patch_size % s == 0
+        and (
+            s == patch_size
+            or (n_h * patch_size // s) * (n_w * patch_size // s) <= max_latents
+        )
+    ]
+    return allowed[int(torch.randint(len(allowed), (1,)).item())]
+
+
 class Perceiver(nn.Module):
     """A Perceiver-style spatial Perceiver.
 
@@ -1491,6 +1583,10 @@ class Perceiver(nn.Module):
         attn_dim: int | None = None,
         student_dims: list[int] | None = None,
         student_output_norm: bool = False,
+        pixel_latents: bool = False,
+        random_latent_stride: bool = False,
+        max_latents: int | None = None,
+        eval_latent_stride: int = 1,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1534,6 +1630,17 @@ class Perceiver(nn.Module):
                 blocks or the encoder.
             student_output_norm: Put a ``LayerNorm`` on the student's output (at the
                 full student width; a prefix is then a slice of a normalized vector).
+            pixel_latents: Lay the register grid at sub-patch resolution: one latent per
+                ``stride x stride`` pixels (``stride`` divides the patch size), at the
+                pixel-block centres (:func:`build_pixel_latent_positions`), instead of
+                one per patch. The reads are global, so nothing else changes; the grid
+                returned is ``[B, n_h * p / stride, n_w * p / stride, D]``. With
+                ``stride == patch_size`` this is exactly the patch-latent Perceiver.
+            random_latent_stride: With ``pixel_latents``, draw the stride per forward
+                pass in training under ``max_latents`` (the patch stride is always
+                allowed); see :func:`choose_latent_stride`.
+            max_latents: Per-sample latent budget for ``random_latent_stride``.
+            eval_latent_stride: Stride outside training (1 = one latent per pixel).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1545,6 +1652,14 @@ class Perceiver(nn.Module):
             raise ValueError(
                 "Perceiver requires use_2d_rope=True to differentiate grid cells."
             )
+        if (random_latent_stride or eval_latent_stride != 1) and not pixel_latents:
+            raise ValueError("latent strides require pixel_latents=True")
+        if random_latent_stride and (max_latents is None or max_latents < 1):
+            raise ValueError("random_latent_stride needs a positive max_latents budget")
+        self.pixel_latents = pixel_latents
+        self.random_latent_stride = random_latent_stride
+        self.max_latents = max_latents
+        self.eval_latent_stride = eval_latent_stride
         self.register = nn.Parameter(torch.empty(1, register_dim))
         nn.init.trunc_normal_(self.register, std=0.02)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
@@ -1663,6 +1778,8 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
+        patch_size: int = 1,
+        patch_spacing: float | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1673,10 +1790,14 @@ class Perceiver(nn.Module):
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
+            patch_size: Patch size of this forward pass (``pixel_latents`` only).
+            patch_spacing: Distance between adjacent patch centres in the RoPE frame
+                (``pixel_latents`` only), to place the sub-patch latent centres.
 
         Returns:
-            registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
-                never rebuild it from a flat sequence.
+            registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
+                ``[B, n_h * p / s, n_w * p / s, register_dim]``) -- the grid, shaped, so
+                callers never rebuild it from a flat sequence.
             register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
                 only consumer is the decoder's cross-attention, which wants a token
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
@@ -1693,7 +1814,22 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        register_grid = spatial_grid
+        latent_stride = patch_size
+        if self.pixel_latents:
+            latent_stride = choose_latent_stride(
+                training=self.training,
+                spatial_grid=spatial_grid,
+                patch_size=patch_size,
+                random_latent_stride=self.random_latent_stride,
+                max_latents=self.max_latents,
+                eval_latent_stride=self.eval_latent_stride,
+            )
+            register_grid = (
+                spatial_grid[0] * patch_size // latent_stride,
+                spatial_grid[1] * patch_size // latent_stride,
+            )
+        else:
+            register_grid = spatial_grid
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.
@@ -1706,9 +1842,21 @@ class Perceiver(nn.Module):
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
-            register_positions = self.build_register_positions(
-                patch_positions, register_grid
-            )
+            if self.pixel_latents:
+                if patch_spacing is None:
+                    raise ValueError("pixel_latents requires patch_spacing")
+                register_positions = build_pixel_latent_positions(
+                    batch_size,
+                    register_grid,
+                    patch_size,
+                    patch_spacing,
+                    reference_tokens.device,
+                    latent_stride,
+                )
+            else:
+                register_positions = self.build_register_positions(
+                    patch_positions, register_grid
+                )
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
@@ -1790,6 +1938,12 @@ class PerceiverConfig(Config):
             slice.
             The heads that distil the teacher into the student are configured
             separately (``LatentMIMConfig.register_distillation_head_config``).
+        pixel_latents: Sub-patch register grid (one latent per ``stride x stride``
+            pixels); see :class:`Perceiver`. None = False.
+        random_latent_stride: With ``pixel_latents``, draw the stride per forward pass
+            in training under ``max_latents``. None = False.
+        max_latents: Per-sample latent budget for ``random_latent_stride``.
+        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel).
     """
 
     register_dim: int
@@ -1799,6 +1953,12 @@ class PerceiverConfig(Config):
     attn_dim: int | None = None
     student_dims: list[int] | None = None
     student_output_norm: bool = False
+    # None defaults: as_config_dict drops None, so patch-latent configs round-trip
+    # without these keys.
+    pixel_latents: bool | None = None
+    random_latent_stride: bool | None = None
+    max_latents: int | None = None
+    eval_latent_stride: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -1834,6 +1994,19 @@ class PerceiverConfig(Config):
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
+        if not self.pixel_latents and any(
+            v is not None
+            for v in (
+                self.random_latent_stride,
+                self.max_latents,
+                self.eval_latent_stride,
+            )
+        ):
+            raise ValueError("latent stride settings need pixel_latents=True")
+        if self.random_latent_stride and (
+            self.max_latents is None or self.max_latents < 1
+        ):
+            raise ValueError("random_latent_stride needs a positive max_latents budget")
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -1865,6 +2038,12 @@ class PerceiverConfig(Config):
             attn_dim=self.attn_dim,
             student_dims=self.sorted_student_dims,
             student_output_norm=self.student_output_norm,
+            pixel_latents=bool(self.pixel_latents),
+            random_latent_stride=bool(self.random_latent_stride),
+            max_latents=self.max_latents,
+            eval_latent_stride=(
+                self.eval_latent_stride if self.eval_latent_stride is not None else 1
+            ),
         )
 
 
@@ -2487,6 +2666,11 @@ class Encoder(FlexiVitBase):
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
+                patch_size=patch_size,
+                patch_spacing=CompositeEncodings.calculate_gsd_ratio(
+                    input_res, patch_size
+                )
+                * self.rope_coordinate_scale,
             )
             register_output = {
                 "registers": registers,
@@ -2891,6 +3075,7 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -2905,6 +3090,7 @@ class Predictor(PredictorBase):
             patch_size,
             input_res,
             timestamps=timestamps,
+            query_pixel_shift=query_pixel_shift,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3049,6 +3235,7 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3063,6 +3250,9 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell query shift in
+                patch units (pixel-resolution targets; see
+                ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3093,6 +3283,7 @@ class Predictor(PredictorBase):
             input_res,
             registers=registers,
             register_positions=register_positions,
+            query_pixel_shift=query_pixel_shift,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}

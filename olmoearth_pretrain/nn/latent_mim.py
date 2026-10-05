@@ -122,7 +122,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             p.requires_grad = False
 
     def forward(
-        self, x: MaskedOlmoEarthSample, patch_size: int
+        self,
+        x: MaskedOlmoEarthSample,
+        patch_size: int,
+        query_pixel_shift: torch.Tensor | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -133,6 +136,14 @@ class LatentMIM(nn.Module, DistributedMixins):
         dict[str, Any] | None,
     ]:
         """Forward pass for the Latent MIM Style.
+
+        Args:
+            x: The masked input sample.
+            patch_size: Patch size of this forward pass.
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell decoder query
+                shift for pixel-resolution targets (see
+                ``olmoearth_pretrain.nn.pixel_targets``). None keeps the queries on
+                the patch grid.
 
         Returns:
             latent: embeddings from encoder
@@ -163,6 +174,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
+        if query_pixel_shift is not None:
+            decoder_kwargs["query_pixel_shift"] = query_pixel_shift
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )

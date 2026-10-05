@@ -180,3 +180,30 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
     }
     enc_only["register_back_projections.4.weight"] = torch.zeros(8, 4)
     model.encoder.load_state_dict(convert.convert_state_dict(enc_only), strict=True)
+
+
+def test_pixel_latent_run_config_converts() -> None:
+    """A ``v1_3_rc_*pix512`` run's config converts to per-pixel latents.
+
+    Its inert ``REMOVED_PERCEIVER_FIELDS`` are dropped; at an active value the
+    conversion refuses.
+    """
+    import olmoearth_pretrain.nn.latent_mim  # noqa: F401
+    from olmoearth_pretrain.config import Config
+
+    legacy = json.loads((LEGACY_DIR / "v1_3_rc_pixtgt_pix512.json").read_text())[
+        "model"
+    ]
+    converted = convert.convert_model_config(legacy)
+    perceiver = converted["encoder_config"]["perceiver_config"]
+    assert not set(convert.REMOVED_PERCEIVER_FIELDS) & set(perceiver)
+    config = Config.from_dict(converted)
+    perceiver_config = config.encoder_config.perceiver_config
+    assert perceiver_config.pixel_latents and perceiver_config.random_latent_stride
+    assert perceiver_config.max_latents == 512
+    assert perceiver_config.eval_latent_stride == 1
+
+    active = copy.deepcopy(legacy)
+    active["encoder_config"]["perceiver_config"]["share_read_kv"] = True
+    with pytest.raises(convert.UnconvertibleCheckpoint, match="share_read_kv"):
+        convert.convert_model_config(active)

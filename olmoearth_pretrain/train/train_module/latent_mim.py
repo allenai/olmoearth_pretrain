@@ -16,7 +16,13 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
-from olmoearth_pretrain.nn.latent_mim import LatentMIM
+from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
+from olmoearth_pretrain.nn.pixel_targets import (
+    gather_pixels,
+    offsets_to_query_shift,
+    sample_pixel_offsets,
+    spatial_token_grid,
+)
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
@@ -38,6 +44,10 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         loss_config: The loss configuration for the model.
         masking_config: The masking configuration for the model.
         ema_decay: EMA decay rate for target encoder (default: 0.99).
+        pixel_targets: Score each masked token on one uniformly drawn pixel of its
+            cell instead of on the whole patch (see
+            ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
+            queries; requires the projection-only target.
     """
 
     loss_config: LossConfig = field(
@@ -52,6 +62,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     )
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
+    pixel_targets: bool = False
 
     def build(
         self,
@@ -120,6 +131,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         ema_decay: tuple[float, float] = (0.996, 1.0),
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
+        pixel_targets: bool = False,
     ):
         """Initialize the training module.
 
@@ -145,6 +157,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
+            pixel_targets: Score each masked token on one uniformly drawn pixel of
+                its cell (decoder query at that pixel's center, target = the frozen
+                projection of that pixel). Requires the projection-only target: a
+                full target encoder would need a per-pixel forward.
         """
         super().__init__(
             model=model,
@@ -187,6 +203,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
         if self.model.register_distillation_head is not None:
             self.total_loss_name = f"{self.total_loss_name}+student"
+        self.pixel_targets = pixel_targets
+        if pixel_targets and not isinstance(
+            self.model.target_encoder, FrozenTargetProjection
+        ):
+            raise ValueError("pixel_targets requires projection_only_target=True")
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -296,6 +317,18 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         dict[str, Any] | None,
     ]:
         """Run a forward pass."""
+        # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
+        # the pixel, so the standard path is already pixel-resolution.
+        pixel_offsets = None
+        query_pixel_shift = None
+        if self.pixel_targets and patch_size > 1:
+            pixel_offsets = sample_pixel_offsets(
+                batch.batch_size,
+                spatial_token_grid(batch, patch_size),
+                patch_size,
+                device=self.device,
+            )
+            query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
         with self._model_forward_context():
             (
                 latent,
@@ -305,13 +338,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 extra_metrics,
                 supervision_preds,
                 student_outputs,
-            ) = self.model(batch, patch_size)
+            ) = self.model(batch, patch_size, query_pixel_shift=query_pixel_shift)
 
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
+                target_input = batch.unmask()
+                target_patch_size = patch_size
+                if pixel_offsets is not None:
+                    # Keep only the drawn pixel of each cell and project it alone: one
+                    # target per cell, on the same grid as the patch-size targets.
+                    target_input = gather_pixels(
+                        target_input, pixel_offsets, patch_size
+                    )
+                    target_patch_size = 1
                 output_dict = self.model.target_encoder.forward(
-                    batch.unmask(),
-                    patch_size=patch_size,
+                    target_input,
+                    patch_size=target_patch_size,
                     token_exit_cfg=token_exit_cfg,
                 )
                 target_output, _, _ = unpack_encoder_output(output_dict)
