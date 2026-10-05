@@ -19,6 +19,20 @@ is used instead (tests and small checks only).
 
 A domain one window wide reproduces the stock forward; larger domains are run in
 chunks with a halo by :func:`embed_domain`.
+
+Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
+
+* There is no source build in our images (no CUDA compiler), so use a prebuilt wheel
+  from https://whl.natten.org. Each wheel is built for ONE torch + CUDA pair, and new
+  wheels only target the two most recent torch releases.
+* With the locked torch (2.9.1+cu128): ``natten==0.21.5+torch290cu128``.
+* Newer torch: upgrade torch AND torchvision together (torch alone breaks the env),
+  then pick the matching wheel, e.g. ``natten==0.21.6+torch2110cu128`` for torch
+  2.11 (the fastest we measured) or ``natten==0.21.7+torch2130cu126`` for 2.13.
+* The H100 nodes run NVIDIA driver 570, which cannot load CUDA 13 builds: use the
+  cu12x torch and NATTEN wheels even when cu13x ones exist.
+* The fast kernels are Hopper's. On A100 NATTEN runs (Ampere kernels) but slowly;
+  FlexAttention was faster there and is not implemented here.
 """
 
 from __future__ import annotations
