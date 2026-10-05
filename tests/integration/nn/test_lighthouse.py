@@ -8,6 +8,7 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 from olmoearth_pretrain.nn.lighthouse import (
     LighthouseSettings,
+    _flex_cells,
     _flex_mask_mod,
     _flex_na,
     _flex_tables,
@@ -136,10 +137,11 @@ def test_flex_block_tables_cover_every_box(kq: int, kk: int) -> None:
         assert blocks.unique().numel() == blocks.numel()  # no block twice
         listed[b, blocks] = True
     listed = listed.repeat_interleave(block, 0).repeat_interleave(block, 1)
-    qi = torch.arange(h * lq)[:, None]
-    ki = torch.arange(h * lk)[None, :]
-    allowed = _flex_mask_mod(h, w, kq, kk, fov, block, 0, "cpu")(0, 0, qi, ki)
-    real_q = (qi % lq < w * kq).expand_as(allowed)
+    cpu = torch.device("cpu")
+    q_cells = _flex_cells(h, w, kq, block, cpu)
+    mask_mod = _flex_mask_mod(q_cells, _flex_cells(h, w, kk, block, cpu), h, w, fov)
+    allowed = mask_mod(0, 0, torch.arange(h * lq)[:, None], torch.arange(h * lk))
+    real_q = (q_cells[1] >= 0)[:, None].expand_as(allowed)
     assert not (allowed & real_q & ~listed).any()
 
 
