@@ -127,6 +127,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         x: MaskedOlmoEarthSample,
         patch_size: int,
         pixel_queries: dict[str, PixelQueries] | None = None,
+        latent_patch_size: int | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -146,6 +147,8 @@ class LatentMIM(nn.Module, DistributedMixins):
                 the decoder then decodes these slots
                 (``Predictor.forward_pixel_queries``) instead of one query per masked
                 token on the patch grid.
+            latent_patch_size: Pixels per Perceiver latent along each side (see
+                ``Encoder.forward``). None = one latent per token.
 
         Returns:
             latent: embeddings from encoder
@@ -162,7 +165,9 @@ class LatentMIM(nn.Module, DistributedMixins):
                 takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        output_dict = self.encoder(
+            x, patch_size=patch_size, latent_patch_size=latent_patch_size
+        )
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict

@@ -231,7 +231,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
     def train_batch(
         self,
-        batch: tuple[int, MaskedOlmoEarthSample],
+        batch: tuple[Any, ...],
         dry_run: bool = False,
     ) -> None:
         """Train a batch.
@@ -247,7 +247,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
 
         Args:
-            batch: A (patch_size, MaskedOlmoEarthSample) tuple from the dataloader.
+            batch: A ``(patch_size, MaskedOlmoEarthSample, latent_patch_size)`` tuple
+                from the dataloader (``latent_patch_size`` None = one Perceiver latent
+                per token; a 2-tuple is read the same way).
             dry_run: If True, skip metric recording and just run forward/backward.
         """
         if not dry_run:
@@ -260,6 +262,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         extra_metric_counts: dict[str, int] = {}
         patch_size = batch[0]
         batch_data = batch[1]
+        latent_patch_size = batch[2] if len(batch) > 2 else None
 
         # Split batch into microbatches
         masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
@@ -276,7 +279,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
                 # Run Encoder and decoder on the augmented input
                 loss, latent, decoded, target_output, extra_metrics = (
-                    self.model_forward(masked_batch, patch_size, self.token_exit_cfg)
+                    self.model_forward(
+                        masked_batch,
+                        patch_size,
+                        self.token_exit_cfg,
+                        latent_patch_size=latent_patch_size,
+                    )
                 )
                 if extra_metrics is not None:
                     self.accumulate_extra_metrics(
@@ -335,6 +343,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
+        latent_patch_size: int | None = None,
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
@@ -342,7 +351,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         TokensAndMasks,
         dict[str, Any] | None,
     ]:
-        """Run a forward pass."""
+        """Run a forward pass.
+
+        ``latent_patch_size``: pixels per Perceiver latent along each side, drawn by
+        the dataloader (None = one latent per token).
+        """
         # Pixel targets: decode queries on single pixels. At ps=1 the token IS the
         # pixel, so the standard path is already pixel-resolution.
         pixel_queries = None
@@ -364,6 +377,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 batch,
                 patch_size,
                 pixel_queries=pixel_queries,
+                latent_patch_size=latent_patch_size,
             )
 
             with torch.no_grad():

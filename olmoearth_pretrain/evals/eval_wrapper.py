@@ -52,6 +52,7 @@ class EvalWrapper:
         eval_on_student_registers: bool = False,
         eval_student_dim: int | None = None,
         use_center_token: bool = False,
+        latent_patch_size: int | None = None,
     ):
         """Initialize the eval wrapper.
 
@@ -77,6 +78,9 @@ class EvalWrapper:
                 full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
+            latent_patch_size: For OlmoEarth models with a Perceiver, pixels per latent
+                along each side (must divide ``patch_size``; 1 = per-pixel latents).
+                None = one latent per token. Other models ignore it.
         """
         super().__init__()
         self.model = model
@@ -96,6 +100,7 @@ class EvalWrapper:
         self.eval_on_student_registers = eval_on_student_registers
         self.eval_student_dim = eval_student_dim
         self.use_center_token = use_center_token
+        self.latent_patch_size = latent_patch_size
         if self.eval_on_student_registers and self.eval_on_encoder_tokens:
             raise ValueError(
                 "eval_on_student_registers and eval_on_encoder_tokens are mutually "
@@ -211,10 +216,19 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        # Only forwarded when set, so encoders without the argument keep working.
+        latent_kwargs = (
+            {"latent_patch_size": self.latent_patch_size}
+            if self.latent_patch_size is not None
+            else {}
+        )
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
             encoder_output = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=fast_pass,
+                **latent_kwargs,
             )
             if (
                 not self.eval_on_encoder_tokens
@@ -253,7 +267,10 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     )
         else:
             pooled_tokens_dict = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=True,
+                **latent_kwargs,
             )["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions

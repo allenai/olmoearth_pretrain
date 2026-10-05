@@ -94,7 +94,8 @@ def _model_config(
 ) -> LatentMIMConfig:
     """Small rc_pix512-shaped model with a projection-only target.
 
-    Per-pixel Perceiver latents with a random latent patch size and a 2D-RoPE decoder over them.
+    A Perceiver (run at ``latent_patch_size=1``: per-pixel latents) and a 2D-RoPE
+    decoder over it.
     """
     encoder_config = EncoderConfig(
         supported_modality_names=MODALITIES,
@@ -108,14 +109,7 @@ def _model_config(
         drop_path=0.0,
         position_encoding="rope",
         tokenization_config=tokenization_config,
-        perceiver_config=PerceiverConfig(
-            register_dim=16,
-            latent_depth=2,
-            pixel_latents=True,
-            random_latent_patch_size=True,
-            max_latents=32,
-            eval_latent_patch_size=1,
-        ),
+        perceiver_config=PerceiverConfig(register_dim=16, latent_depth=2),
     )
     decoder_config = PredictorConfig(
         supported_modality_names=MODALITIES,
@@ -315,8 +309,10 @@ def test_center_pixel_slot_is_the_standard_decoder() -> None:
     center = torch.full((B, *grid, 2), patch_size // 2)
     queries = shared_pixel_queries(sample, patch_size, center)
     with torch.no_grad():
-        standard = model.forward(sample, patch_size)[1]
-        slots_out = model.forward(sample, patch_size, pixel_queries=queries)[1]
+        standard = model.forward(sample, patch_size, latent_patch_size=1)[1]
+        slots_out = model.forward(
+            sample, patch_size, pixel_queries=queries, latent_patch_size=1
+        )[1]
     for name, slots in queries.items():
         ref, got = getattr(standard, name), getattr(slots_out, name)
         assert ref is not None and got is not None
@@ -348,8 +344,12 @@ def test_slots_decode_independently() -> None:
         valid=torch.cat([s2.valid[:, perm], s2.valid[:, :1]], 1),
     )
     with torch.no_grad():
-        out = model.forward(sample, patch_size, pixel_queries=queries)[1].sentinel2_l2a
-        out2 = model.forward(sample, patch_size, pixel_queries=reordered)[1]
+        out = model.forward(
+            sample, patch_size, pixel_queries=queries, latent_patch_size=1
+        )[1].sentinel2_l2a
+        out2 = model.forward(
+            sample, patch_size, pixel_queries=reordered, latent_patch_size=1
+        )[1]
     assert out is not None and out2.sentinel2_l2a is not None
     n = s2.valid.shape[1]
     torch.testing.assert_close(out2.sentinel2_l2a[:, :n], out[:, perm])
@@ -372,7 +372,7 @@ def test_train_module_pixel_target_forward(draw: str, patch_size: int) -> None:
         )
     sample = _sample()
     loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
-        sample, patch_size, train_module.token_exit_cfg
+        sample, patch_size, train_module.token_exit_cfg, latent_patch_size=1
     )
     assert torch.isfinite(loss)
     for name in sample.modalities:

@@ -1492,10 +1492,6 @@ class Perceiver(nn.Module):
         attn_dim: int | None = None,
         student_dims: list[int] | None = None,
         student_output_norm: bool = False,
-        pixel_latents: bool = False,
-        random_latent_patch_size: bool = False,
-        max_latents: int | None = None,
-        eval_latent_patch_size: int = 1,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1539,19 +1535,6 @@ class Perceiver(nn.Module):
                 blocks or the encoder.
             student_output_norm: Put a ``LayerNorm`` on the student's output (at the
                 full student width; a prefix is then a slice of a normalized vector).
-            pixel_latents: Lay the register grid at sub-patch resolution: one latent per
-                ``s x s`` pixels, where the latent patch size ``s`` divides the token
-                patch size ``p``, at the pixel-block centres
-                (:meth:`build_pixel_latent_positions`), instead of one per patch. The
-                reads are global, so nothing else changes; the grid returned is
-                ``[B, n_h * p / s, n_w * p / s, D]``. With ``s == p`` this is exactly
-                the patch-latent Perceiver.
-            random_latent_patch_size: With ``pixel_latents``, draw the latent patch
-                size per forward pass in training under ``max_latents`` (``s == p`` is
-                always allowed); see :meth:`choose_latent_patch_size`.
-            max_latents: Per-sample latent budget for ``random_latent_patch_size``.
-            eval_latent_patch_size: Latent patch size outside training (1 = one latent
-                per pixel).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1563,18 +1546,6 @@ class Perceiver(nn.Module):
             raise ValueError(
                 "Perceiver requires use_2d_rope=True to differentiate grid cells."
             )
-        if (
-            random_latent_patch_size or eval_latent_patch_size != 1
-        ) and not pixel_latents:
-            raise ValueError("latent patch sizes require pixel_latents=True")
-        if random_latent_patch_size and (max_latents is None or max_latents < 1):
-            raise ValueError(
-                "random_latent_patch_size needs a positive max_latents budget"
-            )
-        self.pixel_latents = pixel_latents
-        self.random_latent_patch_size = random_latent_patch_size
-        self.max_latents = max_latents
-        self.eval_latent_patch_size = eval_latent_patch_size
         self.register = nn.Parameter(torch.empty(1, register_dim))
         nn.init.trunc_normal_(self.register, std=0.02)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
@@ -1662,39 +1633,6 @@ class Perceiver(nn.Module):
                 student_layers.append(nn.LayerNorm(student_dim))
             self.student = nn.Sequential(*student_layers)
 
-    def choose_latent_patch_size(
-        self, spatial_grid: tuple[int, int], patch_size: int
-    ) -> int:
-        """Latent patch size (pixels per latent along each axis) for one forward pass.
-
-        Training with ``random_latent_patch_size``: drawn uniformly among the divisors
-        ``s`` of ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)``
-        fits ``max_latents``; ``s == patch_size`` is always allowed, so every grid has
-        an option. Training without random latent patch sizes uses 1. Outside
-        training: ``eval_latent_patch_size``.
-        """
-        if not self.training:
-            if patch_size % self.eval_latent_patch_size != 0:
-                raise ValueError(
-                    f"eval_latent_patch_size {self.eval_latent_patch_size} does not divide "
-                    f"patch_size {patch_size}"
-                )
-            return self.eval_latent_patch_size
-        if not self.random_latent_patch_size:
-            return 1
-        n_h, n_w = spatial_grid
-        assert self.max_latents is not None
-        allowed = [
-            s
-            for s in range(1, patch_size + 1)
-            if patch_size % s == 0
-            and (
-                s == patch_size
-                or (n_h * patch_size // s) * (n_w * patch_size // s) <= self.max_latents
-            )
-        ]
-        return allowed[int(torch.randint(len(allowed), (1,)).item())]
-
     @staticmethod
     def build_pixel_latent_positions(
         batch_size: int,
@@ -1758,6 +1696,7 @@ class Perceiver(nn.Module):
         spatial_grid: tuple[int, int],
         patch_size: int = 1,
         patch_spacing: float | None = None,
+        latent_patch_size: int | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1768,12 +1707,20 @@ class Perceiver(nn.Module):
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
-            patch_size: Patch size of this forward pass (``pixel_latents`` only).
-            patch_spacing: Distance between adjacent patch centres in the RoPE frame
-                (``pixel_latents`` only), to place the sub-patch latent centres.
+            patch_size: Token patch size ``p`` of this forward pass (used with
+                ``latent_patch_size``).
+            patch_spacing: Distance between adjacent patch centres in the RoPE frame,
+                to place sub-patch latent centres (required with
+                ``latent_patch_size``).
+            latent_patch_size: Pixels per latent along each side, ``s``. None lays one
+                latent per token (the patch grid). Otherwise ``s`` must divide ``p``:
+                one latent per ``s x s`` pixels at the pixel-block centres
+                (:meth:`build_pixel_latent_positions`), so ``s = 1`` gives one latent
+                per pixel. The reads are global, so only the grid and its positions
+                change; ``s = p`` reproduces the patch grid exactly.
 
         Returns:
-            registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
+            registers: ``[B, n_h, n_w, register_dim]`` (with ``latent_patch_size``,
                 ``[B, n_h * p / s, n_w * p / s, register_dim]``) -- the grid, shaped, so
                 callers never rebuild it from a flat sequence.
             register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
@@ -1792,9 +1739,12 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        latent_patch_size = patch_size
-        if self.pixel_latents:
-            latent_patch_size = self.choose_latent_patch_size(spatial_grid, patch_size)
+        if latent_patch_size is not None:
+            if patch_size % latent_patch_size != 0:
+                raise ValueError(
+                    f"latent_patch_size {latent_patch_size} does not divide "
+                    f"patch_size {patch_size}"
+                )
             register_grid = (
                 spatial_grid[0] * patch_size // latent_patch_size,
                 spatial_grid[1] * patch_size // latent_patch_size,
@@ -1813,9 +1763,9 @@ class Perceiver(nn.Module):
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
-            if self.pixel_latents:
+            if latent_patch_size is not None:
                 if patch_spacing is None:
-                    raise ValueError("pixel_latents requires patch_spacing")
+                    raise ValueError("latent_patch_size requires patch_spacing")
                 register_positions = self.build_pixel_latent_positions(
                     batch_size,
                     register_grid,
@@ -1909,13 +1859,6 @@ class PerceiverConfig(Config):
             slice.
             The heads that distil the teacher into the student are configured
             separately (``LatentMIMConfig.register_distillation_head_config``).
-        pixel_latents: Sub-patch register grid (one latent per ``s x s`` pixels, ``s``
-            the latent patch size); see :class:`Perceiver`. None = False.
-        random_latent_patch_size: With ``pixel_latents``, draw the latent patch size
-            per forward pass in training under ``max_latents``. None = False.
-        max_latents: Per-sample latent budget for ``random_latent_patch_size``.
-        eval_latent_patch_size: Latent patch size outside training. None = 1 (one
-            latent per pixel).
     """
 
     register_dim: int
@@ -1925,12 +1868,6 @@ class PerceiverConfig(Config):
     attn_dim: int | None = None
     student_dims: list[int] | None = None
     student_output_norm: bool = False
-    # None defaults: as_config_dict drops None, so patch-latent configs round-trip
-    # without these keys.
-    pixel_latents: bool | None = None
-    random_latent_patch_size: bool | None = None
-    max_latents: int | None = None
-    eval_latent_patch_size: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -1966,21 +1903,6 @@ class PerceiverConfig(Config):
                 "2D RoPE requires register head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
-        if not self.pixel_latents and any(
-            v is not None
-            for v in (
-                self.random_latent_patch_size,
-                self.max_latents,
-                self.eval_latent_patch_size,
-            )
-        ):
-            raise ValueError("latent patch size settings need pixel_latents=True")
-        if self.random_latent_patch_size and (
-            self.max_latents is None or self.max_latents < 1
-        ):
-            raise ValueError(
-                "random_latent_patch_size needs a positive max_latents budget"
-            )
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2012,14 +1934,6 @@ class PerceiverConfig(Config):
             attn_dim=self.attn_dim,
             student_dims=self.sorted_student_dims,
             student_output_norm=self.student_output_norm,
-            pixel_latents=bool(self.pixel_latents),
-            random_latent_patch_size=bool(self.random_latent_patch_size),
-            max_latents=self.max_latents,
-            eval_latent_patch_size=(
-                self.eval_latent_patch_size
-                if self.eval_latent_patch_size is not None
-                else 1
-            ),
         )
 
 
@@ -2498,8 +2412,15 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``latent_patch_size`` sets the Perceiver's latent grid (see
+        :meth:`Perceiver.forward`); it requires a Perceiver.
+        """
+        if latent_patch_size is not None and self.perceiver is None:
+            raise ValueError("latent_patch_size requires an encoder with a Perceiver")
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2647,6 +2568,7 @@ class Encoder(FlexiVitBase):
                     input_res, patch_size
                 )
                 * self.rope_coordinate_scale,
+                latent_patch_size=latent_patch_size,
             )
             register_output = {
                 "registers": registers,
@@ -2669,6 +2591,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2678,6 +2601,9 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            latent_patch_size: Pixels per Perceiver latent along each side; must
+                divide ``patch_size``. None = one latent per token. Requires a
+                Perceiver.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -2700,6 +2626,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    latent_patch_size=latent_patch_size,
                 )
             )
         else:

@@ -135,6 +135,7 @@ def _build_shape_sampling_dataloader(
     min_patch_size: int = 1,
     max_patch_size: int = 1,
     tile_size: int = 256,
+    max_latents: int | None = None,
 ) -> OlmoEarthDataLoader:
     """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
     training_modalities = [
@@ -182,8 +183,62 @@ def _build_shape_sampling_dataloader(
         min_tokens_per_instance=min_tokens_per_instance,
         max_timesteps=12,
         tile_size=tile_size,
+        max_latents=max_latents,
         masking_strategy=masking_strategy,
         num_masked_views=1,
+    )
+
+
+def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """With max_latents each rank batch draws one in-budget latent patch size.
+
+    It divides the batch's patch size and fits the budget; without max_latents it is
+    None.
+    """
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        min_patch_size=1,
+        max_patch_size=4,
+        max_latents=256,
+    )
+    dl.reshuffle()
+    items = list(
+        _IterableDatasetWrapper(dl)._get_batch_item_params_iterator(
+            np.arange(400), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+        )
+    )
+    seen: set[int] = set()
+    for start in range(0, len(items), 4):
+        batch = items[start : start + 4]
+        assert len({(ps, lps) for _i, ps, _hw, _t, lps in batch}) == 1
+        _idx, ps, hw, _t, lps = batch[0]
+        assert lps is not None and ps % lps == 0
+        assert lps == ps or (hw * ps // lps) ** 2 <= 256
+        seen.add(lps)
+    assert len(seen) > 1
+
+    dl_off = _build_shape_sampling_dataloader(
+        tmp_path / "off",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        max_patch_size=4,
+    )
+    dl_off.reshuffle()
+    assert all(
+        lps is None
+        for *_rest, lps in _IterableDatasetWrapper(
+            dl_off
+        )._get_batch_item_params_iterator(
+            np.arange(40), dl_off.patch_sizes, dl_off.sampled_hw_p_list, 4
+        )
     )
 
 
@@ -217,10 +272,10 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         )
     )
 
-    assert all(len(it) == 4 for it in items)
+    assert all(len(it) == 5 for it in items)
     hw_seen: set[int] = set()
     t_by_hw: dict[int, set[int]] = {}
-    for _idx, ps, hw, t in items:
+    for _idx, ps, hw, t, _lps in items:
         assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
         assert hw * ps <= dl.tile_size
         hw_seen.add(hw)
@@ -256,7 +311,7 @@ def test_min_tokens_floor_and_temporal_bias(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
         )
     )
-    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t in items]
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps in items]
     # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
     assert all(tok >= 36 for _hw, _t, tok in tokens)
     assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)
@@ -576,9 +631,10 @@ class TestGetMockBatch:
 
         mock_batch = dataloader.get_mock_batch()
 
-        # Should return (patch_size, MaskedOlmoEarthSample)
-        assert len(mock_batch) == 2
-        patch_size, sample = mock_batch
+        # Should return (patch_size, MaskedOlmoEarthSample, latent_patch_size)
+        assert len(mock_batch) == 3
+        patch_size, sample, latent_patch_size = mock_batch
+        assert latent_patch_size is None
         assert patch_size == 1
         assert isinstance(sample, MaskedOlmoEarthSample)
 
@@ -626,9 +682,11 @@ class TestGetMockBatch:
 
         mock_batch = dataloader.get_mock_batch()
 
-        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample)
-        assert len(mock_batch) == 3
-        patch_size, sample_a, sample_b = mock_batch
+        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample,
+        # latent_patch_size)
+        assert len(mock_batch) == 4
+        patch_size, sample_a, sample_b, latent_patch_size = mock_batch
+        assert latent_patch_size is None
         assert patch_size == 1
         assert isinstance(sample_a, MaskedOlmoEarthSample)
         assert isinstance(sample_b, MaskedOlmoEarthSample)

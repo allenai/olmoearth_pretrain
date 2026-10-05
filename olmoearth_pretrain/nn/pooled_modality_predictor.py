@@ -502,8 +502,11 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
+        if latent_patch_size is not None:
+            raise ValueError("latent_patch_size requires an encoder with a Perceiver")
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -631,6 +634,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -640,6 +644,8 @@ class EncodeEarlyAttnPool(Encoder):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            latent_patch_size: Unsupported (this encoder has no Perceiver); must be
+                None.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -657,6 +663,7 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latent_patch_size=latent_patch_size,
             )
         else:
             pooled_tokens_and_masks = {}
