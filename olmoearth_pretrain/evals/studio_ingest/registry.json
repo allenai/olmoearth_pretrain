@@ -11586,7 +11586,11 @@
       "imputes": [],
       "is_multilabel": false,
       "modalities": [
-        "sentinel2_l2a"
+        "sentinel2_l2a",
+        "gse",
+        "tessera",
+        "tessera_v11",
+        "tessera_v2"
       ],
       "name": "pastis2_drom_bg8void_bgdown_2019",
       "norm_stats": {
