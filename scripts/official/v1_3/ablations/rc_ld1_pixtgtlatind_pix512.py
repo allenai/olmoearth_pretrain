@@ -1,0 +1,68 @@
+"""``rc_ld1_pixtgtind_pix512`` with MIM targets at the latent resolution instead of per pixel.
+
+Everything else is ``rc_ld1_pixtgtind_pix512.py``: the RC with 1 Perceiver ``[read -> self-attend]``
+layer, per-pixel random-stride latents (512 budget) and sub-patch MIM targets with
+an independent pixel per token. Here the target unit is the batch's latent stride ``s`` (an ``s x s`` block,
+projected at patch size ``s``) rather than always a single pixel: the train module
+draws ``s`` before the forward pass and the Perceiver uses that stride, so ``s = 1``
+gives pixel targets and ``s = patch size`` gives patch targets.
+
+W&B project ``20260921_perceiver_shapes``; trained as ``v1_3_rc_ld1_pixtgtlatind_pix512``.
+"""
+
+import logging
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from base import (  # noqa: E402
+    build_common_components,
+    build_dataloader_config,
+    build_dataset_config,
+    build_visualize_config,
+)
+from pure_perceiver_mix import build_mix_trainer_config  # noqa: E402
+from rc_ld1_pix512 import build_model_config  # noqa: E402
+from rc_pixtgtind_pix512 import (  # noqa: E402
+    build_train_module_config as _pixel_target_train_module_config,
+)
+
+from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
+
+logger = logging.getLogger(__name__)
+
+MODULE_PATH = "scripts/official/v1_3/ablations/rc_ld1_pixtgtlatind_pix512.py"
+
+
+def build_train_module_config(common: CommonComponents):
+    """``rc_pixtgtind_pix512``'s train module with targets at the latent stride."""
+    config = _pixel_target_train_module_config(common)
+    assert config.pixel_targets
+    config.pixel_target_resolution = "latent"
+    return config
+
+
+def build_trainer_config(common: CommonComponents):
+    """rc_pix512's evals plus ps2 on PASTIS + 2 AEF tasks, re-importing THIS module."""
+    return build_mix_trainer_config(
+        common, MODULE_PATH, ps4_student_evals=True, ps2_student_evals=True
+    )
+
+
+def run() -> None:
+    """Run the experiment."""
+    main(
+        common_components_builder=build_common_components,
+        model_config_builder=build_model_config,
+        train_module_config_builder=build_train_module_config,
+        dataset_config_builder=build_dataset_config,
+        dataloader_config_builder=build_dataloader_config,
+        trainer_config_builder=build_trainer_config,
+        visualize_config_builder=build_visualize_config,
+    )
+
+
+if __name__ == "__main__":
+    run()

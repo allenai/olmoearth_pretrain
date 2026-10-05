@@ -1917,6 +1917,24 @@ class Perceiver(nn.Module):
         """
         return build_register_grid_positions(patch_positions, register_grid)
 
+    def choose_stride(self, spatial_grid: tuple[int, int], patch_size: int) -> int:
+        """This forward pass's latent stride (see :func:`choose_latent_stride`).
+
+        Callers that must know the stride before the forward pass (latent-resolution
+        MIM targets) draw it here and pass it back in as ``latent_stride``.
+        """
+        if not self.pixel_latents:
+            return patch_size
+        return choose_latent_stride(
+            training=self.training,
+            spatial_grid=spatial_grid,
+            patch_size=patch_size,
+            random_latent_stride=self.random_latent_stride,
+            max_latents=self.max_latents,
+            eval_latent_stride=self.eval_latent_stride,
+            stride_bias=self.latent_stride_bias,
+        )
+
     def forward(
         self,
         patch_tokens: Tensor,
@@ -1927,6 +1945,7 @@ class Perceiver(nn.Module):
         cell_ids: Tensor | None = None,
         patch_size: int = 1,
         patch_spacing: float | None = None,
+        latent_stride: int | None = None,
     ) -> tuple[Tensor, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1946,6 +1965,8 @@ class Perceiver(nn.Module):
                 non-spatial tokens), in the same order as ``patch_tokens``. Required
                 with ``token_mix_layout``; ignored otherwise.
             patch_size: Patch size of this forward pass (``pixel_latents`` only).
+            latent_stride: Latent stride for this pass (``pixel_latents`` only;
+                must divide ``patch_size``). None draws it with ``choose_stride``.
             patch_spacing: Distance between adjacent patch centres in the RoPE frame
                 (``pixel_latents`` only), to place the sub-patch latent centres.
 
@@ -1995,19 +2016,20 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
+        requested_stride = latent_stride
         latent_stride = patch_size
         if self.pixel_latents:
             if patch_spacing is None:
                 raise ValueError("pixel_latents requires patch_spacing")
-            latent_stride = choose_latent_stride(
-                training=self.training,
-                spatial_grid=spatial_grid,
-                patch_size=patch_size,
-                random_latent_stride=self.random_latent_stride,
-                max_latents=self.max_latents,
-                eval_latent_stride=self.eval_latent_stride,
-                stride_bias=self.latent_stride_bias,
-            )
+            if requested_stride is None:
+                latent_stride = self.choose_stride(spatial_grid, patch_size)
+            elif patch_size % requested_stride == 0:
+                latent_stride = requested_stride
+            else:
+                raise ValueError(
+                    f"latent_stride {requested_stride} does not divide patch_size "
+                    f"{patch_size}"
+                )
             register_grid = (
                 spatial_grid[0] * patch_size // latent_stride,
                 spatial_grid[1] * patch_size // latent_stride,
@@ -2926,6 +2948,7 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latent_stride: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3104,6 +3127,7 @@ class Encoder(FlexiVitBase):
                         input_res, patch_size
                     )
                     * self.rope_coordinate_scale,
+                    latent_stride=latent_stride,
                 )
             register_output = {
                 "registers": registers,
@@ -3133,12 +3157,15 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        latent_stride: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
             x: Masked input sample containing the data to be encoded
             patch_size: Size of patches to divide the input into
+            latent_stride: Optional Perceiver latent stride for this pass (see
+                ``Perceiver.forward``).
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
@@ -3164,6 +3191,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    latent_stride=latent_stride,
                 )
             )
         else:
@@ -3814,7 +3842,7 @@ class Predictor(PredictorBase):
                 tokens=tokens_only[name],
                 gsd_ratio=gsd_ratio,
             )
-            shift = (slots.pixel.to(torch.float32) + 0.5) / patch_size - 0.5
+            shift = (slots.pixel.to(torch.float32) + slots.size / 2) / patch_size - 0.5
             queries.append(tokens[name][batch_index, i, j, t, 0])  # [B, Q, D]
             query_positions.append(
                 positions[batch_index, i, j, t, 0]

@@ -8,6 +8,7 @@ Covers the three pieces the ``rc_pixtgt_pix512`` arms rely on:
   latent model, with the same decode-query count as the patch-target forward.
 """
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -26,6 +27,7 @@ from olmoearth_pretrain.nn.joint_latent import build_pixel_latent_positions
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_targets import (
     PooledPixelQueries,
+    _gather,
     gather_pixels,
     gather_pooled_pixels,
     offsets_to_query_shift,
@@ -583,3 +585,193 @@ def test_train_module_pooled_draw_forward(patch_size: int) -> None:
     loss.backward()
     grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+# ---------------------------------------------------------------------------
+# Latent-resolution targets: the target unit is one latent's s x s footprint.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("unit", [1, 2, 4])
+def test_block_gather_takes_the_drawn_unit(unit: int) -> None:
+    """Cell (i, j) becomes the unit x unit block at its drawn top-left offset."""
+    patch_size = 4
+    sample = _make_sample()
+    grid = (H // patch_size, W // patch_size)
+    offsets = sample_pixel_offsets(
+        B,
+        grid,
+        patch_size,
+        torch.device("cpu"),
+        generator=torch.Generator().manual_seed(0),
+        unit=unit,
+    )
+    assert (offsets % unit == 0).all() and (offsets < patch_size).all()
+    field = sample.sentinel2_l2a
+    assert field is not None
+    got = _gather(field, offsets, patch_size, unit)
+    assert got.shape[:3] == (B, grid[0] * unit, grid[1] * unit)
+    for b in range(B):
+        for i in range(grid[0]):
+            for j in range(grid[1]):
+                r, c = offsets[b, i, j].tolist()
+                want = field[
+                    b,
+                    i * patch_size + r : i * patch_size + r + unit,
+                    j * patch_size + c : j * patch_size + c + unit,
+                ]
+                assert torch.equal(
+                    got[b, i * unit : (i + 1) * unit, j * unit : (j + 1) * unit], want
+                )
+
+
+def test_unit_equal_to_patch_size_is_the_patch_target() -> None:
+    """Unit == patch_size: the gathered field is the input and the query stays put."""
+    sample = _make_sample()
+    patch_size = 4
+    grid = (H // patch_size, W // patch_size)
+    offsets = sample_pixel_offsets(
+        B, grid, patch_size, torch.device("cpu"), unit=patch_size
+    )
+    assert (offsets == 0).all()
+    assert torch.equal(
+        _gather(sample.sentinel2_l2a, offsets, patch_size, patch_size),
+        sample.sentinel2_l2a,
+    )
+    assert torch.equal(
+        offsets_to_query_shift(offsets, patch_size, patch_size),
+        torch.zeros(offsets.shape),
+    )
+
+
+def test_block_query_shift_is_the_block_centre() -> None:
+    """A 2x2 unit at top-left offset 2 of a 4-pixel patch centres at +0.25 patch."""
+    offsets = torch.tensor([[[[2, 0]]]])
+    shift = offsets_to_query_shift(offsets, patch_size=4, unit=2)
+    assert torch.allclose(shift, torch.tensor([[[[0.25, -0.25]]]]))
+
+
+def test_independent_block_gather_per_timestep() -> None:
+    """The independent draw gathers a separate unit block per timestep."""
+    patch_size, unit = 4, 2
+    sample = _make_sample()
+    offsets = sample_independent_pixel_offsets(
+        sample,
+        patch_size,
+        torch.device("cpu"),
+        generator=torch.Generator().manual_seed(1),
+        unit=unit,
+    )["sentinel2_l2a"]  # [B, h_p, w_p, T, 2]
+    field = sample.sentinel2_l2a
+    assert field is not None
+    got = _gather(field, offsets, patch_size, unit)
+    for t in range(T):
+        r, c = offsets[0, 1, 0, t].tolist()
+        want = field[0, patch_size + r : patch_size + r + unit, c : c + unit, t]
+        assert torch.equal(got[0, unit : 2 * unit, 0:unit, t], want)
+
+
+def test_pooled_draw_in_units_and_block_layout() -> None:
+    """Pooled units are unit-aligned blocks laid out as [B, Q * u, u, 1, ...]."""
+    patch_size, unit = 4, 2
+    sample = _spatial_sample()
+    queries = sample_pooled_pixel_queries(
+        sample,
+        patch_size,
+        torch.device("cpu"),
+        generator=torch.Generator().manual_seed(2),
+        unit=unit,
+    )
+    q = queries["sentinel2_l2a"]
+    assert (
+        q.size == unit and (q.pixel % unit == 0).all() and (q.pixel < patch_size).all()
+    )
+    gathered = gather_pooled_pixels(sample, queries, patch_size).sentinel2_l2a
+    assert gathered is not None and sample.sentinel2_l2a is not None
+    num_slots = q.valid.shape[1]
+    assert gathered.shape[:4] == (B, num_slots * unit, unit, 1)
+    i, j, t = q.token_index[0, 0].tolist()
+    r, c = q.pixel[0, 0].tolist()
+    want = sample.sentinel2_l2a[
+        0,
+        i * patch_size + r : i * patch_size + r + unit,
+        j * patch_size + c : j * patch_size + c + unit,
+        t,
+    ]
+    assert torch.equal(gathered[0, 0:unit, :, 0], want)
+
+
+@pytest.mark.parametrize("draw", ["shared", "independent", "pooled"])
+@pytest.mark.parametrize("stride", [1, 2, 4])
+def test_train_module_latent_resolution_targets(draw: str, stride: int) -> None:
+    """Latent-resolution targets train at every latent stride.
+
+    The Perceiver must run at exactly the stride the targets were built for.
+    """
+    torch.manual_seed(0)
+    patch_size = 4
+    model = _pooled_model()
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_draw=draw,
+        pixel_target_resolution="latent",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = config.build(model, device=torch.device("cpu"))
+    perceiver = model.encoder.perceiver
+    seen: list[int | None] = []
+    original_forward = perceiver.forward
+
+    def recording_forward(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("latent_stride"))
+        return original_forward(*args, **kwargs)
+
+    sample = _spatial_sample()
+    with (
+        patch.object(perceiver, "choose_stride", return_value=stride),
+        patch.object(perceiver, "forward", side_effect=recording_forward),
+    ):
+        loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
+            sample, patch_size, train_module.token_exit_cfg
+        )
+    assert stride in seen
+    assert torch.isfinite(loss)
+    for name in sample.modalities:
+        pred, tgt = getattr(decoded, name), getattr(target_output, name)
+        assert pred is not None and tgt is not None
+        assert tgt.shape[:-1] == pred.shape[:-1]
+    loss.backward()
+    grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
+    assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+def test_unknown_pixel_target_resolution_is_refused() -> None:
+    """Only "pixel" and "latent" target resolutions are accepted."""
+    model = _pooled_model()
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        pixel_target_resolution="token",
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        with pytest.raises(ValueError, match="pixel_target_resolution"):
+            config.build(model, device=torch.device("cpu"))

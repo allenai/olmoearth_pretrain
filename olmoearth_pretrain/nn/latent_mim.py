@@ -127,6 +127,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         patch_size: int,
         query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None,
         pooled_queries: dict[str, Any] | None = None,
+        latent_stride: int | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -148,6 +149,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             pooled_queries: Optional ``{modality: PooledPixelQueries}`` for the
                 pooled pixel-target draw: the decoder then decodes these slots
                 (``Predictor.forward_pooled``) instead of one query per masked token.
+            latent_stride: Optional Perceiver latent stride, drawn by the train
+                module for latent-resolution targets (None: the Perceiver draws it).
 
         Returns:
             latent: embeddings from encoder
@@ -164,7 +167,11 @@ class LatentMIM(nn.Module, DistributedMixins):
                 takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        output_dict = self.encoder(x, patch_size=patch_size)
+        # latent_stride: the Perceiver's latent stride for this pass, when the caller
+        # already drew it (latent-resolution MIM targets); None lets it draw its own.
+        output_dict = self.encoder(
+            x, patch_size=patch_size, latent_stride=latent_stride
+        )
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict

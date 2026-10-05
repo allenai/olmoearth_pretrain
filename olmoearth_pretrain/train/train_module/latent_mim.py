@@ -55,6 +55,11 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         pixel_target_draw: ``"shared"`` (one pixel per cell for all its tokens),
             ``"independent"`` (one pixel per token) or ``"pooled"`` (as many pixels
             as masked tokens, drawn from all masked pixels of the sample).
+        pixel_target_resolution: ``"pixel"`` (every target is one pixel) or
+            ``"latent"`` (every target is one Perceiver latent's footprint: the
+            batch's latent stride is drawn before the forward pass, the target unit is
+            an ``s x s`` block projected at ``patch_size=s``, and ``s = patch_size``
+            is the plain patch target).
     """
 
     loss_config: LossConfig = field(
@@ -71,6 +76,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
     pixel_target_draw: str = "shared"
+    pixel_target_resolution: str = "pixel"
 
     def build(
         self,
@@ -141,6 +147,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
         pixel_target_draw: str = "shared",
+        pixel_target_resolution: str = "pixel",
     ):
         """Initialize the training module.
 
@@ -177,6 +184,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 ``"pooled"``: per (sample, modality), as many targets as masked
                 tokens, drawn without replacement from every masked pixel, so a
                 footprint can get zero or several; needs one band set per modality.
+            pixel_target_resolution: ``"pixel"`` or ``"latent"`` (targets at the
+                batch's latent stride; see the config docstring).
         """
         super().__init__(
             model=model,
@@ -230,6 +239,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
+        if pixel_target_resolution not in ("pixel", "latent"):
+            raise ValueError(
+                "pixel_target_resolution must be 'pixel' or 'latent', got "
+                f"{pixel_target_resolution!r}"
+            )
+        self.pixel_target_resolution = pixel_target_resolution
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -358,19 +373,30 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         pixel_offsets: torch.Tensor | dict[str, torch.Tensor] | None = None
         query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None
         pooled_queries: dict[str, PooledPixelQueries] | None = None
-        if self.pixel_targets and patch_size > 1:
+        # Target unit: one pixel, or (latent resolution) one latent's footprint. The
+        # latent stride is drawn here, with the Perceiver's own settings, and passed
+        # into the forward so the latents and the targets share it. A unit equal to
+        # the patch size is the plain patch target.
+        unit = 1
+        latent_stride: int | None = None
+        if self.pixel_targets and self.pixel_target_resolution == "latent":
+            unit = self.model.encoder.perceiver.choose_stride(
+                spatial_token_grid(batch, patch_size), patch_size
+            )
+            latent_stride = unit
+        if self.pixel_targets and patch_size > 1 and unit < patch_size:
             if self.pixel_target_draw == "pooled":
                 self._check_single_bandsets(batch)
                 pooled_queries = sample_pooled_pixel_queries(
-                    batch, patch_size, device=self.device
+                    batch, patch_size, device=self.device, unit=unit
                 )
             elif self.pixel_target_draw == "independent":
                 self._check_single_bandsets(batch)
                 pixel_offsets = sample_independent_pixel_offsets(
-                    batch, patch_size, device=self.device
+                    batch, patch_size, device=self.device, unit=unit
                 )
                 query_pixel_shift = {
-                    name: offsets_to_query_shift(offsets, patch_size)
+                    name: offsets_to_query_shift(offsets, patch_size, unit)
                     for name, offsets in pixel_offsets.items()
                 }
             else:
@@ -379,8 +405,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     spatial_token_grid(batch, patch_size),
                     patch_size,
                     device=self.device,
+                    unit=unit,
                 )
-                query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
+                query_pixel_shift = offsets_to_query_shift(
+                    pixel_offsets, patch_size, unit
+                )
         with self._model_forward_context():
             (
                 latent,
@@ -395,6 +424,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 patch_size,
                 query_pixel_shift=query_pixel_shift,
                 pooled_queries=pooled_queries,
+                latent_stride=latent_stride,
             )
 
             with torch.no_grad():
@@ -406,14 +436,14 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     target_input = gather_pooled_pixels(
                         target_input, pooled_queries, patch_size
                     )
-                    target_patch_size = 1
+                    target_patch_size = unit
                 elif pixel_offsets is not None:
                     # Keep only the drawn pixel of each cell and project it alone: one
                     # target per cell, on the same grid as the patch-size targets.
                     target_input = gather_pixels(
-                        target_input, pixel_offsets, patch_size
+                        target_input, pixel_offsets, patch_size, unit
                     )
-                    target_patch_size = 1
+                    target_patch_size = unit
                 output_dict = self.model.target_encoder.forward(
                     target_input,
                     patch_size=target_patch_size,
