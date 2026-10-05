@@ -1092,6 +1092,13 @@ class FlexiVitBase(nn.Module):
 
         return tokens, masks
 
+    def rope_gsd_ratio(self, input_res: int, patch_size: int) -> float:
+        """Distance between adjacent token centres in the RoPE coordinate frame."""
+        return (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
+
     def build_rope_positions(
         self,
         tokens_only_dict: dict[str, Tensor],
@@ -1103,31 +1110,9 @@ class FlexiVitBase(nn.Module):
         """Build per-token coordinates for RoPE.
 
         Returns ``[B, N, 2]`` ``(row, col)`` for 2D RoPE modes and
-        ``[B, N, 3]`` ``(t, row, col)`` for 3D RoPE modes, in the collapsed token
-        order. ``None`` for any non-RoPE encoding (the additive paths consume raw
-        indices, not per-token position tensors). See
-        :meth:`build_rope_position_dict` for the coordinates themselves.
-        """
-        position_dict = self.build_rope_position_dict(
-            tokens_only_dict, patch_size, input_res, timestamps=timestamps
-        )
-        if position_dict is None:
-            return None
-        position_dict.update(original_masks_dict)
-        positions, _ = self.collapse_and_combine_hwtc(position_dict)
-        return positions
-
-    def build_rope_position_dict(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        patch_size: int,
-        input_res: int,
-        timestamps: Tensor | None = None,
-    ) -> dict[str, Tensor] | None:
-        """Per-modality RoPE coordinates, each laid out like its tokens.
-
-        ``{modality: [..., 2]}`` ``(row, col)`` for 2D RoPE modes and ``[..., 3]``
-        ``(t, row, col)`` for 3D RoPE modes; ``None`` for non-RoPE encodings.
+        ``[B, N, 3]`` ``(t, row, col)`` for 3D RoPE modes. ``None`` for any
+        non-RoPE encoding (the additive paths consume raw indices, not
+        per-token position tensors).
 
         Under 3D RoPE the temporal coordinate is days-since-2000 derived from
         ``timestamps`` (so models see real calendar deltas, not slot indices),
@@ -1142,10 +1127,7 @@ class FlexiVitBase(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-        gsd_ratio = (
-            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-            * self.rope_coordinate_scale
-        )
+        gsd_ratio = self.rope_gsd_ratio(input_res, patch_size)
 
         # For 3D RoPE, convert timestamps -> days-since-anchor once. Shape
         # (B, T_max). Each multitemporal modality indexes into this with its
@@ -1184,7 +1166,10 @@ class FlexiVitBase(nn.Module):
                     gsd_ratio=gsd_ratio,
                 )
             position_dict[modality_name] = positions
-        return position_dict
+
+        position_dict.update(original_masks_dict)
+        positions, _ = self.collapse_and_combine_hwtc(position_dict)
+        return positions
 
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
@@ -1659,7 +1644,7 @@ class Perceiver(nn.Module):
         patch_size: int,
         gsd_ratio: float,
         device: torch.device,
-        latent_patch_size: int = 1,
+        latent_patch_size: int,
     ) -> Tensor:
         """Sub-patch latent centre coordinates in the patch RoPE frame.
 
@@ -1714,9 +1699,9 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
-        patch_size: int = 1,
-        gsd_ratio: float | None = None,
         latent_patch_size: int | None = None,
+        patch_size: int | None = None,
+        gsd_ratio: float | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1727,17 +1712,17 @@ class Perceiver(nn.Module):
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
             spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
-            patch_size: Token patch size ``p`` of this forward pass (used with
-                ``latent_patch_size``).
-            gsd_ratio: Distance between adjacent token centres in the RoPE frame
-                (``FlexiVitBase``'s ``gsd_ratio``), to place sub-token latent
-                centres (required with ``latent_patch_size``).
             latent_patch_size: Pixels per latent along each side, ``s``. None lays one
                 latent per token (the patch grid). Otherwise ``s`` must divide ``p``:
                 one latent per ``s x s`` pixels at the pixel-block centres
                 (:meth:`build_pixel_latent_positions`), so ``s = 1`` gives one latent
                 per pixel. The reads are global, so only the grid and its positions
                 change; ``s = p`` reproduces the patch grid exactly.
+            patch_size: Token patch size ``p`` of this forward pass. Required with
+                ``latent_patch_size``; unused otherwise.
+            gsd_ratio: Distance between adjacent token centres in the RoPE frame
+                (``FlexiVitBase.rope_gsd_ratio``), to place sub-token latent centres.
+                Required with ``latent_patch_size``; unused otherwise.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` (with ``latent_patch_size``,
@@ -1760,6 +1745,8 @@ class Perceiver(nn.Module):
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
         if latent_patch_size is not None:
+            if patch_size is None or gsd_ratio is None:
+                raise ValueError("latent_patch_size requires patch_size and gsd_ratio")
             if patch_size % latent_patch_size != 0:
                 raise ValueError(
                     f"latent_patch_size {latent_patch_size} does not divide "
@@ -1784,8 +1771,7 @@ class Perceiver(nn.Module):
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
             if latent_patch_size is not None:
-                if gsd_ratio is None:
-                    raise ValueError("latent_patch_size requires gsd_ratio")
+                assert patch_size is not None and gsd_ratio is not None
                 register_positions = self.build_pixel_latent_positions(
                     batch_size,
                     register_grid,
@@ -2584,8 +2570,7 @@ class Encoder(FlexiVitBase):
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
                 patch_size=patch_size,
-                gsd_ratio=CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-                * self.rope_coordinate_scale,
+                gsd_ratio=self.rope_gsd_ratio(input_res, patch_size),
                 latent_patch_size=latent_patch_size,
             )
             register_output = {
@@ -3023,12 +3008,7 @@ class Predictor(PredictorBase):
             )
         else:
             tokens_dict, original_masks_dict, positions = self._pixel_query_slots(
-                tokens_dict,
-                tokens_only_dict,
-                pixel_queries,
-                patch_size,
-                input_res,
-                timestamps,
+                tokens_dict, pixel_queries, patch_size, input_res
             )
             modalities_to_dims_dict = {
                 name: tokens.shape for name, tokens in tokens_dict.items()
@@ -3258,32 +3238,26 @@ class Predictor(PredictorBase):
     def _pixel_query_slots(
         self,
         tokens_dict: dict[str, Tensor],
-        tokens_only_dict: dict[str, Tensor],
         pixel_queries: dict[str, PixelQueries],
         patch_size: int,
         input_res: int,
-        timestamps: Tensor,
     ) -> tuple[dict[str, Tensor], dict[str, Tensor], Tensor]:
         """Lay the pixel-query slots out as a ``[B, Q, 1, 1, band sets]`` token grid.
 
-        Slot ``q`` takes its token's encoded decoder input and RoPE coordinate, with
-        the ``(row, col)`` coordinate moved to the slot's pixel centre; valid slots are
-        masked ``DECODER``, padding slots ``ONLINE_ENCODER``. The rest of
-        :meth:`apply_attn` then decodes the slots like any other tokens.
+        Slot ``q`` takes its token's encoded decoder input; its 2D RoPE coordinate is
+        the token's ``(i, j)`` moved to the slot's pixel centre, ``(i + shift_row,
+        j + shift_col) * gsd_ratio``. Valid slots are masked ``DECODER``, padding slots
+        ``ONLINE_ENCODER``. The rest of :meth:`apply_attn` then decodes the slots like
+        any other tokens.
 
         Returns:
             The slot tokens and masks per modality, and the collapsed RoPE positions.
         """
-        if not PositionEncoding.is_rope(self.position_encoding):
-            raise ValueError("pixel queries require a RoPE position encoding")
-        position_dict = self.build_rope_position_dict(
-            tokens_only_dict, patch_size, input_res, timestamps=timestamps
-        )
-        assert position_dict is not None
-        gsd_ratio = (
-            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-            * self.rope_coordinate_scale
-        )
+        if not PositionEncoding.is_rope(
+            self.position_encoding
+        ) or PositionEncoding.is_3d_rope(self.position_encoding):
+            raise NotImplementedError("pixel queries support 2D RoPE decoders only")
+        gsd_ratio = self.rope_gsd_ratio(input_res, patch_size)
         if set(pixel_queries) != set(tokens_dict):
             raise ValueError(
                 f"pixel queries cover {sorted(pixel_queries)} but the decoder has "
@@ -3298,11 +3272,12 @@ class Predictor(PredictorBase):
                 slots.valid.shape[0], device=slots.valid.device
             ).view(-1, 1)
             i, j, t = slots.token_index.unbind(-1)
-            # [B, Q, band sets, ...] -> [B, Q, 1, 1, band sets, ...]
+            # [B, Q, band sets, D] -> [B, Q, 1, 1, band sets, D]
             tokens = tokens_dict[name][batch_index, i, j, t]
-            positions = position_dict[name][batch_index, i, j, t].clone()
-            shift = pixel_center_shift(slots.pixel, patch_size) * gsd_ratio
-            positions[..., -2:] += shift.unsqueeze(2).to(positions.dtype)
+            cell = torch.stack([i, j], dim=-1).to(torch.float32)
+            positions = (
+                (cell + pixel_center_shift(slots.pixel, patch_size)) * gsd_ratio
+            )[:, :, None, :].expand(-1, -1, tokens.shape[2], -1)
             mask = torch.where(
                 slots.valid,
                 MaskValue.DECODER.value,
