@@ -47,6 +47,11 @@ from olmoearth_pretrain.nn.flexi_vit import (
     return_modalities_from_dict,
 )
 
+try:  # Lighthouse on GPU only; not a declared dependency (wheels are per torch/CUDA)
+    import natten
+except ImportError:
+    natten = None
+
 if TYPE_CHECKING:
     from olmoearth_pretrain.nn.attention import Block
 
@@ -124,8 +129,12 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     ``Kk`` slots of a cell, so a query's slot does not change what it sees, and the
     padding queries' outputs are dropped.
     """
-    import natten
-
+    if natten is None:
+        raise ImportError(
+            "Lighthouse on GPU needs NATTEN: pip install the wheel matching your "
+            "torch and CUDA from https://whl.natten.org (e.g. "
+            "natten==0.21.7+torch2130cu126 -f https://whl.natten.org)"
+        )
     h, w, kq, heads, dim = q.shape
     kk = k.shape[2]
     groups = -(-kq // kk)
