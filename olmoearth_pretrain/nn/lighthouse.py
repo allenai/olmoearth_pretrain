@@ -168,10 +168,9 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     return rearrange(o, "g h w k n d -> h w (g k) n d")[:, :, :kq]
 
 
-def _box_start(i: Tensor, n: Any, fov: int) -> Tensor:
+def _box_start(i: Tensor, n: int, fov: int) -> Tensor:
     """First cell of the ``fov``-cell box around cell ``i`` of ``n``, shifted inward."""
-    start = (i - fov // 2).clamp(min=0)
-    return torch.where(start > n - fov, n - fov, start)
+    return (i - fov // 2).clamp(0, n - fov)
 
 
 def _round_up(n: int, block: int) -> int:
@@ -206,30 +205,30 @@ def _flex_tables(
     return fov * n, idx.masked_fill(idx == n_kb, 0)
 
 
-def _flex_mask_mod(
-    h: int, w: int, kq: int, kk: int, fov: int, block: int, offset: int, device: Any
-) -> Callable[..., Tensor]:
-    """The exact box rule on row-padded indices (``offset``: first query of a chunk).
+def _flex_cells(
+    h: int, w: int, k: int, block: int, device: torch.device
+) -> tuple[Tensor, Tensor]:
+    """``(row, col)`` cell of every slot of the row-padded layout (padding: col -1)."""
+    j = torch.arange(_round_up(w * k, block), device=device)
+    col = torch.where(j < w * k, j // k, -1)
+    return torch.arange(h, device=device).repeat_interleave(j.numel()), col.repeat(h)
 
-    The geometry is captured as tensors so the compiled kernel is reused across
-    chunks and domain sizes.
-    """
-    lq, lk = _round_up(w * kq, block), _round_up(w * kk, block)
-    g = torch.tensor([h, w, kq, kk, lq, lk, offset], device=device)
-    h_, w_, kq_, kk_, lq_, lk_, off = g.unbind()
+
+def _flex_mask_mod(
+    q_cells: tuple[Tensor, Tensor],
+    k_cells: tuple[Tensor, Tensor],
+    h: int,
+    w: int,
+    fov: int,
+) -> Callable[..., Tensor]:
+    """The exact box rule, from each slot's cell (padding keys are never inside)."""
+    q_r0 = _box_start(q_cells[0], h, fov)
+    q_c0 = _box_start(q_cells[1].clamp(min=0), w, fov)
+    k_row, k_col = k_cells
 
     def mask_mod(b: Tensor, hd: Tensor, qi: Tensor, ki: Tensor) -> Tensor:
-        qi = qi + off
-        r0 = _box_start(qi // lq_, h_, fov)
-        c0 = _box_start((qi % lq_) // kq_, w_, fov)
-        k_row, k_col = ki // lk_, (ki % lk_) // kk_
-        return (
-            (ki % lk_ < w_ * kk_)  # not row padding
-            & (k_row >= r0)
-            & (k_row < r0 + fov)
-            & (k_col >= c0)
-            & (k_col < c0 + fov)
-        )
+        r0, c0, kr, kc = q_r0[qi], q_c0[qi], k_row[ki], k_col[ki]
+        return (kr >= r0) & (kr < r0 + fov) & (kc >= c0) & (kc < c0 + fov)
 
     return mask_mod
 
@@ -261,21 +260,23 @@ def _flex_na(
             _COMPILED["flex"] = torch.compile(flex_attention, dynamic=True)
         attend = _COMPILED["flex"]
     num, idx = _flex_tables(h, w, kq, kk, fov, block, q.device)
+    q_rows, q_cols = _flex_cells(h, w, kq, block, q.device)
+    k_cells = _flex_cells(h, w, kk, block, q.device)
     n_kb = h * lk // block
     out = torch.empty_like(qf)
     for b0 in range(0, num.numel(), chunk):
         b1 = min(b0 + chunk, num.numel())
+        s = slice(b0 * block, b1 * block)
         block_mask = BlockMask.from_kv_blocks(
             num[None, None, b0:b1].int(),
             # Padded to the key-block count: narrower tables gave WRONG outputs
             # (torch 2.9).
             F.pad(idx[b0:b1], (0, n_kb - idx.shape[1]))[None, None].int(),
             BLOCK_SIZE=block,
-            mask_mod=_flex_mask_mod(h, w, kq, kk, fov, block, b0 * block, q.device),
+            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, h, w, fov),
             seq_lengths=((b1 - b0) * block, h * lk),
             compute_q_blocks=False,
         )
-        s = slice(b0 * block, b1 * block)
         out[:, :, s] = attend(qf[:, :, s], kf, vf, block_mask=block_mask)
     out = out.view(heads, h, lq, dim)[:, :, : w * kq]
     return rearrange(out, "n h (w k) d -> h w k n d", w=w)
