@@ -37,7 +37,8 @@ briefly lived on the encoder as ``encoder.register_student``. A checkpoint writt
 converted) under that interim layout is converted as well: its config is already
 current, and only those two parameters are renamed. The per-pixel-latent runs
 (``v1_3_rc_*pix512``) were trained in that layout; their configs additionally carry
-inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped.
+inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped, and two latent
+fields renamed from "stride" to "patch size" (``RENAMED_PERCEIVER_FIELDS``).
 
 The mapping is pinned by ``tests/unit/test_convert_legacy_checkpoint.py`` against the
 release checkpoint's original config.
@@ -95,6 +96,12 @@ REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
     "read_time_rope": (False, None),  # temporal RoPE on the reads
     "share_read_kv": (False, None),  # one K/V projection shared by every read
 }
+#: Perceiver fields of those runs that were renamed for release ("stride" -> the
+#: patch-size terminology used everywhere else).
+RENAMED_PERCEIVER_FIELDS: dict[str, str] = {
+    "random_latent_stride": "random_latent_patch_size",
+    "eval_latent_stride": "eval_latent_patch_size",
+}
 REMOVED_MODEL_FIELDS: dict[str, tuple[Any, ...]] = {
     "supervision_source": ("registers", None),  # heads on the student instead
 }
@@ -140,11 +147,15 @@ def convert_model_config(model: dict) -> dict:
 
     _strip_removed(enc, REMOVED_ENCODER_FIELDS, "model.encoder_config")
     if isinstance(enc.get("perceiver_config"), dict):
+        perceiver_section = enc["perceiver_config"]
         _strip_removed(
-            enc["perceiver_config"],
+            perceiver_section,
             REMOVED_PERCEIVER_FIELDS,
             "model.encoder_config.perceiver_config",
         )
+        for old, new in RENAMED_PERCEIVER_FIELDS.items():
+            if old in perceiver_section:
+                perceiver_section[new] = perceiver_section.pop(old)
     _strip_removed(model, REMOVED_MODEL_FIELDS, "model")
     head = model.get("supervision_head_config")
     if isinstance(head, dict):

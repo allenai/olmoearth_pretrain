@@ -94,7 +94,7 @@ def _model_config(
 ) -> LatentMIMConfig:
     """Small rc_pix512-shaped model with a projection-only target.
 
-    Per-pixel random-stride Perceiver latents and a 2D-RoPE decoder over them.
+    Per-pixel Perceiver latents with a random latent patch size and a 2D-RoPE decoder over them.
     """
     encoder_config = EncoderConfig(
         supported_modality_names=MODALITIES,
@@ -112,9 +112,9 @@ def _model_config(
             register_dim=16,
             latent_depth=2,
             pixel_latents=True,
-            random_latent_stride=True,
+            random_latent_patch_size=True,
             max_latents=32,
-            eval_latent_stride=1,
+            eval_latent_patch_size=1,
         ),
     )
     decoder_config = PredictorConfig(
@@ -283,11 +283,11 @@ def test_gather_query_pixels_picks_each_slot() -> None:
 
 @pytest.mark.parametrize("patch_size", [2, 4])
 def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
-    """Patch coordinate + pixel_center_shift = the pixel's stride-1 latent coordinate."""
+    """Patch coordinate + pixel_center_shift = the pixel's latent coordinate at latent patch size 1."""
     gsd_ratio = CompositeEncodings.calculate_gsd_ratio(10, patch_size)
     h_p, w_p = H // patch_size, W // patch_size
     latents = Perceiver.build_pixel_latent_positions(
-        1, (H, W), patch_size, gsd_ratio, CPU, stride=1
+        1, (H, W), patch_size, gsd_ratio, CPU, latent_patch_size=1
     ).view(H, W, 2)
     for i in range(h_p):
         for j in range(w_p):

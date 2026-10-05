@@ -197,11 +197,12 @@ def test_pixel_latent_run_config_converts() -> None:
     converted = convert.convert_model_config(legacy)
     perceiver = converted["encoder_config"]["perceiver_config"]
     assert not set(convert.REMOVED_PERCEIVER_FIELDS) & set(perceiver)
+    assert not set(convert.RENAMED_PERCEIVER_FIELDS) & set(perceiver)
     config = Config.from_dict(converted)
     perceiver_config = config.encoder_config.perceiver_config
-    assert perceiver_config.pixel_latents and perceiver_config.random_latent_stride
+    assert perceiver_config.pixel_latents and perceiver_config.random_latent_patch_size
     assert perceiver_config.max_latents == 512
-    assert perceiver_config.eval_latent_stride == 1
+    assert perceiver_config.eval_latent_patch_size == 1
 
     active = copy.deepcopy(legacy)
     active["encoder_config"]["perceiver_config"]["share_read_kv"] = True

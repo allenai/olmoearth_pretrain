@@ -1493,9 +1493,9 @@ class Perceiver(nn.Module):
         student_dims: list[int] | None = None,
         student_output_norm: bool = False,
         pixel_latents: bool = False,
-        random_latent_stride: bool = False,
+        random_latent_patch_size: bool = False,
         max_latents: int | None = None,
-        eval_latent_stride: int = 1,
+        eval_latent_patch_size: int = 1,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1540,16 +1540,18 @@ class Perceiver(nn.Module):
             student_output_norm: Put a ``LayerNorm`` on the student's output (at the
                 full student width; a prefix is then a slice of a normalized vector).
             pixel_latents: Lay the register grid at sub-patch resolution: one latent per
-                ``stride x stride`` pixels (``stride`` divides the patch size), at the
-                pixel-block centres (:meth:`build_pixel_latent_positions`), instead of
-                one per patch. The reads are global, so nothing else changes; the grid
-                returned is ``[B, n_h * p / stride, n_w * p / stride, D]``. With
-                ``stride == patch_size`` this is exactly the patch-latent Perceiver.
-            random_latent_stride: With ``pixel_latents``, draw the stride per forward
-                pass in training under ``max_latents`` (the patch stride is always
-                allowed); see :meth:`choose_latent_stride`.
-            max_latents: Per-sample latent budget for ``random_latent_stride``.
-            eval_latent_stride: Stride outside training (1 = one latent per pixel).
+                ``s x s`` pixels, where the latent patch size ``s`` divides the token
+                patch size ``p``, at the pixel-block centres
+                (:meth:`build_pixel_latent_positions`), instead of one per patch. The
+                reads are global, so nothing else changes; the grid returned is
+                ``[B, n_h * p / s, n_w * p / s, D]``. With ``s == p`` this is exactly
+                the patch-latent Perceiver.
+            random_latent_patch_size: With ``pixel_latents``, draw the latent patch
+                size per forward pass in training under ``max_latents`` (``s == p`` is
+                always allowed); see :meth:`choose_latent_patch_size`.
+            max_latents: Per-sample latent budget for ``random_latent_patch_size``.
+            eval_latent_patch_size: Latent patch size outside training (1 = one latent
+                per pixel).
         """
         super().__init__()
         self.register_dim = register_dim
@@ -1561,14 +1563,18 @@ class Perceiver(nn.Module):
             raise ValueError(
                 "Perceiver requires use_2d_rope=True to differentiate grid cells."
             )
-        if (random_latent_stride or eval_latent_stride != 1) and not pixel_latents:
-            raise ValueError("latent strides require pixel_latents=True")
-        if random_latent_stride and (max_latents is None or max_latents < 1):
-            raise ValueError("random_latent_stride needs a positive max_latents budget")
+        if (
+            random_latent_patch_size or eval_latent_patch_size != 1
+        ) and not pixel_latents:
+            raise ValueError("latent patch sizes require pixel_latents=True")
+        if random_latent_patch_size and (max_latents is None or max_latents < 1):
+            raise ValueError(
+                "random_latent_patch_size needs a positive max_latents budget"
+            )
         self.pixel_latents = pixel_latents
-        self.random_latent_stride = random_latent_stride
+        self.random_latent_patch_size = random_latent_patch_size
         self.max_latents = max_latents
-        self.eval_latent_stride = eval_latent_stride
+        self.eval_latent_patch_size = eval_latent_patch_size
         self.register = nn.Parameter(torch.empty(1, register_dim))
         nn.init.trunc_normal_(self.register, std=0.02)
         # The read + latent transformer run on small unpacked [B, N, D] tensors with an
@@ -1656,25 +1662,25 @@ class Perceiver(nn.Module):
                 student_layers.append(nn.LayerNorm(student_dim))
             self.student = nn.Sequential(*student_layers)
 
-    def choose_latent_stride(
+    def choose_latent_patch_size(
         self, spatial_grid: tuple[int, int], patch_size: int
     ) -> int:
-        """Latent stride (pixels per latent along each axis) for one forward pass.
+        """Latent patch size (pixels per latent along each axis) for one forward pass.
 
-        Training with ``random_latent_stride``: drawn uniformly among the divisors ``s``
-        of ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
-        ``max_latents``; the patch stride is always allowed, so every grid has an
-        option. Training without random strides uses stride 1. Outside training:
-        ``eval_latent_stride``.
+        Training with ``random_latent_patch_size``: drawn uniformly among the divisors
+        ``s`` of ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)``
+        fits ``max_latents``; ``s == patch_size`` is always allowed, so every grid has
+        an option. Training without random latent patch sizes uses 1. Outside
+        training: ``eval_latent_patch_size``.
         """
         if not self.training:
-            if patch_size % self.eval_latent_stride != 0:
+            if patch_size % self.eval_latent_patch_size != 0:
                 raise ValueError(
-                    f"eval_latent_stride {self.eval_latent_stride} does not divide "
+                    f"eval_latent_patch_size {self.eval_latent_patch_size} does not divide "
                     f"patch_size {patch_size}"
                 )
-            return self.eval_latent_stride
-        if not self.random_latent_stride:
+            return self.eval_latent_patch_size
+        if not self.random_latent_patch_size:
             return 1
         n_h, n_w = spatial_grid
         assert self.max_latents is not None
@@ -1696,15 +1702,15 @@ class Perceiver(nn.Module):
         patch_size: int,
         patch_spacing: float,
         device: torch.device,
-        stride: int = 1,
+        latent_patch_size: int = 1,
     ) -> Tensor:
         """Sub-patch latent centre coordinates in the patch RoPE frame.
 
-        Patch ``i`` sits at ``i * patch_spacing``. With latents every ``stride``
-        pixels, latent ``k`` of an axis covers pixels ``[k * stride, (k + 1) * stride)``
-        and has its centre at ``((k + 0.5) * stride / patch_size - 0.5) * patch_spacing``.
-        At ``stride = 1`` these are pixel centres; at ``stride = patch_size`` they are
-        exactly the patch coordinates.
+        Patch ``i`` sits at ``i * patch_spacing``. With a latent patch size ``s``,
+        latent ``k`` of an axis covers pixels ``[k * s, (k + 1) * s)`` and has its
+        centre at ``((k + 0.5) * s / patch_size - 0.5) * patch_spacing``. At ``s = 1``
+        these are pixel centres; at ``s = patch_size`` they are exactly the patch
+        coordinates.
 
         Returns:
             ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
@@ -1713,7 +1719,7 @@ class Perceiver(nn.Module):
 
         def axis(n: int) -> Tensor:
             k = torch.arange(n, device=device, dtype=torch.float32)
-            return ((k + 0.5) * stride / patch_size - 0.5) * patch_spacing
+            return ((k + 0.5) * latent_patch_size / patch_size - 0.5) * patch_spacing
 
         grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
         grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
@@ -1786,12 +1792,12 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        latent_stride = patch_size
+        latent_patch_size = patch_size
         if self.pixel_latents:
-            latent_stride = self.choose_latent_stride(spatial_grid, patch_size)
+            latent_patch_size = self.choose_latent_patch_size(spatial_grid, patch_size)
             register_grid = (
-                spatial_grid[0] * patch_size // latent_stride,
-                spatial_grid[1] * patch_size // latent_stride,
+                spatial_grid[0] * patch_size // latent_patch_size,
+                spatial_grid[1] * patch_size // latent_patch_size,
             )
         else:
             register_grid = spatial_grid
@@ -1816,7 +1822,7 @@ class Perceiver(nn.Module):
                     patch_size,
                     patch_spacing,
                     reference_tokens.device,
-                    latent_stride,
+                    latent_patch_size,
                 )
             else:
                 register_positions = self.build_register_positions(
@@ -1903,12 +1909,13 @@ class PerceiverConfig(Config):
             slice.
             The heads that distil the teacher into the student are configured
             separately (``LatentMIMConfig.register_distillation_head_config``).
-        pixel_latents: Sub-patch register grid (one latent per ``stride x stride``
-            pixels); see :class:`Perceiver`. None = False.
-        random_latent_stride: With ``pixel_latents``, draw the stride per forward pass
-            in training under ``max_latents``. None = False.
-        max_latents: Per-sample latent budget for ``random_latent_stride``.
-        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel).
+        pixel_latents: Sub-patch register grid (one latent per ``s x s`` pixels, ``s``
+            the latent patch size); see :class:`Perceiver`. None = False.
+        random_latent_patch_size: With ``pixel_latents``, draw the latent patch size
+            per forward pass in training under ``max_latents``. None = False.
+        max_latents: Per-sample latent budget for ``random_latent_patch_size``.
+        eval_latent_patch_size: Latent patch size outside training. None = 1 (one
+            latent per pixel).
     """
 
     register_dim: int
@@ -1921,9 +1928,9 @@ class PerceiverConfig(Config):
     # None defaults: as_config_dict drops None, so patch-latent configs round-trip
     # without these keys.
     pixel_latents: bool | None = None
-    random_latent_stride: bool | None = None
+    random_latent_patch_size: bool | None = None
     max_latents: int | None = None
-    eval_latent_stride: int | None = None
+    eval_latent_patch_size: int | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -1962,16 +1969,18 @@ class PerceiverConfig(Config):
         if not self.pixel_latents and any(
             v is not None
             for v in (
-                self.random_latent_stride,
+                self.random_latent_patch_size,
                 self.max_latents,
-                self.eval_latent_stride,
+                self.eval_latent_patch_size,
             )
         ):
-            raise ValueError("latent stride settings need pixel_latents=True")
-        if self.random_latent_stride and (
+            raise ValueError("latent patch size settings need pixel_latents=True")
+        if self.random_latent_patch_size and (
             self.max_latents is None or self.max_latents < 1
         ):
-            raise ValueError("random_latent_stride needs a positive max_latents budget")
+            raise ValueError(
+                "random_latent_patch_size needs a positive max_latents budget"
+            )
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2004,10 +2013,12 @@ class PerceiverConfig(Config):
             student_dims=self.sorted_student_dims,
             student_output_norm=self.student_output_norm,
             pixel_latents=bool(self.pixel_latents),
-            random_latent_stride=bool(self.random_latent_stride),
+            random_latent_patch_size=bool(self.random_latent_patch_size),
             max_latents=self.max_latents,
-            eval_latent_stride=(
-                self.eval_latent_stride if self.eval_latent_stride is not None else 1
+            eval_latent_patch_size=(
+                self.eval_latent_patch_size
+                if self.eval_latent_patch_size is not None
+                else 1
             ),
         )
 
