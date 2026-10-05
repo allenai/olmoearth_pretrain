@@ -2152,6 +2152,8 @@ class Encoder(FlexiVitBase):
         )
 
         self.apply(self._init_weights)
+        # Inference-only sliding-FOV mode (``nn/lighthouse.py``); None = stock forward.
+        self.lighthouse: Any = None
 
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
@@ -2467,6 +2469,22 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        if self.lighthouse is not None:
+            from olmoearth_pretrain.nn.lighthouse import encoder_lighthouse
+
+            return encoder_lighthouse(
+                self,
+                tokens,
+                mask,
+                positions,
+                tokens_only_dict,
+                original_masks_dict,
+                modalities_to_dims_dict,
+                patch_size,
+                input_res,
+                latent_patch_size,
+            )
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
