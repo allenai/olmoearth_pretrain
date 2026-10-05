@@ -101,6 +101,30 @@ data:
         required: false
         use_all_bands_in_order_of_band_set_idx: 0
         passthrough: true
+      # Tessera v1 and v1.1 released embedding products, same wiring as
+      # tessera_v2 above and as the non-bgdown sibling pastis2_drom_bg8void.
+      # Without these input entries --model=tessera_precomputed dies in the data
+      # loader ("Modality tessera not found in dataset inputs") and
+      # --model=tessera_v11_precomputed silently evaluates nothing, which is why
+      # Tessera v1/v1.1 had no balanced-column number while v2 did. The layers
+      # are already materialized on the shared windows (tessera 2744/2750,
+      # tessera_v11 2750/2750). required: false so imagery evals do not gate.
+      tessera:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera
+        required: false
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
+      tessera_v11:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - tessera_v11
+        required: false
+        use_all_bands_in_order_of_band_set_idx: 0
+        passthrough: true
       # Landsat 8/9 OLI-TIRS monthly mosaics (aws_landsat), 12 slots. required:
       # false so S2/S1-only evals run before landsat is materialized (the eval
       # loader supports ragged/optional Landsat). Band order = Modality.LANDSAT.
