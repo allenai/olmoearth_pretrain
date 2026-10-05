@@ -1458,76 +1458,6 @@ class FlexiVitBase(nn.Module):
             block.apply_compile()
 
 
-def build_pixel_latent_positions(
-    batch_size: int,
-    latent_grid: tuple[int, int],
-    patch_size: int,
-    patch_spacing: float,
-    device: torch.device,
-    stride: int = 1,
-) -> Tensor:
-    """Sub-patch latent centre coordinates in the patch RoPE frame.
-
-    Patch ``i`` sits at ``i * patch_spacing``. With latents every ``stride`` pixels,
-    latent ``k`` of an axis covers pixels ``[k * stride, (k + 1) * stride)`` and has its
-    centre at ``((k + 0.5) * stride / patch_size - 0.5) * patch_spacing``. At
-    ``stride = 1`` these are pixel centres; at ``stride = patch_size`` they are exactly
-    the patch coordinates.
-
-    Returns:
-        ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
-    """
-    lat_h, lat_w = latent_grid
-
-    def axis(n: int) -> Tensor:
-        k = torch.arange(n, device=device, dtype=torch.float32)
-        return ((k + 0.5) * stride / patch_size - 0.5) * patch_spacing
-
-    grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
-    grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
-    return grid.unsqueeze(0).expand(batch_size, -1, -1)
-
-
-def choose_latent_stride(
-    *,
-    training: bool,
-    spatial_grid: tuple[int, int],
-    patch_size: int,
-    random_latent_stride: bool,
-    max_latents: int | None,
-    eval_latent_stride: int,
-) -> int:
-    """Latent stride (pixels per latent along each axis) for one forward pass.
-
-    Training with ``random_latent_stride``: drawn uniformly among the divisors ``s`` of
-    ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
-    ``max_latents``; the patch stride is always allowed, so every grid has an option.
-    Training without random strides uses stride 1. Outside training:
-    ``eval_latent_stride``.
-    """
-    if not training:
-        if patch_size % eval_latent_stride != 0:
-            raise ValueError(
-                f"eval_latent_stride {eval_latent_stride} does not divide "
-                f"patch_size {patch_size}"
-            )
-        return eval_latent_stride
-    if not random_latent_stride:
-        return 1
-    n_h, n_w = spatial_grid
-    assert max_latents is not None
-    allowed = [
-        s
-        for s in range(1, patch_size + 1)
-        if patch_size % s == 0
-        and (
-            s == patch_size
-            or (n_h * patch_size // s) * (n_w * patch_size // s) <= max_latents
-        )
-    ]
-    return allowed[int(torch.randint(len(allowed), (1,)).item())]
-
-
 class Perceiver(nn.Module):
     """A Perceiver-style spatial Perceiver.
 
@@ -1611,13 +1541,13 @@ class Perceiver(nn.Module):
                 full student width; a prefix is then a slice of a normalized vector).
             pixel_latents: Lay the register grid at sub-patch resolution: one latent per
                 ``stride x stride`` pixels (``stride`` divides the patch size), at the
-                pixel-block centres (:func:`build_pixel_latent_positions`), instead of
+                pixel-block centres (:meth:`build_pixel_latent_positions`), instead of
                 one per patch. The reads are global, so nothing else changes; the grid
                 returned is ``[B, n_h * p / stride, n_w * p / stride, D]``. With
                 ``stride == patch_size`` this is exactly the patch-latent Perceiver.
             random_latent_stride: With ``pixel_latents``, draw the stride per forward
                 pass in training under ``max_latents`` (the patch stride is always
-                allowed); see :func:`choose_latent_stride`.
+                allowed); see :meth:`choose_latent_stride`.
             max_latents: Per-sample latent budget for ``random_latent_stride``.
             eval_latent_stride: Stride outside training (1 = one latent per pixel).
         """
@@ -1726,6 +1656,69 @@ class Perceiver(nn.Module):
                 student_layers.append(nn.LayerNorm(student_dim))
             self.student = nn.Sequential(*student_layers)
 
+    def choose_latent_stride(
+        self, spatial_grid: tuple[int, int], patch_size: int
+    ) -> int:
+        """Latent stride (pixels per latent along each axis) for one forward pass.
+
+        Training with ``random_latent_stride``: drawn uniformly among the divisors ``s``
+        of ``patch_size`` whose latent count ``(n_h * p / s) * (n_w * p / s)`` fits
+        ``max_latents``; the patch stride is always allowed, so every grid has an
+        option. Training without random strides uses stride 1. Outside training:
+        ``eval_latent_stride``.
+        """
+        if not self.training:
+            if patch_size % self.eval_latent_stride != 0:
+                raise ValueError(
+                    f"eval_latent_stride {self.eval_latent_stride} does not divide "
+                    f"patch_size {patch_size}"
+                )
+            return self.eval_latent_stride
+        if not self.random_latent_stride:
+            return 1
+        n_h, n_w = spatial_grid
+        assert self.max_latents is not None
+        allowed = [
+            s
+            for s in range(1, patch_size + 1)
+            if patch_size % s == 0
+            and (
+                s == patch_size
+                or (n_h * patch_size // s) * (n_w * patch_size // s) <= self.max_latents
+            )
+        ]
+        return allowed[int(torch.randint(len(allowed), (1,)).item())]
+
+    @staticmethod
+    def build_pixel_latent_positions(
+        batch_size: int,
+        latent_grid: tuple[int, int],
+        patch_size: int,
+        patch_spacing: float,
+        device: torch.device,
+        stride: int = 1,
+    ) -> Tensor:
+        """Sub-patch latent centre coordinates in the patch RoPE frame.
+
+        Patch ``i`` sits at ``i * patch_spacing``. With latents every ``stride``
+        pixels, latent ``k`` of an axis covers pixels ``[k * stride, (k + 1) * stride)``
+        and has its centre at ``((k + 0.5) * stride / patch_size - 0.5) * patch_spacing``.
+        At ``stride = 1`` these are pixel centres; at ``stride = patch_size`` they are
+        exactly the patch coordinates.
+
+        Returns:
+            ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
+        """
+        lat_h, lat_w = latent_grid
+
+        def axis(n: int) -> Tensor:
+            k = torch.arange(n, device=device, dtype=torch.float32)
+            return ((k + 0.5) * stride / patch_size - 0.5) * patch_spacing
+
+        grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+        return grid.unsqueeze(0).expand(batch_size, -1, -1)
+
     def build_register_positions(
         self, patch_positions: Tensor, register_grid: tuple[int, int]
     ) -> Tensor:
@@ -1795,14 +1788,7 @@ class Perceiver(nn.Module):
         batch_size = reference_tokens.shape[0]
         latent_stride = patch_size
         if self.pixel_latents:
-            latent_stride = choose_latent_stride(
-                training=self.training,
-                spatial_grid=spatial_grid,
-                patch_size=patch_size,
-                random_latent_stride=self.random_latent_stride,
-                max_latents=self.max_latents,
-                eval_latent_stride=self.eval_latent_stride,
-            )
+            latent_stride = self.choose_latent_stride(spatial_grid, patch_size)
             register_grid = (
                 spatial_grid[0] * patch_size // latent_stride,
                 spatial_grid[1] * patch_size // latent_stride,
@@ -1824,7 +1810,7 @@ class Perceiver(nn.Module):
             if self.pixel_latents:
                 if patch_spacing is None:
                     raise ValueError("pixel_latents requires patch_spacing")
-                register_positions = build_pixel_latent_positions(
+                register_positions = self.build_pixel_latent_positions(
                     batch_size,
                     register_grid,
                     patch_size,

@@ -10,8 +10,8 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     EncoderConfig,
+    Perceiver,
     PerceiverConfig,
-    choose_latent_stride,
 )
 
 B, H, W, T = 2, 8, 8, 2
@@ -88,31 +88,28 @@ def test_pixel_latents_train_and_eval_grids() -> None:
         )
 
 
+def _perceiver(**kwargs: Any) -> Perceiver:
+    return PerceiverConfig(register_dim=16, pixel_latents=True, **kwargs).build(
+        encoder_embedding_size=32,
+        encoder_num_heads=2,
+        mlp_ratio=2.0,
+        position_encoding="rope",
+        rope_base=10000.0,
+        qk_norm=False,
+    )
+
+
 def test_choose_latent_stride_respects_the_budget() -> None:
     """Strides whose latent count exceeds the budget are never drawn."""
     torch.manual_seed(0)
-    strides = {
-        choose_latent_stride(
-            training=True,
-            spatial_grid=(2, 2),
-            patch_size=4,
-            random_latent_stride=True,
-            max_latents=16,
-            eval_latent_stride=1,
-        )
-        for _ in range(100)
-    }
+    perceiver = _perceiver(random_latent_stride=True, max_latents=16).train()
+    strides = {perceiver.choose_latent_stride((2, 2), 4) for _ in range(100)}
     # stride 1 = 64 latents (over budget), 2 = 16, 4 = 4.
     assert strides == {2, 4}
+    perceiver.eval()
+    assert perceiver.choose_latent_stride((2, 2), 4) == 1
     with pytest.raises(ValueError, match="does not divide"):
-        choose_latent_stride(
-            training=False,
-            spatial_grid=(2, 2),
-            patch_size=4,
-            random_latent_stride=True,
-            max_latents=16,
-            eval_latent_stride=3,
-        )
+        _perceiver(eval_latent_stride=3).eval().choose_latent_stride((2, 2), 4)
 
 
 def test_pixel_latent_settings_need_pixel_latents() -> None:

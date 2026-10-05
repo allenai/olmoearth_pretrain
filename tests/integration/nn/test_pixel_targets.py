@@ -20,9 +20,9 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import (
     CompositeEncodings,
     EncoderConfig,
+    Perceiver,
     PerceiverConfig,
     PredictorConfig,
-    build_pixel_latent_positions,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_targets import (
@@ -286,7 +286,7 @@ def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
     """Patch coordinate + pixel_center_shift = the pixel's stride-1 latent coordinate."""
     gsd_ratio = CompositeEncodings.calculate_gsd_ratio(10, patch_size)
     h_p, w_p = H // patch_size, W // patch_size
-    latents = build_pixel_latent_positions(
+    latents = Perceiver.build_pixel_latent_positions(
         1, (H, W), patch_size, gsd_ratio, CPU, stride=1
     ).view(H, W, 2)
     for i in range(h_p):

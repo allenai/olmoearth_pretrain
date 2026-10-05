@@ -61,7 +61,7 @@ def pixel_center_shift(pixel: Tensor, patch_size: int) -> Tensor:
 
     ``(o + 0.5) / p - 0.5`` per axis: pixel ``o`` of patch ``i`` has its center at
     ``i + (o + 0.5) / p - 0.5`` patch units, the stride-1 coordinate of
-    ``flexi_vit.build_pixel_latent_positions``, so a shifted query lands exactly on
+    ``Perceiver.build_pixel_latent_positions``, so a shifted query lands exactly on
     its per-pixel latent (at a coarser latent stride, inside that latent's footprint).
     """
     return (pixel.to(torch.float32) + 0.5) / patch_size - 0.5
