@@ -9,7 +9,7 @@ decoder's only spatial signal), and its target is the frozen projection of that 
 pixel (the projection-only target applied at ``patch_size=1``).
 
 Every draw produces the same object, :class:`PixelQueries` (``Q`` slots per sample and
-modality), decoded by ``Predictor.forward_pixel_queries`` and paired with its targets
+modality), decoded by ``Predictor.forward(pixel_queries=...)`` and paired with its targets
 by :func:`gather_query_pixels`. The draws differ only in which pixels the slots name;
 all are uniform and redrawn every step, and all give one slot per masked token in
 total:
@@ -243,7 +243,7 @@ def gather_query_pixels(
     """The queried pixels as a ``[B, Q, 1, 1, ...]`` field per modality.
 
     Laid out so the patch embedding at ``patch_size=1`` returns one target per slot,
-    in the ``[B, Q, 1, 1, band sets, D]`` layout ``Predictor.forward_pixel_queries``
+    in the ``[B, Q, 1, 1, band sets, D]`` layout ``Predictor.forward(pixel_queries=...)``
     emits. Invalid slots hold an arbitrary pixel; the decoded mask leaves them out of
     the loss.
     """

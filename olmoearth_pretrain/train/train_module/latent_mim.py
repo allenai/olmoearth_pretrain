@@ -386,7 +386,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 target_patch_size = patch_size
                 if pixel_queries is not None:
                     # One target per query slot, projected alone at patch size 1, in
-                    # forward_pixel_queries' layout.
+                    # the decoder's slot layout.
                     target_input = gather_query_pixels(
                         target_input, pixel_queries, patch_size
                     )

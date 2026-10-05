@@ -144,9 +144,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             patch_size: Patch size of this forward pass.
             pixel_queries: Optional ``{modality: PixelQueries}`` for
                 pixel-resolution targets (see ``olmoearth_pretrain.nn.pixel_targets``):
-                the decoder then decodes these slots
-                (``Predictor.forward_pixel_queries``) instead of one query per masked
-                token on the patch grid.
+                the decoder then decodes these slots instead of one query per masked
+                token on the patch grid (see ``Predictor.forward``).
             latent_patch_size: Pixels per Perceiver latent along each side (see
                 ``Encoder.forward``). None = one latent per token.
 
@@ -182,17 +181,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
         if pixel_queries is not None:
-            decoded = self.decoder.forward_pixel_queries(
-                latent,
-                timestamps=x.timestamps,
-                patch_size=patch_size,
-                pixel_queries=pixel_queries,
-                **decoder_kwargs,
-            )
-        else:
-            decoded = self.decoder(
-                latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-            )
+            decoder_kwargs["pixel_queries"] = pixel_queries
+        decoded = self.decoder(
+            latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
+        )
 
         # The encoder hands back the register grid as [B, n_h, n_w, D]; it is
         # otherwise visible only inside decoder_kwargs.

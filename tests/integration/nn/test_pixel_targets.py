@@ -1,7 +1,7 @@
 """Tests for pixel-resolution MIM targets (``nn/pixel_targets.py``).
 
 Every draw produces :class:`PixelQueries` slots, decoded by
-``Predictor.forward_pixel_queries`` and scored against ``gather_query_pixels``:
+``Predictor.forward(pixel_queries=...)`` and scored against ``gather_query_pixels``:
 
 * the samplers: slot counts, which tokens and pixels each draw may name;
 * a slot's query lands on the coordinate of the per-pixel latent it targets, and
