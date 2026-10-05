@@ -37,6 +37,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.pixel_targets import PixelQueries, pixel_center_shift
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -1098,7 +1099,6 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1111,20 +1111,10 @@ class FlexiVitBase(nn.Module):
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
-
-        ``query_pixel_shift`` (patch units, 2D RoPE only) moves spatial tokens off
-        their patch coordinates -- see ``olmoearth_pretrain.nn.pixel_targets``. One
-        ``[B, h_p, w_p, 2]`` tensor shifts every token of a cell alike; a
-        ``{modality: shift}`` dict gives each modality its own, ``[B, h_p, w_p, T, 2]``
-        for a per-timestep shift.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
-            if query_pixel_shift is not None:
-                raise ValueError("query_pixel_shift requires a RoPE position encoding")
             return None
         is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
-        if is_3d and query_pixel_shift is not None:
-            raise NotImplementedError("query_pixel_shift supports 2D RoPE only")
 
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
@@ -1170,11 +1160,6 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
-                    query_pixel_shift=(
-                        query_pixel_shift.get(modality_name)
-                        if isinstance(query_pixel_shift, dict)
-                        else query_pixel_shift
-                    ),
                 )
             position_dict[modality_name] = positions
 
@@ -1233,14 +1218,8 @@ class FlexiVitBase(nn.Module):
         modality: ModalitySpec,
         tokens: Tensor,
         gsd_ratio: float,
-        query_pixel_shift: Tensor | None = None,
     ) -> Tensor:
-        """Build ``(row, col)`` RoPE coordinates for one modality.
-
-        ``query_pixel_shift``: optional shift in patch units, ``[B, h, w, 2]`` (added
-        to every token of the cell) or ``[B, h, w, T, 2]`` (one per timestep of a
-        multitemporal modality); broadcast over band sets.
-        """
+        """Build ``(row, col)`` RoPE coordinates for one modality."""
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
 
@@ -1249,25 +1228,19 @@ class FlexiVitBase(nn.Module):
         )
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
-        grid = repeat(grid, "h w p -> b h w p", b=batch_size)
-        if tokens.ndim == 6:
-            # Multitemporal: lay the grid out per timestep so a shift can vary in t.
-            grid = repeat(grid, "b h w p -> b h w t p", t=tokens.shape[3])
-        if query_pixel_shift is not None:
-            shift = query_pixel_shift
-            if shift.ndim == 4 and grid.ndim == 5:
-                shift = shift.unsqueeze(3)  # one shift for every timestep
-            if shift.ndim != grid.ndim or any(
-                s not in (1, g) for s, g in zip(shift.shape, grid.shape)
-            ):
-                raise ValueError(
-                    f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
-                    f"the {modality_name} token grid {tuple(grid.shape)}"
-                )
-            grid = grid + shift.to(grid.dtype) * gsd_ratio
 
-        bandsets = tokens.shape[-2]
-        return repeat(grid, "... p -> ... b_s p", b_s=bandsets)
+        if tokens.ndim == 5:
+            bandsets = tokens.shape[3]
+            return repeat(grid, "h w p -> b h w b_s p", b=batch_size, b_s=bandsets)
+
+        timesteps, bandsets = tokens.shape[3], tokens.shape[4]
+        return repeat(
+            grid,
+            "h w p -> b h w t b_s p",
+            b=batch_size,
+            t=timesteps,
+            b_s=bandsets,
+        )
 
     def _build_3d_rope_positions_for_modality(
         self,
@@ -3081,7 +3054,6 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3096,7 +3068,6 @@ class Predictor(PredictorBase):
             patch_size,
             input_res,
             timestamps=timestamps,
-            query_pixel_shift=query_pixel_shift,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3241,7 +3212,6 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3256,9 +3226,6 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
-            query_pixel_shift: Optional query shift in patch units for
-                pixel-resolution targets: one ``[B, h_p, w_p, 2]`` tensor, or a
-                ``{modality: shift}`` dict (see ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3289,7 +3256,6 @@ class Predictor(PredictorBase):
             input_res,
             registers=registers,
             register_positions=register_positions,
-            query_pixel_shift=query_pixel_shift,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}
@@ -3315,37 +3281,43 @@ class Predictor(PredictorBase):
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
 
-    def forward_pooled(
+    def forward_pixel_queries(
         self,
         x: TokensAndMasks,
         timestamps: Tensor,
         patch_size: int,
-        pooled: dict[str, Any],
+        pixel_queries: dict[str, PixelQueries],
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
     ) -> TokensAndMasks:
-        """Decode a flat list of pixel queries (the ``pooled`` pixel-target draw).
+        """Decode a flat list of pixel queries (pixel-resolution MIM targets).
 
-        ``pooled`` maps each modality to a ``PooledPixelQueries``: ``Q`` slots per
-        sample, each naming a decoded token ``(i, j, t)`` and a pixel inside its
-        footprint. A slot's query is that token's decoder input exactly as
-        :meth:`forward` builds it (mask token + composite encodings), with its 2D
-        RoPE coordinate moved to the pixel's center; slots of one sample attend only
-        to that sample's latents, never to each other, so several slots of one token
-        are independent queries. Returns ``[B, Q, 1, 1, 1, D]`` per modality, masked
-        ``DECODER`` on valid slots and ``ONLINE_ENCODER`` elsewhere.
+        ``pixel_queries`` maps each modality to a ``PixelQueries``
+        (``olmoearth_pretrain.nn.pixel_targets``): ``Q`` slots per sample, each naming
+        a decoded token ``(i, j, t)`` and a pixel inside its footprint. A slot's query
+        is that token's decoder input exactly as :meth:`forward` builds it (mask token
+        + composite encodings), with its 2D RoPE coordinate moved to the pixel's
+        center; slots of one sample attend only to that sample's latents, never to
+        each other, so a slot decodes exactly as its token would at that position, and
+        several slots of one token are independent queries. Returns
+        ``[B, Q, 1, 1, 1, D]`` per modality, masked ``DECODER`` on valid slots and
+        ``ONLINE_ENCODER`` elsewhere.
         """
         if registers is None:
-            raise ValueError("forward_pooled decodes against the Perceiver latents")
+            raise ValueError(
+                "forward_pixel_queries decodes against the Perceiver latents"
+            )
         if self.register_to_decoder_embed is None:
             raise ValueError(
-                "forward_pooled requires a decoder built with use_perceiver"
+                "forward_pixel_queries requires a decoder built with use_perceiver"
             )
         if PositionEncoding.is_3d_rope(self.position_encoding) or not (
             PositionEncoding.is_rope(self.position_encoding)
         ):
-            raise NotImplementedError("forward_pooled supports 2D RoPE decoders only")
+            raise NotImplementedError(
+                "forward_pixel_queries supports 2D RoPE decoders only"
+            )
 
         decoder_embedded = x.as_dict()
         for modality in get_modalities_to_process(
@@ -3364,12 +3336,14 @@ class Predictor(PredictorBase):
             * self.rope_coordinate_scale
         )
 
-        names = list(pooled)
+        names = list(pixel_queries)
         queries, query_positions, query_valid = [], [], []
         for name in names:
-            slots = pooled[name]
+            slots = pixel_queries[name]
             if self.tokenization_config.get_num_bandsets(name) != 1:
-                raise ValueError(f"forward_pooled needs one band set; {name} has more")
+                raise ValueError(
+                    f"forward_pixel_queries needs one band set; {name} has more"
+                )
             batch_index = torch.arange(
                 slots.valid.shape[0], device=slots.valid.device
             ).view(-1, 1)
@@ -3380,7 +3354,7 @@ class Predictor(PredictorBase):
                 tokens=tokens_only[name],
                 gsd_ratio=gsd_ratio,
             )
-            shift = (slots.pixel.to(torch.float32) + 0.5) / patch_size - 0.5
+            shift = pixel_center_shift(slots.pixel, patch_size)
             queries.append(tokens[name][batch_index, i, j, t, 0])  # [B, Q, D]
             query_positions.append(
                 positions[batch_index, i, j, t, 0]

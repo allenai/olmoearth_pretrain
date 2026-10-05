@@ -1,11 +1,12 @@
-"""Tests for subsampled pixel-resolution MIM targets (``nn/pixel_targets.py``).
+"""Tests for pixel-resolution MIM targets (``nn/pixel_targets.py``).
 
-Covers the three pieces the ``rc_pixtgt_pix512`` arms rely on:
+Every draw produces :class:`PixelQueries` slots, decoded by
+``Predictor.forward_pixel_queries`` and scored against ``gather_query_pixels``:
 
-* ``gather_pixels`` keeps exactly the drawn pixel of every token cell;
-* a shifted decoder query lands on the coordinate of the per-pixel latent it targets;
-* the train module's pixel-target forward runs end to end on a small per-pixel
-  latent model, with the same decode-query count as the patch-target forward.
+* the samplers: slot counts, which tokens and pixels each draw may name;
+* a slot's query lands on the coordinate of the per-pixel latent it targets, and
+  decodes exactly as the standard decoder when its pixel is the patch center;
+* the train module's pixel-target forward runs end to end for every draw.
 """
 
 from unittest.mock import patch
@@ -25,13 +26,13 @@ from olmoearth_pretrain.nn.flexi_vit import (
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
 from olmoearth_pretrain.nn.pixel_targets import (
-    PooledPixelQueries,
-    gather_pixels,
-    gather_pooled_pixels,
-    offsets_to_query_shift,
-    sample_independent_pixel_offsets,
+    PIXEL_TARGET_DRAWS,
+    PixelQueries,
+    gather_query_pixels,
+    pixel_center_shift,
     sample_pixel_offsets,
-    sample_pooled_pixel_queries,
+    sample_pixel_queries,
+    shared_pixel_queries,
     spatial_token_grid,
     token_decode_mask,
 )
@@ -45,28 +46,11 @@ from olmoearth_pretrain.train.masking import (
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
 
 B, H, W, T = 2, 8, 8, 2
-MODALITIES = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
+MODALITIES = [Modality.SENTINEL2_L2A.name, Modality.WORLDCOVER.name]
+CPU = torch.device("cpu")
 
-
-def _make_sample() -> MaskedOlmoEarthSample:
-    """S2 + latlon sample; the top-left 4x4 block is decoded at t=0."""
-    torch.manual_seed(1234)
-    num_bands = Modality.SENTINEL2_L2A.num_bands
-    mask = torch.zeros(B, H, W, T, num_bands, dtype=torch.long)
-    mask[:, 0:4, 0:4, 0, :] = MaskValue.DECODER.value
-    mask[:, 4:8, 0:4, 1, :] = MaskValue.TARGET_ENCODER_ONLY.value
-    return MaskedOlmoEarthSample(
-        sentinel2_l2a=torch.randn(B, H, W, T, num_bands),
-        sentinel2_l2a_mask=mask,
-        latlon=torch.randn(B, Modality.LATLON.num_bands),
-        latlon_mask=torch.zeros(B, Modality.LATLON.num_bands, dtype=torch.long),
-        timestamps=torch.tensor(
-            [[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
-        ).expand(B, -1, -1),
-    )
-
-
-# v1.3 tokenizes Sentinel-2 as one band set (scripts/official/v1_2/base.py).
+# v1.3 tokenizes Sentinel-2 as one band set (scripts/official/v1_2/base.py); pixel
+# targets require it.
 S2_ONE_BANDSET = TokenizationConfig(
     overrides={
         "sentinel2_l2a": ModalityTokenization(
@@ -76,8 +60,37 @@ S2_ONE_BANDSET = TokenizationConfig(
 )
 
 
+def _sample(height: int = H, width: int = W) -> MaskedOlmoEarthSample:
+    """S2 + WorldCover; decoded tokens sit on 4x4 blocks (whole tokens at ps 2 and 4).
+
+    At patch size 4: three S2 tokens and two WorldCover tokens are decoded.
+    """
+    torch.manual_seed(1234)
+    num_s2 = Modality.SENTINEL2_L2A.num_bands
+    s2_mask = torch.zeros(B, height, width, T, num_s2, dtype=torch.long)
+    for rows, cols, t in (
+        (slice(0, 4), slice(0, 4), 0),
+        (slice(4, 8), slice(4, 8), 1),
+        (slice(0, 4), slice(4, 8), 1),
+    ):
+        s2_mask[:, rows, cols, t] = MaskValue.DECODER.value
+    num_wc = Modality.WORLDCOVER.num_bands
+    wc_mask = torch.zeros(B, height, width, 1, num_wc, dtype=torch.long)
+    wc_mask[:, 4:8, 4:8] = MaskValue.DECODER.value
+    wc_mask[:, 0:4, 0:4] = MaskValue.DECODER.value
+    return MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, height, width, T, num_s2),
+        sentinel2_l2a_mask=s2_mask,
+        worldcover=torch.randn(B, height, width, 1, num_wc),
+        worldcover_mask=wc_mask,
+        timestamps=torch.tensor(
+            [[[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
+        ).expand(B, -1, -1),
+    )
+
+
 def _model_config(
-    tokenization_config: TokenizationConfig | None = None,
+    tokenization_config: TokenizationConfig | None = S2_ONE_BANDSET,
 ) -> LatentMIMConfig:
     """Small rc_pix512-shaped model with a projection-only target.
 
@@ -125,351 +138,101 @@ def _model_config(
     )
 
 
-def test_gather_pixels_keeps_the_drawn_pixel() -> None:
-    """Cell (i, j) of the gathered field is pixel (i*p + o_r, j*p + o_c)."""
-    sample = _make_sample()
-    patch_size = 4
+def _train_module_config(**kwargs: object) -> LatentMIMTrainModuleConfig:
+    return LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def _check_slots(
+    sample: MaskedOlmoEarthSample,
+    queries: dict[str, PixelQueries],
+    patch_size: int,
+) -> None:
+    """Valid slots name decoded tokens and in-footprint pixels, one per masked token."""
+    assert set(queries) == set(sample.modalities)
+    for name, slots in queries.items():
+        decode = token_decode_mask(sample, name, patch_size)
+        assert torch.equal(slots.valid.sum(1), decode.flatten(1).sum(1))
+        for b in range(B):
+            picked = slots.token_index[b][slots.valid[b]]
+            pix = slots.pixel[b][slots.valid[b]]
+            assert (pix >= 0).all() and (pix < patch_size).all()
+            assert decode[b, picked[:, 0], picked[:, 1], picked[:, 2]].all()
+
+
+# --- samplers -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("patch_size", [2, 4])
+def test_shared_draw_one_slot_per_token_at_its_cells_pixel(patch_size: int) -> None:
+    """Every decoded token gets one slot, at the pixel drawn for its cell."""
+    sample = _sample()
     grid = spatial_token_grid(sample, patch_size)
-    assert grid == (H // patch_size, W // patch_size)
-    offsets = sample_pixel_offsets(B, grid, patch_size, torch.device("cpu"))
-    gathered = gather_pixels(sample, offsets, patch_size)
-    assert gathered.sentinel2_l2a is not None and sample.sentinel2_l2a is not None
-    assert gathered.sentinel2_l2a.shape == (
-        B,
-        *grid,
-        T,
-        Modality.SENTINEL2_L2A.num_bands,
-    )
-    assert (
-        gathered.sentinel2_l2a_mask is not None
-        and sample.sentinel2_l2a_mask is not None
-    )
-    for b in range(B):
-        for i in range(grid[0]):
-            for j in range(grid[1]):
-                r = i * patch_size + int(offsets[b, i, j, 0])
-                c = j * patch_size + int(offsets[b, i, j, 1])
-                assert torch.equal(
-                    gathered.sentinel2_l2a[b, i, j], sample.sentinel2_l2a[b, r, c]
-                )
-                assert torch.equal(
-                    gathered.sentinel2_l2a_mask[b, i, j],
-                    sample.sentinel2_l2a_mask[b, r, c],
-                )
-    # Non-spatial modalities pass through untouched.
-    assert gathered.latlon is sample.latlon
+    offsets = sample_pixel_offsets(B, grid, patch_size, CPU)
+    queries = shared_pixel_queries(sample, patch_size, offsets)
+    _check_slots(sample, queries, patch_size)
+    for name, slots in queries.items():
+        for b in range(B):
+            picked = slots.token_index[b][slots.valid[b]]
+            # Each decoded token exactly once.
+            assert len({tuple(x) for x in picked.tolist()}) == len(picked)
+            for q in range(int(slots.valid[b].sum())):
+                i, j, _ = slots.token_index[b, q].tolist()
+                assert torch.equal(slots.pixel[b, q], offsets[b, i, j])
 
 
 @pytest.mark.parametrize("patch_size", [2, 4])
-def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
-    """The decoder's shifted query coordinate equals the drawn pixel's latent (stride 1)."""
+def test_independent_draw_one_slot_per_token(patch_size: int) -> None:
+    """One slot per decoded token; the tokens of a cell can point at different pixels."""
     torch.manual_seed(0)
-    model = _model_config().build()
-    decoder = model.decoder
-    h_p, w_p = H // patch_size, W // patch_size
-    offsets = sample_pixel_offsets(B, (h_p, w_p), patch_size, torch.device("cpu"))
-    shift = offsets_to_query_shift(offsets, patch_size)
-    gsd_ratio = (
-        CompositeEncodings.calculate_gsd_ratio(10, patch_size)
-        * decoder.rope_coordinate_scale
-    )
-    tokens = torch.zeros(B, h_p, w_p, T, 1, 16)
-    query_positions = decoder._build_2d_rope_positions_for_modality(
-        modality_name="sentinel2_l2a",
-        modality=Modality.SENTINEL2_L2A,
-        tokens=tokens,
-        gsd_ratio=gsd_ratio,
-        query_pixel_shift=shift,
-    )
-    register_positions = build_pixel_latent_positions(
-        B, (H, W), patch_size, gsd_ratio, torch.device("cpu"), stride=1
-    ).view(B, H, W, 2)
-    for b in range(B):
-        for i in range(h_p):
-            for j in range(w_p):
-                r = i * patch_size + int(offsets[b, i, j, 0])
-                c = j * patch_size + int(offsets[b, i, j, 1])
-                for t in range(T):
-                    torch.testing.assert_close(
-                        query_positions[b, i, j, t, 0], register_positions[b, r, c]
-                    )
-
-
-def test_zero_shift_is_the_patch_query_and_a_shift_moves_it() -> None:
-    """A zero shift reproduces the unshifted decoder; a real shift changes it."""
-    torch.manual_seed(0)
-    model = _model_config().build()
-    model.eval()
-    sample = _make_sample()
-    patch_size = 2
-    grid = (H // patch_size, W // patch_size)
-    with torch.no_grad():
-        base = model.forward(sample, patch_size)[1].sentinel2_l2a
-        zero = model.forward(
-            sample, patch_size, query_pixel_shift=torch.zeros(B, *grid, 2)
-        )[1].sentinel2_l2a
-        shifted = model.forward(
-            sample,
-            patch_size,
-            query_pixel_shift=torch.full((B, *grid, 2), 0.25),
-        )[1].sentinel2_l2a
-    assert base is not None and zero is not None and shifted is not None
-    torch.testing.assert_close(zero, base)
-    assert not torch.allclose(shifted, base)
-
-
-@pytest.mark.parametrize("patch_size", [1, 2, 4])
-def test_train_module_pixel_target_forward(patch_size: int) -> None:
-    """model_forward with pixel targets: finite loss, gradients, same query count."""
-    torch.manual_seed(0)
-    model: LatentMIM = _model_config().build()
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-            }
-        ),
-        masking_config=MaskingConfig(strategy_config={"type": "random"}),
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        train_module = config.build(model, device=torch.device("cpu"))
-    sample = _make_sample()
-    loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
-        sample, patch_size, train_module.token_exit_cfg
-    )
-    assert torch.isfinite(loss)
-    # One query and one target per token, exactly as with patch targets.
-    assert decoded.sentinel2_l2a is not None and target_output.sentinel2_l2a is not None
-    assert decoded.sentinel2_l2a.shape[:3] == (B, H // patch_size, W // patch_size)
-    assert target_output.sentinel2_l2a.shape[:-1] == decoded.sentinel2_l2a.shape[:-1]
-    loss.backward()
-    grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
-    assert grads and all(torch.isfinite(g).all() for g in grads)
-
-
-def test_pixel_targets_require_projection_target() -> None:
-    """A full target encoder cannot be projected per pixel: refuse it at build time."""
-    model_config = _model_config()
-    model_config.projection_only_target = False
-    model = model_config.build()
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        with pytest.raises(ValueError, match="projection_only_target"):
-            config.build(model, device=torch.device("cpu"))
-
-
-# --- independent draw: one pixel per token -----------------------------------------------
-
-
-def test_independent_gather_draws_per_timestep_and_per_modality() -> None:
-    """Multitemporal modalities get a pixel per (cell, timestep); static ones per cell."""
-    torch.manual_seed(0)
-    base = _make_sample()
-    num_wc = Modality.WORLDCOVER.num_bands
-    sample = base._replace(
-        worldcover=torch.randn(B, H, W, 1, num_wc),
-        worldcover_mask=torch.zeros(B, H, W, 1, num_wc, dtype=torch.long),
-    )
-    patch_size = 4
-    offsets = sample_independent_pixel_offsets(sample, patch_size, torch.device("cpu"))
-    h_p, w_p = H // patch_size, W // patch_size
-    assert set(offsets) == {"sentinel2_l2a", "worldcover"}
-    assert offsets["sentinel2_l2a"].shape == (B, h_p, w_p, T, 2)
-    assert offsets["worldcover"].shape == (B, h_p, w_p, 2)
-    gathered = gather_pixels(sample, offsets, patch_size)
-    assert gathered.sentinel2_l2a is not None and sample.sentinel2_l2a is not None
-    assert gathered.worldcover is not None and sample.worldcover is not None
-    s2_off, wc_off = offsets["sentinel2_l2a"], offsets["worldcover"]
-    for b in range(B):
-        for i in range(h_p):
-            for j in range(w_p):
-                for t in range(T):
-                    r = i * patch_size + int(s2_off[b, i, j, t, 0])
-                    c = j * patch_size + int(s2_off[b, i, j, t, 1])
-                    assert torch.equal(
-                        gathered.sentinel2_l2a[b, i, j, t],
-                        sample.sentinel2_l2a[b, r, c, t],
-                    )
-                r = i * patch_size + int(wc_off[b, i, j, 0])
-                c = j * patch_size + int(wc_off[b, i, j, 1])
-                assert torch.equal(
-                    gathered.worldcover[b, i, j], sample.worldcover[b, r, c]
-                )
-    assert gathered.latlon is sample.latlon
-
-
-@pytest.mark.parametrize("patch_size", [2, 4])
-def test_per_timestep_shift_lands_on_each_timesteps_pixel(patch_size: int) -> None:
-    """A [B, h, w, T, 2] shift moves each timestep's query to that timestep's pixel."""
-    torch.manual_seed(0)
-    model = _model_config().build()
-    decoder = model.decoder
-    h_p, w_p = H // patch_size, W // patch_size
-    offsets = torch.randint(0, patch_size, (B, h_p, w_p, T, 2))
-    gsd_ratio = (
-        CompositeEncodings.calculate_gsd_ratio(10, patch_size)
-        * decoder.rope_coordinate_scale
-    )
-    query_positions = decoder._build_2d_rope_positions_for_modality(
-        modality_name="sentinel2_l2a",
-        modality=Modality.SENTINEL2_L2A,
-        tokens=torch.zeros(B, h_p, w_p, T, 1, 16),
-        gsd_ratio=gsd_ratio,
-        query_pixel_shift=offsets_to_query_shift(offsets, patch_size),
-    )
-    latent_positions = build_pixel_latent_positions(
-        B, (H, W), patch_size, gsd_ratio, torch.device("cpu"), stride=1
-    ).view(B, H, W, 2)
-    for b in range(B):
-        for i in range(h_p):
-            for j in range(w_p):
-                for t in range(T):
-                    r = i * patch_size + int(offsets[b, i, j, t, 0])
-                    c = j * patch_size + int(offsets[b, i, j, t, 1])
-                    torch.testing.assert_close(
-                        query_positions[b, i, j, t, 0], latent_positions[b, r, c]
-                    )
-
-
-@pytest.mark.parametrize("patch_size", [1, 2, 4])
-def test_train_module_independent_draw_forward(patch_size: int) -> None:
-    """The independent draw runs end to end with the same query/target count."""
-    torch.manual_seed(0)
-    model: LatentMIM = _model_config(S2_ONE_BANDSET).build()
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-            }
-        ),
-        masking_config=MaskingConfig(strategy_config={"type": "random"}),
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-        pixel_target_draw="independent",
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        train_module = config.build(model, device=torch.device("cpu"))
-    loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
-        _make_sample(), patch_size, train_module.token_exit_cfg
-    )
-    assert torch.isfinite(loss)
-    assert decoded.sentinel2_l2a is not None and target_output.sentinel2_l2a is not None
-    assert target_output.sentinel2_l2a.shape[:-1] == decoded.sentinel2_l2a.shape[:-1]
-    loss.backward()
-
-
-def test_independent_draw_refuses_multiple_bandsets() -> None:
-    """With several band sets a token's pixels would be ambiguous: refuse, don't guess."""
-    model: LatentMIM = _model_config().build()  # default tokenization: 3 S2 band sets
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-        pixel_target_draw="independent",
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        train_module = config.build(model, device=torch.device("cpu"))
-    with pytest.raises(ValueError, match="one band set"):
-        train_module.model_forward(_make_sample(), 2, train_module.token_exit_cfg)
-
-
-def test_unknown_pixel_target_draw_is_refused() -> None:
-    """A typo in the draw name fails at build time, not silently as 'shared'."""
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-        pixel_target_draw="random",
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        with pytest.raises(ValueError, match="pixel_target_draw"):
-            config.build(_model_config().build(), device=torch.device("cpu"))
-
-
-# --- pooled draw: targets drawn from all masked pixels -----------------------------------
-
-
-def _spatial_sample() -> MaskedOlmoEarthSample:
-    """S2 + WorldCover only (the pooled draw refuses non-spatial modalities).
-
-    Masks sit on 4x4 blocks so every tested patch size sees whole tokens; three S2
-    tokens and two WorldCover tokens are decoded at patch size 4.
-    """
-    base = _make_sample()
-    num_s2 = Modality.SENTINEL2_L2A.num_bands
-    s2_mask = torch.zeros(B, H, W, T, num_s2, dtype=torch.long)
-    for rows, cols, t in (
-        (slice(0, 4), slice(0, 4), 0),
-        (slice(4, 8), slice(4, 8), 1),
-        (slice(0, 4), slice(4, 8), 1),
-    ):
-        s2_mask[:, rows, cols, t] = MaskValue.DECODER.value
-    num_wc = Modality.WORLDCOVER.num_bands
-    wc_mask = torch.zeros(B, H, W, 1, num_wc, dtype=torch.long)
-    wc_mask[:, 4:8, 4:8] = MaskValue.DECODER.value
-    wc_mask[:, 0:4, 0:4] = MaskValue.DECODER.value
-    return MaskedOlmoEarthSample(
-        sentinel2_l2a=base.sentinel2_l2a,
-        sentinel2_l2a_mask=s2_mask,
-        worldcover=torch.randn(B, H, W, 1, num_wc),
-        worldcover_mask=wc_mask,
-        timestamps=base.timestamps,
-    )
-
-
-def _pooled_model() -> LatentMIM:
-    config = _model_config(S2_ONE_BANDSET)
-    names = [Modality.SENTINEL2_L2A.name, Modality.WORLDCOVER.name]
-    config.encoder_config.supported_modality_names = names
-    assert config.decoder_config is not None
-    config.decoder_config.supported_modality_names = names
-    return config.build()
+    sample = _sample()
+    differs = False
+    for _ in range(20):
+        queries = sample_pixel_queries(sample, patch_size, "independent", CPU)
+        _check_slots(sample, queries, patch_size)
+        s2 = queries["sentinel2_l2a"]
+        for b in range(B):
+            picked = s2.token_index[b][s2.valid[b]]
+            assert len({tuple(x) for x in picked.tolist()}) == len(picked)
+        # Cell (0, 0) is decoded in S2 at t=0 and in WorldCover: compare their pixels.
+        wc = queries["worldcover"]
+        s2_first = s2.pixel[:, 0]
+        wc_first = wc.pixel[:, 0]
+        assert torch.equal(s2.token_index[:, 0, :2], wc.token_index[:, 0, :2])
+        differs |= not torch.equal(s2_first, wc_first)
+    assert differs
 
 
 @pytest.mark.parametrize("patch_size", [2, 4])
 def test_pooled_draw_counts_and_units(patch_size: int) -> None:
     """As many slots as masked tokens; each a distinct pixel of a masked token."""
     torch.manual_seed(0)
-    sample = _spatial_sample()
+    sample = _sample()
     max_per_token = 0
     saw_empty_token = False
     for _ in range(40):
-        pooled = sample_pooled_pixel_queries(sample, patch_size, torch.device("cpu"))
-        for name, slots in pooled.items():
-            decode = token_decode_mask(sample, name, patch_size)
-            counts = decode.flatten(1).sum(1)
-            assert torch.equal(slots.valid.sum(1), counts)
+        queries = sample_pixel_queries(sample, patch_size, "pooled", CPU)
+        _check_slots(sample, queries, patch_size)
+        for name, slots in queries.items():
+            counts = token_decode_mask(sample, name, patch_size).flatten(1).sum(1)
             for b in range(B):
                 picked = slots.token_index[b][slots.valid[b]]
                 pix = slots.pixel[b][slots.valid[b]]
-                assert (pix >= 0).all() and (pix < patch_size).all()
-                assert decode[b, picked[:, 0], picked[:, 1], picked[:, 2]].all()
                 units = {tuple(u) for u in torch.cat([picked, pix], 1).tolist()}
                 assert len(units) == len(picked)  # without replacement
                 per_token: dict[tuple, int] = {}
@@ -482,14 +245,27 @@ def test_pooled_draw_counts_and_units(patch_size: int) -> None:
     assert saw_empty_token
 
 
-def test_gather_pooled_pixels_picks_each_slot() -> None:
+def test_samplers_refuse_non_spatial_modalities_and_unknown_draws() -> None:
+    """A non-spatial token has no footprint to draw a pixel from."""
+    sample = _sample()._replace(
+        latlon=torch.randn(B, Modality.LATLON.num_bands),
+        latlon_mask=torch.zeros(B, Modality.LATLON.num_bands, dtype=torch.long),
+    )
+    for draw in PIXEL_TARGET_DRAWS:
+        with pytest.raises(ValueError, match="spatial modalities only"):
+            sample_pixel_queries(sample, 2, draw, CPU)
+    with pytest.raises(ValueError, match="draw"):
+        sample_pixel_queries(_sample(), 2, "random", CPU)
+
+
+def test_gather_query_pixels_picks_each_slot() -> None:
     """Slot q of sample b holds pixel (i*p + r, j*p + c) at timestep t."""
     torch.manual_seed(0)
-    sample = _spatial_sample()
+    sample = _sample()
     patch_size = 4
-    pooled = sample_pooled_pixel_queries(sample, patch_size, torch.device("cpu"))
-    gathered = gather_pooled_pixels(sample, pooled, patch_size)
-    for name, slots in pooled.items():
+    queries = sample_pixel_queries(sample, patch_size, "pooled", CPU)
+    gathered = gather_query_pixels(sample, queries, patch_size)
+    for name, slots in queries.items():
         field, picked = getattr(sample, name), getattr(gathered, name)
         assert picked.shape[:4] == (B, slots.valid.shape[1], 1, 1)
         for b in range(B):
@@ -502,37 +278,49 @@ def test_gather_pooled_pixels_picks_each_slot() -> None:
                 )
 
 
-def test_forward_pooled_matches_the_standard_decoder() -> None:
-    """One slot per masked token at the shared pixel == the shared-draw decoder."""
-    torch.manual_seed(0)
-    model = _pooled_model().eval()
-    sample = _spatial_sample()
-    patch_size = 4
+# --- decoder --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("patch_size", [2, 4])
+def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
+    """Patch coordinate + pixel_center_shift = the pixel's stride-1 latent coordinate."""
+    gsd_ratio = CompositeEncodings.calculate_gsd_ratio(10, patch_size)
     h_p, w_p = H // patch_size, W // patch_size
-    offsets = sample_pixel_offsets(B, (h_p, w_p), patch_size, torch.device("cpu"))
-    pooled = {}
-    for name in sample.modalities:
-        decode = token_decode_mask(sample, name, patch_size)
-        tok = decode.nonzero()  # [N, 4] (b, i, j, t), same count per sample here
-        per_sample = [tok[tok[:, 0] == b, 1:] for b in range(B)]
-        n = max(len(x) for x in per_sample)
-        index = torch.zeros(B, n, 3, dtype=torch.long)
-        valid = torch.zeros(B, n, dtype=torch.bool)
-        for b, x in enumerate(per_sample):
-            index[b, : len(x)] = x
-            valid[b, : len(x)] = True
-        pixel = offsets[torch.arange(B).view(-1, 1), index[..., 0], index[..., 1]]
-        pooled[name] = PooledPixelQueries(token_index=index, pixel=pixel, valid=valid)
+    latents = build_pixel_latent_positions(
+        1, (H, W), patch_size, gsd_ratio, CPU, stride=1
+    ).view(H, W, 2)
+    for i in range(h_p):
+        for j in range(w_p):
+            for r in range(patch_size):
+                for c in range(patch_size):
+                    shift = pixel_center_shift(torch.tensor([r, c]), patch_size)
+                    query = torch.tensor([i, j], dtype=torch.float32) * gsd_ratio
+                    torch.testing.assert_close(
+                        query + shift * gsd_ratio,
+                        latents[i * patch_size + r, j * patch_size + c],
+                    )
+
+
+def test_center_pixel_slot_is_the_standard_decoder() -> None:
+    """A center-pixel slot decodes exactly as the standard decoder.
+
+    At an odd patch size the center pixel has zero shift, so the slot path decodes
+    every masked token as the standard decoder does.
+    """
+    torch.manual_seed(0)
+    model = _model_config().build().eval()
+    patch_size = 3
+    sample = _sample(height=6, width=6)
+    grid = spatial_token_grid(sample, patch_size)
+    center = torch.full((B, *grid, 2), patch_size // 2)
+    queries = shared_pixel_queries(sample, patch_size, center)
     with torch.no_grad():
-        standard = model.forward(
-            sample,
-            patch_size,
-            query_pixel_shift=offsets_to_query_shift(offsets, patch_size),
-        )[1]
-        flat = model.forward(sample, patch_size, pooled_queries=pooled)[1]
-    for name, slots in pooled.items():
-        ref, got = getattr(standard, name), getattr(flat, name)
+        standard = model.forward(sample, patch_size)[1]
+        slots_out = model.forward(sample, patch_size, pixel_queries=queries)[1]
+    for name, slots in queries.items():
+        ref, got = getattr(standard, name), getattr(slots_out, name)
         assert ref is not None and got is not None
+        assert slots.valid.any()
         for b in range(B):
             for q in range(slots.valid.shape[1]):
                 if not slots.valid[b, q]:
@@ -541,31 +329,48 @@ def test_forward_pooled_matches_the_standard_decoder() -> None:
                 torch.testing.assert_close(got[b, q, 0, 0, 0], ref[b, i, j, t, 0])
 
 
-@pytest.mark.parametrize("patch_size", [1, 2, 4])
-def test_train_module_pooled_draw_forward(patch_size: int) -> None:
-    """The pooled draw trains: finite loss, gradients, one target per masked token."""
+def test_slots_decode_independently() -> None:
+    """A slot's output depends only on its own (token, pixel).
+
+    Reordering and duplicating slots does not change it; moving its pixel does.
+    """
     torch.manual_seed(0)
-    model = _pooled_model()
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-            }
-        ),
-        masking_config=MaskingConfig(strategy_config={"type": "random"}),
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-        pixel_target_draw="pooled",
+    model = _model_config().build().eval()
+    sample = _sample()
+    patch_size = 4
+    queries = sample_pixel_queries(sample, patch_size, "pooled", CPU)
+    s2 = queries["sentinel2_l2a"]
+    perm = torch.arange(s2.valid.shape[1]).flip(0)
+    reordered = dict(queries)
+    reordered["sentinel2_l2a"] = PixelQueries(
+        token_index=torch.cat([s2.token_index[:, perm], s2.token_index[:, :1]], 1),
+        pixel=torch.cat([s2.pixel[:, perm], (s2.pixel[:, :1] + 1) % patch_size], 1),
+        valid=torch.cat([s2.valid[:, perm], s2.valid[:, :1]], 1),
     )
+    with torch.no_grad():
+        out = model.forward(sample, patch_size, pixel_queries=queries)[1].sentinel2_l2a
+        out2 = model.forward(sample, patch_size, pixel_queries=reordered)[1]
+    assert out is not None and out2.sentinel2_l2a is not None
+    n = s2.valid.shape[1]
+    torch.testing.assert_close(out2.sentinel2_l2a[:, :n], out[:, perm])
+    # The appended slot is slot 0's token at a different pixel.
+    assert not torch.allclose(out2.sentinel2_l2a[:, n], out[:, 0])
+
+
+# --- train module ---------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("draw", PIXEL_TARGET_DRAWS)
+@pytest.mark.parametrize("patch_size", [1, 2, 4])
+def test_train_module_pixel_target_forward(draw: str, patch_size: int) -> None:
+    """Finite loss and gradients; one target per masked token for every draw."""
+    torch.manual_seed(0)
+    model: LatentMIM = _model_config().build()
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        train_module = config.build(model, device=torch.device("cpu"))
-    sample = _spatial_sample()
+        train_module = _train_module_config(pixel_target_draw=draw).build(
+            model, device=CPU
+        )
+    sample = _sample()
     loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
         sample, patch_size, train_module.token_exit_cfg
     )
@@ -583,3 +388,30 @@ def test_train_module_pooled_draw_forward(patch_size: int) -> None:
     loss.backward()
     grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+def test_pixel_targets_refuse_multiple_bandsets() -> None:
+    """With several band sets a token's pixels would be ambiguous: refuse, don't guess."""
+    model: LatentMIM = _model_config(tokenization_config=None).build()  # 3 S2 band sets
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = _train_module_config().build(model, device=CPU)
+    with pytest.raises(ValueError, match="one band set"):
+        train_module.model_forward(_sample(), 2, train_module.token_exit_cfg)
+
+
+def test_pixel_targets_require_projection_target() -> None:
+    """A full target encoder cannot be projected per pixel: refuse it at build time."""
+    model_config = _model_config()
+    model_config.projection_only_target = False
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        with pytest.raises(ValueError, match="projection_only_target"):
+            _train_module_config().build(model_config.build(), device=CPU)
+
+
+def test_unknown_pixel_target_draw_is_refused() -> None:
+    """A typo in the draw name fails at build time, not silently as 'shared'."""
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        with pytest.raises(ValueError, match="pixel_target_draw"):
+            _train_module_config(pixel_target_draw="random").build(
+                _model_config().build(), device=CPU
+            )

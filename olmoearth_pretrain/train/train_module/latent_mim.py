@@ -18,14 +18,9 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
 from olmoearth_pretrain.nn.pixel_targets import (
-    PooledPixelQueries,
-    gather_pixels,
-    gather_pooled_pixels,
-    offsets_to_query_shift,
-    sample_independent_pixel_offsets,
-    sample_pixel_offsets,
-    sample_pooled_pixel_queries,
-    spatial_token_grid,
+    PIXEL_TARGET_DRAWS,
+    gather_query_pixels,
+    sample_pixel_queries,
 )
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
@@ -48,10 +43,9 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         loss_config: The loss configuration for the model.
         masking_config: The masking configuration for the model.
         ema_decay: EMA decay rate for target encoder (default: 0.99).
-        pixel_targets: Score each masked token on one uniformly drawn pixel of its
-            cell instead of on the whole patch (see
-            ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
-            queries; requires the projection-only target.
+        pixel_targets: Score masked tokens on single pixels instead of whole
+            patches (see ``olmoearth_pretrain.nn.pixel_targets``). Same number of
+            decode queries; requires the projection-only target.
         pixel_target_draw: ``"shared"`` (one pixel per cell for all its tokens),
             ``"independent"`` (one pixel per token) or ``"pooled"`` (as many pixels
             as masked tokens, drawn from all masked pixels of the sample).
@@ -166,17 +160,17 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             mae_loss_config: Optional loss config for masked auto-encoding.
             regularizer_config: An optional regularizer configuration for the model.
             find_unused_parameters: Whether to find unused parameters in the model, only used for DDP.
-            pixel_targets: Score each masked token on one uniformly drawn pixel of
-                its cell (decoder query at that pixel's center, target = the frozen
-                projection of that pixel). Requires the projection-only target: a
-                full target encoder would need a per-pixel forward.
+            pixel_targets: Score masked tokens on single pixels (decoder query at
+                the pixel's center, target = the frozen projection of that pixel).
+                Requires the projection-only target: a full target encoder would
+                need a per-pixel forward. Every modality must be spatial with one
+                band set.
             pixel_target_draw: ``"shared"``: one pixel per (sample, cell), shared by
-                every token on the cell (all timesteps, band sets, modalities).
-                ``"independent"``: one pixel per token, i.e. per (sample, cell,
-                timestep, modality); needs one band set per modality.
+                every token on the cell (all timesteps, modalities).
+                ``"independent"``: one pixel per token.
                 ``"pooled"``: per (sample, modality), as many targets as masked
                 tokens, drawn without replacement from every masked pixel, so a
-                footprint can get zero or several; needs one band set per modality.
+                footprint can get zero or several.
         """
         super().__init__(
             model=model,
@@ -224,9 +218,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.model.target_encoder, FrozenTargetProjection
         ):
             raise ValueError("pixel_targets requires projection_only_target=True")
-        if pixel_target_draw not in ("shared", "independent", "pooled"):
+        if pixel_target_draw not in PIXEL_TARGET_DRAWS:
             raise ValueError(
-                f"pixel_target_draw must be 'shared', 'independent' or 'pooled', got "
+                f"pixel_target_draw must be one of {PIXEL_TARGET_DRAWS}, got "
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
@@ -327,15 +321,12 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         del latent, decoded, target_output
 
     def _check_single_bandsets(self, batch: MaskedOlmoEarthSample) -> None:
-        """The independent draw gives a token's band sets the same pixel: insist on one."""
+        """A pixel query decodes one token, so every modality needs one band set."""
         tokenization = self.model.target_encoder.patch_embeddings.tokenization_config
         for name in batch.modalities:
-            if (
-                Modality.get(name).is_spatial
-                and tokenization.get_num_bandsets(name) > 1
-            ):
+            if tokenization.get_num_bandsets(name) > 1:
                 raise ValueError(
-                    f"pixel_target_draw='independent' needs one band set per modality; "
+                    f"pixel_targets need one band set per modality; "
                     f"{name} has {tokenization.get_num_bandsets(name)}"
                 )
 
@@ -352,34 +343,14 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         dict[str, Any] | None,
     ]:
         """Run a forward pass."""
-        # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
-        # the pixel, so the standard path is already pixel-resolution.
-        pixel_offsets: torch.Tensor | dict[str, torch.Tensor] | None = None
-        query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None
-        pooled_queries: dict[str, PooledPixelQueries] | None = None
+        # Pixel targets: decode queries on single pixels. At ps=1 the token IS the
+        # pixel, so the standard path is already pixel-resolution.
+        pixel_queries = None
         if self.pixel_targets and patch_size > 1:
-            if self.pixel_target_draw == "pooled":
-                self._check_single_bandsets(batch)
-                pooled_queries = sample_pooled_pixel_queries(
-                    batch, patch_size, device=self.device
-                )
-            elif self.pixel_target_draw == "independent":
-                self._check_single_bandsets(batch)
-                pixel_offsets = sample_independent_pixel_offsets(
-                    batch, patch_size, device=self.device
-                )
-                query_pixel_shift = {
-                    name: offsets_to_query_shift(offsets, patch_size)
-                    for name, offsets in pixel_offsets.items()
-                }
-            else:
-                pixel_offsets = sample_pixel_offsets(
-                    batch.batch_size,
-                    spatial_token_grid(batch, patch_size),
-                    patch_size,
-                    device=self.device,
-                )
-                query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
+            self._check_single_bandsets(batch)
+            pixel_queries = sample_pixel_queries(
+                batch, patch_size, self.pixel_target_draw, device=self.device
+            )
         with self._model_forward_context():
             (
                 latent,
@@ -392,25 +363,18 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             ) = self.model(
                 batch,
                 patch_size,
-                query_pixel_shift=query_pixel_shift,
-                pooled_queries=pooled_queries,
+                pixel_queries=pixel_queries,
             )
 
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
                 target_input = batch.unmask()
                 target_patch_size = patch_size
-                if pooled_queries is not None:
-                    # One target per pooled slot, in forward_pooled's layout.
-                    target_input = gather_pooled_pixels(
-                        target_input, pooled_queries, patch_size
-                    )
-                    target_patch_size = 1
-                elif pixel_offsets is not None:
-                    # Keep only the drawn pixel of each cell and project it alone: one
-                    # target per cell, on the same grid as the patch-size targets.
-                    target_input = gather_pixels(
-                        target_input, pixel_offsets, patch_size
+                if pixel_queries is not None:
+                    # One target per query slot, projected alone at patch size 1, in
+                    # forward_pixel_queries' layout.
+                    target_input = gather_query_pixels(
+                        target_input, pixel_queries, patch_size
                     )
                     target_patch_size = 1
                 output_dict = self.model.target_encoder.forward(
