@@ -12,10 +12,11 @@ attentions of the ViT + Perceiver encoder (v1.3 RC, pix512):
 * latent self-attention: a latent attends every latent whose cell is in that box.
 
 Each is neighbourhood attention over a ``(rows, cols, K)`` grid with kernel
-``(W, W, K)``, where ``K`` is the number of elements per cell. NATTEN computes that
-exactly and fast, but needs the same ``K`` in every cell, i.e. missing data must be
-whole timesteps (which is how rslearn exports it). On CPU a dense masked reference
-is used instead (tests and small checks only).
+``(W, W, K)``, where ``K`` is the number of elements per cell; this needs the same
+``K`` in every cell, i.e. missing data must be whole timesteps (which is how rslearn
+exports it). On H100 NATTEN computes it exactly and fast; on A100 FlexAttention is
+faster (see :func:`neighborhood_attention`). On CPU a dense masked reference is used
+(tests and small checks only).
 
 A domain one window wide reproduces the stock forward; larger domains are run in
 chunks with a halo by :func:`embed_domain`.
@@ -31,8 +32,8 @@ Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
   2.11 (the fastest we measured) or ``natten==0.21.7+torch2130cu126`` for 2.13.
 * The H100 nodes run NVIDIA driver 570, which cannot load CUDA 13 builds: use the
   cu12x torch and NATTEN wheels even when cu13x ones exist.
-* The fast kernels are Hopper's. On A100 NATTEN runs (Ampere kernels) but slowly;
-  FlexAttention was faster there and is not implemented here.
+* The fast kernels are Hopper's. On A100 NATTEN runs (Ampere kernels) but slowly,
+  so ``backend="auto"`` uses FlexAttention there and NATTEN is not needed.
 """
 
 from __future__ import annotations
@@ -61,7 +62,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     return_modalities_from_dict,
 )
 
-try:  # Lighthouse on GPU only; not a declared dependency (wheels are per torch/CUDA)
+try:  # Lighthouse on H100 only; not a declared dependency (wheels are per torch/CUDA)
     import natten
 except ImportError:
     natten = None
@@ -82,12 +83,14 @@ class LighthouseSettings:
             of one domain consistent with each other.
         chunk: Elements per projection / MLP call (bounds peak memory).
         compile: ``torch.compile`` the per-chunk projection and MLP math (~1.3x).
+        backend: Attention kernel on GPU (see :func:`neighborhood_attention`).
     """
 
     fov_px: int = 16
     origin_px: tuple[int, int] = (0, 0)
     chunk: int = 1 << 18
     compile: bool = False
+    backend: str = "auto"
 
 
 def lighthouse_reach_px(
@@ -165,11 +168,135 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     return rearrange(o, "g h w k n d -> h w (g k) n d")[:, :, :kq]
 
 
-def neighborhood_attention(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
-    """Lighthouse attention of ``[h, w, Kq, H, D]`` queries over ``[h, w, Kk, H, D]``."""
-    if q.device.type == "cuda":
+def _box_start(i: Tensor, n: Any, fov: int) -> Tensor:
+    """First cell of the ``fov``-cell box around cell ``i`` of ``n``, shifted inward."""
+    start = (i - fov // 2).clamp(min=0)
+    return torch.where(start > n - fov, n - fov, start)
+
+
+def _round_up(n: int, block: int) -> int:
+    return -(-n // block) * block
+
+
+def _flex_tables(
+    h: int, w: int, kq: int, kk: int, fov: int, block: int, device: torch.device
+) -> tuple[Tensor, Tensor]:
+    """Key blocks of every query block, as ``(count, indices)`` for FlexAttention.
+
+    In the row-padded layout of :func:`_flex_na` a query block lies in one cell row
+    and its queries' boxes span ``fov`` cell rows and one run of columns, which is
+    the same run of key blocks in each of those rows.
+    """
+    lq, lk = _round_up(w * kq, block), _round_up(w * kk, block)
+    qb = torch.arange(h * lq // block, device=device)
+    row = qb // (lq // block)
+    first_el = (qb % (lq // block)) * block
+    last_el = (first_el + block - 1).clamp(max=w * kq - 1)
+    r0 = _box_start(row, h, fov)
+    c0 = _box_start((first_el // kq).clamp(max=w - 1), w, fov)
+    c1 = _box_start(last_el // kq, w, fov) + fov
+    first = c0 * kk // block  # key-block offset of the run within a key row
+    n = (c1 * kk - 1) // block - first + 1
+    i = torch.arange(fov, device=device)[None, :, None]
+    j = torch.arange(int(n.max()), device=device)[None, None, :]
+    idx = (r0[:, None, None] + i) * (lk // block) + first[:, None, None] + j
+    # Drop the j >= n slots: push them to the end and zero them.
+    n_kb = h * lk // block
+    idx = idx.masked_fill(j >= n[:, None, None], n_kb).flatten(1).sort(1).values
+    return fov * n, idx.masked_fill(idx == n_kb, 0)
+
+
+def _flex_mask_mod(
+    h: int, w: int, kq: int, kk: int, fov: int, block: int, offset: int, device: Any
+) -> Callable[..., Tensor]:
+    """The exact box rule on row-padded indices (``offset``: first query of a chunk).
+
+    The geometry is captured as tensors so the compiled kernel is reused across
+    chunks and domain sizes.
+    """
+    lq, lk = _round_up(w * kq, block), _round_up(w * kk, block)
+    g = torch.tensor([h, w, kq, kk, lq, lk, offset], device=device)
+    h_, w_, kq_, kk_, lq_, lk_, off = g.unbind()
+
+    def mask_mod(b: Tensor, hd: Tensor, qi: Tensor, ki: Tensor) -> Tensor:
+        qi = qi + off
+        r0 = _box_start(qi // lq_, h_, fov)
+        c0 = _box_start((qi % lq_) // kq_, w_, fov)
+        k_row, k_col = ki // lk_, (ki % lk_) // kk_
+        return (
+            (ki % lk_ < w_ * kk_)  # not row padding
+            & (k_row >= r0)
+            & (k_row < r0 + fov)
+            & (k_col >= c0)
+            & (k_col < c0 + fov)
+        )
+
+    return mask_mod
+
+
+def _flex_na(
+    q: Tensor, k: Tensor, v: Tensor, fov: int, block: int = 128, chunk: int = 1 << 13
+) -> Tensor:
+    """:func:`_reference_na` with FlexAttention (GPUs without fast NATTEN, e.g. A100).
+
+    Each cell row is padded to a multiple of ``block`` elements, so the key blocks a
+    query block needs are a few contiguous runs (:func:`_flex_tables`); padding
+    queries' outputs are dropped and padding keys are masked out. Queries run in
+    chunks of ``chunk`` blocks to bound the size of the block tables.
+    """
+    from torch.nn.attention.flex_attention import BlockMask, flex_attention
+
+    h, w, kq, heads, dim = q.shape
+    kk = k.shape[2]
+    lq, lk = _round_up(w * kq, block), _round_up(w * kk, block)
+
+    def padded_rows(x: Tensor, length: int) -> Tensor:
+        x = rearrange(x, "h w k n d -> n h (w k) d")
+        return F.pad(x, (0, 0, 0, length - x.shape[2])).reshape(1, heads, -1, dim)
+
+    qf, kf, vf = padded_rows(q, lq), padded_rows(k, lk), padded_rows(v, lk)
+    attend = flex_attention
+    if q.is_cuda:
+        if "flex" not in _COMPILED:
+            _COMPILED["flex"] = torch.compile(flex_attention, dynamic=True)
+        attend = _COMPILED["flex"]
+    num, idx = _flex_tables(h, w, kq, kk, fov, block, q.device)
+    n_kb = h * lk // block
+    out = torch.empty_like(qf)
+    for b0 in range(0, num.numel(), chunk):
+        b1 = min(b0 + chunk, num.numel())
+        block_mask = BlockMask.from_kv_blocks(
+            num[None, None, b0:b1].int(),
+            # Padded to the key-block count: narrower tables gave WRONG outputs
+            # (torch 2.9).
+            F.pad(idx[b0:b1], (0, n_kb - idx.shape[1]))[None, None].int(),
+            BLOCK_SIZE=block,
+            mask_mod=_flex_mask_mod(h, w, kq, kk, fov, block, b0 * block, q.device),
+            seq_lengths=((b1 - b0) * block, h * lk),
+            compute_q_blocks=False,
+        )
+        s = slice(b0 * block, b1 * block)
+        out[:, :, s] = attend(qf[:, :, s], kf, vf, block_mask=block_mask)
+    out = out.view(heads, h, lq, dim)[:, :, : w * kq]
+    return rearrange(out, "n h (w k) d -> h w k n d", w=w)
+
+
+def neighborhood_attention(
+    q: Tensor, k: Tensor, v: Tensor, fov: int, backend: str = "auto"
+) -> Tensor:
+    """Lighthouse attention of ``[h, w, Kq, H, D]`` queries over ``[h, w, Kk, H, D]``.
+
+    ``backend``: ``"natten"``, ``"flex"``, or ``"auto"`` = NATTEN on Hopper and newer
+    (fast kernels), FlexAttention on older GPUs (A100). CPU uses the reference.
+    """
+    if q.device.type != "cuda":
+        return _reference_na(q, k, v, fov)
+    if backend == "auto":
+        hopper = torch.cuda.get_device_capability(q.device)[0] >= 9
+        backend = "natten" if hopper else "flex"
+    if backend == "natten":
         return _natten_na(q, k, v, fov)
-    return _reference_na(q, k, v, fov)
+    return _flex_na(q, k, v, fov)
 
 
 # -------------------------------------------------------------------------- blocks
@@ -274,6 +401,7 @@ def _block(
         k.view(h, w, kk, *k.shape[1:]),
         v.view(h, w, kk, *v.shape[1:]),
         fov,
+        settings.backend,
     )
     del q, k, v
     o = rearrange(o, "h w k n d -> 1 (h w k) (n d)")

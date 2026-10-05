@@ -8,6 +8,9 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 from olmoearth_pretrain.nn.lighthouse import (
     LighthouseSettings,
+    _flex_mask_mod,
+    _flex_na,
+    _flex_tables,
     _reference_na,
     embed_domain,
     lighthouse_reach_px,
@@ -107,6 +110,37 @@ def test_reference_attention_is_the_sliding_box() -> None:
             box = torch.zeros(h, w, dtype=torch.bool)
             box[starts[r] : starts[r] + fov, starts[c] : starts[c] + fov] = True
             assert torch.equal(seen[r, c], box)
+
+
+@pytest.mark.parametrize(("kq", "kk"), [(4, 12), (12, 12), (1, 3)])
+def test_flex_matches_the_reference(kq: int, kk: int) -> None:
+    """FlexAttention's layout and mask (CPU eager applies ``mask_mod`` densely)."""
+    torch.manual_seed(0)
+    h, w, fov = 7, 9, 4
+    q = torch.randn(h, w, kq, 2, 8)
+    k, v = torch.randn(2, h, w, kk, 2, 8)
+    out = _flex_na(q, k, v, fov, block=16, chunk=3)
+    torch.testing.assert_close(out, _reference_na(q, k, v, fov))
+
+
+@pytest.mark.parametrize(("kq", "kk"), [(4, 12), (12, 12), (1, 3)])
+def test_flex_block_tables_cover_every_box(kq: int, kk: int) -> None:
+    """Every (query, key) pair the box rule allows lies in a listed key block."""
+    h, w, fov, block = 7, 9, 4, 16
+    num, idx = _flex_tables(h, w, kq, kk, fov, block, torch.device("cpu"))
+    lq = -(-w * kq // block) * block
+    lk = -(-w * kk // block) * block
+    listed = torch.zeros(num.numel(), h * lk // block, dtype=torch.bool)
+    for b in range(num.numel()):
+        blocks = idx[b, : num[b]]
+        assert blocks.unique().numel() == blocks.numel()  # no block twice
+        listed[b, blocks] = True
+    listed = listed.repeat_interleave(block, 0).repeat_interleave(block, 1)
+    qi = torch.arange(h * lq)[:, None]
+    ki = torch.arange(h * lk)[None, :]
+    allowed = _flex_mask_mod(h, w, kq, kk, fov, block, 0, "cpu")(0, 0, qi, ki)
+    real_q = (qi % lq < w * kq).expand_as(allowed)
+    assert not (allowed & real_q & ~listed).any()
 
 
 def test_embed_domain_chunks_match_one_pass() -> None:
