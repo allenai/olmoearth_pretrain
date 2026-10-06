@@ -1011,6 +1011,35 @@ class DownstreamEvaluator:
             logger.info(
                 f"test embeddings shape for {self.dataset}: {test_embeddings.shape}"
             )
+        # Drop rows whose embedding is not finite. A released embedding product
+        # can have genuine coverage gaps: GeoTessera has no `tessera` (v1) tiles
+        # for 6 of the 2750 PLANTEUR windows, recorded by the materializer as
+        # "6 coverage gaps", and those windows load as NaN. Training tolerates
+        # them but the metrics bundle does not -- sklearn roc_auc raises
+        # "Input contains NaN" and takes mIoU down with it, losing the whole eval
+        # over a few unusable pixels. Filtering here keeps the run and costs only
+        # the affected rows.
+        def _drop_nonfinite(emb, lab, split):
+            if emb is None or lab is None:
+                return emb, lab
+            keep = torch.isfinite(emb).all(dim=tuple(range(1, emb.ndim)))
+            dropped = int((~keep).sum())
+            if dropped:
+                logger.warning(
+                    f"{self.dataset} {split}: dropping {dropped} of {len(keep)} "
+                    f"rows with non-finite embeddings (coverage gaps)"
+                )
+                emb, lab = emb[keep], lab[keep]
+            return emb, lab
+
+        train_embeddings, train_labels = _drop_nonfinite(
+            train_embeddings, train_labels, "train"
+        )
+        val_embeddings, val_labels = _drop_nonfinite(val_embeddings, val_labels, "val")
+        test_embeddings, test_labels = _drop_nonfinite(
+            test_embeddings, test_labels, "test"
+        )
+
         logger.info(f"train labels shape for {self.dataset}: {train_labels.shape}")
         logger.info(f"val labels shape for {self.dataset}: {val_labels.shape}")
         if test_labels is not None:
