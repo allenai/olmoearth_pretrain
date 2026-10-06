@@ -1,4 +1,4 @@
-"""Lighthouse inference (``nn/lighthouse.py``) against the stock encoder forward."""
+"""Searchlight inference (``nn/searchlight.py``) against the stock encoder forward."""
 
 from collections.abc import Callable
 
@@ -7,17 +7,17 @@ import torch
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
-from olmoearth_pretrain.nn import lighthouse
+from olmoearth_pretrain.nn import searchlight
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
-from olmoearth_pretrain.nn.lighthouse import (
-    LighthouseSettings,
+from olmoearth_pretrain.nn.searchlight import (
+    SearchlightSettings,
     _flex_cells,
     _flex_mask_mod,
     _flex_na,
     _flex_tables,
     _reference_na,
     embed_domain,
-    lighthouse_reach_px,
+    searchlight_reach_px,
 )
 
 T = 3
@@ -95,12 +95,14 @@ def test_one_window_domain_matches_the_stock_forward(
     )
     with torch.no_grad():
         stock = encoder(sample, **kwargs)
-        lighthouse = encoder(sample, **kwargs, lighthouse=LighthouseSettings(fov_px=16))
+        searchlight = encoder(
+            sample, **kwargs, searchlight=SearchlightSettings(fov_px=16)
+        )
     for key in ("registers", "student_registers", "register_positions"):
-        torch.testing.assert_close(lighthouse[key], stock[key], atol=1e-5, rtol=1e-5)
+        torch.testing.assert_close(searchlight[key], stock[key], atol=1e-5, rtol=1e-5)
     for name in MODALITIES:
         torch.testing.assert_close(
-            getattr(lighthouse["tokens_and_masks"], name),
+            getattr(searchlight["tokens_and_masks"], name),
             getattr(stock["tokens_and_masks"], name),
             atol=1e-5,
             rtol=1e-5,
@@ -154,9 +156,9 @@ def test_flex_layout_matches_the_reference(
     CPU eager flex ignores the block tables, so the row test is added to the mask.
     """
     h, w, fov = 7, 9, 4
-    monkeypatch.setattr(lighthouse, "_BLOCK_MASKS", {})  # no masks from other tests
+    monkeypatch.setattr(searchlight, "_BLOCK_MASKS", {})  # no masks from other tests
     monkeypatch.setattr(
-        lighthouse,
+        searchlight,
         "_flex_mask_mod",
         lambda q_cells, k_cells, w_, fov_: _exact_flex_mask_mod(
             q_cells, k_cells, w_, fov_, h
@@ -207,7 +209,7 @@ def test_embed_domain_chunks_match_one_pass() -> None:
     """Cores + the exact halo reproduce the single-pass domain forward."""
     encoder = _encoder()
     sample = _sample(64)
-    halo = lighthouse_reach_px(16, 4, vit_depth=2, perceiver_depth=2)
+    halo = searchlight_reach_px(16, 4, vit_depth=2, perceiver_depth=2)
     one_pass = embed_domain(encoder, sample, 4, 2, core_px=64, halo_px=0)
     chunked = embed_domain(encoder, sample, 4, 2, core_px=16, halo_px=halo)
     assert one_pass.shape == (32, 32, 8)
@@ -221,7 +223,7 @@ def test_per_pixel_missing_data_is_refused() -> None:
     assert sample.sentinel1_mask is not None
     sample.sentinel1_mask[:, :4, :4, 0] = MaskValue.MISSING.value
     with pytest.raises(NotImplementedError, match="same number of tokens"):
-        encoder(sample, patch_size=2, input_res=10, lighthouse=LighthouseSettings())
+        encoder(sample, patch_size=2, input_res=10, searchlight=SearchlightSettings())
 
 
 def test_batched_input_is_refused() -> None:
@@ -236,4 +238,4 @@ def test_batched_input_is_refused() -> None:
         }
     )
     with pytest.raises(ValueError, match="batch size 1"):
-        encoder(batched, patch_size=2, input_res=10, lighthouse=LighthouseSettings())
+        encoder(batched, patch_size=2, input_res=10, searchlight=SearchlightSettings())

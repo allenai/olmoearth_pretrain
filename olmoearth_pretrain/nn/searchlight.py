@@ -1,7 +1,7 @@
-"""Lighthouse inference: every query attends within its own sliding field of view.
+"""Searchlight inference: every query attends within its own sliding field of view.
 
 Tiled inference runs the encoder on training-size windows (16 px) and stitches them,
-so a pixel's context jumps at every tile seam. Lighthouse instead runs a whole domain
+so a pixel's context jumps at every tile seam. Searchlight instead runs a whole domain
 in one pass and gives every query the window it would see if a 16 px training window
 were centred on it: ``W = fov_px / patch_size`` cells per side, sliding one cell at a
 time and shifted inward (not shrunk) at the domain edge. The rule applies to all three
@@ -21,7 +21,7 @@ faster (see :func:`neighborhood_attention`). On CPU a dense masked reference is 
 A domain one window wide reproduces the stock forward; larger domains are run in
 chunks with a halo by :func:`embed_domain`.
 
-How to run it, setup and measured speed / quality: ``docs/Lighthouse-Inference.md``.
+How to run it, setup and measured speed / quality: ``docs/Searchlight-Inference.md``.
 
 Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
 
@@ -65,7 +65,7 @@ from olmoearth_pretrain.nn.flexi_vit import (
     return_modalities_from_dict,
 )
 
-try:  # Lighthouse on H100 only; not a declared dependency (wheels are per torch/CUDA)
+try:  # Searchlight on H100 only; not a declared dependency (wheels are per torch/CUDA)
     import natten
 except ImportError:
     natten = None
@@ -75,8 +75,8 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class LighthouseSettings:
-    """Inference-only: pass as ``Encoder.forward(..., lighthouse=...)``.
+class SearchlightSettings:
+    """Inference-only: pass as ``Encoder.forward(..., searchlight=...)``.
 
     Args:
         fov_px: Field of view in pixels (the 16 px training window); a multiple of
@@ -98,7 +98,7 @@ class LighthouseSettings:
     backend: str = "auto"
 
 
-def lighthouse_reach_px(
+def searchlight_reach_px(
     fov_px: int, patch_size: int, vit_depth: int, perceiver_depth: int
 ) -> int:
     """Pixels an output can depend on in each direction (the exact chunk halo).
@@ -127,7 +127,7 @@ def _round_up(n: int, block: int) -> int:
 
 
 def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
-    """Dense masked attention implementing the Lighthouse rule (CPU / tests).
+    """Dense masked attention implementing the Searchlight rule (CPU / tests).
 
     ``q`` is ``[h, w, Kq, H, D]``, ``k`` and ``v`` ``[h, w, Kk, H, D]``.
     """
@@ -162,7 +162,7 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     """
     if natten is None:
         raise ImportError(
-            "Lighthouse on GPU needs NATTEN: pip install the wheel matching your "
+            "Searchlight on GPU needs NATTEN: pip install the wheel matching your "
             "torch and CUDA from https://whl.natten.org (e.g. "
             "natten==0.21.7+torch2130cu126 -f https://whl.natten.org)"
         )
@@ -262,7 +262,7 @@ def _flex_mask_mod(
     return mask_mod
 
 
-# Block masks of the current domain, reused by every layer (see encoder_lighthouse).
+# Block masks of the current domain, reused by every layer (see encoder_searchlight).
 _BLOCK_MASKS: dict[tuple, list[tuple[slice, Any]]] = {}
 
 
@@ -341,7 +341,7 @@ def _flex_na(
 def neighborhood_attention(
     q: Tensor, k: Tensor, v: Tensor, fov: int, backend: str = "auto"
 ) -> Tensor:
-    """Lighthouse attention of ``[h, w, Kq, H, D]`` queries over ``[h, w, Kk, H, D]``.
+    """Searchlight attention of ``[h, w, Kq, H, D]`` queries over ``[h, w, Kk, H, D]``.
 
     ``backend``: ``"natten"``, ``"flex"``, or ``"auto"`` = NATTEN on Hopper and newer
     (fast kernels), FlexAttention on older GPUs (A100). CPU uses the reference.
@@ -376,7 +376,7 @@ def _rope(attn: Any, x: Tensor, positions: Tensor) -> Tensor:
         )
     if mode == PositionEncoding.MIXED_3D_ROPE:
         return apply_3d_mixed_rope(x, positions, attn.rope_mixed_freqs)
-    raise NotImplementedError(f"Lighthouse needs RoPE, got {mode}")
+    raise NotImplementedError(f"Searchlight needs RoPE, got {mode}")
 
 
 def _project(
@@ -409,7 +409,7 @@ def _block(
     x_pos: Tensor,
     grid: tuple[int, int, int],
     fov: int,
-    settings: LighthouseSettings,
+    settings: SearchlightSettings,
     keys: tuple[Callable[[slice], Tensor], Tensor, int] | None = None,
 ) -> None:
     """One attention block over grid-ordered elements, in place on ``x``.
@@ -482,7 +482,7 @@ def _cell_ids(
         tokens = tokens_only_dict[name]
         if not Modality.get(name).is_spatial or tuple(tokens.shape[1:3]) != grid:
             raise NotImplementedError(
-                f"Lighthouse needs every modality on the {grid} patch grid ({name})"
+                f"Searchlight needs every modality on the {grid} patch grid ({name})"
             )
         cells = torch.arange(grid[0] * grid[1], device=tokens.device).view(*grid)
         shape = (*tokens.shape[:-1], 1)
@@ -493,9 +493,9 @@ def _cell_ids(
 
 
 @torch.no_grad()
-def encoder_lighthouse(
+def encoder_searchlight(
     encoder: Encoder,
-    settings: LighthouseSettings,
+    settings: SearchlightSettings,
     tokens: Tensor,
     mask: Tensor,
     positions: Tensor,
@@ -515,7 +515,7 @@ def encoder_lighthouse(
     perceiver = encoder.perceiver
     _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
     if encoder.has_register_tokens:
-        raise NotImplementedError("Lighthouse: encoder register tokens are global")
+        raise NotImplementedError("Searchlight: encoder register tokens are global")
     if settings.fov_px % patch_size:
         raise ValueError(f"fov_px {settings.fov_px} is not a multiple of {patch_size}")
     n_h, n_w = encoder._patch_grid_hw(tokens_only_dict)
@@ -531,7 +531,7 @@ def encoder_lighthouse(
     k_tok = int(counts[0])
     if k_tok == 0 or bool((counts != k_tok).any()):
         raise NotImplementedError(
-            "Lighthouse needs the same number of tokens in every cell "
+            "Searchlight needs the same number of tokens in every cell "
             "(missing data per timestep, not per pixel)"
         )
     order = visible[torch.argsort(cells[visible], stable=True)]
@@ -618,16 +618,16 @@ def embed_domain(
     core_px: int,
     halo_px: int,
     output_key: str = "student_registers",
-    settings: LighthouseSettings | None = None,
+    settings: SearchlightSettings | None = None,
     input_res: int = 10,
 ) -> Tensor:
-    """Lighthouse embeddings of a whole domain, run as cores of ``core_px`` + halo.
+    """Searchlight embeddings of a whole domain, run as cores of ``core_px`` + halo.
 
-    ``sample`` has batch size 1 and covers the domain. Each chunk is one Lighthouse
+    ``sample`` has batch size 1 and covers the domain. Each chunk is one Searchlight
     forward over its core plus ``halo_px`` on every side (clipped at the domain edge);
     only the core is kept. Returns ``[H / s, W / s, D]`` for latent patch size ``s``.
     """
-    settings = settings or LighthouseSettings()
+    settings = settings or SearchlightSettings()
     s = latent_patch_size or patch_size
     if core_px % patch_size or halo_px % patch_size:
         raise ValueError("core_px and halo_px must be multiples of the patch size")
@@ -643,7 +643,7 @@ def embed_domain(
                 patch_size=patch_size,
                 input_res=input_res,
                 latent_patch_size=latent_patch_size,
-                lighthouse=replace(settings, origin_px=(r0, c0)),
+                searchlight=replace(settings, origin_px=(r0, c0)),
             )[output_key][0]
             if out is None:
                 out = emb.new_zeros(H // s, W // s, emb.shape[-1])
