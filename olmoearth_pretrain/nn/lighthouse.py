@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 
 @dataclass
 class LighthouseSettings:
-    """Inference-only switch on an :class:`Encoder` (``encoder.lighthouse``).
+    """Inference-only: pass as ``Encoder.forward(..., lighthouse=...)``.
 
     Args:
         fov_px: Field of view in pixels (the 16 px training window); a multiple of
@@ -493,6 +493,7 @@ def _cell_ids(
 @torch.no_grad()
 def encoder_lighthouse(
     encoder: Encoder,
+    settings: LighthouseSettings,
     tokens: Tensor,
     mask: Tensor,
     positions: Tensor,
@@ -509,7 +510,6 @@ def encoder_lighthouse(
     single domain (batch size 1) and returns what ``apply_attn`` returns. Tokens that
     are not ``ONLINE_ENCODER`` are dropped (and come back as zeros).
     """
-    settings: LighthouseSettings = encoder.lighthouse
     perceiver = encoder.perceiver
     _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
     if encoder.has_register_tokens:
@@ -644,25 +644,22 @@ def embed_domain(
     assert sample.sentinel2_l2a is not None
     H, W = sample.sentinel2_l2a.shape[1:3]
     out: Tensor | None = None
-    try:
-        for r in range(0, H, core_px):
-            for c in range(0, W, core_px):
-                r0, c0 = max(r - halo_px, 0), max(c - halo_px, 0)
-                r1, c1 = min(r + core_px + halo_px, H), min(c + core_px + halo_px, W)
-                encoder.lighthouse = replace(settings, origin_px=(r0, c0))
-                emb = encoder(
-                    _crop(sample, slice(r0, r1), slice(c0, c1)),
-                    patch_size=patch_size,
-                    input_res=input_res,
-                    latent_patch_size=latent_patch_size,
-                )[output_key][0]
-                if out is None:
-                    out = emb.new_zeros(H // s, W // s, emb.shape[-1])
-                rc, cc = min(r + core_px, H), min(c + core_px, W)
-                out[r // s : rc // s, c // s : cc // s] = emb[
-                    (r - r0) // s : (rc - r0) // s, (c - c0) // s : (cc - c0) // s
-                ]
-    finally:
-        encoder.lighthouse = None
+    for r in range(0, H, core_px):
+        for c in range(0, W, core_px):
+            r0, c0 = max(r - halo_px, 0), max(c - halo_px, 0)
+            r1, c1 = min(r + core_px + halo_px, H), min(c + core_px + halo_px, W)
+            emb = encoder(
+                _crop(sample, slice(r0, r1), slice(c0, c1)),
+                patch_size=patch_size,
+                input_res=input_res,
+                latent_patch_size=latent_patch_size,
+                lighthouse=replace(settings, origin_px=(r0, c0)),
+            )[output_key][0]
+            if out is None:
+                out = emb.new_zeros(H // s, W // s, emb.shape[-1])
+            rc, cc = min(r + core_px, H), min(c + core_px, W)
+            out[r // s : rc // s, c // s : cc // s] = emb[
+                (r - r0) // s : (rc - r0) // s, (c - c0) // s : (cc - c0) // s
+            ]
     assert out is not None
     return out

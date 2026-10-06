@@ -95,8 +95,7 @@ def test_one_window_domain_matches_the_stock_forward(
     )
     with torch.no_grad():
         stock = encoder(sample, **kwargs)
-        encoder.lighthouse = LighthouseSettings(fov_px=16)
-        lighthouse = encoder(sample, **kwargs)
+        lighthouse = encoder(sample, **kwargs, lighthouse=LighthouseSettings(fov_px=16))
     for key in ("registers", "student_registers", "register_positions"):
         torch.testing.assert_close(lighthouse[key], stock[key], atol=1e-5, rtol=1e-5)
     for name in MODALITIES:
@@ -221,9 +220,8 @@ def test_per_pixel_missing_data_is_refused() -> None:
     sample = _sample(16)
     assert sample.sentinel1_mask is not None
     sample.sentinel1_mask[:, :4, :4, 0] = MaskValue.MISSING.value
-    encoder.lighthouse = LighthouseSettings(fov_px=16)
     with pytest.raises(NotImplementedError, match="same number of tokens"):
-        encoder(sample, patch_size=2, input_res=10)
+        encoder(sample, patch_size=2, input_res=10, lighthouse=LighthouseSettings())
 
 
 def test_batched_input_is_refused() -> None:
@@ -237,6 +235,5 @@ def test_batched_input_is_refused() -> None:
             if v is not None
         }
     )
-    encoder.lighthouse = LighthouseSettings(fov_px=16)
     with pytest.raises(ValueError, match="batch size 1"):
-        encoder(batched, patch_size=2, input_res=10)
+        encoder(batched, patch_size=2, input_res=10, lighthouse=LighthouseSettings())
