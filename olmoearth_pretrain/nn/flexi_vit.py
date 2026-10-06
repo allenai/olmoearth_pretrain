@@ -2470,6 +2470,16 @@ class Encoder(FlexiVitBase):
         if self.lighthouse is not None:
             from olmoearth_pretrain.nn.lighthouse import encoder_lighthouse
 
+            # Lighthouse replaces batching with one large domain per forward: the
+            # sample is a whole area ([1, H, W, T, C], H and W any multiple of the
+            # patch size), and the parallelism comes from its millions of tokens.
+            # Larger areas are run in pieces by lighthouse.embed_domain.
+            if tokens.shape[0] != 1:
+                raise ValueError(
+                    "Lighthouse runs one domain per forward (batch size 1), "
+                    f"got batch size {tokens.shape[0]}"
+                )
+
             return encoder_lighthouse(
                 self,
                 tokens,

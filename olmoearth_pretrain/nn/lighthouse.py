@@ -512,8 +512,6 @@ def encoder_lighthouse(
     settings: LighthouseSettings = encoder.lighthouse
     perceiver = encoder.perceiver
     _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
-    if tokens.shape[0] != 1:
-        raise ValueError("Lighthouse runs one domain per call (batch size 1)")
     if encoder.has_register_tokens:
         raise NotImplementedError("Lighthouse: encoder register tokens are global")
     if settings.fov_px % patch_size:
