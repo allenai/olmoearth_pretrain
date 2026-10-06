@@ -82,14 +82,16 @@ class LighthouseSettings:
         origin_px: ``(row, col)`` pixel offset of this domain in a larger one. RoPE
             is relative, so this only matters at fp32 rounding, but it keeps chunks
             of one domain consistent with each other.
-        chunk: Elements per projection / MLP call (bounds peak memory).
+        tokens_per_call: Tokens (or latents) per projection / MLP call. These ops act
+            on each token independently, so this only bounds peak memory (e.g. the
+            MLP hidden activation); results do not depend on it.
         compile: ``torch.compile`` the per-chunk projection and MLP math (~1.3x).
         backend: Attention kernel on GPU (see :func:`neighborhood_attention`).
     """
 
     fov_px: int = 16
     origin_px: tuple[int, int] = (0, 0)
-    chunk: int = 1 << 18
+    tokens_per_call: int = 1 << 18
     compile: bool = False
     backend: str = "auto"
 
@@ -421,7 +423,8 @@ def _block(
 
     def spans(n: int) -> list[slice]:
         return [
-            slice(s, min(s + settings.chunk, n)) for s in range(0, n, settings.chunk)
+            slice(s, min(s + settings.tokens_per_call, n))
+            for s in range(0, n, settings.tokens_per_call)
         ]
 
     def qkv(
