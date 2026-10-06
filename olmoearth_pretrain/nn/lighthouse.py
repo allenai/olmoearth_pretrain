@@ -179,12 +179,14 @@ def _round_up(n: int, block: int) -> int:
 
 def _flex_tables(
     h: int, w: int, kq: int, kk: int, fov: int, block: int, device: torch.device
-) -> tuple[Tensor, Tensor]:
-    """Key blocks of every query block, as ``(count, indices)`` for FlexAttention.
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Key blocks of every query block for FlexAttention: partial and full lists.
 
     In the row-padded layout of :func:`_flex_na` a query block lies in one cell row
     and its queries' boxes span ``fov`` cell rows and one run of columns, which is
-    the same run of key blocks in each of those rows.
+    the same run of key blocks in each of those rows. Blocks inside EVERY query's
+    box are "full" and skip the mask. Returns ``(partial count, partial indices,
+    full count, full indices)``.
     """
     lq, lk = _round_up(w * kq, block), _round_up(w * kk, block)
     qb = torch.arange(h * lq // block, device=device)
@@ -192,17 +194,29 @@ def _flex_tables(
     first_el = (qb % (lq // block)) * block
     last_el = (first_el + block - 1).clamp(max=w * kq - 1)
     r0 = _box_start(row, h, fov)
-    c0 = _box_start((first_el // kq).clamp(max=w - 1), w, fov)
-    c1 = _box_start(last_el // kq, w, fov) + fov
-    first = c0 * kk // block  # key-block offset of the run within a key row
-    n = (c1 * kk - 1) // block - first + 1
+    c0_first = _box_start((first_el // kq).clamp(max=w - 1), w, fov)
+    c0_last = _box_start(last_el // kq, w, fov)
+    # Key-block offsets within a key row: [first, first + n) covers every query's
+    # box; [full_lo, full_hi) lies inside all of them.
+    first = c0_first * kk // block
+    n = ((c0_last + fov) * kk - 1) // block - first + 1
+    full_lo = -(-c0_last * kk // block)
+    full_hi = (c0_first + fov) * kk // block
     i = torch.arange(fov, device=device)[None, :, None]
-    j = torch.arange(int(n.max()), device=device)[None, None, :]
-    idx = (r0[:, None, None] + i) * (lk // block) + first[:, None, None] + j
-    # Drop the j >= n slots: push them to the end and zero them.
+    offset = first[:, None, None] + torch.arange(int(n.max()), device=device)
+    idx = (r0[:, None, None] + i) * (lk // block) + offset
+    in_run = (offset < (first + n)[:, None, None]).expand_as(idx)
+    full = (
+        in_run & (offset >= full_lo[:, None, None]) & (offset < full_hi[:, None, None])
+    )
     n_kb = h * lk // block
-    idx = idx.masked_fill(j >= n[:, None, None], n_kb).flatten(1).sort(1).values
-    return fov * n, idx.masked_fill(idx == n_kb, 0)
+
+    def pack(keep: Tensor) -> tuple[Tensor, Tensor]:
+        # Kept blocks first (sorted), the rest pushed to the end and zeroed.
+        kept = idx.masked_fill(~keep, n_kb).flatten(1).sort(1).values
+        return keep.flatten(1).sum(1), kept.masked_fill(kept == n_kb, 0)
+
+    return (*pack(in_run & ~full), *pack(full))
 
 
 def _flex_cells(
@@ -234,6 +248,50 @@ def _flex_mask_mod(
     return mask_mod
 
 
+# Block masks of the current domain, reused by every layer (see encoder_lighthouse).
+_BLOCK_MASKS: dict[tuple, list[tuple[slice, Any]]] = {}
+
+
+def _flex_block_masks(
+    h: int, w: int, kq: int, kk: int, fov: int, block: int, chunk: int, device: Any
+) -> list[tuple[slice, Any]]:
+    """``(query slice, BlockMask)`` per chunk of ``chunk`` query blocks, cached."""
+    from torch.nn.attention.flex_attention import BlockMask
+
+    key = (h, w, kq, kk, fov, block, chunk, device)
+    if key in _BLOCK_MASKS:
+        return _BLOCK_MASKS[key]
+    part_num, part_idx, full_num, full_idx = _flex_tables(
+        h, w, kq, kk, fov, block, device
+    )
+    q_rows, q_cols = _flex_cells(h, w, kq, block, device)
+    k_cells = _flex_cells(h, w, kk, block, device)
+    n_qb, n_kb = part_num.numel(), k_cells[0].numel() // block
+    masks = []
+    for b0 in range(0, n_qb, chunk):
+        b1 = min(b0 + chunk, n_qb)
+        s = slice(b0 * block, b1 * block)
+
+        def table(t: Tensor) -> Tensor:
+            # Padded to the key-block count: narrower tables gave WRONG outputs
+            # (torch 2.9).
+            return F.pad(t[b0:b1], (0, n_kb - t.shape[1]))[None, None].int()
+
+        block_mask = BlockMask.from_kv_blocks(
+            part_num[None, None, b0:b1].int(),
+            table(part_idx),
+            full_num[None, None, b0:b1].int(),
+            table(full_idx),
+            BLOCK_SIZE=block,
+            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, w, fov),
+            seq_lengths=((b1 - b0) * block, n_kb * block),
+            compute_q_blocks=False,
+        )
+        masks.append((s, block_mask))
+    _BLOCK_MASKS[key] = masks
+    return masks
+
+
 def _flex_na(
     q: Tensor, k: Tensor, v: Tensor, fov: int, block: int = 128, chunk: int = 1 << 13
 ) -> Tensor:
@@ -244,7 +302,7 @@ def _flex_na(
     queries' outputs are dropped and padding keys are masked out. Queries run in
     chunks of ``chunk`` blocks to bound the size of the block tables.
     """
-    from torch.nn.attention.flex_attention import BlockMask, flex_attention
+    from torch.nn.attention.flex_attention import flex_attention
 
     h, w, kq, heads, dim = q.shape
     kk = k.shape[2]
@@ -260,24 +318,8 @@ def _flex_na(
         if "flex" not in _COMPILED:
             _COMPILED["flex"] = torch.compile(flex_attention, dynamic=True)
         attend = _COMPILED["flex"]
-    num, idx = _flex_tables(h, w, kq, kk, fov, block, q.device)
-    q_rows, q_cols = _flex_cells(h, w, kq, block, q.device)
-    k_cells = _flex_cells(h, w, kk, block, q.device)
-    n_kb = h * lk // block
     out = torch.empty_like(qf)
-    for b0 in range(0, num.numel(), chunk):
-        b1 = min(b0 + chunk, num.numel())
-        s = slice(b0 * block, b1 * block)
-        block_mask = BlockMask.from_kv_blocks(
-            num[None, None, b0:b1].int(),
-            # Padded to the key-block count: narrower tables gave WRONG outputs
-            # (torch 2.9).
-            F.pad(idx[b0:b1], (0, n_kb - idx.shape[1]))[None, None].int(),
-            BLOCK_SIZE=block,
-            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, w, fov),
-            seq_lengths=((b1 - b0) * block, h * lk),
-            compute_q_blocks=False,
-        )
+    for s, block_mask in _flex_block_masks(h, w, kq, kk, fov, block, chunk, q.device):
         out[:, :, s] = attend(qf[:, :, s], kf, vf, block_mask=block_mask)
     out = out.view(heads, h, lq, dim)[:, :, : w * kq]
     return rearrange(out, "n h (w k) d -> h w k n d", w=w)
@@ -460,6 +502,7 @@ def encoder_lighthouse(
     """
     settings: LighthouseSettings = encoder.lighthouse
     perceiver = encoder.perceiver
+    _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
     if tokens.shape[0] != 1:
         raise ValueError("Lighthouse runs one domain per call (batch size 1)")
     if encoder.has_register_tokens:
@@ -543,6 +586,7 @@ def encoder_lighthouse(
         if perceiver.student is not None:
             register_output["student_registers"] = perceiver.student(registers)
 
+    _BLOCK_MASKS.clear()  # free the tables (~0.5 GB per chunk and attention kind)
     tokens_dict = encoder.split_and_expand_per_modality(
         tokens_out, modalities_to_dims_dict
     )
