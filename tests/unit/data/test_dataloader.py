@@ -223,6 +223,26 @@ def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
         seen.add(lps)
     assert len(seen) > 1
 
+    # A budget too small for any sub-token grid falls back to one latent per token.
+    dl_tiny = _build_shape_sampling_dataloader(
+        tmp_path / "tiny",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        max_patch_size=4,
+        max_latents=1,
+    )
+    dl_tiny.reshuffle()
+    assert all(
+        lps == ps
+        for _idx, ps, _hw, _t, lps in _IterableDatasetWrapper(
+            dl_tiny
+        )._get_batch_item_params_iterator(
+            np.arange(40), dl_tiny.patch_sizes, dl_tiny.sampled_hw_p_list, 4
+        )
+    )
+
     dl_off = _build_shape_sampling_dataloader(
         tmp_path / "off",
         setup_h5py_dir,

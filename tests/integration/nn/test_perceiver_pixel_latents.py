@@ -1,11 +1,9 @@
 """Sub-patch Perceiver latents: the ``latent_patch_size`` forward argument."""
 
-import numpy as np
 import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.data.dataloader import choose_latent_patch_size
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 
@@ -92,17 +90,3 @@ def test_latent_patch_size_must_divide_patch_size_and_needs_a_perceiver() -> Non
         _encoder(perceiver=False).eval()(
             _sample(), patch_size=4, input_res=10, latent_patch_size=1
         )
-
-
-def test_dataloader_latent_patch_size_draw_respects_the_budget() -> None:
-    """Latent patch sizes whose latent count exceeds the budget are never drawn."""
-    rng = np.random.default_rng(0)
-    # 2x2 tokens at patch size 4: latent patch size 1 = 64 latents (over budget),
-    # 2 = 16, 4 = 4.
-    sizes = {choose_latent_patch_size(rng, 4, 2, max_latents=16) for _ in range(100)}
-    assert sizes == {2, 4}
-    # The token's own patch size is always allowed, even over budget.
-    over_budget = {
-        choose_latent_patch_size(rng, 4, 8, max_latents=1) for _ in range(20)
-    }
-    assert over_budget == {4}
