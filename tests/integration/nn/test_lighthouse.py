@@ -1,10 +1,13 @@
 """Lighthouse inference (``nn/lighthouse.py``) against the stock encoder forward."""
 
+from collections.abc import Callable
+
 import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+from olmoearth_pretrain.nn import lighthouse
 from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
 from olmoearth_pretrain.nn.lighthouse import (
     LighthouseSettings,
@@ -113,11 +116,43 @@ def test_reference_attention_is_the_sliding_box() -> None:
             assert torch.equal(seen[r, c], box)
 
 
+def _exact_flex_mask_mod(
+    q_cells: tuple[torch.Tensor, torch.Tensor],
+    k_cells: tuple[torch.Tensor, torch.Tensor],
+    w: int,
+    fov: int,
+    h: int,
+) -> Callable[..., torch.Tensor]:
+    """Rows + cols: what the GPU's block tables + column mask compute together."""
+    cols = _flex_mask_mod(q_cells, k_cells, w, fov)
+    r0 = (q_cells[0] - fov // 2).clamp(0, h - fov)
+
+    def mask_mod(
+        b: torch.Tensor, hd: torch.Tensor, qi: torch.Tensor, ki: torch.Tensor
+    ) -> torch.Tensor:
+        kr = k_cells[0][ki]
+        return cols(b, hd, qi, ki) & (kr >= r0[qi]) & (kr < r0[qi] + fov)
+
+    return mask_mod
+
+
 @pytest.mark.parametrize(("kq", "kk"), [(4, 12), (12, 12), (1, 3)])
-def test_flex_matches_the_reference(kq: int, kk: int) -> None:
-    """FlexAttention's layout and mask (CPU eager applies ``mask_mod`` densely)."""
-    torch.manual_seed(0)
+def test_flex_layout_matches_the_reference(
+    kq: int, kk: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Padding, chunking and reshaping of :func:`_flex_na`.
+
+    CPU eager flex ignores the block tables, so the row test is added to the mask.
+    """
     h, w, fov = 7, 9, 4
+    monkeypatch.setattr(
+        lighthouse,
+        "_flex_mask_mod",
+        lambda q_cells, k_cells, w_, fov_: _exact_flex_mask_mod(
+            q_cells, k_cells, w_, fov_, h
+        ),
+    )
+    torch.manual_seed(0)
     q = torch.randn(h, w, kq, 2, 8)
     k, v = torch.randn(2, h, w, kk, 2, 8)
     out = _flex_na(q, k, v, fov, block=16, chunk=3)
@@ -125,10 +160,11 @@ def test_flex_matches_the_reference(kq: int, kk: int) -> None:
 
 
 @pytest.mark.parametrize(("kq", "kk"), [(4, 12), (12, 12), (1, 3)])
-def test_flex_block_tables_cover_every_box(kq: int, kk: int) -> None:
-    """Every (query, key) pair the box rule allows lies in a listed key block."""
+def test_flex_blocks_and_mask_are_exactly_the_box(kq: int, kk: int) -> None:
+    """Listed key blocks AND the column mask = the box rule, for every real query."""
     h, w, fov, block = 7, 9, 4, 16
-    num, idx = _flex_tables(h, w, kq, kk, fov, block, torch.device("cpu"))
+    cpu = torch.device("cpu")
+    num, idx = _flex_tables(h, w, kq, kk, fov, block, cpu)
     lq = -(-w * kq // block) * block
     lk = -(-w * kk // block) * block
     listed = torch.zeros(num.numel(), h * lk // block, dtype=torch.bool)
@@ -137,12 +173,20 @@ def test_flex_block_tables_cover_every_box(kq: int, kk: int) -> None:
         assert blocks.unique().numel() == blocks.numel()  # no block twice
         listed[b, blocks] = True
     listed = listed.repeat_interleave(block, 0).repeat_interleave(block, 1)
-    cpu = torch.device("cpu")
-    q_cells = _flex_cells(h, w, kq, block, cpu)
-    mask_mod = _flex_mask_mod(q_cells, _flex_cells(h, w, kk, block, cpu), h, w, fov)
-    allowed = mask_mod(0, 0, torch.arange(h * lq)[:, None], torch.arange(h * lk))
-    real_q = (q_cells[1] >= 0)[:, None].expand_as(allowed)
-    assert not (allowed & real_q & ~listed).any()
+    q_cells, k_cells = (
+        _flex_cells(h, w, kq, block, cpu),
+        _flex_cells(h, w, kk, block, cpu),
+    )
+    mask = _flex_mask_mod(q_cells, k_cells, w, fov)(
+        0, 0, torch.arange(h * lq)[:, None], torch.arange(h * lk)
+    )
+    # The rule, written out independently.
+    (qr, qc), (kr, kc) = q_cells, k_cells
+    r0 = (qr - fov // 2).clamp(0, h - fov)[:, None]
+    c0 = (qc - fov // 2).clamp(0, w - fov)[:, None]
+    rule = (kc >= 0) & (kr >= r0) & (kr < r0 + fov) & (kc >= c0) & (kc < c0 + fov)
+    real = qc >= 0
+    assert torch.equal((listed & mask)[real], rule[real])
 
 
 def test_embed_domain_chunks_match_one_pass() -> None:
