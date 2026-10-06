@@ -34,6 +34,7 @@ from olmoearth_pretrain.data.constants import (
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
+    S2_CLOUD_FIELD,
     TIME_INDEXED_MODALITIES,
     OlmoEarthSample,
     time_index_field,
@@ -42,6 +43,33 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
+
+# The S2 scene classification layer of the every-capture corpus (one SCL map per
+# S2 capture) and the classes counted as cloudy: cloud shadow, cloud medium and
+# high probability, thin cirrus (the corpus's sentinel2_scl_cloud_fraction).
+S2_SCL_LAYER = "sentinel2_scl"
+CLOUD_SCL_CLASSES = (3, 8, 9, 10)
+
+
+def s2_cloud_flags(
+    scl: np.ndarray, scl_timestamps: np.ndarray, s2_timestamps: np.ndarray
+) -> np.ndarray:
+    """[H, W, T_s2] uint8 cloud flags for S2's captures from ``scl`` [H, W, T_scl, 1].
+
+    SCL normally holds exactly S2's captures. A few files (~0.3%) have one extra
+    SCL capture, so captures are matched by date; an S2 capture without an SCL
+    match gets no cloud flags.
+    """
+    cloud = np.isin(scl[..., 0], CLOUD_SCL_CLASSES).astype(np.uint8)
+    if np.array_equal(scl_timestamps, s2_timestamps):
+        return cloud
+    scl_row = {tuple(t): i for i, t in enumerate(scl_timestamps.tolist())}
+    flags = np.zeros((*cloud.shape[:2], len(s2_timestamps)), dtype=np.uint8)
+    for j, t in enumerate(s2_timestamps.tolist()):
+        i = scl_row.get(tuple(t))
+        if i is not None:
+            flags[..., j] = cloud[..., i]
+    return flags
 
 
 # =============================================================================
@@ -464,6 +492,7 @@ class OlmoEarthDataset(Dataset):
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
         per_modality_timestamps: bool = False,
+        load_s2_cloud_mask: bool = False,
     ):
         """Initialize the dataset.
 
@@ -494,6 +523,10 @@ class OlmoEarthDataset(Dataset):
                 every-capture corpus) instead of one shared ``timestamps`` grid with
                 missing-timestep masks. Samples are assembled on a per-sample union
                 timeline; see ``_getitem_per_modality_timestamps``.
+            load_s2_cloud_mask: With ``per_modality_timestamps``, also read the S2
+                scene classification and return per-pixel cloud flags for the
+                sample's S2 timesteps (``S2_CLOUD_FIELD``); the collator then drops
+                cloudy S2 tokens from the decoder targets.
 
         Returns:
             None
@@ -534,6 +567,9 @@ class OlmoEarthDataset(Dataset):
         else:
             self.indices_to_filter = None
         self.per_modality_timestamps = per_modality_timestamps
+        if load_s2_cloud_mask and not per_modality_timestamps:
+            raise ValueError("load_s2_cloud_mask needs per_modality_timestamps")
+        self.load_s2_cloud_mask = load_s2_cloud_mask
 
     @property
     def fingerprint_version(self) -> str:
@@ -977,7 +1013,8 @@ class OlmoEarthDataset(Dataset):
 
         Returns ``(data, timestamps)``: modality -> raw array as stored, and
         multitemporal modality -> ``(T_m, 3)`` timestamps. Modalities absent from
-        the file are absent from both dicts.
+        the file are absent from both dicts. With ``load_s2_cloud_mask`` both also
+        hold ``S2_SCL_LAYER`` when the file has it.
         """
         h5_file_path = self._local_h5_path(h5_file_path)
         data: dict[str, np.ndarray] = {}
@@ -990,6 +1027,9 @@ class OlmoEarthDataset(Dataset):
                     data[modality] = h5file[modality][()]
                     if Modality.get(modality).is_multitemporal:
                         timestamps[modality] = h5file[f"timestamps_{modality}"][()]
+                if self.load_s2_cloud_mask and S2_SCL_LAYER in h5file:
+                    data[S2_SCL_LAYER] = h5file[S2_SCL_LAYER][()]
+                    timestamps[S2_SCL_LAYER] = h5file[f"timestamps_{S2_SCL_LAYER}"][()]
         return data, timestamps
 
     @staticmethod
@@ -1051,6 +1091,10 @@ class OlmoEarthDataset(Dataset):
         data, timestamps = self.read_h5_file_per_modality_timestamps(
             self._get_h5_file_path(index)
         )
+        # The scene classification is not a modality: keep it out of the
+        # timeline and the token budget.
+        scl = data.pop(S2_SCL_LAYER, None)
+        scl_timestamps = timestamps.pop(S2_SCL_LAYER, None)
         sampled_hw = args.sampled_hw_p * args.patch_size
         tile_h, tile_w = next(
             v.shape[:2] for m, v in data.items() if Modality.get(m).is_spatial
@@ -1107,12 +1151,25 @@ class OlmoEarthDataset(Dataset):
                     )
                 steps = step_index.get(modality, np.zeros(0, dtype=np.int64))
                 in_run = (steps >= first_step) & (steps <= last_step)
+                s2_cloud = (
+                    self.load_s2_cloud_mask and modality == Modality.SENTINEL2_L2A.name
+                )
                 if in_run.any():
                     captures = kept[modality][in_run]
                     sample_dict[modality] = prepare(
                         modality, data[modality][crop][:, :, captures]
                     )
                     sample_dict[time_index_field(modality)] = steps[in_run] - first_step
+                    if s2_cloud:
+                        sample_dict[S2_CLOUD_FIELD] = (
+                            s2_cloud_flags(
+                                scl[crop], scl_timestamps, timestamps[modality]
+                            )[:, :, captures]
+                            if scl is not None
+                            else np.zeros(
+                                (sampled_hw, sampled_hw, len(captures)), dtype=np.uint8
+                            )
+                        )
                 else:
                     sample_dict[modality] = np.full(
                         (sampled_hw, sampled_hw, 1, spec.num_bands),
@@ -1122,6 +1179,10 @@ class OlmoEarthDataset(Dataset):
                     sample_dict[time_index_field(modality)] = np.full(
                         1, -1, dtype=np.int64
                     )
+                    if s2_cloud:
+                        sample_dict[S2_CLOUD_FIELD] = np.zeros(
+                            (sampled_hw, sampled_hw, 1), dtype=np.uint8
+                        )
             elif spec.is_space_only_varying:
                 if modality in data:
                     sample_dict[modality] = prepare(modality, data[modality][crop])
@@ -1237,6 +1298,7 @@ class OlmoEarthDatasetConfig(Config):
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
     per_modality_timestamps: bool = False
+    load_s2_cloud_mask: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

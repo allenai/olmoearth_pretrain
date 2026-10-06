@@ -85,6 +85,18 @@ def allcap_h5py_dir(tmp_path: Path) -> UPath:
                 f.create_dataset(f"timestamps_{name}", data=ts)
                 data = rng.integers(1, 3000, (16, 16, len(dates), bands))
                 f.create_dataset(name, data=data.astype(np.uint16))
+                if name == "sentinel2_l2a":
+                    # Scene classification per S2 capture; sample 1's has one
+                    # extra capture S2 lacks (as in ~0.3% of the corpus).
+                    # (Day 29 never occurs in the S2 dates above.)
+                    scl_ts = (
+                        ts
+                        if idx == 0
+                        else np.concatenate([ts[:4], [[29, 0, 2022]], ts[4:]])
+                    )
+                    f.create_dataset("timestamps_sentinel2_scl", data=scl_ts)
+                    scl = rng.integers(0, 12, (16, 16, len(scl_ts), 1))
+                    f.create_dataset("sentinel2_scl", data=scl.astype(np.uint8))
             f.create_dataset("srtm", data=rng.integers(0, 500, (16, 16, 1, 1)))
             f.create_dataset("latlon", data=np.array([1.0, 2.0], dtype=np.float32))
     pd.DataFrame(
@@ -100,13 +112,16 @@ def allcap_h5py_dir(tmp_path: Path) -> UPath:
     return UPath(h5py_dir)
 
 
-def _dataset(h5py_dir: UPath, normalize: bool = False) -> OlmoEarthDataset:
+def _dataset(
+    h5py_dir: UPath, normalize: bool = False, load_s2_cloud_mask: bool = False
+) -> OlmoEarthDataset:
     dataset = OlmoEarthDataset(
         h5py_dir=h5py_dir,
         training_modalities=MODALITIES,
         dtype=np.float32,
         normalize=normalize,
         per_modality_timestamps=True,
+        load_s2_cloud_mask=load_s2_cloud_mask,
     )
     dataset.prepare()
     return dataset
@@ -316,6 +331,106 @@ def test_microbatches_trim_shared_time_padding(allcap_h5py_dir: UPath) -> None:
                     if field.endswith("_time_index")
                     else _field(masked, field)[i : i + 1, :, :, :length],
                 ), field
+
+
+def test_s2_cloud_flags_follow_s2_captures(allcap_h5py_dir: UPath) -> None:
+    """Cloud flags = cloudy SCL classes on S2's own captures (matched by date)."""
+    import h5py
+
+    from olmoearth_pretrain.data.dataset import CLOUD_SCL_CLASSES
+
+    dataset = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    for idx in (0, 1):
+        _, sample = dataset[GetItemArgs(idx=idx, patch_size=1, sampled_hw_p=16)]
+        with h5py.File(allcap_h5py_dir / f"sample_{idx}.h5", "r") as f:
+            scl = f["sentinel2_scl"][()][..., 0]
+            scl_ts = f["timestamps_sentinel2_scl"][()]
+            s2_ts = f["timestamps_sentinel2_l2a"][()]
+        rows = [next(i for i, t in enumerate(scl_ts) if (t == s).all()) for s in s2_ts]
+        expected = np.isin(scl[:, :, rows], CLOUD_SCL_CLASSES).astype(np.uint8)
+        np.testing.assert_array_equal(_field(sample, "sentinel2_l2a_cloud"), expected)
+        assert "sentinel2_l2a_cloud" not in sample.modalities
+
+
+def test_s2_cloud_flags_leave_sampling_unchanged(allcap_h5py_dir: UPath) -> None:
+    """Loading cloud flags draws the same crops, ranges and captures (same batches)."""
+    plain = _dataset(allcap_h5py_dir)
+    cloudy = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    for seed in range(3):
+        samples = []
+        for dataset in (plain, cloudy):
+            np.random.seed(seed)
+            args = GetItemArgs(
+                idx=seed % 2,
+                patch_size=2,
+                sampled_hw_p=3,
+                time_range_days=90,
+                token_budget=400,
+                tokenization_config=S2_SINGLE,
+            )
+            samples.append(dataset[args][1])
+        for name, value in samples[0].as_dict().items():
+            np.testing.assert_array_equal(getattr(samples[1], name), value)
+        cloud = _field(samples[1], "sentinel2_l2a_cloud")
+        assert cloud.shape == _field(samples[1], "sentinel2_l2a").shape[:3]
+
+
+def test_cloudy_s2_targets_become_missing(allcap_h5py_dir: UPath) -> None:
+    """Only S2 decoder targets whose patch is mostly cloud change (to MISSING)."""
+    import torch
+
+    from olmoearth_pretrain.data.collate import (
+        CLOUDY_TOKEN_FRACTION,
+        collate_double_masked_batched,
+    )
+    from olmoearth_pretrain.datatypes import MaskValue
+    from olmoearth_pretrain.train.masking import MaskingConfig
+
+    dataset = _dataset(allcap_h5py_dir, normalize=True, load_s2_cloud_mask=True)
+    np.random.seed(5)
+    items = [
+        dataset[
+            GetItemArgs(idx=i % 2, patch_size=2, sampled_hw_p=4, time_range_days=180)
+        ]
+        for i in range(4)
+    ]
+    stripped = [(p, s._replace(sentinel2_l2a_cloud=None)) for p, s in items]
+    masking = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "only_decode_modalities": ["srtm"],
+        }
+    ).build()
+    outputs = []
+    for batch in (stripped, items):
+        np.random.seed(6)
+        torch.manual_seed(6)
+        outputs.append(collate_double_masked_batched(batch, None, masking, None))
+    (_, ref_a, ref_b), (_, out_a, out_b) = outputs
+    cloud = _field(collate_olmoearth_pretrain(items)[1], "sentinel2_l2a_cloud")
+    fraction = cloud.float().reshape(4, 4, 2, 4, 2, -1).mean(dim=(2, 4))
+    cloudy = (
+        (fraction > CLOUDY_TOKEN_FRACTION)
+        .repeat_interleave(2, 1)
+        .repeat_interleave(2, 2)
+    )
+    dropped = 0
+    for ref, out in ((ref_a, out_a), (ref_b, out_b)):
+        for name, value in ref.as_dict().items():
+            if name != "sentinel2_l2a_mask":
+                assert torch.equal(getattr(out, name), value), name
+        before, after = (
+            _field(ref, "sentinel2_l2a_mask"),
+            _field(out, "sentinel2_l2a_mask"),
+        )
+        expect_drop = cloudy.unsqueeze(-1) & (before == MaskValue.DECODER.value)
+        assert torch.equal(
+            after[expect_drop],
+            torch.full_like(after[expect_drop], MaskValue.MISSING.value),
+        )
+        assert torch.equal(after[~expect_drop], before[~expect_drop])
+        dropped += int(expect_drop.sum())
+    assert dropped > 0
 
 
 def _densify(batch: OlmoEarthSample) -> OlmoEarthSample:

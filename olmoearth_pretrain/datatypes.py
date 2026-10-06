@@ -53,6 +53,11 @@ def time_index_field(modality: str) -> str:
 
 TIME_INDEX_FIELDS = tuple(time_index_field(m) for m in TIME_INDEXED_MODALITIES)
 
+# Per-pixel cloud flags of sentinel2_l2a's own timesteps ([B, H, W, T_s2] uint8,
+# 1 = cloud or cloud shadow in the S2 scene classification). Loss-side metadata
+# (cloudy S2 tokens are not decoder targets), never a model input or modality.
+S2_CLOUD_FIELD = "sentinel2_l2a_cloud"
+
 
 # =============================================================================
 # Shared standalone helpers (called by NamedTuple methods to avoid duplication)
@@ -70,13 +75,13 @@ def _as_dict(obj: NamedTuple, include_nones: bool = False) -> dict[str, Any]:
 
 
 def _modalities(obj: NamedTuple) -> list[str]:
-    """Get present modalities (excludes masks, timestamps and time indices)."""
+    """Get present modalities (excludes masks, timestamps, time indices, cloud flags)."""
     return [
         name
         for name in obj._fields
         if not name.endswith("_mask")
         and not name.endswith(TIME_INDEX_SUFFIX)
-        and name != TIMESTAMPS_FIELD
+        and name not in (TIMESTAMPS_FIELD, S2_CLOUD_FIELD)
         and getattr(obj, name) is not None
     ]
 
@@ -150,6 +155,7 @@ class OlmoEarthSample(NamedTuple):
     sentinel1_time_index: ArrayTensor | None = None
     landsat_time_index: ArrayTensor | None = None
     landsat_l2_time_index: ArrayTensor | None = None
+    sentinel2_l2a_cloud: ArrayTensor | None = None  # [B, H, W, T_s2], S2_CLOUD_FIELD
 
     def as_dict(self, include_nones: bool = False) -> dict[str, ArrayTensor | None]:
         """Convert to a dictionary.
@@ -204,6 +210,8 @@ class OlmoEarthSample(NamedTuple):
             return len(TIMESTAMPS)
         if attribute.endswith(TIME_INDEX_SUFFIX):
             return 1  # one timeline row per timestep slot
+        if attribute == S2_CLOUD_FIELD:
+            return 1  # one cloud flag per pixel and timestep
         return Modality.get(attribute).num_bands
 
     def to_device(
@@ -528,6 +536,8 @@ class MaskedOlmoEarthSample(NamedTuple):
         """
         masked_sample_dict: dict[str, Any] = {}
         for key, t in sample.as_dict(include_nones=True).items():
+            if key == S2_CLOUD_FIELD:
+                continue  # consumed by the collator, not part of the masked sample
             if key == "timestamps" or key.endswith(TIME_INDEX_SUFFIX):
                 masked_sample_dict[key] = t
             else:

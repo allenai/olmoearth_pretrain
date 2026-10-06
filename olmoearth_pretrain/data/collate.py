@@ -7,12 +7,17 @@ import torch
 from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.data.transform import Transform
 from olmoearth_pretrain.datatypes import (
+    S2_CLOUD_FIELD,
     TIME_INDEX_FIELDS,
     TIME_INDEX_SUFFIX,
     MaskedOlmoEarthSample,
+    MaskValue,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
+
+# An S2 token is cloudy when more than this fraction of its patch's pixels are.
+CLOUDY_TOKEN_FRACTION = 0.5
 
 
 def _with_time_indices(
@@ -28,6 +33,31 @@ def _with_time_indices(
         if getattr(sample, name) is not None
     }
     return masked._replace(**updates) if updates else masked
+
+
+def _drop_cloudy_s2_targets(
+    masked: MaskedOlmoEarthSample, sample: OlmoEarthSample, patch_size: int
+) -> MaskedOlmoEarthSample:
+    """Cloudy S2 decoder targets become MISSING, so the loss never asks for a cloud.
+
+    Uses the sample's ``S2_CLOUD_FIELD`` flags (absent: no change). Cloudy S2
+    tokens the masking made encoder inputs stay inputs; other modalities are
+    untouched.
+    """
+    cloud = getattr(sample, S2_CLOUD_FIELD)
+    if cloud is None:
+        return masked
+    mask = masked.sentinel2_l2a_mask  # [B, H, W, T_s2, bandsets]
+    assert mask is not None
+    b, h, w, t = cloud.shape
+    p = patch_size
+    fraction = cloud.float().reshape(b, h // p, p, w // p, p, t).mean(dim=(2, 4))
+    cloudy = (fraction > CLOUDY_TOKEN_FRACTION).repeat_interleave(p, dim=1)
+    cloudy = cloudy.repeat_interleave(p, dim=2).unsqueeze(-1)
+    drop = cloudy & (mask == MaskValue.DECODER.value)
+    return masked._replace(
+        sentinel2_l2a_mask=mask.masked_fill(drop, MaskValue.MISSING.value)
+    )
 
 
 def collate_olmoearth_pretrain(
@@ -50,7 +80,12 @@ def collate_olmoearth_pretrain(
         # padded steps become MISSING tokens), time indices with -1 (padding
         # slot) and timestamps with copies of the last timestamp, as the dataset
         # does when padding to max_sequence_length.
-        fill = -1 if attr.endswith(TIME_INDEX_SUFFIX) else MISSING_VALUE
+        if attr.endswith(TIME_INDEX_SUFFIX):
+            fill = -1
+        elif attr == S2_CLOUD_FIELD:
+            fill = 0  # padding slots are MISSING anyway
+        else:
+            fill = MISSING_VALUE
         stacked = torch.full((len(arrays), *shape), fill, dtype=arrays[0].dtype)
         for i, array in enumerate(arrays):
             stacked[i][tuple(slice(0, n) for n in array.shape)] = array
@@ -99,6 +134,7 @@ def collate_single_masked_batched(
     masked_sample = _with_time_indices(
         masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
     )
+    masked_sample = _drop_cloudy_s2_targets(masked_sample, stacked_sample, patch_size)
     if uint8_masks:
         masked_sample = masked_sample.with_uint8_masks()
 
@@ -144,6 +180,12 @@ def collate_double_masked_batched(
     )
     masked_sample_b = _with_time_indices(
         strategy_b.apply_mask(stacked_sample, patch_size), stacked_sample
+    )
+    masked_sample_a = _drop_cloudy_s2_targets(
+        masked_sample_a, stacked_sample, patch_size
+    )
+    masked_sample_b = _drop_cloudy_s2_targets(
+        masked_sample_b, stacked_sample, patch_size
     )
     if uint8_masks:
         masked_sample_a = masked_sample_a.with_uint8_masks()
