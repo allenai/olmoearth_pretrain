@@ -60,28 +60,6 @@ def _worker_ignore_sigterm(worker_id: int) -> None:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
-def choose_latent_patch_size(
-    rng: np.random.Generator,
-    patch_size: int,
-    sampled_hw_p: int,
-    max_latents: int,
-) -> int:
-    """Draw the Perceiver latent patch size for one rank batch.
-
-    Uniform among the divisors ``s`` of ``patch_size`` whose latent count
-    ``(sampled_hw_p * patch_size / s) ** 2`` fits ``max_latents``. ``s ==
-    patch_size`` (one latent per token) is always allowed, so every batch has an
-    option.
-    """
-    allowed = [
-        s
-        for s in range(1, patch_size + 1)
-        if patch_size % s == 0
-        and (s == patch_size or (sampled_hw_p * patch_size // s) ** 2 <= max_latents)
-    ]
-    return int(rng.choice(allowed))
-
-
 class OlmoEarthDataLoader(DataLoaderBase):
     """OlmoEarth Pretrain dataloader.
 
@@ -169,8 +147,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
             tile_size: Spatial extent (in base-resolution pixels) of a training tile.
                 Used to bound the sampled grid so ``sampled_hw_p * patch_size`` fits.
             max_latents: Per-sample Perceiver latent budget. If set, every rank batch
-                also draws a ``latent_patch_size`` (see :func:`choose_latent_patch_size`)
-                next to its patch size; None leaves it None (one latent per token).
+                also draws a ``latent_patch_size`` next to its patch size: uniform
+                among the divisors ``s`` of the patch size whose latent count
+                ``(sampled_hw_p * patch_size / s) ** 2`` fits the budget (``s ==
+                patch_size``, one latent per token, is always allowed). None leaves
+                it None (one latent per token).
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -698,6 +679,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         time_priority_prob = dl.time_priority_prob
         temporal_bias = dl.temporal_bias
         min_tokens = dl.min_tokens_per_instance
+        max_latents = dl.max_latents
 
         def max_t_for(hw: int) -> int:
             """Largest number of timesteps that fits the budget for this grid."""
@@ -734,6 +716,21 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             weights = ts.astype(np.float64) ** temporal_bias
             weights /= weights.sum()
             return int(rng.choice(ts, p=weights))
+
+        def sample_latent_patch_size(patch_size: int, hw: int) -> int | None:
+            """Uniform over the latent patch sizes that fit max_latents (see __init__).
+
+            None without a budget, and then no draw is taken from ``rng``.
+            """
+            if max_latents is None:
+                return None
+            allowed = [
+                s
+                for s in range(1, patch_size + 1)
+                if patch_size % s == 0
+                and (s == patch_size or (hw * patch_size // s) ** 2 <= max_latents)
+            ]
+            return int(rng.choice(allowed))
 
         # TODO: We need to maintain state and reproducibility here
         worker_id = self.worker_info.id if self.worker_info is not None else 0
@@ -794,12 +791,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     sampled_hw_p = int(rng.choice(candidates))
                     lo, hi = windows[sampled_hw_p]
                     target_t = sample_t(lo, hi)
-                latent_patch_size = (
-                    choose_latent_patch_size(
-                        rng, patch_size, sampled_hw_p, dl.max_latents
-                    )
-                    if dl.max_latents is not None
-                    else None
+                latent_patch_size = sample_latent_patch_size(
+                    int(patch_size), sampled_hw_p
                 )
             yield (
                 idx,
