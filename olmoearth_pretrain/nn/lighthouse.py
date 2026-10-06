@@ -607,18 +607,6 @@ def encoder_lighthouse(
 # -------------------------------------------------------------------------- domain
 
 
-def _crop(
-    sample: MaskedOlmoEarthSample, rows: slice, cols: slice
-) -> MaskedOlmoEarthSample:
-    fields = sample.as_dict()
-    return MaskedOlmoEarthSample(
-        **{
-            k: v if v is None or k == "timestamps" else v[:, rows, cols]
-            for k, v in fields.items()
-        }
-    )
-
-
 @torch.no_grad()
 def embed_domain(
     encoder: Encoder,
@@ -649,7 +637,7 @@ def embed_domain(
             r0, c0 = max(r - halo_px, 0), max(c - halo_px, 0)
             r1, c1 = min(r + core_px + halo_px, H), min(c + core_px + halo_px, W)
             emb = encoder(
-                _crop(sample, slice(r0, r1), slice(c0, c1)),
+                sample.crop(slice(r0, r1), slice(c0, c1)),
                 patch_size=patch_size,
                 input_res=input_res,
                 latent_patch_size=latent_patch_size,
