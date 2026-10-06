@@ -477,3 +477,21 @@ def test_write_back_with_a_narrow_mixing_stream() -> None:
     out = encoder(_sample(), patch_size=2, input_res=10)
     out["registers"].sum().backward()
     assert attn.k.weight.grad is not None and attn.k.weight.grad.abs().sum() > 0
+
+
+def test_eval_latent_stride_zero_is_one_latent_per_token_cell() -> None:
+    """Stride 0 at eval resolves to the forward pass's patch size, at any patch size."""
+    from olmoearth_pretrain.nn.joint_latent import choose_latent_stride
+
+    for patch_size in (1, 2, 4, 8):
+        assert (
+            choose_latent_stride(
+                training=False,
+                spatial_grid=(4, 4),
+                patch_size=patch_size,
+                random_latent_stride=True,
+                max_latents=512,
+                eval_latent_stride=0,
+            )
+            == patch_size
+        )
