@@ -2425,7 +2425,7 @@ class Encoder(FlexiVitBase):
 
         ``latent_patch_size`` sets the Perceiver's latent grid (see
         :meth:`Perceiver.forward`); it requires a Perceiver. ``searchlight`` runs the
-        attention under a sliding field of view (``nn/searchlight.py``).
+        attention under a sliding neighborhood (``nn/searchlight.py``).
         """
         if latent_patch_size is not None and self.perceiver is None:
             raise ValueError("latent_patch_size requires an encoder with a Perceiver")
@@ -2639,7 +2639,7 @@ class Encoder(FlexiVitBase):
                 divide ``patch_size``. None = one latent per token. Requires a
                 Perceiver.
             searchlight: Inference only: every token and latent attends within its
-                own sliding field of view over one whole domain (batch size 1),
+                own sliding neighborhood over one whole domain (batch size 1),
                 instead of the window it was cropped to. None = the stock forward.
                 See ``nn/searchlight.py``; ``searchlight.embed_domain`` runs large
                 areas in pieces.
