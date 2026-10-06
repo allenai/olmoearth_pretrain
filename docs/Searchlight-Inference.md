@@ -65,17 +65,17 @@ whole timesteps, so this holds for them.
 
 - `overlap_px`: an output depends on inputs up to `searchlight_reach_px(...)` away
   (120 px for 12 ViT + 2 Perceiver layers at ps2), so an overlap of twice that is
-  exact. Much less is indistinguishable in practice (measured on v1.3 at ps1: a 32 px
-  overlap gives per-pixel cosine p01 0.9999 vs the exact overlap; 64 px is identical
-  to five decimals). Each forward computes `crop^2 / (crop - overlap)^2` times the
-  area it keeps, ~1.15x at 480 / 32.
+  exact, but 32 px is enough. Measured on Seattle (`v1_3_rc_ld2_pix512`, ps2, H100)
+  against the exact overlap: per-pixel cosine mean 0.99997 within 2 px of a crop
+  boundary and 0.99999 from 8 px in (the bf16 floor), and no seam at the crop
+  boundaries. Each forward computes `crop^2 / (crop - overlap)^2` times the area it
+  keeps, ~1.15x at 480 / 32.
 - `crop_px`: as large as memory allows. At 480 px (ps2, S1 + S2 + Landsat x 12
   months) a 1536 px window peaked at ~65 GB on an 80 GB H100, including the whole
   window held on the GPU; that also fits an 80 GB A100. 688 px does not fit.
 
 **Settings** (`SearchlightSettings`): `neighborhood_attention_size_px` (16, the training window),
-`compile` (compile the projection / MLP math, ~1.3x), `backend` (see below) and
-`origin_px` (set by `embed_domain`).
+`compile` (compile the projection / MLP math, ~1.3x) and `backend` (see below).
 
 ## Setup
 

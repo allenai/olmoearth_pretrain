@@ -41,7 +41,7 @@ Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -83,15 +83,11 @@ class SearchlightSettings:
             in PIXELS (the 16 px training window); a multiple of the patch size. In
             cells (tokens per side) it is this divided by the patch size, e.g. 8 at
             ps2.
-        origin_px: ``(row, col)`` pixel offset of this domain in a larger one. RoPE
-            is relative, so this only matters at fp32 rounding, but it keeps chunks
-            of one domain consistent with each other.
         compile: ``torch.compile`` the projection and MLP math (~1.3x).
         backend: Attention kernel on GPU (see :func:`neighborhood_attention`).
     """
 
     neighborhood_attention_size_px: int = 16
-    origin_px: tuple[int, int] = (0, 0)
     compile: bool = False
     backend: str = "auto"
 
@@ -556,10 +552,8 @@ def encoder_searchlight(
         CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
         * encoder.rope_coordinate_scale
     )
-    shift = torch.tensor(settings.origin_px, device=device) * (gsd_ratio / patch_size)
     x = tokens[:, order]
     pos = positions[:, order]
-    pos[..., -2:] += shift.to(pos.dtype)
 
     for blk in encoder.blocks:
         x = _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
@@ -583,7 +577,6 @@ def encoder_searchlight(
         lat_pos = rearrange(
             lat_positions[0], "(h a w b) c -> 1 (h w a b) c", h=n_h, a=r, b=r
         )
-        lat_pos = lat_pos + shift.to(lat_pos.dtype)
         lat = perceiver.register.to(x.dtype).expand(1, n_h * n_w * r * r, -1)
         key_pos = pos[..., -2:]  # the reads rotate over (row, col) only
         for i, (read_blk, lat_blk) in enumerate(
@@ -666,7 +659,7 @@ def embed_domain(
                 patch_size=patch_size,
                 input_res=input_res,
                 latent_patch_size=latent_patch_size,
-                searchlight=replace(settings, origin_px=(r0, c0)),
+                searchlight=settings,
             )[output_key][0]
             if out is None:
                 out = emb.new_zeros(H // s, W // s, emb.shape[-1])
