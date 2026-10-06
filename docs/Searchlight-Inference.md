@@ -69,7 +69,7 @@ whole timesteps, so this holds for them.
 - `core_px`: as large as memory allows; at 448 px the original implementation
   peaked at ~38 GB at ps2 with S1 + S2 + Landsat x 12 months.
 
-**Settings** (`SearchlightSettings`): `fov_px` (16, the training window),
+**Settings** (`SearchlightSettings`): `neighborhood_attention_size_px` (16, the training window),
 `compile` (compile the projection / MLP math, ~1.3x), `backend` (see below),
 `tokens_per_call` (memory only) and `origin_px` (set by `embed_domain`).
 

@@ -83,7 +83,7 @@ def _encoder() -> Encoder:
 def test_one_window_domain_matches_the_stock_forward(
     patch_size: int, latent_patch_size: int | None, missing_in: tuple[str, ...]
 ) -> None:
-    """A domain exactly one FOV wide: every query's box is the whole window.
+    """A domain exactly one neighborhood wide: every query's box is the whole window.
 
     Missing data is a whole timestep of one or more modalities (S1 missing while
     S2 is present is the common case).
@@ -96,7 +96,9 @@ def test_one_window_domain_matches_the_stock_forward(
     with torch.no_grad():
         stock = encoder(sample, **kwargs)
         searchlight = encoder(
-            sample, **kwargs, searchlight=SearchlightSettings(fov_px=16)
+            sample,
+            **kwargs,
+            searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
         )
     for key in ("registers", "student_registers", "register_positions"):
         torch.testing.assert_close(searchlight[key], stock[key], atol=1e-5, rtol=1e-5)
@@ -112,18 +114,23 @@ def test_one_window_domain_matches_the_stock_forward(
 def test_reference_attention_is_the_sliding_box() -> None:
     """A query sees exactly the cells of its box, shifted inward at the edges."""
     h = w = 6
-    fov = 4
+    neighborhood_cells = 4
     torch.manual_seed(0)
     q = torch.randn(h, w, 2, 1, 4)
     k = torch.randn(h, w, 3, 1, 4)
     # Values one-hot on the key's cell: the output's support is the attended cells.
     v = torch.eye(h * w).view(h, w, 1, 1, h * w).expand(h, w, 3, 1, h * w)
-    seen = (_reference_na(q, k, v, fov)[..., 0, 0, :] > 0).view(h, w, h, w)
+    seen = (_reference_na(q, k, v, neighborhood_cells)[..., 0, 0, :] > 0).view(
+        h, w, h, w
+    )
     starts = [0, 0, 0, 1, 2, 2]  # clip(r - 2, 0, 2)
     for r in range(h):
         for c in range(w):
             box = torch.zeros(h, w, dtype=torch.bool)
-            box[starts[r] : starts[r] + fov, starts[c] : starts[c] + fov] = True
+            box[
+                starts[r] : starts[r] + neighborhood_cells,
+                starts[c] : starts[c] + neighborhood_cells,
+            ] = True
             assert torch.equal(seen[r, c], box)
 
 
@@ -131,18 +138,18 @@ def _exact_flex_mask_mod(
     q_cells: tuple[torch.Tensor, torch.Tensor],
     k_cells: tuple[torch.Tensor, torch.Tensor],
     w: int,
-    fov: int,
+    neighborhood_cells: int,
     h: int,
 ) -> Callable[..., torch.Tensor]:
     """Rows + cols: what the GPU's block tables + column mask compute together."""
-    cols = _flex_mask_mod(q_cells, k_cells, w, fov)
-    r0 = (q_cells[0] - fov // 2).clamp(0, h - fov)
+    cols = _flex_mask_mod(q_cells, k_cells, w, neighborhood_cells)
+    r0 = (q_cells[0] - neighborhood_cells // 2).clamp(0, h - neighborhood_cells)
 
     def mask_mod(
         b: torch.Tensor, hd: torch.Tensor, qi: torch.Tensor, ki: torch.Tensor
     ) -> torch.Tensor:
         kr = k_cells[0][ki]
-        return cols(b, hd, qi, ki) & (kr >= r0[qi]) & (kr < r0[qi] + fov)
+        return cols(b, hd, qi, ki) & (kr >= r0[qi]) & (kr < r0[qi] + neighborhood_cells)
 
     return mask_mod
 
@@ -155,28 +162,28 @@ def test_flex_layout_matches_the_reference(
 
     CPU eager flex ignores the block tables, so the row test is added to the mask.
     """
-    h, w, fov = 7, 9, 4
+    h, w, neighborhood_cells = 7, 9, 4
     monkeypatch.setattr(searchlight, "_BLOCK_MASKS", {})  # no masks from other tests
     monkeypatch.setattr(
         searchlight,
         "_flex_mask_mod",
-        lambda q_cells, k_cells, w_, fov_: _exact_flex_mask_mod(
-            q_cells, k_cells, w_, fov_, h
+        lambda q_cells, k_cells, w_, cells_: _exact_flex_mask_mod(
+            q_cells, k_cells, w_, cells_, h
         ),
     )
     torch.manual_seed(0)
     q = torch.randn(h, w, kq, 2, 8)
     k, v = torch.randn(2, h, w, kk, 2, 8)
-    out = _flex_na(q, k, v, fov, block=16, chunk=3)
-    torch.testing.assert_close(out, _reference_na(q, k, v, fov))
+    out = _flex_na(q, k, v, neighborhood_cells, block=16, chunk=3)
+    torch.testing.assert_close(out, _reference_na(q, k, v, neighborhood_cells))
 
 
 @pytest.mark.parametrize(("kq", "kk"), [(4, 12), (12, 12), (1, 3)])
 def test_flex_blocks_and_mask_are_exactly_the_box(kq: int, kk: int) -> None:
     """Partial blocks AND the column mask, plus full blocks, = the box rule exactly."""
-    h, w, fov, block = 7, 9, 4, 16
+    h, w, neighborhood_cells, block = 7, 9, 4, 16
     cpu = torch.device("cpu")
-    tables = _flex_tables(h, w, kq, kk, fov, block, cpu)
+    tables = _flex_tables(h, w, kq, kk, neighborhood_cells, block, cpu)
     lq = -(-w * kq // block) * block
     lk = -(-w * kk // block) * block
     listed = []
@@ -193,14 +200,20 @@ def test_flex_blocks_and_mask_are_exactly_the_box(kq: int, kk: int) -> None:
         _flex_cells(h, w, kq, block, cpu),
         _flex_cells(h, w, kk, block, cpu),
     )
-    mask = _flex_mask_mod(q_cells, k_cells, w, fov)(
+    mask = _flex_mask_mod(q_cells, k_cells, w, neighborhood_cells)(
         0, 0, torch.arange(h * lq)[:, None], torch.arange(h * lk)
     )
     # The rule, written out independently.
     (qr, qc), (kr, kc) = q_cells, k_cells
-    r0 = (qr - fov // 2).clamp(0, h - fov)[:, None]
-    c0 = (qc - fov // 2).clamp(0, w - fov)[:, None]
-    rule = (kc >= 0) & (kr >= r0) & (kr < r0 + fov) & (kc >= c0) & (kc < c0 + fov)
+    r0 = (qr - neighborhood_cells // 2).clamp(0, h - neighborhood_cells)[:, None]
+    c0 = (qc - neighborhood_cells // 2).clamp(0, w - neighborhood_cells)[:, None]
+    rule = (
+        (kc >= 0)
+        & (kr >= r0)
+        & (kr < r0 + neighborhood_cells)
+        & (kc >= c0)
+        & (kc < c0 + neighborhood_cells)
+    )
     real = qc >= 0
     assert torch.equal(((partial & mask) | full)[real], rule[real])
 

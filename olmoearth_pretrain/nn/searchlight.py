@@ -1,9 +1,9 @@
-"""Searchlight inference: every query attends within its own sliding field of view.
+"""Searchlight inference: every query attends within its own sliding neighborhood.
 
 Tiled inference runs the encoder on training-size windows (16 px) and stitches them,
 so a pixel's context jumps at every tile seam. Searchlight instead runs a whole domain
 in one pass and gives every query the window it would see if a 16 px training window
-were centred on it: ``W = fov_px / patch_size`` cells per side, sliding one cell at a
+were centred on it: ``W = neighborhood_attention_size_px / patch_size`` cells per side, sliding one cell at a
 time and shifted inward (not shrunk) at the domain edge. The rule applies to all three
 attentions of the ViT + Perceiver encoder (v1.3 RC, pix512):
 
@@ -79,8 +79,10 @@ class SearchlightSettings:
     """Inference-only: pass as ``Encoder.forward(..., searchlight=...)``.
 
     Args:
-        fov_px: Field of view in pixels (the 16 px training window); a multiple of
-            the patch size.
+        neighborhood_attention_size_px: Side of each query's attention neighborhood
+            in PIXELS (the 16 px training window); a multiple of the patch size. In
+            cells (tokens per side) it is this divided by the patch size, e.g. 8 at
+            ps2.
         origin_px: ``(row, col)`` pixel offset of this domain in a larger one. RoPE
             is relative, so this only matters at fp32 rounding, but it keeps chunks
             of one domain consistent with each other.
@@ -91,7 +93,7 @@ class SearchlightSettings:
         backend: Attention kernel on GPU (see :func:`neighborhood_attention`).
     """
 
-    fov_px: int = 16
+    neighborhood_attention_size_px: int = 16
     origin_px: tuple[int, int] = (0, 0)
     tokens_per_call: int = 1 << 18
     compile: bool = False
@@ -99,7 +101,10 @@ class SearchlightSettings:
 
 
 def searchlight_reach_px(
-    fov_px: int, patch_size: int, vit_depth: int, perceiver_depth: int
+    neighborhood_attention_size_px: int,
+    patch_size: int,
+    vit_depth: int,
+    perceiver_depth: int,
 ) -> int:
     """Pixels an output can depend on in each direction (the exact chunk halo).
 
@@ -107,7 +112,11 @@ def searchlight_reach_px(
     last read (earlier reads see the same tokens) and each latent self-attention.
     A much shorter halo is enough in practice (16 px: cosine p01 0.9999 vs exact).
     """
-    return (vit_depth + 1 + perceiver_depth) * (fov_px // patch_size // 2) * patch_size
+    return (
+        (vit_depth + 1 + perceiver_depth)
+        * (neighborhood_attention_size_px // patch_size // 2)
+        * patch_size
+    )
 
 
 # ----------------------------------------------------------------- attention kernels
@@ -117,16 +126,16 @@ def searchlight_reach_px(
 _COMPILED: dict[str, Callable[..., Any]] = {}
 
 
-def _box_start(i: Tensor, n: int, fov: int) -> Tensor:
-    """First cell of the ``fov``-cell box around cell ``i`` of ``n``, shifted inward."""
-    return (i - fov // 2).clamp(0, n - fov)
+def _box_start(i: Tensor, n: int, neighborhood_cells: int) -> Tensor:
+    """First cell of the ``neighborhood_cells``-cell box around cell ``i`` of ``n``, shifted inward."""
+    return (i - neighborhood_cells // 2).clamp(0, n - neighborhood_cells)
 
 
 def _round_up(n: int, block: int) -> int:
     return -(-n // block) * block
 
 
-def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
+def _reference_na(q: Tensor, k: Tensor, v: Tensor, neighborhood_cells: int) -> Tensor:
     """Dense masked attention implementing the Searchlight rule (CPU / tests).
 
     ``q`` is ``[h, w, Kq, H, D]``, ``k`` and ``v`` ``[h, w, Kk, H, D]``.
@@ -136,8 +145,8 @@ def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
 
     def inside(n: int) -> Tensor:  # [query cell, key cell] along one axis
         cells = torch.arange(n, device=q.device)
-        start = _box_start(cells, n, fov)[:, None]
-        return (cells[None, :] >= start) & (cells[None, :] < start + fov)
+        start = _box_start(cells, n, neighborhood_cells)[:, None]
+        return (cells[None, :] >= start) & (cells[None, :] < start + neighborhood_cells)
 
     mask = (inside(h)[:, None, :, None] & inside(w)[None, :, None, :]).reshape(
         h * w, h * w
@@ -152,7 +161,7 @@ def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     return rearrange(o, "1 n (h w k) d -> h w k n d", h=h, w=w)
 
 
-def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
+def _natten_na(q: Tensor, k: Tensor, v: Tensor, neighborhood_cells: int) -> Tensor:
     """:func:`_reference_na` with NATTEN.
 
     NATTEN needs queries and keys on the same grid, so each cell's ``Kq`` queries are
@@ -175,10 +184,15 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     k = k.expand(groups, *k.shape)
     v = v.expand(groups, *v.shape)
     if kk == 1:  # NATTEN rejects kernel sizes < 2; one element per cell is 2D anyway
-        o = natten.na2d(q[:, :, :, 0], k[:, :, :, 0], v[:, :, :, 0], (fov, fov))
+        o = natten.na2d(
+            q[:, :, :, 0],
+            k[:, :, :, 0],
+            v[:, :, :, 0],
+            (neighborhood_cells, neighborhood_cells),
+        )
         o = o[:, :, :, None]
     else:
-        o = natten.na3d(q, k, v, (fov, fov, kk))
+        o = natten.na3d(q, k, v, (neighborhood_cells, neighborhood_cells, kk))
     return rearrange(o, "g h w k n d -> h w (g k) n d")[:, :, :kq]
 
 
@@ -187,17 +201,23 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
 # Queries and keys are laid out row-major by cell, (row, col, k), with each cell row
 # padded to a multiple of the attention block. A block of queries then lies in one
 # cell row, and the keys its boxes need are one run of key blocks in each of the
-# box's ``fov`` rows. The block tables list exactly those runs; the mask only tests
+# box's ``neighborhood_cells`` rows. The block tables list exactly those runs; the mask only tests
 # columns.
 
 
 def _flex_tables(
-    h: int, w: int, kq: int, kk: int, fov: int, block: int, device: torch.device
+    h: int,
+    w: int,
+    kq: int,
+    kk: int,
+    neighborhood_cells: int,
+    block: int,
+    device: torch.device,
 ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Key blocks of every query block for FlexAttention: partial and full lists.
 
     In the row-padded layout of :func:`_flex_na` a query block lies in one cell row
-    and its queries' boxes span ``fov`` cell rows and one run of columns, which is
+    and its queries' boxes span ``neighborhood_cells`` cell rows and one run of columns, which is
     the same run of key blocks in each of those rows. Blocks inside EVERY query's
     box are "full" and skip the mask. Returns ``(partial count, partial indices,
     full count, full indices)``.
@@ -207,16 +227,16 @@ def _flex_tables(
     row = qb // (lq // block)
     first_el = (qb % (lq // block)) * block
     last_el = (first_el + block - 1).clamp(max=w * kq - 1)
-    r0 = _box_start(row, h, fov)
-    c0_first = _box_start((first_el // kq).clamp(max=w - 1), w, fov)
-    c0_last = _box_start(last_el // kq, w, fov)
+    r0 = _box_start(row, h, neighborhood_cells)
+    c0_first = _box_start((first_el // kq).clamp(max=w - 1), w, neighborhood_cells)
+    c0_last = _box_start(last_el // kq, w, neighborhood_cells)
     # Key-block offsets within a key row: [first, first + n) covers every query's
     # box; [full_lo, full_hi) lies inside all of them.
     first = c0_first * kk // block
-    n = ((c0_last + fov) * kk - 1) // block - first + 1
+    n = ((c0_last + neighborhood_cells) * kk - 1) // block - first + 1
     full_lo = -(-c0_last * kk // block)
-    full_hi = (c0_first + fov) * kk // block
-    i = torch.arange(fov, device=device)[None, :, None]
+    full_hi = (c0_first + neighborhood_cells) * kk // block
+    i = torch.arange(neighborhood_cells, device=device)[None, :, None]
     offset = first[:, None, None] + torch.arange(int(n.max()), device=device)
     idx = (r0[:, None, None] + i) * (lk // block) + offset
     in_run = (offset < (first + n)[:, None, None]).expand_as(idx)
@@ -243,7 +263,10 @@ def _flex_cells(
 
 
 def _flex_mask_mod(
-    q_cells: tuple[Tensor, Tensor], k_cells: tuple[Tensor, Tensor], w: int, fov: int
+    q_cells: tuple[Tensor, Tensor],
+    k_cells: tuple[Tensor, Tensor],
+    w: int,
+    neighborhood_cells: int,
 ) -> Callable[..., Tensor]:
     """The box rule's column test, from each slot's cell (padding keys: col -1).
 
@@ -252,12 +275,12 @@ def _flex_mask_mod(
     is kept minimal: on A100 a ViT call took 1.5 s testing rows + cols in int64 and
     0.9 s testing int32 cols only.
     """
-    q_c0 = _box_start(q_cells[1].clamp(min=0), w, fov).int()
+    q_c0 = _box_start(q_cells[1].clamp(min=0), w, neighborhood_cells).int()
     k_col = k_cells[1].int()
 
     def mask_mod(b: Tensor, hd: Tensor, qi: Tensor, ki: Tensor) -> Tensor:
         c0, kc = q_c0[qi], k_col[ki]
-        return (kc >= c0) & (kc < c0 + fov)
+        return (kc >= c0) & (kc < c0 + neighborhood_cells)
 
     return mask_mod
 
@@ -267,16 +290,23 @@ _BLOCK_MASKS: dict[tuple, list[tuple[slice, Any]]] = {}
 
 
 def _flex_block_masks(
-    h: int, w: int, kq: int, kk: int, fov: int, block: int, chunk: int, device: Any
+    h: int,
+    w: int,
+    kq: int,
+    kk: int,
+    neighborhood_cells: int,
+    block: int,
+    chunk: int,
+    device: Any,
 ) -> list[tuple[slice, Any]]:
     """``(query slice, BlockMask)`` per chunk of ``chunk`` query blocks, cached."""
     from torch.nn.attention.flex_attention import BlockMask
 
-    key = (h, w, kq, kk, fov, block, chunk, device)
+    key = (h, w, kq, kk, neighborhood_cells, block, chunk, device)
     if key in _BLOCK_MASKS:
         return _BLOCK_MASKS[key]
     part_num, part_idx, full_num, full_idx = _flex_tables(
-        h, w, kq, kk, fov, block, device
+        h, w, kq, kk, neighborhood_cells, block, device
     )
     q_rows, q_cols = _flex_cells(h, w, kq, block, device)
     k_cells = _flex_cells(h, w, kk, block, device)
@@ -297,7 +327,9 @@ def _flex_block_masks(
             full_num[None, None, b0:b1].int(),
             table(full_idx),
             BLOCK_SIZE=block,
-            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, w, fov),
+            mask_mod=_flex_mask_mod(
+                (q_rows[s], q_cols[s]), k_cells, w, neighborhood_cells
+            ),
             seq_lengths=((b1 - b0) * block, n_kb * block),
             compute_q_blocks=False,
         )
@@ -307,7 +339,12 @@ def _flex_block_masks(
 
 
 def _flex_na(
-    q: Tensor, k: Tensor, v: Tensor, fov: int, block: int = 128, chunk: int = 1 << 13
+    q: Tensor,
+    k: Tensor,
+    v: Tensor,
+    neighborhood_cells: int,
+    block: int = 128,
+    chunk: int = 1 << 13,
 ) -> Tensor:
     """:func:`_reference_na` with FlexAttention (GPUs without fast NATTEN, e.g. A100).
 
@@ -332,14 +369,16 @@ def _flex_na(
             _COMPILED["flex"] = torch.compile(flex_attention, dynamic=True)
         attend = _COMPILED["flex"]
     out = torch.empty_like(qf)
-    for s, block_mask in _flex_block_masks(h, w, kq, kk, fov, block, chunk, q.device):
+    for s, block_mask in _flex_block_masks(
+        h, w, kq, kk, neighborhood_cells, block, chunk, q.device
+    ):
         out[:, :, s] = attend(qf[:, :, s], kf, vf, block_mask=block_mask)
     out = out.view(heads, h, lq, dim)[:, :, : w * kq]
     return rearrange(out, "n h (w k) d -> h w k n d", w=w)
 
 
 def neighborhood_attention(
-    q: Tensor, k: Tensor, v: Tensor, fov: int, backend: str = "auto"
+    q: Tensor, k: Tensor, v: Tensor, neighborhood_cells: int, backend: str = "auto"
 ) -> Tensor:
     """Searchlight attention of ``[h, w, Kq, H, D]`` queries over ``[h, w, Kk, H, D]``.
 
@@ -347,13 +386,13 @@ def neighborhood_attention(
     (fast kernels), FlexAttention on older GPUs (A100). CPU uses the reference.
     """
     if q.device.type != "cuda":
-        return _reference_na(q, k, v, fov)
+        return _reference_na(q, k, v, neighborhood_cells)
     if backend == "auto":
         hopper = torch.cuda.get_device_capability(q.device)[0] >= 9
         backend = "natten" if hopper else "flex"
     if backend == "natten":
-        return _natten_na(q, k, v, fov)
-    return _flex_na(q, k, v, fov)
+        return _natten_na(q, k, v, neighborhood_cells)
+    return _flex_na(q, k, v, neighborhood_cells)
 
 
 # -------------------------------------------------------------------------- blocks
@@ -408,7 +447,7 @@ def _block(
     x: Tensor,
     x_pos: Tensor,
     grid: tuple[int, int, int],
-    fov: int,
+    neighborhood_cells: int,
     settings: SearchlightSettings,
     keys: tuple[Callable[[slice], Tensor], Tensor, int] | None = None,
 ) -> None:
@@ -455,7 +494,7 @@ def _block(
         q.view(h, w, kq, *q.shape[1:]),
         k.view(h, w, kk, *k.shape[1:]),
         v.view(h, w, kk, *v.shape[1:]),
-        fov,
+        neighborhood_cells,
         settings.backend,
     )
     del q, k, v
@@ -506,7 +545,7 @@ def encoder_searchlight(
     input_res: int,
     latent_patch_size: int | None,
 ) -> tuple[dict[str, Tensor], None, dict[str, Any] | None]:
-    """The ViT, norm and Perceiver of :meth:`Encoder.apply_attn` under a sliding FOV.
+    """The ViT, norm and Perceiver of :meth:`Encoder.apply_attn` in sliding neighborhoods.
 
     Takes ``apply_attn``'s collapsed ``tokens``, ``mask`` and RoPE ``positions`` of a
     single domain (batch size 1) and returns what ``apply_attn`` returns. Tokens that
@@ -516,12 +555,16 @@ def encoder_searchlight(
     _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
     if encoder.has_register_tokens:
         raise NotImplementedError("Searchlight: encoder register tokens are global")
-    if settings.fov_px % patch_size:
-        raise ValueError(f"fov_px {settings.fov_px} is not a multiple of {patch_size}")
+    if settings.neighborhood_attention_size_px % patch_size:
+        raise ValueError(
+            f"neighborhood_attention_size_px {settings.neighborhood_attention_size_px} is not a multiple of {patch_size}"
+        )
     n_h, n_w = encoder._patch_grid_hw(tokens_only_dict)
-    fov = settings.fov_px // patch_size
-    if fov > min(n_h, n_w):
-        raise ValueError(f"the {n_h}x{n_w} cell domain is smaller than the FOV")
+    neighborhood_cells = settings.neighborhood_attention_size_px // patch_size
+    if neighborhood_cells > min(n_h, n_w):
+        raise ValueError(
+            f"the {n_h}x{n_w} cell domain is smaller than the neighborhood"
+        )
     device = tokens.device
 
     # Visible tokens in (row, col, k) grid order; NATTEN needs the same k per cell.
@@ -546,7 +589,7 @@ def encoder_searchlight(
     pos[..., -2:] += shift.to(pos.dtype)
 
     for blk in encoder.blocks:
-        _block(blk, x, pos, (n_h, n_w, k_tok), fov, settings)
+        _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
     x = encoder.norm(x)
     tokens_out = torch.zeros_like(tokens)
     tokens_out[:, order] = x.to(tokens.dtype)
@@ -583,11 +626,13 @@ def encoder_searchlight(
                 lat,
                 lat_pos,
                 (n_h, n_w, r * r),
-                fov,
+                neighborhood_cells,
                 settings,
                 keys=(source, key_pos, k_tok),
             )
-            _block(lat_blk, lat, lat_pos, (n_h, n_w, r * r), fov, settings)
+            _block(
+                lat_blk, lat, lat_pos, (n_h, n_w, r * r), neighborhood_cells, settings
+            )
         registers = rearrange(
             perceiver.norm(lat), "1 (h w a b) d -> 1 (h a) (w b) d", h=n_h, a=r, b=r
         )
