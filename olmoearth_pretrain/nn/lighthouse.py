@@ -57,6 +57,7 @@ from olmoearth_pretrain.nn.encodings import (
     apply_3d_mixed_rope,
 )
 from olmoearth_pretrain.nn.flexi_vit import (
+    CompositeEncodings,
     Encoder,
     get_modalities_to_process,
     return_modalities_from_dict,
@@ -531,9 +532,12 @@ def encoder_lighthouse(
             "(missing data per timestep, not per pixel)"
         )
     order = visible[torch.argsort(cells[visible], stable=True)]
-    shift = torch.tensor(settings.origin_px, device=device) * (
-        encoder.rope_gsd_ratio(input_res, patch_size) / patch_size
+    # Distance between adjacent token centres in the RoPE frame (as in apply_attn).
+    gsd_ratio = (
+        CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+        * encoder.rope_coordinate_scale
     )
+    shift = torch.tensor(settings.origin_px, device=device) * (gsd_ratio / patch_size)
     x = tokens[:, order]
     pos = positions[:, order]
     pos[..., -2:] += shift.to(pos.dtype)
@@ -552,7 +556,7 @@ def encoder_lighthouse(
             1,
             (n_h * r, n_w * r),
             patch_size,
-            encoder.rope_gsd_ratio(input_res, patch_size),
+            gsd_ratio,
             device,
             s,
         )
