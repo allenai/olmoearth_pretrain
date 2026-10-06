@@ -1092,13 +1092,6 @@ class FlexiVitBase(nn.Module):
 
         return tokens, masks
 
-    def rope_gsd_ratio(self, input_res: int, patch_size: int) -> float:
-        """Distance between adjacent token centres in the RoPE coordinate frame."""
-        return (
-            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-            * self.rope_coordinate_scale
-        )
-
     def build_rope_positions(
         self,
         tokens_only_dict: dict[str, Tensor],
@@ -1127,7 +1120,10 @@ class FlexiVitBase(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-        gsd_ratio = self.rope_gsd_ratio(input_res, patch_size)
+        gsd_ratio = (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
 
         # For 3D RoPE, convert timestamps -> days-since-anchor once. Shape
         # (B, T_max). Each multitemporal modality indexes into this with its
@@ -1721,8 +1717,9 @@ class Perceiver(nn.Module):
             patch_size: Token patch size ``p`` of this forward pass. Required with
                 ``latent_patch_size``; unused otherwise.
             gsd_ratio: Distance between adjacent token centres in the RoPE frame
-                (``FlexiVitBase.rope_gsd_ratio``), to place sub-token latent centres.
-                Required with ``latent_patch_size``; unused otherwise.
+                (the ``gsd_ratio`` of ``FlexiVitBase``'s RoPE positions), to place
+                sub-token latent centres. Required with ``latent_patch_size``;
+                unused otherwise.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` (with ``latent_patch_size``,
@@ -2570,7 +2567,8 @@ class Encoder(FlexiVitBase):
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
                 patch_size=patch_size,
-                gsd_ratio=self.rope_gsd_ratio(input_res, patch_size),
+                gsd_ratio=CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+                * self.rope_coordinate_scale,
                 latent_patch_size=latent_patch_size,
             )
             register_output = {
@@ -3257,7 +3255,10 @@ class Predictor(PredictorBase):
             self.position_encoding
         ) or PositionEncoding.is_3d_rope(self.position_encoding):
             raise NotImplementedError("pixel queries support 2D RoPE decoders only")
-        gsd_ratio = self.rope_gsd_ratio(input_res, patch_size)
+        gsd_ratio = (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
         if set(pixel_queries) != set(tokens_dict):
             raise ValueError(
                 f"pixel queries cover {sorted(pixel_queries)} but the decoder has "
