@@ -34,15 +34,17 @@ with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         sample,                 # MaskedOlmoEarthSample, batch size 1, the whole area
         patch_size=2,
         latent_patch_size=1,    # one embedding per pixel (pix512 models)
-        core_px=448,
-        halo_px=16,
+        crop_px=480,
+        overlap_px=32,
         settings=SearchlightSettings(compile=True),
     )                           # [H, W, D] student embeddings (output_key)
 ```
 
-`embed_domain` cuts the area into cores of `core_px`, runs one Searchlight forward
-per core plus `halo_px` on every side, and keeps only the cores. One forward is the
-ordinary encoder call with one extra argument:
+`embed_domain` runs the area as overlapping crops, with the same meaning as
+rslearn's sliding-window inference: each forward covers a `crop_px` square,
+neighbouring crops share `overlap_px` pixels, and half of the overlap is dropped
+from each side of a crop. One forward is the ordinary encoder call with one extra
+argument:
 
 ```python
 out = encoder(sample, patch_size=2, input_res=10, latent_patch_size=1,
@@ -59,16 +61,17 @@ same number of tokens. A timestep missing in S1 but present in S2 is fine; a
 timestep missing in only part of the area raises an error. rslearn exports drop
 whole timesteps, so this holds for them.
 
-**Chunk sizes.**
+**Crop sizes.**
 
-- `halo_px`: the exact reach of an output is `searchlight_reach_px(...)` (120 px for
-  12 ViT + 2 Perceiver layers at ps2), but 16 px is indistinguishable in practice
-  (measured on v1.3 at ps1: per-pixel cosine p01 0.9999 vs the exact halo; 32 px is
-  identical to five decimals). Each chunk processes `(core + 2 * halo)^2 / core^2` of its area, ~1.15x
-  at 448 / 16.
-- `core_px`: as large as memory allows. At 448 px (480 px per forward, ps2, S1 + S2
-  + Landsat x 12 months) a 1536 px window peaked at ~65 GB on an 80 GB H100,
-  including the whole window held on the GPU; that also fits an 80 GB A100.
+- `overlap_px`: an output depends on inputs up to `searchlight_reach_px(...)` away
+  (120 px for 12 ViT + 2 Perceiver layers at ps2), so an overlap of twice that is
+  exact. Much less is indistinguishable in practice (measured on v1.3 at ps1: a 32 px
+  overlap gives per-pixel cosine p01 0.9999 vs the exact overlap; 64 px is identical
+  to five decimals). Each forward computes `crop^2 / (crop - overlap)^2` times the
+  area it keeps, ~1.15x at 480 / 32.
+- `crop_px`: as large as memory allows. At 480 px (ps2, S1 + S2 + Landsat x 12
+  months) a 1536 px window peaked at ~65 GB on an 80 GB H100, including the whole
+  window held on the GPU; that also fits an 80 GB A100. 688 px does not fit.
 
 **Settings** (`SearchlightSettings`): `neighborhood_attention_size_px` (16, the training window),
 `compile` (compile the projection / MLP math, ~1.3x), `backend` (see below) and
@@ -90,7 +93,7 @@ The attention kernel depends on the GPU (`backend="auto"`):
 ## Results
 
 All numbers are for `v1_3_rc_ld2_pix512` at step 320k (2 Perceiver layers, mid
-training), patch size 2, latent patch size 1, `core_px=448`, `halo_px=16`,
+training), patch size 2, latent patch size 1, `crop_px=480`, `overlap_px=32`,
 `compile=True`, bf16 autocast, unless stated otherwise. Speeds are model forward
 only (no data loading or writing), per km^2 of output.
 
