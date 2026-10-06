@@ -43,7 +43,7 @@ from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
 if TYPE_CHECKING:
-    from olmoearth_pretrain.nn.lighthouse import LighthouseSettings
+    from olmoearth_pretrain.nn.searchlight import SearchlightSettings
 
 logger = logging.getLogger(__name__)
 
@@ -2419,13 +2419,13 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
-        lighthouse: "LighthouseSettings | None" = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks.
 
         ``latent_patch_size`` sets the Perceiver's latent grid (see
-        :meth:`Perceiver.forward`); it requires a Perceiver. ``lighthouse`` runs the
-        attention under a sliding field of view (``nn/lighthouse.py``).
+        :meth:`Perceiver.forward`); it requires a Perceiver. ``searchlight`` runs the
+        attention under a sliding field of view (``nn/searchlight.py``).
         """
         if latent_patch_size is not None and self.perceiver is None:
             raise ValueError("latent_patch_size requires an encoder with a Perceiver")
@@ -2470,22 +2470,22 @@ class Encoder(FlexiVitBase):
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        if lighthouse is not None:
-            from olmoearth_pretrain.nn.lighthouse import encoder_lighthouse
+        if searchlight is not None:
+            from olmoearth_pretrain.nn.searchlight import encoder_searchlight
 
-            # Lighthouse replaces batching with one large domain per forward: the
+            # Searchlight replaces batching with one large domain per forward: the
             # sample is a whole area ([1, H, W, T, C], H and W any multiple of the
             # patch size), and the parallelism comes from its millions of tokens.
-            # Larger areas are run in pieces by lighthouse.embed_domain.
+            # Larger areas are run in pieces by searchlight.embed_domain.
             if tokens.shape[0] != 1:
                 raise ValueError(
-                    "Lighthouse runs one domain per forward (batch size 1), "
+                    "Searchlight runs one domain per forward (batch size 1), "
                     f"got batch size {tokens.shape[0]}"
                 )
 
-            return encoder_lighthouse(
+            return encoder_searchlight(
                 self,
-                lighthouse,
+                searchlight,
                 tokens,
                 mask,
                 positions,
@@ -2625,7 +2625,7 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
-        lighthouse: "LighthouseSettings | None" = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2638,10 +2638,10 @@ class Encoder(FlexiVitBase):
             latent_patch_size: Pixels per Perceiver latent along each side; must
                 divide ``patch_size``. None = one latent per token. Requires a
                 Perceiver.
-            lighthouse: Inference only: every token and latent attends within its
+            searchlight: Inference only: every token and latent attends within its
                 own sliding field of view over one whole domain (batch size 1),
                 instead of the window it was cropped to. None = the stock forward.
-                See ``nn/lighthouse.py``; ``lighthouse.embed_domain`` runs large
+                See ``nn/searchlight.py``; ``searchlight.embed_domain`` runs large
                 areas in pieces.
 
         Returns:
@@ -2666,7 +2666,7 @@ class Encoder(FlexiVitBase):
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
                     latent_patch_size=latent_patch_size,
-                    lighthouse=lighthouse,
+                    searchlight=searchlight,
                 )
             )
         else:
