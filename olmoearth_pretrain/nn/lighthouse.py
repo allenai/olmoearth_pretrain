@@ -108,6 +108,19 @@ def lighthouse_reach_px(
 # ----------------------------------------------------------------- attention kernels
 
 
+# torch.compile'd functions, compiled once per process (see _maybe_compiled).
+_COMPILED: dict[str, Callable[..., Any]] = {}
+
+
+def _box_start(i: Tensor, n: int, fov: int) -> Tensor:
+    """First cell of the ``fov``-cell box around cell ``i`` of ``n``, shifted inward."""
+    return (i - fov // 2).clamp(0, n - fov)
+
+
+def _round_up(n: int, block: int) -> int:
+    return -(-n // block) * block
+
+
 def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     """Dense masked attention implementing the Lighthouse rule (CPU / tests).
 
@@ -116,18 +129,14 @@ def _reference_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     h, w, kq = q.shape[:3]
     kk = k.shape[2]
 
-    def start(n: int) -> Tensor:
-        return (torch.arange(n, device=q.device) - fov // 2).clamp(0, n - fov)
+    def inside(n: int) -> Tensor:  # [query cell, key cell] along one axis
+        cells = torch.arange(n, device=q.device)
+        start = _box_start(cells, n, fov)[:, None]
+        return (cells[None, :] >= start) & (cells[None, :] < start + fov)
 
-    rows = torch.arange(h, device=q.device)
-    cols = torch.arange(w, device=q.device)
-    r_in = (rows[None, :] >= start(h)[:, None]) & (
-        rows[None, :] < start(h)[:, None] + fov
+    mask = (inside(h)[:, None, :, None] & inside(w)[None, :, None, :]).reshape(
+        h * w, h * w
     )
-    c_in = (cols[None, :] >= start(w)[:, None]) & (
-        cols[None, :] < start(w)[:, None] + fov
-    )
-    mask = (r_in[:, None, :, None] & c_in[None, :, None, :]).reshape(h * w, h * w)
     mask = mask.repeat_interleave(kq, 0).repeat_interleave(kk, 1)
     o = F.scaled_dot_product_attention(
         rearrange(q, "h w k n d -> 1 n (h w k) d"),
@@ -168,13 +177,13 @@ def _natten_na(q: Tensor, k: Tensor, v: Tensor, fov: int) -> Tensor:
     return rearrange(o, "g h w k n d -> h w (g k) n d")[:, :, :kq]
 
 
-def _box_start(i: Tensor, n: int, fov: int) -> Tensor:
-    """First cell of the ``fov``-cell box around cell ``i`` of ``n``, shifted inward."""
-    return (i - fov // 2).clamp(0, n - fov)
-
-
-def _round_up(n: int, block: int) -> int:
-    return -(-n // block) * block
+# ------------------------------------------------- FlexAttention (GPUs before Hopper)
+#
+# Queries and keys are laid out row-major by cell, (row, col, k), with each cell row
+# padded to a multiple of the attention block. A block of queries then lies in one
+# cell row, and the keys its boxes need are one run of key blocks in each of the
+# box's ``fov`` rows. The block tables list exactly those runs; the mask only tests
+# columns.
 
 
 def _flex_tables(
@@ -234,9 +243,9 @@ def _flex_mask_mod(
     """The box rule's column test, from each slot's cell (padding keys: col -1).
 
     The row test is left to the block tables, which list only key blocks of the box's
-    rows (each key block lies in one cell row). The mask is evaluated for every
-    score, so each lookup counts (A100, ViT: rows + cols int64 1.54 s per call,
-    cols int64 0.98 s, cols int32 below).
+    rows (each key block lies in one cell row). The mask runs for every score, so it
+    is kept minimal: on A100 a ViT call took 1.5 s testing rows + cols in int64 and
+    0.9 s testing int32 cols only.
     """
     q_c0 = _box_start(q_cells[1].clamp(min=0), w, fov).int()
     k_col = k_cells[1].int()
@@ -297,10 +306,9 @@ def _flex_na(
 ) -> Tensor:
     """:func:`_reference_na` with FlexAttention (GPUs without fast NATTEN, e.g. A100).
 
-    Each cell row is padded to a multiple of ``block`` elements, so the key blocks a
-    query block needs are a few contiguous runs (:func:`_flex_tables`); padding
-    queries' outputs are dropped and padding keys are masked out. Queries run in
-    chunks of ``chunk`` blocks to bound the size of the block tables.
+    See the section comment for the layout. Padding queries' outputs are dropped and
+    padding keys are masked out. Queries run in chunks of ``chunk`` blocks to bound
+    the size of the block tables, which are built once per domain.
     """
     from torch.nn.attention.flex_attention import flex_attention
 
@@ -380,9 +388,6 @@ def _tail(blk: Any, x: Tensor, o: Tensor) -> Tensor:
     """Output projection + residual, then the MLP + residual (:meth:`Block.forward`)."""
     x = x + blk.ls1(blk.attn.proj(o).to(x.dtype))
     return x + blk.ls2(blk.mlp(blk.norm2(x))).to(x.dtype)
-
-
-_COMPILED: dict[str, Callable[..., Any]] = {}
 
 
 def _maybe_compiled(fn: Callable[..., Any], on: bool) -> Callable[..., Any]:
