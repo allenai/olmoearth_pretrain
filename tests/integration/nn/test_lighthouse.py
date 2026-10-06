@@ -24,8 +24,10 @@ T = 3
 MODALITIES = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
 
 
-def _sample(size: int, missing_t: int | None = None) -> MaskedOlmoEarthSample:
-    """One ``size`` px domain; ``missing_t`` marks a whole timestep MISSING."""
+def _sample(
+    size: int, missing_t: int | None = None, missing_in: tuple[str, ...] = ()
+) -> MaskedOlmoEarthSample:
+    """One ``size`` px domain; timestep ``missing_t`` is MISSING in ``missing_in``."""
     torch.manual_seed(1234)
     fields: dict[str, torch.Tensor] = {}
     for name in MODALITIES:
@@ -33,7 +35,7 @@ def _sample(size: int, missing_t: int | None = None) -> MaskedOlmoEarthSample:
         mask = torch.full(
             (1, size, size, T, bands), MaskValue.ONLINE_ENCODER.value, dtype=torch.long
         )
-        if missing_t is not None:
+        if missing_t is not None and name in missing_in:
             mask[:, :, :, missing_t] = MaskValue.MISSING.value
         fields[name] = torch.randn(1, size, size, T, bands)
         fields[f"{name}_mask"] = mask
@@ -70,16 +72,24 @@ def _encoder() -> Encoder:
     )
 
 
-@pytest.mark.parametrize("missing_t", [None, 1])
+@pytest.mark.parametrize(
+    "missing_in",
+    [(), tuple(MODALITIES), (Modality.SENTINEL1.name,)],
+    ids=["none", "all", "s1_only"],
+)
 @pytest.mark.parametrize(
     ("patch_size", "latent_patch_size"), [(2, 1), (2, None), (4, 2), (1, None)]
 )
 def test_one_window_domain_matches_the_stock_forward(
-    patch_size: int, latent_patch_size: int | None, missing_t: int | None
+    patch_size: int, latent_patch_size: int | None, missing_in: tuple[str, ...]
 ) -> None:
-    """A domain exactly one FOV wide: every query's box is the whole window."""
+    """A domain exactly one FOV wide: every query's box is the whole window.
+
+    Missing data is a whole timestep of one or more modalities (S1 missing while
+    S2 is present is the common case).
+    """
     encoder = _encoder()
-    sample = _sample(16, missing_t)
+    sample = _sample(16, missing_t=1, missing_in=missing_in)
     kwargs = dict(
         patch_size=patch_size, input_res=10, latent_patch_size=latent_patch_size
     )
