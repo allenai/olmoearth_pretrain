@@ -219,12 +219,14 @@ def test_flex_blocks_and_mask_are_exactly_the_box(kq: int, kk: int) -> None:
 
 
 def test_embed_domain_chunks_match_one_pass() -> None:
-    """Cores + the exact halo reproduce the single-pass domain forward."""
+    """Overlapping crops with the exact overlap reproduce the single-pass forward."""
     encoder = _encoder()
     sample = _sample(64)
-    halo = searchlight_reach_px(16, 4, vit_depth=2, perceiver_depth=2)
-    one_pass = embed_domain(encoder, sample, 4, 2, core_px=64, halo_px=0)
-    chunked = embed_domain(encoder, sample, 4, 2, core_px=16, halo_px=halo)
+    reach = searchlight_reach_px(16, 4, vit_depth=2, perceiver_depth=2)
+    one_pass = embed_domain(encoder, sample, 4, 2, crop_px=64, overlap_px=0)
+    chunked = embed_domain(
+        encoder, sample, 4, 2, crop_px=16 + 2 * reach, overlap_px=2 * reach
+    )
     assert one_pass.shape == (32, 32, 8)
     torch.testing.assert_close(chunked, one_pass, atol=1e-4, rtol=1e-4)
 

@@ -18,8 +18,8 @@ exports it). On H100 NATTEN computes it exactly and fast; on A100 FlexAttention 
 faster (see :func:`neighborhood_attention`). On CPU a dense masked reference is used
 (tests and small checks only).
 
-A domain one window wide reproduces the stock forward; larger domains are run in
-chunks with a halo by :func:`embed_domain`.
+A domain one window wide reproduces the stock forward; larger domains are run as
+overlapping crops by :func:`embed_domain`.
 
 How to run it, setup and measured speed / quality: ``docs/Searchlight-Inference.md``.
 
@@ -102,11 +102,12 @@ def searchlight_reach_px(
     vit_depth: int,
     perceiver_depth: int,
 ) -> int:
-    """Pixels an output can depend on in each direction (the exact chunk halo).
+    """Pixels an output can depend on in each direction.
 
     Every attention spreads context by at most ``W // 2`` cells: each ViT block, the
     last read (earlier reads see the same tokens) and each latent self-attention.
-    A much shorter halo is enough in practice (16 px: cosine p01 0.9999 vs exact).
+    An ``embed_domain`` overlap of twice this is exact; a much smaller one is enough
+    in practice (see ``docs/Searchlight-Inference.md``).
     """
     return (
         (vit_depth + 1 + perceiver_depth)
@@ -631,22 +632,28 @@ def embed_domain(
     sample: MaskedOlmoEarthSample,
     patch_size: int,
     latent_patch_size: int | None,
-    core_px: int,
-    halo_px: int,
+    crop_px: int,
+    overlap_px: int,
     output_key: str = "student_registers",
     settings: SearchlightSettings | None = None,
     input_res: int = 10,
 ) -> Tensor:
-    """Searchlight embeddings of a whole domain, run as cores of ``core_px`` + halo.
+    """Searchlight embeddings of a whole domain, run as overlapping crops.
 
-    ``sample`` has batch size 1 and covers the domain. Each chunk is one Searchlight
-    forward over its core plus ``halo_px`` on every side (clipped at the domain edge);
-    only the core is kept. Returns ``[H / s, W / s, D]`` for latent patch size ``s``.
+    As rslearn's sliding-window inference: each forward covers a ``crop_px`` square,
+    neighbouring crops share ``overlap_px`` pixels, and half of the overlap is
+    dropped from each side of a crop (not at the domain edge). ``sample`` has batch
+    size 1 and covers the domain. Returns ``[H / s, W / s, D]`` for latent patch size
+    ``s``.
     """
     settings = settings or SearchlightSettings()
     s = latent_patch_size or patch_size
-    if core_px % patch_size or halo_px % patch_size:
-        raise ValueError("core_px and halo_px must be multiples of the patch size")
+    halo_px, core_px = overlap_px // 2, crop_px - overlap_px
+    if overlap_px % 2 or halo_px % patch_size or core_px <= 0 or core_px % patch_size:
+        raise ValueError(
+            "need overlap_px / 2 and crop_px - overlap_px to be positive multiples of "
+            f"the patch size (crop_px {crop_px}, overlap_px {overlap_px})"
+        )
     assert sample.sentinel2_l2a is not None
     H, W = sample.sentinel2_l2a.shape[1:3]
     out: Tensor | None = None
