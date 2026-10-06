@@ -86,16 +86,12 @@ class SearchlightSettings:
         origin_px: ``(row, col)`` pixel offset of this domain in a larger one. RoPE
             is relative, so this only matters at fp32 rounding, but it keeps chunks
             of one domain consistent with each other.
-        tokens_per_call: Tokens (or latents) per projection / MLP call. These ops act
-            on each token independently, so this only bounds peak memory (e.g. the
-            MLP hidden activation); results do not depend on it.
-        compile: ``torch.compile`` the per-chunk projection and MLP math (~1.3x).
+        compile: ``torch.compile`` the projection and MLP math (~1.3x).
         backend: Attention kernel on GPU (see :func:`neighborhood_attention`).
     """
 
     neighborhood_attention_size_px: int = 16
     origin_px: tuple[int, int] = (0, 0)
-    tokens_per_call: int = 1 << 18
     compile: bool = False
     backend: str = "auto"
 
@@ -449,47 +445,25 @@ def _block(
     grid: tuple[int, int, int],
     neighborhood_cells: int,
     settings: SearchlightSettings,
-    keys: tuple[Callable[[slice], Tensor], Tensor, int] | None = None,
-) -> None:
-    """One attention block over grid-ordered elements, in place on ``x``.
+    keys: tuple[Tensor, Tensor, int] | None = None,
+) -> Tensor:
+    """One attention block over grid-ordered elements (:meth:`Block.forward`).
 
     ``x`` is ``[1, h * w * K, D]`` in ``(row, col, k)`` order with RoPE positions
-    ``x_pos``. ``keys`` = ``(source, positions, K)`` makes it cross-attention (the
-    Perceiver read): ``source(slice)`` gives the key inputs of those key elements.
+    ``x_pos``. ``keys`` = ``(inputs, positions, K)`` makes it cross-attention (the
+    Perceiver read) over those key inputs.
     """
     attn = blk.attn
     project = _maybe_compiled(_project, settings.compile)
     tail = _maybe_compiled(_tail, settings.compile)
     dtype = torch.bfloat16 if x.is_cuda else x.dtype
-
-    def spans(n: int) -> list[slice]:
-        return [
-            slice(s, min(s + settings.tokens_per_call, n))
-            for s in range(0, n, settings.tokens_per_call)
-        ]
-
-    def qkv(
-        lin: Any, norm: Any, src: Callable[[slice], Tensor], pos: Any, n: int
-    ) -> Tensor:
-        out = torch.empty(
-            n, attn.num_heads, attn.head_dim, dtype=dtype, device=x.device
-        )
-        for s in spans(n):
-            out[s] = project(
-                attn, lin, norm, src(s), None if pos is None else pos[:, s]
-            )
-        return out
-
     h, w, kq = grid
-    n_q = x.shape[1]
-    q = qkv(attn.q, attn.q_norm, lambda s: blk.norm1(x[:, s]), x_pos, n_q)
-    if keys is None:
-        key_src, k_pos, kk = (lambda s: blk.norm1(x[:, s])), x_pos, kq
-    else:
-        key_src, k_pos, kk = keys
-    n_k = h * w * kk
-    k = qkv(attn.k, attn.k_norm, key_src, k_pos, n_k)
-    v = qkv(attn.v, None, key_src, None, n_k)
+    y = blk.norm1(x)
+    key_in, k_pos, kk = (y, x_pos, kq) if keys is None else keys
+    q = project(attn, attn.q, attn.q_norm, y, x_pos).to(dtype)
+    k = project(attn, attn.k, attn.k_norm, key_in, k_pos).to(dtype)
+    v = project(attn, attn.v, None, key_in, None).to(dtype)
+    del y, key_in
     o = neighborhood_attention(
         q.view(h, w, kq, *q.shape[1:]),
         k.view(h, w, kk, *k.shape[1:]),
@@ -498,9 +472,7 @@ def _block(
         settings.backend,
     )
     del q, k, v
-    o = rearrange(o, "h w k n d -> 1 (h w k) (n d)")
-    for s in spans(n_q):
-        x[:, s] = tail(blk, x[:, s], o[:, s])
+    return tail(blk, x, rearrange(o, "h w k n d -> 1 (h w k) (n d)"))
 
 
 # ------------------------------------------------------------------------- encoder
@@ -589,7 +561,7 @@ def encoder_searchlight(
     pos[..., -2:] += shift.to(pos.dtype)
 
     for blk in encoder.blocks:
-        _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
+        x = _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
     x = encoder.norm(x)
     tokens_out = torch.zeros_like(tokens)
     tokens_out[:, order] = x.to(tokens.dtype)
@@ -611,7 +583,7 @@ def encoder_searchlight(
             lat_positions[0], "(h a w b) c -> 1 (h w a b) c", h=n_h, a=r, b=r
         )
         lat_pos = lat_pos + shift.to(lat_pos.dtype)
-        lat = perceiver.register.to(x.dtype).expand(1, n_h * n_w * r * r, -1).clone()
+        lat = perceiver.register.to(x.dtype).expand(1, n_h * n_w * r * r, -1)
         key_pos = pos[..., -2:]  # the reads rotate over (row, col) only
         for i, (read_blk, lat_blk) in enumerate(
             zip(perceiver.read_blocks, perceiver.latent_blocks)
@@ -620,17 +592,16 @@ def encoder_searchlight(
                 norm, proj = perceiver.input_norms[i], perceiver.kv_projs[i]
             else:
                 norm, proj = perceiver.input_norm, perceiver.kv_proj
-            source = lambda sl, _n=norm, _p=proj: _p(_n(x[:, sl]))  # noqa: E731
-            _block(
+            lat = _block(
                 read_blk,
                 lat,
                 lat_pos,
                 (n_h, n_w, r * r),
                 neighborhood_cells,
                 settings,
-                keys=(source, key_pos, k_tok),
+                keys=(proj(norm(x)), key_pos, k_tok),
             )
-            _block(
+            lat = _block(
                 lat_blk, lat, lat_pos, (n_h, n_w, r * r), neighborhood_cells, settings
             )
         registers = rearrange(
