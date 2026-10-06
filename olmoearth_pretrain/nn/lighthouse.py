@@ -21,6 +21,8 @@ faster (see :func:`neighborhood_attention`). On CPU a dense masked reference is 
 A domain one window wide reproduces the stock forward; larger domains are run in
 chunks with a halo by :func:`embed_domain`.
 
+How to run it, setup and measured speed / quality: ``docs/Lighthouse-Inference.md``.
+
 Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
 
 * There is no source build in our images (no CUDA compiler), so use a prebuilt wheel
