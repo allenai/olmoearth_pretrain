@@ -66,12 +66,13 @@ whole timesteps, so this holds for them.
   (measured on v1.3 at ps1: per-pixel cosine p01 0.9999 vs the exact halo; 32 px is
   identical to five decimals). Each chunk processes `(core + 2 * halo)^2 / core^2` of its area, ~1.15x
   at 448 / 16.
-- `core_px`: as large as memory allows; at 448 px the original implementation
-  peaked at ~38 GB at ps2 with S1 + S2 + Landsat x 12 months.
+- `core_px`: as large as memory allows. At 448 px (480 px per forward, ps2, S1 + S2
+  + Landsat x 12 months) a 1536 px window peaked at ~65 GB on an 80 GB H100,
+  including the whole window held on the GPU; that also fits an 80 GB A100.
 
 **Settings** (`SearchlightSettings`): `neighborhood_attention_size_px` (16, the training window),
-`compile` (compile the projection / MLP math, ~1.3x), `backend` (see below),
-`tokens_per_call` (memory only) and `origin_px` (set by `embed_domain`).
+`compile` (compile the projection / MLP math, ~1.3x), `backend` (see below) and
+`origin_px` (set by `embed_domain`).
 
 ## Setup
 
