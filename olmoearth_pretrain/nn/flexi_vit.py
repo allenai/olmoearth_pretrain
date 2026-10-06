@@ -1666,7 +1666,8 @@ class Perceiver(nn.Module):
                 pass in training under ``max_latents`` (the patch stride is always
                 allowed); see :func:`choose_latent_stride`.
             max_latents: Per-sample latent budget for ``random_latent_stride``.
-            eval_latent_stride: Stride outside training (1 = one latent per pixel).
+            eval_latent_stride: Stride outside training (1 = one latent per pixel, 0 =
+                one latent per token cell at the forward pass's patch size).
             latent_stride_bias: Weight allowed strides by ``(1 / s) ** bias`` (0 =
                 uniform), biasing training toward the finest stride that fits.
         """
@@ -2262,7 +2263,8 @@ class PerceiverConfig(Config):
         random_latent_stride: With ``pixel_latents``, draw the stride per forward pass
             in training under ``max_latents``. None = False.
         max_latents: Per-sample latent budget for ``random_latent_stride``.
-        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel).
+        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel);
+            0 = one latent per token cell (the KNN/LP/finetune sweeps).
         latent_stride_bias: Bias the drawn stride toward the finest that fits
             (weights ``(1 / s) ** bias``). None = 0 (uniform).
     """

@@ -187,9 +187,14 @@ def choose_latent_stride(
     ``stride_bias`` (beta) weights each allowed stride by ``(1 / s) ** beta``, like the
     sampler's temporal bias: 0 is uniform, larger values favour the finest stride that
     fits without always taking it. Training without random strides uses stride 1.
-    Outside training: ``eval_latent_stride``.
+    Outside training: ``eval_latent_stride`` (0 = the patch size, one latent per
+    token cell).
     """
     if not training:
+        if eval_latent_stride == 0:
+            # One latent per token cell: the KNN/LP/finetune sweeps run tasks at
+            # different patch sizes, and per-pixel latents OOM on large tiles.
+            return patch_size
         if patch_size % eval_latent_stride != 0:
             raise ValueError(
                 f"eval_latent_stride {eval_latent_stride} does not divide "
