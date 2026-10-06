@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -41,6 +41,9 @@ from olmoearth_pretrain.nn.pixel_targets import PixelQueries, pixel_center_shift
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.lighthouse import LighthouseSettings
 
 logger = logging.getLogger(__name__)
 
@@ -2149,8 +2152,6 @@ class Encoder(FlexiVitBase):
         )
 
         self.apply(self._init_weights)
-        # Inference-only sliding-FOV mode (``nn/lighthouse.py``); None = stock forward.
-        self.lighthouse: Any = None
 
         if frozen_patch_embeddings:
             for p in self.patch_embeddings.parameters():
@@ -2418,11 +2419,13 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
+        lighthouse: "LighthouseSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks.
 
         ``latent_patch_size`` sets the Perceiver's latent grid (see
-        :meth:`Perceiver.forward`); it requires a Perceiver.
+        :meth:`Perceiver.forward`); it requires a Perceiver. ``lighthouse`` runs the
+        attention under a sliding field of view (``nn/lighthouse.py``).
         """
         if latent_patch_size is not None and self.perceiver is None:
             raise ValueError("latent_patch_size requires an encoder with a Perceiver")
@@ -2467,7 +2470,7 @@ class Encoder(FlexiVitBase):
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
-        if self.lighthouse is not None:
+        if lighthouse is not None:
             from olmoearth_pretrain.nn.lighthouse import encoder_lighthouse
 
             # Lighthouse replaces batching with one large domain per forward: the
@@ -2482,6 +2485,7 @@ class Encoder(FlexiVitBase):
 
             return encoder_lighthouse(
                 self,
+                lighthouse,
                 tokens,
                 mask,
                 positions,
@@ -2621,6 +2625,7 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
+        lighthouse: "LighthouseSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2633,6 +2638,11 @@ class Encoder(FlexiVitBase):
             latent_patch_size: Pixels per Perceiver latent along each side; must
                 divide ``patch_size``. None = one latent per token. Requires a
                 Perceiver.
+            lighthouse: Inference only: every token and latent attends within its
+                own sliding field of view over one whole domain (batch size 1),
+                instead of the window it was cropped to. None = the stock forward.
+                See ``nn/lighthouse.py``; ``lighthouse.embed_domain`` runs large
+                areas in pieces.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -2656,6 +2666,7 @@ class Encoder(FlexiVitBase):
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
                     latent_patch_size=latent_patch_size,
+                    lighthouse=lighthouse,
                 )
             )
         else:
