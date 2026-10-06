@@ -215,20 +215,21 @@ def _flex_cells(
 
 
 def _flex_mask_mod(
-    q_cells: tuple[Tensor, Tensor],
-    k_cells: tuple[Tensor, Tensor],
-    h: int,
-    w: int,
-    fov: int,
+    q_cells: tuple[Tensor, Tensor], k_cells: tuple[Tensor, Tensor], w: int, fov: int
 ) -> Callable[..., Tensor]:
-    """The exact box rule, from each slot's cell (padding keys are never inside)."""
-    q_r0 = _box_start(q_cells[0], h, fov)
-    q_c0 = _box_start(q_cells[1].clamp(min=0), w, fov)
-    k_row, k_col = k_cells
+    """The box rule's column test, from each slot's cell (padding keys: col -1).
+
+    The row test is left to the block tables, which list only key blocks of the box's
+    rows (each key block lies in one cell row). The mask is evaluated for every
+    score, so each lookup counts (A100, ViT: rows + cols int64 1.54 s per call,
+    cols int64 0.98 s, cols int32 below).
+    """
+    q_c0 = _box_start(q_cells[1].clamp(min=0), w, fov).int()
+    k_col = k_cells[1].int()
 
     def mask_mod(b: Tensor, hd: Tensor, qi: Tensor, ki: Tensor) -> Tensor:
-        r0, c0, kr, kc = q_r0[qi], q_c0[qi], k_row[ki], k_col[ki]
-        return (kr >= r0) & (kr < r0 + fov) & (kc >= c0) & (kc < c0 + fov)
+        c0, kc = q_c0[qi], k_col[ki]
+        return (kc >= c0) & (kc < c0 + fov)
 
     return mask_mod
 
@@ -273,7 +274,7 @@ def _flex_na(
             # (torch 2.9).
             F.pad(idx[b0:b1], (0, n_kb - idx.shape[1]))[None, None].int(),
             BLOCK_SIZE=block,
-            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, h, w, fov),
+            mask_mod=_flex_mask_mod((q_rows[s], q_cols[s]), k_cells, w, fov),
             seq_lengths=((b1 - b0) * block, h * lk),
             compute_q_blocks=False,
         )
