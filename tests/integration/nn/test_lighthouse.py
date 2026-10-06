@@ -224,3 +224,19 @@ def test_per_pixel_missing_data_is_refused() -> None:
     encoder.lighthouse = LighthouseSettings(fov_px=16)
     with pytest.raises(NotImplementedError, match="same number of tokens"):
         encoder(sample, patch_size=2, input_res=10)
+
+
+def test_batched_input_is_refused() -> None:
+    """One domain per forward: the sample is a whole area, not a batch of crops."""
+    encoder = _encoder()
+    sample = _sample(16)
+    batched = MaskedOlmoEarthSample(
+        **{
+            k: v.expand(2, *v.shape[1:])
+            for k, v in sample.as_dict().items()
+            if v is not None
+        }
+    )
+    encoder.lighthouse = LighthouseSettings(fov_px=16)
+    with pytest.raises(ValueError, match="batch size 1"):
+        encoder(batched, patch_size=2, input_res=10)
