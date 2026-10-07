@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -40,6 +40,9 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.searchlight import SearchlightSettings
 
 logger = logging.getLogger(__name__)
 
@@ -2400,11 +2403,13 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks.
 
         ``latent_patch_size`` sets the Perceiver's latent grid (see
-        :meth:`Perceiver.forward`); it requires a Perceiver.
+        :meth:`Perceiver.forward`); it requires a Perceiver. ``searchlight`` runs the
+        attention under a sliding neighborhood (``nn/searchlight.py``).
         """
         if latent_patch_size is not None and self.perceiver is None:
             raise ValueError("latent_patch_size requires an encoder with a Perceiver")
@@ -2448,6 +2453,33 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        if searchlight is not None:
+            from olmoearth_pretrain.nn.searchlight import encoder_searchlight
+
+            # Searchlight replaces batching with one large domain per forward: the
+            # sample is a whole area ([1, H, W, T, C], H and W any multiple of the
+            # patch size), and the parallelism comes from its millions of tokens.
+            # Larger areas are run in pieces by searchlight.embed_domain.
+            if tokens.shape[0] != 1:
+                raise ValueError(
+                    "Searchlight runs one domain per forward (batch size 1), "
+                    f"got batch size {tokens.shape[0]}"
+                )
+
+            return encoder_searchlight(
+                self,
+                searchlight,
+                tokens,
+                mask,
+                positions,
+                tokens_only_dict,
+                original_masks_dict,
+                modalities_to_dims_dict,
+                patch_size,
+                input_res,
+                latent_patch_size,
+            )
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
@@ -2577,6 +2609,7 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
         latent_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2589,6 +2622,11 @@ class Encoder(FlexiVitBase):
             latent_patch_size: Pixels per Perceiver latent along each side; must
                 divide ``patch_size``. None = one latent per token. Requires a
                 Perceiver.
+            searchlight: Inference only: every token and latent attends within its
+                own sliding neighborhood over one whole domain (batch size 1),
+                instead of the window it was cropped to. None = the stock forward.
+                See ``nn/searchlight.py``; ``searchlight.embed_domain`` runs large
+                areas in pieces.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -2612,6 +2650,7 @@ class Encoder(FlexiVitBase):
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
                     latent_patch_size=latent_patch_size,
+                    searchlight=searchlight,
                 )
             )
         else:
