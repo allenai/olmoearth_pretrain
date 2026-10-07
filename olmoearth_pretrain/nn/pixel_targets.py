@@ -77,7 +77,7 @@ def sample_pixel_offsets(
 def offsets_to_query_shift(offsets: Tensor, patch_size: int) -> Tensor:
     """Pixel offsets -> the query shift in patch units: ``(o + 0.5) / p - 0.5``.
 
-    Matches ``Perceiver.build_pixel_latent_positions`` at latent patch size 1: pixel
+    Matches ``Perceiver.build_register_positions`` at latent patch size 1: pixel
     ``o`` of patch ``i`` has its center at ``i + (o + 0.5) / p - 0.5`` patch units, so a
     shifted query lands exactly on its per-pixel latent's coordinate (at a coarser
     latent patch size it lands inside that latent's footprint).

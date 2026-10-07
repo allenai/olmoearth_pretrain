@@ -14,6 +14,9 @@ from olmoearth_pretrain.nn.flexi_vit import Perceiver
 ENCODER_DIM = 64
 DEPTH = 4
 SPATIAL_GRID = (3, 5)
+# The synthetic token positions below lie on a 10-unit grid: patch size 1, spacing 10.
+PATCH_SIZE = 1
+GSD_RATIO = 10.0
 
 
 def _build_perceiver(per_depth_read_proj: bool, attn_dim: int | None) -> Perceiver:
@@ -54,7 +57,7 @@ def _make_inputs(
 
 
 ForwardFn = Callable[
-    [Tensor, Tensor, Tensor, tuple[int, int]],
+    [Tensor, Tensor, Tensor, tuple[int, int], int, float],
     tuple[Tensor, Tensor | None, Tensor | None],
 ]
 
@@ -65,6 +68,8 @@ def _reference_forward(
     patch_positions: Tensor,
     visible_mask: Tensor,
     spatial_grid: tuple[int, int],
+    patch_size: int,
+    gsd_ratio: float,
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
     """Frozen copy of ``Perceiver.forward`` from before K/V was built lazily per read.
 
@@ -86,7 +91,7 @@ def _reference_forward(
         .contiguous()
     )
     register_positions = perceiver.build_register_positions(
-        patch_positions, spatial_grid
+        batch_size, spatial_grid, patch_size, gsd_ratio, patch_tokens.device, patch_size
     )
     read_attn_mask = visible_mask.bool()
     for i, (read_blk, kv) in enumerate(zip(perceiver.read_blocks, kv_per_read)):
@@ -125,9 +130,22 @@ def test_perceiver_forward_matches_reference(
 
     with torch.no_grad():
         expected = _reference_forward(
-            perceiver, patch_tokens, patch_positions, visible_mask, SPATIAL_GRID
+            perceiver,
+            patch_tokens,
+            patch_positions,
+            visible_mask,
+            SPATIAL_GRID,
+            PATCH_SIZE,
+            GSD_RATIO,
         )
-        actual = perceiver(patch_tokens, patch_positions, visible_mask, SPATIAL_GRID)
+        actual = perceiver(
+            patch_tokens,
+            patch_positions,
+            visible_mask,
+            SPATIAL_GRID,
+            PATCH_SIZE,
+            GSD_RATIO,
+        )
 
     assert actual[0].shape == (2, *SPATIAL_GRID, 32)
     assert actual[2] is not None and actual[2].shape == (2, *SPATIAL_GRID, 16)
@@ -148,7 +166,7 @@ def test_perceiver_gradients_match_reference(
         perceiver.zero_grad(set_to_none=True)
         tokens = patch_tokens.clone().requires_grad_(True)
         out, _, student = forward_fn(
-            tokens, patch_positions, visible_mask, SPATIAL_GRID
+            tokens, patch_positions, visible_mask, SPATIAL_GRID, PATCH_SIZE, GSD_RATIO
         )
         assert student is not None
         (out.square().sum() + student.sum()).backward()
@@ -206,7 +224,14 @@ def test_perceiver_keeps_one_per_read_kv_alive_at_inference(
     ]
     try:
         with torch.no_grad():
-            perceiver(patch_tokens, patch_positions, visible_mask, SPATIAL_GRID)
+            perceiver(
+                patch_tokens,
+                patch_positions,
+                visible_mask,
+                SPATIAL_GRID,
+                PATCH_SIZE,
+                GSD_RATIO,
+            )
     finally:
         for handle in handles:
             handle.remove()
@@ -231,7 +256,14 @@ def test_perceiver_inference_peak_memory_cuda() -> None:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         with torch.no_grad():
-            forward_fn(patch_tokens, patch_positions, visible_mask, SPATIAL_GRID)
+            forward_fn(
+                patch_tokens,
+                patch_positions,
+                visible_mask,
+                SPATIAL_GRID,
+                PATCH_SIZE,
+                GSD_RATIO,
+            )
         torch.cuda.synchronize()
         return torch.cuda.max_memory_allocated()
 

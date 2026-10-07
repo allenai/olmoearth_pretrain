@@ -155,7 +155,7 @@ def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
         gsd_ratio=gsd_ratio,
         query_pixel_shift=shift,
     )
-    register_positions = Perceiver.build_pixel_latent_positions(
+    register_positions = Perceiver.build_register_positions(
         B, (H, W), patch_size, gsd_ratio, torch.device("cpu"), latent_patch_size=1
     ).view(B, H, W, 2)
     for b in range(B):

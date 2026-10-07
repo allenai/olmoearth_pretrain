@@ -1655,27 +1655,27 @@ class Perceiver(nn.Module):
             self.student = nn.Sequential(*student_layers)
 
     @staticmethod
-    def build_pixel_latent_positions(
+    def build_register_positions(
         batch_size: int,
-        latent_grid: tuple[int, int],
+        register_grid: tuple[int, int],
         patch_size: int,
         gsd_ratio: float,
         device: torch.device,
         latent_patch_size: int,
     ) -> Tensor:
-        """Sub-patch latent centre coordinates in the patch RoPE frame.
+        """Register (latent) centre coordinates in the token RoPE frame.
 
-        Patch ``i`` sits at ``i * gsd_ratio`` (the token positions of
+        Token ``i`` sits at ``i * gsd_ratio`` (the token positions of
         ``FlexiVitBase``). With a latent patch size ``s``, latent ``k`` of an axis
         covers pixels ``[k * s, (k + 1) * s)`` and has its centre at
-        ``((k + 0.5) * s / patch_size - 0.5) * gsd_ratio``. At ``s = 1``
-        these are pixel centres; at ``s = patch_size`` they are exactly the patch
-        coordinates.
+        ``((k + 0.5) * s / patch_size - 0.5) * gsd_ratio``. At ``s = patch_size``
+        these are exactly the token coordinates (one register per token); at
+        ``s = 1`` they are pixel centres.
 
         Returns:
-            ``[B, lat_h * lat_w, 2]`` row-major ``(row, col)`` coordinates.
+            ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` coordinates.
         """
-        lat_h, lat_w = latent_grid
+        lat_h, lat_w = register_grid
 
         def axis(n: int) -> Tensor:
             k = torch.arange(n, device=device, dtype=torch.float32)
@@ -1685,40 +1685,15 @@ class Perceiver(nn.Module):
         grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
         return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
-    def build_register_positions(
-        self, patch_positions: Tensor, register_grid: tuple[int, int]
-    ) -> Tensor:
-        """Place the register grid evenly across the patch extent (GSD-scaled frame).
-
-        Args:
-            patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
-            register_grid: ``(n_h, n_w)`` grid to lay down (the patch grid, so the
-                register coords coincide with the patch coords).
-
-        Returns:
-            ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
-        """
-        n_h, n_w = register_grid
-        device = patch_positions.device
-        # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
-        max_pos = patch_positions.amax(dim=1)  # [B, 2]
-        lin_h = torch.linspace(0.0, 1.0, n_h, device=device)
-        lin_w = torch.linspace(0.0, 1.0, n_w, device=device)
-        grid_h, grid_w = torch.meshgrid(lin_h, lin_w, indexing="ij")
-        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(
-            -1, 2
-        )  # [n_reg, 2] in [0, 1]
-        return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
-
     def forward(
         self,
         patch_tokens: Tensor,
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
+        patch_size: int,
+        gsd_ratio: float,
         latent_patch_size: int | None = None,
-        patch_size: int | None = None,
-        gsd_ratio: float | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1728,19 +1703,16 @@ class Perceiver(nn.Module):
                 using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
-            spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
-            latent_patch_size: Pixels per latent along each side, ``s``. None lays one
-                latent per token (the patch grid). Otherwise ``s`` must divide ``p``:
-                one latent per ``s x s`` pixels at the pixel-block centres
-                (:meth:`build_pixel_latent_positions`), so ``s = 1`` gives one latent
-                per pixel. The reads are global, so only the grid and its positions
-                change; ``s = p`` reproduces the patch grid exactly.
-            patch_size: Token patch size ``p`` of this forward pass. Required with
-                ``latent_patch_size``; unused otherwise.
+            spatial_grid: ``(n_h, n_w)`` patch grid of the tokens.
+            patch_size: Token patch size ``p`` of this forward pass.
             gsd_ratio: Distance between adjacent token centres in the RoPE frame
-                (the ``gsd_ratio`` of ``FlexiVitBase``'s RoPE positions), to place
-                sub-token latent centres. Required with ``latent_patch_size``;
-                unused otherwise.
+                (the ``gsd_ratio`` of ``FlexiVitBase``'s RoPE positions); the
+                registers are placed in the same frame.
+            latent_patch_size: Pixels per latent along each side, ``s``; must divide
+                ``p``. One latent per ``s x s`` pixels at the pixel-block centres
+                (:meth:`build_register_positions`), so ``s = 1`` gives one latent per
+                pixel. The reads are global, so only the grid and its positions
+                change. None = ``p``, one latent per token.
 
         Returns:
             registers: ``[B, n_h, n_w, register_dim]`` (with ``latent_patch_size``,
@@ -1762,20 +1734,17 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        if latent_patch_size is not None:
-            if patch_size is None or gsd_ratio is None:
-                raise ValueError("latent_patch_size requires patch_size and gsd_ratio")
-            if patch_size % latent_patch_size != 0:
-                raise ValueError(
-                    f"latent_patch_size {latent_patch_size} does not divide "
-                    f"patch_size {patch_size}"
-                )
-            register_grid = (
-                spatial_grid[0] * patch_size // latent_patch_size,
-                spatial_grid[1] * patch_size // latent_patch_size,
+        if latent_patch_size is None:
+            latent_patch_size = patch_size
+        if patch_size % latent_patch_size != 0:
+            raise ValueError(
+                f"latent_patch_size {latent_patch_size} does not divide "
+                f"patch_size {patch_size}"
             )
-        else:
-            register_grid = spatial_grid
+        register_grid = (
+            spatial_grid[0] * patch_size // latent_patch_size,
+            spatial_grid[1] * patch_size // latent_patch_size,
+        )
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.
@@ -1788,20 +1757,14 @@ class Perceiver(nn.Module):
         if self.use_2d_rope:
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
-            if latent_patch_size is not None:
-                assert patch_size is not None and gsd_ratio is not None
-                register_positions = self.build_pixel_latent_positions(
-                    batch_size,
-                    register_grid,
-                    patch_size,
-                    gsd_ratio,
-                    reference_tokens.device,
-                    latent_patch_size,
-                )
-            else:
-                register_positions = self.build_register_positions(
-                    patch_positions, register_grid
-                )
+            register_positions = self.build_register_positions(
+                batch_size,
+                register_grid,
+                patch_size,
+                gsd_ratio,
+                reference_tokens.device,
+                latent_patch_size,
+            )
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
