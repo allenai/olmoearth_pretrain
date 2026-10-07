@@ -18,7 +18,6 @@ from torch.distributed.fsdp import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
-from olmoearth_pretrain.nn.pixel_targets import PixelQueries
 from olmoearth_pretrain.nn.register_distillation_head import (
     RegisterDistillationHead,
     RegisterDistillationHeadConfig,
@@ -126,7 +125,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self,
         x: MaskedOlmoEarthSample,
         patch_size: int,
-        pixel_queries: dict[str, PixelQueries] | None = None,
+        query_pixel_shift: torch.Tensor | None = None,
         latent_patch_size: int | None = None,
     ) -> tuple[
         TokensAndMasks,
@@ -142,10 +141,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         Args:
             x: The masked input sample.
             patch_size: Patch size of this forward pass.
-            pixel_queries: Optional ``{modality: PixelQueries}`` for
-                pixel-resolution targets (see ``olmoearth_pretrain.nn.pixel_targets``):
-                the decoder then decodes these slots instead of one query per masked
-                token on the patch grid (see ``Predictor.forward``).
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell decoder query
+                shift for pixel-resolution targets (see
+                ``olmoearth_pretrain.nn.pixel_targets``). None keeps the queries on
+                the patch grid.
             latent_patch_size: Pixels per Perceiver latent along each side (see
                 ``Encoder.forward``). None = one latent per token.
 
@@ -180,8 +179,8 @@ class LatentMIM(nn.Module, DistributedMixins):
         reconstructed = None
         if self.reconstructor:
             reconstructed = self.reconstructor(latent, x.timestamps, patch_size)
-        if pixel_queries is not None:
-            decoder_kwargs["pixel_queries"] = pixel_queries
+        if query_pixel_shift is not None:
+            decoder_kwargs["query_pixel_shift"] = query_pixel_shift
         decoded = self.decoder(
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
