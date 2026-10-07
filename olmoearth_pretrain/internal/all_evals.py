@@ -1588,6 +1588,14 @@ EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"] = replace(
     input_modalities=[Modality.OLMOEARTH_EMB.name],
 )
 
+# The same, for the geozarr store written from v1_3_rc_ld1_pixtgtpool_pix512 at
+# step 320k (ps2, Searchlight inference), to check large-scale inference of
+# that checkpoint against its in-loop PASTIS evals.
+EMBEDDING_EVAL_TASKS["pastis_year_aligned_ld1pool320zarr_ws16_ps1"] = replace(
+    EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"],
+    dataset="pastis_year_aligned_ld1pool320zarr",
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

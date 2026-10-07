@@ -157,12 +157,17 @@ def main() -> None:
     parser.add_argument("--src_ds_path", default=DEFAULT_SRC)
     parser.add_argument("--dst_ds_path", default=DEFAULT_DST)
     parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument(
+        "--config_json",
+        default=str(CONFIG_JSON),
+        help="config.json copied into the dataset root (its registry hash must match)",
+    )
     args = parser.parse_args()
 
     dst_path = UPath(args.dst_ds_path)
     dst_path.mkdir(parents=True, exist_ok=True)
     with (dst_path / "config.json").open("wb") as f:
-        f.write(CONFIG_JSON.read_bytes())
+        f.write(Path(args.config_json).read_bytes())
     dst_dataset = Dataset(dst_path)
     provider = RslearnWindowProvider(dst_path)
 
