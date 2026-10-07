@@ -6,9 +6,11 @@ cloud (SCL cloud shadow / cloud / cirrus) into MISSING, so the loss never asks
 the model to predict a cloud. Cloudy S2 tokens stay encoder inputs; S1 and
 Landsat targets are unchanged (the corpus has no Landsat QA band).
 
-The fork starts from base_allcap_fact9k_1's step 75000 checkpoint (model,
+The fork started from base_allcap_fact9k_1's step 75000 checkpoint (model,
 optimizer, and data-loader position), so from there both runs see the same
-batches and masks apart from the dropped targets. joer 2026-10-06.
+batches and masks apart from the dropped targets. joer 2026-10-06. That
+checkpoint no longer exists: olmo-core's CheckpointerCallback keeps only the
+last ``max_checkpoints`` (default 3) permanent checkpoints of a job.
 
 Launch (8 GPUs):
     PYTHONPATH=. python scripts/vnext/allcap_fact9k/cloudmask.py launch \
@@ -17,6 +19,8 @@ Launch (8 GPUs):
 
 import importlib.util
 from pathlib import Path
+
+from upath import UPath
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main
 
@@ -44,11 +48,16 @@ def build_dataset_config(common: CommonComponents):
 def build_trainer_config(common: CommonComponents):
     """base.py's trainer, initialized from the baseline's step 75000 checkpoint.
 
-    The load path only applies while this run's save folder has no checkpoint;
-    restarts resume from its own checkpoints.
+    Only a first start (no checkpoint in this run's save folder yet) gets the load
+    path; restarts resume from this run's own checkpoints. The load path must not
+    stay set: the train module reads ``<load_path>/config.json`` on every
+    checkpoint save and load, so it crashed once the baseline's step 75000 was
+    deleted.
     """
     config = allcap.build_trainer_config(common)
-    config.load_path = FORK_FROM
+    save_folder = UPath(common.save_folder)
+    if not (save_folder.exists() and any(save_folder.glob("step*"))):
+        config.load_path = FORK_FROM
     return config
 
 
