@@ -565,7 +565,7 @@ def encoder_searchlight(
     if perceiver is not None:
         s = latent_patch_size or patch_size
         r = patch_size // s
-        lat_positions = perceiver.build_pixel_latent_positions(
+        lat_positions = perceiver.build_register_positions(
             1,
             (n_h * r, n_w * r),
             patch_size,
