@@ -469,6 +469,18 @@ class MaskedOlmoEarthSample(NamedTuple):
             }
         )
 
+    def crop(self, rows: slice, cols: slice) -> MaskedOlmoEarthSample:
+        """The ``[rows, cols]`` pixel window of every spatial modality and its mask.
+
+        Timestamps and non-spatial modalities are kept whole.
+        """
+        updates = {}
+        for key, val in self.as_dict(include_nones=False).items():
+            modality = _get_unmasked_modality_name(key)
+            if key != "timestamps" and Modality.get(modality).is_spatial:
+                updates[key] = val[:, rows, cols]
+        return self._replace(**updates)
+
     def unmask(self) -> MaskedOlmoEarthSample:
         """Return an unmasked MaskedOlmoEarthSample.
 

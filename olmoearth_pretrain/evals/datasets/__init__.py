@@ -20,6 +20,7 @@ from .pastis_raw_dataset import PastisRawTimeSeriesDataset
 from .pastis_raw_s1s2_dataset import PastisRawS1S2Dataset
 from .pretrain_subset import PretrainSubsetDataset
 from .rslearn_dataset import from_registry_entry
+from .sbd_dataset import SBDDataset
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,14 @@ def get_eval_dataset(
     elif eval_dataset == "breizhcrops":
         return BreizhCropsDataset(
             path_to_splits=paths.BREIZHCROPS_DIR,
+            split=split,
+            label_fraction=label_fraction,
+            norm_stats_from_pretrained=norm_stats_from_pretrained,
+            norm_method=norm_method,
+        )
+    elif eval_dataset == "similar_but_different":
+        return SBDDataset(
+            path_to_splits=paths.SBD_DIR,
             split=split,
             label_fraction=label_fraction,
             norm_stats_from_pretrained=norm_stats_from_pretrained,

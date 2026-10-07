@@ -4,13 +4,15 @@ import logging
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
-from beaker import Experiment
+from beaker import Beaker
+from beaker.types import BeakerWorkload
+from gantry.api import Recipe as GantryRecipe
 from olmo_core.config import StrEnum
 from olmo_core.distributed.utils import get_local_rank
-from olmo_core.launch.beaker import BeakerLaunchConfig, ExperimentSpec
+from olmo_core.launch.beaker import BeakerLaunchConfig
 from olmo_core.train import (
     TrainerConfig,
     prepare_training_environment,
@@ -44,26 +46,39 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OlmoEarthBeakerLaunchConfig(BeakerLaunchConfig):
-    """Extend BeakerLaunchConfig with hostnames option.
+    """Extend BeakerLaunchConfig with options olmo-core doesn't expose.
 
-    This enables targeting specific Beaker hosts.
+    Args:
+        min_runtime: how long to protect the (preemptible) job from preemption,
+            as a duration string like "8h" or "30m". Defaults to 8 hours, the
+            maximum allowed on most clusters. Set to null to disable and fall
+            back to plain preemptible behavior.
+        install: custom command for installing the project's Python environment
+            inside the Beaker job, replacing gantry's default
+            (``uv pip install -r pyproject.toml .``).
+        gh_token_secret: name of the Beaker workspace secret holding the GitHub
+            token used to clone the (private) repository. Defaults to gantry's
+            convention of a workspace secret named "GITHUB_TOKEN".
     """
 
-    hostnames: list[str] | None = None
+    min_runtime: str | None = "8h"
+    install: str | None = None
+    gh_token_secret: str | None = None
 
-    def build_experiment_spec(
-        self, torchrun: bool = True, entrypoint: str | None = None
-    ) -> ExperimentSpec:
-        """Build the experiment spec."""
-        # We simply call the superclass build_experiment_spec, but just replace cluster
-        # setting in the Constraints with hostname setting if user provided hostname
-        # list.
-        spec = super().build_experiment_spec(torchrun, entrypoint)
-        if self.hostnames:
-            constraints = spec.tasks[0].constraints
-            constraints.cluster = None
-            constraints.hostname = self.hostnames
-        return spec
+    def _build_recipe(
+        self, beaker: Beaker, **kwargs: Any
+    ) -> tuple[GantryRecipe, dict[str, Any]]:
+        recipe, recipe_launch_kwargs = super()._build_recipe(beaker, **kwargs)
+        if self.min_runtime is not None:
+            # beaker-py drops the deprecated `preemptible` field from the
+            # serialized spec whenever min_runtime is set, so it's fine to
+            # leave recipe.preemptible as is.
+            recipe.min_runtime = self.min_runtime
+        if self.install is not None:
+            recipe.install = self.install
+        if self.gh_token_secret is not None:
+            recipe.gh_token_secret = self.gh_token_secret
+        return recipe, recipe_launch_kwargs
 
 
 HeliosBeakerLaunchConfig = _deprecated_class_alias(
@@ -368,8 +383,8 @@ def visualize(config: OlmoEarthExperimentConfig) -> None:
     logger.info("Done visualizing the dataset")
 
 
-def launch(config: OlmoEarthExperimentConfig) -> Experiment:
-    """Launch an experiment and return the submitted Beaker experiment."""
+def launch(config: OlmoEarthExperimentConfig) -> BeakerWorkload:
+    """Launch an experiment and return the submitted Beaker workload."""
     logger.info("Launching the experiment")
     logger.info(config)
     # Set follow=False if you don't want to stream the logs to the terminal

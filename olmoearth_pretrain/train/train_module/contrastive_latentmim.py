@@ -17,7 +17,6 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import LatentMIM
-from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import (
@@ -99,7 +98,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         autocast_precision: torch.dtype | None = None,
         max_grad_norm: float | None = None,
         scheduler: Scheduler | None = None,
-        scheduler_overrides: dict[str, Scheduler] | None = None,
         device: torch.device | None = None,
         state_dict_save_opts: dist_cp_sd.StateDictOptions | None = None,
         state_dict_load_opts: dist_cp_sd.StateDictOptions | None = None,
@@ -126,8 +124,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision: Enable AMP with this data type.
             max_grad_norm: Clip gradient norms to this value.
             scheduler: Optional learning rate scheduler.
-            scheduler_overrides: Optional per-param-group schedulers, keyed
-                by the group's "group_name" tag.
             device: The device to train on.
             state_dict_save_opts: Override state dict options for saving.
             state_dict_load_opts: Override state dict options for loading.
@@ -149,7 +145,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
             autocast_precision=autocast_precision,
             max_grad_norm=max_grad_norm,
             scheduler=scheduler,
-            scheduler_overrides=scheduler_overrides,
             device=device,
             state_dict_save_opts=state_dict_save_opts,
             state_dict_load_opts=state_dict_load_opts,
@@ -175,14 +170,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         self.mae_loss = mae_loss_config.build() if mae_loss_config is not None else None
         if self.mae_loss is not None:
             self.total_loss_name = f"{self.total_loss_name}+{self.mae_loss.name}"
-
-        self._supervised_modality_names: list[str] = []
-        if self.model.supervision_head is not None:
-            self._supervised_modality_names = list(
-                self.model.supervision_head.modality_configs.keys()
-            )
-            self.total_loss_name = f"{self.total_loss_name}+supervision"
-
         if reinit_targets:
             if ema_decay != (0.0, 0.0):
                 logger.warning(
@@ -222,8 +209,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         total_batch_con = torch.zeros([], device=self.device)
-        accumulated_extra_metrics: dict[str, Any] = {}
-        extra_metric_counts: dict[str, int] = {}
 
         # Unpack batch
         patch_size = batch[0]
@@ -245,17 +230,12 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 masked_batch_b = microbatch_b.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
-                loss_a, latent_a, decoded_a, target_output_a, pooled_a, metrics_a = (
+                loss_a, latent_a, decoded_a, target_output_a, pooled_a = (
                     self.model_forward(masked_batch_a, patch_size, self.token_exit_cfg)
                 )
-                loss_b, latent_b, decoded_b, target_output_b, pooled_b, metrics_b = (
+                loss_b, latent_b, decoded_b, target_output_b, pooled_b = (
                     self.model_forward(masked_batch_b, patch_size, self.token_exit_cfg)
                 )
-                for metrics in (metrics_a, metrics_b):
-                    if metrics is not None:
-                        self.accumulate_extra_metrics(
-                            accumulated_extra_metrics, extra_metric_counts, metrics
-                        )
                 loss = (loss_a + loss_b) / 2
 
                 # Scale loss by number of microbatches
@@ -307,9 +287,6 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 total_batch_con,
                 ReduceType.mean,
             )
-        self.log_accumulated_extra_metrics(
-            accumulated_extra_metrics, extra_metric_counts
-        )
         self.log_regularization(total_batch_reg)
 
         del batch  # In case this helps with memory utilization.
@@ -321,12 +298,7 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
         patch_size: int,
         token_exit_cfg: dict[str, int],
     ) -> tuple[
-        torch.Tensor,
-        TokensAndMasks,
-        TokensAndMasks,
-        TokensAndMasks,
-        torch.Tensor,
-        dict[str, Any] | None,
+        torch.Tensor, TokensAndMasks, TokensAndMasks, TokensAndMasks, torch.Tensor
     ]:
         """Run a forward pass."""
         with self._model_forward_context():
@@ -337,17 +309,15 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
-                projection_outputs,
+                student_outputs,
             ) = self.model(batch, patch_size)
-            if projection_outputs is not None:
-                # The detached register projection is trained by the distillation /
-                # projection-supervision losses in LatentMIMTrainModule; this
-                # (two-view contrastive) module does not implement them, so refuse
-                # rather than silently leaving the student untrained.
+            if supervision_preds is not None or student_outputs is not None:
                 raise NotImplementedError(
-                    "register_projection_dims is not supported by "
-                    "ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
+                    "supervision heads and perceiver_config.student_dims are not supported "
+                    "by ContrastiveLatentMIMTrainModule; use LatentMIMTrainModule"
                 )
+            if extra_metrics is not None:
+                self.log_extra_metrics(extra_metrics)
             with torch.no_grad():
                 logger.debug("Target Encoder forward pass...")
                 output_dict = self.model.target_encoder.forward(
@@ -365,28 +335,4 @@ class ContrastiveLatentMIMTrainModule(OlmoEarthTrainModule):
                 loss = self.loss_fn(decoded, target_output)
                 if self.mae_loss is not None and reconstructed is not None:
                     loss += self.mae_loss.compute(reconstructed, batch)
-
-                # --- Supervision loss ---
-                if (
-                    supervision_preds is not None
-                    and self.model.supervision_head is not None
-                ):
-                    if extra_metrics is None:
-                        extra_metrics = {}
-                    sup_loss, per_modality_losses = compute_supervision_loss(
-                        supervision_preds,
-                        batch,
-                        self.model.supervision_head,
-                    )
-                    loss = loss + sup_loss
-                    for mod_name, mod_loss in per_modality_losses.items():
-                        extra_metrics[f"supervision/{mod_name}"] = mod_loss
-
-            return (
-                loss,
-                latent,
-                decoded,
-                target_output,
-                latent_projected_and_pooled,
-                extra_metrics,
-            )
+            return loss, latent, decoded, target_output, latent_projected_and_pooled

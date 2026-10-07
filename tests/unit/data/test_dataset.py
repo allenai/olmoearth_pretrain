@@ -11,7 +11,6 @@ from upath import UPath
 
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import (
-    GLO30_ASPECT_FLAT,
     MISSING_VALUE,
     Modality,
 )
@@ -21,7 +20,6 @@ from olmoearth_pretrain.data.dataset import (
     get_valid_start_ts,
     subset_sample_default,
 )
-from olmoearth_pretrain.nn.supervision_head import _build_valid_mask
 
 logger = getLogger(__name__)
 
@@ -437,85 +435,3 @@ def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
             h5py_dir=str(tmp_path),
             training_modalities=[Modality.SENTINEL2_L2A.name],
         )
-
-
-class TestComputeGlo30AspectSincos:
-    """Test the circular glo30 aspect encoding in OlmoEarthDataset."""
-
-    @pytest.fixture
-    def tmp_h5py_dir(self, tmp_path: Path) -> UPath:
-        """Create a temporary h5py directory."""
-        h5py_dir = tmp_path / "h5py_data"
-        h5py_dir.mkdir()
-        return UPath(h5py_dir)
-
-    @pytest.fixture
-    def dataset(self, tmp_h5py_dir: UPath) -> OlmoEarthDataset:
-        """Create a dataset instance for testing."""
-        return OlmoEarthDataset(
-            h5py_dir=tmp_h5py_dir,
-            training_modalities=["glo30", "glo30_aspect"],
-            dtype=np.float32,
-            normalize=False,
-        )
-
-    @staticmethod
-    def _glo30(aspect_degrees: np.ndarray) -> np.ndarray:
-        """Build a [H, W, 1, 3] glo30 array with the given aspect band."""
-        h, w = aspect_degrees.shape
-        data = np.zeros((h, w, 1, 3), dtype=np.float32)
-        data[..., 0] = 100.0  # elevation
-        data[..., 1] = 10.0  # slope
-        data[..., 2] = aspect_degrees[:, :, np.newaxis]
-        return data
-
-    def test_sincos_matches_bearing(self, dataset: OlmoEarthDataset) -> None:
-        """sin/cos are the trig functions of the stored compass bearing."""
-        degrees = np.array([[0.0, 90.0], [180.0, 270.0]], dtype=np.float32)
-        sincos, missing_modalities = dataset._compute_glo30_aspect_sincos(
-            self._glo30(degrees), ["glo30_aspect"]
-        )
-
-        assert sincos.shape == (2, 2, 1, 2)
-        expected = np.deg2rad(degrees)
-        np.testing.assert_allclose(sincos[..., 0, 0], np.sin(expected), atol=1e-6)
-        np.testing.assert_allclose(sincos[..., 0, 1], np.cos(expected), atol=1e-6)
-        assert "glo30_aspect" not in missing_modalities
-
-    def test_continuous_across_north(self, dataset: OlmoEarthDataset) -> None:
-        """359 deg and 1 deg are one degree apart in the encoding, not a whole range.
-
-        This is the property the raw-degree target lacks: z-scored degrees put the
-        same bearing at opposite ends of the range.
-        """
-        degrees = np.array([[359.0, 1.0]], dtype=np.float32)
-        sincos, _ = dataset._compute_glo30_aspect_sincos(self._glo30(degrees), [])
-
-        near_north = sincos[0, 0, 0]
-        just_east = sincos[0, 1, 0]
-        assert np.linalg.norm(near_north - just_east) < 0.05
-
-    def test_flat_sentinel_is_missing(self, dataset: OlmoEarthDataset) -> None:
-        """Flat pixels (aspect -1) are MISSING_VALUE in both channels."""
-        degrees = np.array([[GLO30_ASPECT_FLAT, 45.0]], dtype=np.float32)
-        sincos, _ = dataset._compute_glo30_aspect_sincos(self._glo30(degrees), [])
-
-        assert np.all(sincos[0, 0, 0] == MISSING_VALUE)
-        assert np.all(sincos[0, 1, 0] != MISSING_VALUE)
-
-    def test_missing_aspect_is_missing(self, dataset: OlmoEarthDataset) -> None:
-        """Pixels whose aspect is already MISSING_VALUE stay missing."""
-        degrees = np.array([[float(MISSING_VALUE), 45.0]], dtype=np.float32)
-        sincos, _ = dataset._compute_glo30_aspect_sincos(self._glo30(degrees), [])
-
-        assert np.all(sincos[0, 0, 0] == MISSING_VALUE)
-        assert np.all(sincos[0, 1, 0] != MISSING_VALUE)
-
-    def test_valid_mask_drops_flat_pixels(self, dataset: OlmoEarthDataset) -> None:
-        """The supervision head's valid mask excludes flat pixels for free."""
-        degrees = np.array([[GLO30_ASPECT_FLAT, 45.0]], dtype=np.float32)
-        sincos, _ = dataset._compute_glo30_aspect_sincos(self._glo30(degrees), [])
-
-        valid = _build_valid_mask(torch.from_numpy(sincos))
-        assert not valid[0, 0, 0]
-        assert valid[0, 1, 0]

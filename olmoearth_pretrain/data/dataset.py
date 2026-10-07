@@ -115,6 +115,8 @@ def _get_max_t_within_token_budget(
             continue
         if attribute in exclude_modalities:
             continue
+        if attribute in exclude_modalities:
+            continue
         modality_spec = Modality.get(attribute)
         num_band_sets = (
             tokenization_config.get_num_bandsets(attribute)

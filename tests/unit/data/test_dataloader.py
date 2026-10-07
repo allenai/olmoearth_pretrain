@@ -18,7 +18,11 @@ from olmoearth_pretrain.data.dataloader import (
     OlmoEarthDataLoaderConfig,
     _IterableDatasetWrapper,
 )
-from olmoearth_pretrain.data.dataset import OlmoEarthDataset, OlmoEarthSample
+from olmoearth_pretrain.data.dataset import (
+    OlmoEarthDataset,
+    OlmoEarthSample,
+    compute_bandset_rates,
+)
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.train.masking import MaskingConfig
 
@@ -126,13 +130,12 @@ def _build_shape_sampling_dataloader(
     token_budget: int,
     sampled_hw_p_list: list[int],
     time_priority_prob: float,
-    exclude_only_decode_from_budget: bool,
-    patch_size_probs: list[float] | None = None,
     temporal_bias: float = 0.0,
     min_tokens_per_instance: int = 0,
     min_patch_size: int = 1,
     max_patch_size: int = 1,
     tile_size: int = 256,
+    max_latents: int | None = None,
 ) -> OlmoEarthDataLoader:
     """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
     training_modalities = [
@@ -175,15 +178,87 @@ def _build_shape_sampling_dataloader(
         min_patch_size=min_patch_size,
         max_patch_size=max_patch_size,
         sampled_hw_p_list=sampled_hw_p_list,
-        patch_size_probs=patch_size_probs,
         time_priority_prob=time_priority_prob,
         temporal_bias=temporal_bias,
         min_tokens_per_instance=min_tokens_per_instance,
         max_timesteps=12,
         tile_size=tile_size,
-        exclude_only_decode_from_budget=exclude_only_decode_from_budget,
+        max_latents=max_latents,
         masking_strategy=masking_strategy,
         num_masked_views=1,
+    )
+
+
+def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """With max_latents each rank batch draws one in-budget latent patch size.
+
+    It divides the batch's patch size and fits the budget; without max_latents it is
+    None.
+    """
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        min_patch_size=1,
+        max_patch_size=4,
+        max_latents=256,
+    )
+    dl.reshuffle()
+    items = list(
+        _IterableDatasetWrapper(dl)._get_batch_item_params_iterator(
+            np.arange(400), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+        )
+    )
+    seen: set[int] = set()
+    for start in range(0, len(items), 4):
+        batch = items[start : start + 4]
+        assert len({(ps, lps) for _i, ps, _hw, _t, lps in batch}) == 1
+        _idx, ps, hw, _t, lps = batch[0]
+        assert lps is not None and ps % lps == 0
+        assert lps == ps or (hw * ps // lps) ** 2 <= 256
+        seen.add(lps)
+    assert len(seen) > 1
+
+    # A budget too small for any sub-token grid falls back to one latent per token.
+    dl_tiny = _build_shape_sampling_dataloader(
+        tmp_path / "tiny",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        max_patch_size=4,
+        max_latents=1,
+    )
+    dl_tiny.reshuffle()
+    assert all(
+        lps == ps
+        for _idx, ps, _hw, _t, lps in _IterableDatasetWrapper(
+            dl_tiny
+        )._get_batch_item_params_iterator(
+            np.arange(40), dl_tiny.patch_sizes, dl_tiny.sampled_hw_p_list, 4
+        )
+    )
+
+    dl_off = _build_shape_sampling_dataloader(
+        tmp_path / "off",
+        setup_h5py_dir,
+        token_budget=4096,
+        sampled_hw_p_list=[2, 4, 8],
+        time_priority_prob=0.5,
+        max_patch_size=4,
+    )
+    dl_off.reshuffle()
+    assert all(
+        lps is None
+        for *_rest, lps in _IterableDatasetWrapper(
+            dl_off
+        )._get_batch_item_params_iterator(
+            np.arange(40), dl_off.patch_sizes, dl_off.sampled_hw_p_list, 4
+        )
     )
 
 
@@ -197,12 +272,11 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         token_budget=4096,
         sampled_hw_p_list=[4, 8, 16, 24],
         time_priority_prob=0.5,
-        exclude_only_decode_from_budget=True,
     )
     dl.reshuffle()
     dw = _IterableDatasetWrapper(dl)
 
-    st, so = dl._st_bandsets, dl._so_bandsets
+    st, so = dl._space_time_bandsets, dl._space_only_bandsets
     static, tbs = dl._static_bandsets, dl._time_bandsets
     assert dl.token_budget is not None
     budget = cast(int, dl.token_budget)
@@ -218,10 +292,10 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         )
     )
 
-    assert all(len(it) == 4 for it in items)
+    assert all(len(it) == 5 for it in items)
     hw_seen: set[int] = set()
     t_by_hw: dict[int, set[int]] = {}
-    for _idx, ps, hw, t in items:
+    for _idx, ps, hw, t, _lps in items:
         assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
         assert hw * ps <= dl.tile_size
         hw_seen.add(hw)
@@ -245,20 +319,19 @@ def test_min_tokens_floor_and_temporal_bias(
         token_budget=8192,
         sampled_hw_p_list=[1, 2, 4, 8, 12],
         time_priority_prob=0.5,
-        exclude_only_decode_from_budget=True,
         temporal_bias=3.0,
         min_tokens_per_instance=36,
     )
     dl.reshuffle()
     dw = _IterableDatasetWrapper(dl)
 
-    st = dl._st_bandsets  # spacetime band-sets (maps excluded)
+    st = dl._space_time_bandsets  # spacetime band-sets (maps excluded)
     items = list(
         dw._get_batch_item_params_iterator(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
         )
     )
-    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t in items]
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps in items]
     # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
     assert all(tok >= 36 for _hw, _t, tok in tokens)
     assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)
@@ -272,28 +345,22 @@ def test_min_tokens_floor_and_temporal_bias(
 
 
 def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) -> None:
-    """Excluding decode-only maps from the budget lowers the space-only rate."""
-    with_maps = _build_shape_sampling_dataloader(
-        tmp_path / "a",
+    """Decode-only maps are kept out of the budget, lowering the space-only rate."""
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
         setup_h5py_dir,
         token_budget=4096,
         sampled_hw_p_list=[8, 16],
         time_priority_prob=0.0,
-        exclude_only_decode_from_budget=False,
     )
-    without_maps = _build_shape_sampling_dataloader(
-        tmp_path / "b",
-        setup_h5py_dir,
-        token_budget=4096,
-        sampled_hw_p_list=[8, 16],
-        time_priority_prob=0.0,
-        exclude_only_decode_from_budget=True,
-    )
-    assert without_maps.budget_exclude_modalities == frozenset(
+    assert dl.budget_exclude_modalities == frozenset(
         [Modality.WORLDCOVER.name, Modality.OPENSTREETMAP_RASTER.name]
     )
-    # Space-only band-set rate drops once the maps stop counting against budget.
-    assert without_maps._so_bandsets < with_maps._so_bandsets
+    # Space-only band-set rate is lower than it would be with the maps counted.
+    _st, so_with_maps, _static, _time = compute_bandset_rates(
+        dl.dataset.training_modalities, dl.tokenization_config
+    )
+    assert dl._space_only_bandsets < so_with_maps
 
 
 def _create_test_dataloader(
@@ -584,9 +651,10 @@ class TestGetMockBatch:
 
         mock_batch = dataloader.get_mock_batch()
 
-        # Should return (patch_size, MaskedOlmoEarthSample)
-        assert len(mock_batch) == 2
-        patch_size, sample = mock_batch
+        # Should return (patch_size, MaskedOlmoEarthSample, latent_patch_size)
+        assert len(mock_batch) == 3
+        patch_size, sample, latent_patch_size = mock_batch
+        assert latent_patch_size is None
         assert patch_size == 1
         assert isinstance(sample, MaskedOlmoEarthSample)
 
@@ -634,9 +702,11 @@ class TestGetMockBatch:
 
         mock_batch = dataloader.get_mock_batch()
 
-        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample)
-        assert len(mock_batch) == 3
-        patch_size, sample_a, sample_b = mock_batch
+        # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample,
+        # latent_patch_size)
+        assert len(mock_batch) == 4
+        patch_size, sample_a, sample_b, latent_patch_size = mock_batch
+        assert latent_patch_size is None
         assert patch_size == 1
         assert isinstance(sample_a, MaskedOlmoEarthSample)
         assert isinstance(sample_b, MaskedOlmoEarthSample)

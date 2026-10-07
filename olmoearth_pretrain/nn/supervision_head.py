@@ -1,20 +1,11 @@
 """Supervision heads for direct supervision of decode-only modalities.
 
-Each supervision modality uses its own decoder tokens directly (no cross-
-modality pooling).  Decode-only spatial modalities have T=1 and BS=1, so
-the T and BandSet dimensions are indexed directly.  Per-modality linear
-heads predict max_patch_size x max_patch_size sub-patch grids that are
-unfolded to pixel resolution.  When the actual patch_size < max_patch_size
-the predictions are *downsampled* to match the target -- never upsampled.
-
-Operates on decoder output to avoid pressuring the encoder to encode spatial
-details at the expense of global semantic features.
-
-The ``latlon`` modality is a special case: the sample's (lat, lon) is regressed
-as cartesian coordinates on the unit sphere (``LATLON_TARGET_DIM = 3``) from the
-pooled features, so the target has no dateline discontinuity or pole degeneracy.
-Since latlon is never a decoder modality, it is only supervisable with
-``register_supervision=True`` (the non-spatial register path mean-pools the grid).
+Every head reads the encoder's register grid (the Perceiver bottleneck), so the
+supervision gradient flows straight into the representation the decoder and the
+downstream probes consume. Per-modality linear heads predict a
+max_patch_size x max_patch_size sub-patch grid per register cell, unfolded and
+then bilinearly resized to the target's pixel resolution; non-spatial modalities
+read the mean-pooled grid and predict one vector per sample.
 """
 
 from __future__ import annotations
@@ -32,39 +23,8 @@ from torch import Tensor
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.encodings import timestamps_to_day_of_year
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 
 logger = logging.getLogger(__name__)
-
-# The latlon supervision target is a point on the unit sphere: (x, y, z).
-LATLON_TARGET_DIM = 3
-
-
-def _day_of_year_encoding(timestamps: Tensor, num_harmonics: int) -> Tensor:
-    """Fixed sincos day-of-year basis for the time-conditioned heads.
-
-    ``phi(t) = [sin(2*pi*k*doy/365.25), cos(2*pi*k*doy/365.25)] for k = 1..K``:
-    periodic across year boundaries and year-invariant (matching the anchored
-    register read's ``year_start`` semantics). A learned linear map over a
-    Fourier basis IS a learned continuous-time embedding, so the MLP's first
-    layer provides the mixing and nothing here needs to be learned — which
-    also means exact generalization to observation dates never seen in
-    training.
-
-    Args:
-        timestamps: ``[B, T, 3]`` ``(day, month, year)`` timestamps.
-        num_harmonics: Number of annual harmonics K.
-
-    Returns:
-        ``[B, T, 2 * num_harmonics]`` float tensor.
-    """
-    doy = timestamps_to_day_of_year(timestamps)  # [B, T]
-    k = torch.arange(
-        1, num_harmonics + 1, device=timestamps.device, dtype=torch.float32
-    )
-    angles = 2.0 * torch.pi * doy.unsqueeze(-1) * k / 365.25  # [B, T, K]
-    return torch.cat([torch.sin(angles), torch.cos(angles)], dim=-1)
 
 
 class SupervisionTaskType(StrEnum):
@@ -101,39 +61,6 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
-        time_conditioned: Register-supervision only, for MULTITEMPORAL targets
-            (e.g. ndvi). The register grid is a time-free 2D map, so a plain
-            linear head can only produce one prediction per cell; a
-            time-conditioned head instead predicts a value per (cell, timestep)
-            by evaluating a small MLP on ``[register_cell ; phi(t)]``, where
-            ``phi(t)`` is a fixed day-of-year sincos basis built from the
-            sample's own timestamps. Because the prediction for cell (i, j) can
-            only read ``z[i, j]``, the loss forces each cell to store its own
-            trajectory, decodable given time — exactly what a frozen
-            per-cell probe needs. Variable timestep counts need no fixed
-            output layer (the head is queried at exactly the observed times;
-            per-timestep validity is handled by the MISSING_VALUE mask).
-        time_harmonics: For time_conditioned only. Number of annual harmonics
-            K in the day-of-year encoding: ``phi(t) = [sin(2*pi*k*doy/365.25),
-            cos(...)] for k = 1..K`` (2K features). K=4 spans phenology-scale
-            temporal structure; the MLP's first layer learns the mixing.
-        time_mlp_hidden_dim: For time_conditioned only. Hidden width of the
-            two-layer MLP head. Kept small on purpose: the point of the loss
-            is to force the REGISTER to store the trajectory, not to let a
-            clever head reconstruct it from weak features.
-        target_band_index: Regression only. For multi-band targets where only
-            one band should be supervised (e.g. glo30's ``elevation`` band 0,
-            leaving the circular ``aspect`` band unsupervised since plain L1/MSE
-            is lossy on a wrap-around angle), select that band from the raw
-            target before the loss. ``num_output_channels`` must then be 1.
-            ``None`` (default) supervises every band of the target.
-        target_band_indices: Regression only. Like ``target_band_index`` but
-            selects a *subset* of bands (e.g. glo30 ``[0, 1]`` = elevation +
-            slope, still skipping the circular ``aspect`` band). The raw target
-            is sliced to these bands (in the given order) before the loss and
-            ``num_output_channels`` must equal ``len(target_band_indices)``.
-            Mutually exclusive with ``target_band_index``. ``None`` (default)
-            leaves band selection to ``target_band_index`` / all bands.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -143,11 +70,6 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
-    time_conditioned: bool = False
-    time_harmonics: int = 4
-    time_mlp_hidden_dim: int = 64
-    target_band_index: int | None = None
-    target_band_indices: list[int] | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -163,42 +85,6 @@ class SupervisionModalityConfig(Config):
                 f"regression_loss_type must be 'mse' or 'l1', got "
                 f"{self.regression_loss_type!r}"
             )
-        if self.time_conditioned:
-            if self.task_type != SupervisionTaskType.REGRESSION:
-                raise ValueError(
-                    "time_conditioned supervision only supports regression, got "
-                    f"{self.task_type}"
-                )
-            if self.time_harmonics < 1:
-                raise ValueError(
-                    f"time_harmonics must be >= 1, got {self.time_harmonics}"
-                )
-        if self.target_band_index is not None:
-            if self.task_type != SupervisionTaskType.REGRESSION:
-                raise ValueError(
-                    f"target_band_index only supports regression, got {self.task_type}"
-                )
-            if self.num_output_channels != 1:
-                raise ValueError(
-                    "target_band_index selects a single band, so "
-                    "num_output_channels must be 1, got "
-                    f"{self.num_output_channels}"
-                )
-        if self.target_band_indices is not None:
-            if self.target_band_index is not None:
-                raise ValueError(
-                    "set only one of target_band_index / target_band_indices"
-                )
-            if self.task_type != SupervisionTaskType.REGRESSION:
-                raise ValueError(
-                    "target_band_indices only supports regression, got "
-                    f"{self.task_type}"
-                )
-            if self.num_output_channels != len(self.target_band_indices):
-                raise ValueError(
-                    "num_output_channels must equal len(target_band_indices), got "
-                    f"{self.num_output_channels} vs {len(self.target_band_indices)}"
-                )
 
 
 @dataclass
@@ -210,10 +96,6 @@ class SupervisionHeadConfig(Config):
     """
 
     modality_configs: dict[str, SupervisionModalityConfig] = field(default_factory=dict)
-    # When True, the heads read the encoder register grid (the Perceiver bottleneck)
-    # instead of the per-modality decoder tokens, providing a spatial-salience signal to
-    # the registers. embedding_dim is then the register dim (resolved by LatentMIMConfig).
-    register_supervision: bool = False
 
     def __post_init__(self) -> None:
         """Coerce raw dicts in modality_configs to SupervisionModalityConfig instances."""
@@ -226,32 +108,28 @@ class SupervisionHeadConfig(Config):
         """Build the supervision head.
 
         Args:
-            embedding_dim: Dimension of the feature source (decoder embeddings, or the
-                register dim when register_supervision is True).
-            max_patch_size: Maximum patch size; each token predicts a
+            embedding_dim: Width of the register grid the heads read (the bottleneck's
+                register dim, resolved by LatentMIMConfig).
+            max_patch_size: Maximum patch size; each register cell predicts a
                 max_patch_size x max_patch_size sub-patch grid.
         """
         return SupervisionHead(
             modality_configs=self.modality_configs,
             embedding_dim=embedding_dim,
             max_patch_size=max_patch_size,
-            register_supervision=self.register_supervision,
         )
 
 
 class SupervisionHead(nn.Module):
-    """Per-modality linear heads on per-modality decoder tokens.
+    """Per-modality linear heads on the encoder register grid.
 
-    Forward path (per supervised modality):
-      1. Grab the modality's own decoder tokens [B, P_H, P_W, T, 1, D]
-         and squeeze BS -> [B, P_H, P_W, T, D]
-      2. Linear head predicting max_patch_size^2 * C values per token
-         (broadcasts over T)
-      3. Unfold to [B, P_H * max_ps, P_W * max_ps, T, C]
-      4. Downsample spatial dims to target pixel resolution when needed.
+    Forward path (per supervised spatial modality):
+      1. Read the shared register grid ``[B, n_h, n_w, D]``.
+      2. Linear head predicting max_patch_size^2 * C values per cell.
+      3. Unfold to ``[B, n_h * max_ps, n_w * max_ps, 1, C]``.
+      4. Bilinearly resize to the target's pixel resolution.
 
-    For non-multitemporal modalities T=1.  For multitemporal modalities
-    (e.g. NDVI) a separate prediction is produced for each timestep.
+    Non-spatial modalities read the mean-pooled grid and predict ``[B, C]``.
     """
 
     def __init__(
@@ -259,64 +137,21 @@ class SupervisionHead(nn.Module):
         modality_configs: dict[str, SupervisionModalityConfig],
         embedding_dim: int,
         max_patch_size: int,
-        register_supervision: bool = False,
     ) -> None:
         """Initialize the supervision head."""
         super().__init__()
         self.modality_configs = modality_configs
         self.max_patch_size = max_patch_size
-        self.register_supervision = register_supervision
         self._non_spatial_modalities: set[str] = set()
-        self._time_conditioned_modalities: set[str] = set()
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
-            if name == Modality.LATLON.name and (
-                cfg.task_type != SupervisionTaskType.REGRESSION
-                or cfg.num_output_channels != LATLON_TARGET_DIM
-            ):
-                raise ValueError(
-                    "latlon supervision must be a regression onto unit-sphere xyz "
-                    f"(num_output_channels={LATLON_TARGET_DIM}), got "
-                    f"task_type={cfg.task_type} num_output_channels="
-                    f"{cfg.num_output_channels}"
-                )
             modality_spec = Modality.get(name)
-            if cfg.time_conditioned:
-                if not register_supervision:
-                    raise ValueError(
-                        f"time_conditioned supervision ({name}) requires "
-                        "register_supervision=True: it conditions the time-free "
-                        "register grid on the query time"
-                    )
-                if not (modality_spec.is_spatial and modality_spec.is_multitemporal):
-                    raise ValueError(
-                        f"time_conditioned supervision requires a spatial "
-                        f"multitemporal modality, got {name}"
-                    )
-                # Two-layer MLP on [register_cell ; phi(t)] -> C. Per-cell (no
-                # max_patch_size^2 unfold): the output is bilinearly interpolated
-                # to the target resolution like the other spatial heads.
-                self._time_conditioned_modalities.add(name)
-                self.heads[name] = nn.Sequential(
-                    nn.Linear(
-                        embedding_dim + 2 * cfg.time_harmonics,
-                        cfg.time_mlp_hidden_dim,
-                    ),
-                    nn.GELU(),
-                    nn.Linear(cfg.time_mlp_hidden_dim, cfg.num_output_channels),
-                )
-                continue
             if modality_spec.is_spatial:
-                # TODO: the max_patch_size^2 unfold is a holdover from decoder-token
-                # supervision (each token = one real patch of up to max_patch_size px).
-                # For register_supervision the registers are a coarse latent grid, not
-                # patches, and the output is bilinearly interpolated to the target
-                # resolution regardless — so this factor isn't needed. With register grids
-                # finer than the patch grid (e.g. n=16/32 vs ~13) it over-produces
-                # (n*max_patch_size > target) then downsamples, wasting head params.
-                # Consider making it configurable (e.g. 1, or ceil(max_target / n)) in
-                # register_supervision mode. Expected downstream effect: negligible (low-
-                # weight nudge, interpolated output, head discarded after pretraining).
+                # The max_patch_size^2 unfold predates register supervision (each decoder
+                # token was one real patch of up to max_patch_size px). The registers are
+                # a coarse latent grid and the output is interpolated to the target
+                # resolution regardless, so the factor is not strictly needed; it is kept
+                # because the shipped checkpoints were trained with these head shapes.
                 out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
             else:
                 out_dim = cfg.num_output_channels
@@ -333,13 +168,6 @@ class SupervisionHead(nn.Module):
     def get_class_values(self, name: str) -> Tensor:
         """Retrieve the cached class_values buffer for a modality."""
         return getattr(self, f"_class_values_{name}")
-
-    def _get_batch_size(self, decoded: TokensAndMasks) -> int:
-        for modality_name in decoded.modalities:
-            t = getattr(decoded, modality_name)
-            if t is not None:
-                return t.shape[0]
-        return 1
 
     @staticmethod
     def _maybe_interpolate_to_target(
@@ -363,114 +191,36 @@ class SupervisionHead(nn.Module):
         return rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
 
     def forward(
-        self,
-        decoded: TokensAndMasks,
-        batch: MaskedOlmoEarthSample,
-        register_grid: Tensor | None = None,
+        self, register_grid: Tensor, batch: MaskedOlmoEarthSample
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
-        Each modality head operates on that modality's own decoder tokens.
-        Under FSDP every head must run on every rank, so we use dummy zero
-        features when a modality's tokens are absent from the decoder output.
+        Every head runs on every call (FSDP needs each parameter touched on every
+        rank), whether or not the batch carries that modality's target.
 
         Args:
-            decoded: Decoder output TokensAndMasks.
+            register_grid: The encoder register grid ``[B, n_h, n_w, register_dim]``.
             batch: The original batch (used to determine target spatial dims).
-            register_grid: When register_supervision is True, the encoder register grid
-                ``[B, n_h, n_w, register_dim]`` that all heads read from instead of the
-                per-modality decoder tokens.
 
         Returns:
-            Dictionary mapping supervised modality name to predictions.
-            Shape is [B, H, W, T, C] (T preserved from decoder tokens).
+            Dictionary mapping supervised modality name to predictions: ``[B, H, W,
+            1, C]`` for spatial modalities, ``[B, C]`` for non-spatial ones.
         """
         mps = self.max_patch_size
-        device = next(self.parameters()).device
-        dtype = next(self.parameters()).dtype
-
-        if self.register_supervision and register_grid is None:
-            raise ValueError(
-                "register_grid must be provided when register_supervision is True"
-            )
-
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
-            tokens = getattr(decoded, sup_name, None)
-
-            if sup_name in self._time_conditioned_modalities:
-                # Time-conditioned head: MLP([register_cell ; phi(t)]) evaluated at
-                # every (cell, observed timestep). The prediction for cell (i, j)
-                # can only read register_grid[:, i, j], so the fitted trajectory is
-                # guaranteed to live in the cell the frozen probes read.
-                assert register_grid is not None
-                if batch.timestamps is None:
-                    raise ValueError(
-                        f"time_conditioned supervision ({sup_name}) requires batch "
-                        "timestamps to build the day-of-year encoding"
-                    )
-                cfg = self.modality_configs[sup_name]
-                phi = _day_of_year_encoding(batch.timestamps, cfg.time_harmonics).to(
-                    dtype
-                )  # [B, T, 2K]
-                b, n_h, n_w, d = register_grid.shape
-                t = phi.shape[1]
-                features = torch.cat(
-                    [
-                        register_grid[:, :, :, None, :].expand(b, n_h, n_w, t, d),
-                        phi[:, None, None, :, :].expand(b, n_h, n_w, t, -1),
-                    ],
-                    dim=-1,
-                )
-                output = head(features)  # [B, n_h, n_w, T, C]
-                predictions[sup_name] = self._maybe_interpolate_to_target(
-                    output, getattr(batch, sup_name, None)
-                )
-                continue
-
             if sup_name in self._non_spatial_modalities:
-                # Non-spatial modality: features [B, D]
-                if self.register_supervision:
-                    assert register_grid is not None
-                    features = register_grid.mean(dim=(1, 2))  # [B, D]
-                elif tokens is not None:
-                    features = tokens.mean(dim=-2)  # [B, D]
-                else:
-                    batch_size = self._get_batch_size(decoded)
-                    features = torch.zeros(
-                        batch_size, head.in_features, device=device, dtype=dtype
-                    )
-                output = head(features)  # [B, C]
+                output = head(register_grid.mean(dim=(1, 2)))  # [B, C]
             else:
-                # Spatial modality: features [B, P_H, P_W, T, D]. In register-supervision
-                # mode all heads read the shared register grid [B, n_h, n_w, D] (T=1).
-                if self.register_supervision:
-                    assert register_grid is not None
-                    features = register_grid.unsqueeze(3)  # [B, n_h, n_w, 1, D]
-                elif tokens is not None:
-                    features = tokens.mean(dim=-2)  # [B, P_H, P_W, T, D]
-                else:
-                    batch_size = self._get_batch_size(decoded)
-                    features = torch.zeros(
-                        batch_size,
-                        1,
-                        1,
-                        1,
-                        head.in_features,
-                        device=device,
-                        dtype=dtype,
-                    )
-
                 num_channels = self.modality_configs[sup_name].num_output_channels
-                raw = head(features)  # [B, P_H, P_W, T, mps^2 * C]
-
+                raw = head(register_grid.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
                 output = rearrange(
                     raw,
                     "b ph pw t (c i j) -> b (ph i) (pw j) t c",
                     c=num_channels,
                     i=mps,
                     j=mps,
-                )  # [B, P_H*mps, P_W*mps, T, C]
+                )  # [B, n_h*mps, n_w*mps, 1, C]
 
                 output = self._maybe_interpolate_to_target(
                     output, getattr(batch, sup_name, None)
@@ -509,26 +259,6 @@ def _compute_per_modality_losses(
         if raw_target is None:
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
             continue
-
-        # latlon targets are [B, 2] (lat, lon) but the prediction is [B, 3]
-        # unit-sphere xyz, so the generic shape-matched paths below don't apply.
-        if name == Modality.LATLON.name:
-            per_modality_losses[name] = _latlon_regression_loss(
-                pred, raw_target, regression_loss_type=cfg.regression_loss_type
-            )
-            continue
-
-        # Single-band supervision of a multi-band target (e.g. glo30 elevation):
-        # slice the chosen band so the valid mask and loss run at 1 channel,
-        # matching the head's num_output_channels=1.
-        if cfg.target_band_index is not None:
-            idx = cfg.target_band_index
-            raw_target = raw_target[..., idx : idx + 1]
-        # Subset supervision of a multi-band target (e.g. glo30 elevation+slope):
-        # slice the chosen bands (in order) so the valid mask and loss run at
-        # len(indices) channels, matching the head's num_output_channels.
-        elif cfg.target_band_indices is not None:
-            raw_target = raw_target[..., cfg.target_band_indices]
 
         valid_mask = _build_valid_mask(raw_target)
 
@@ -594,42 +324,6 @@ def compute_supervision_loss(
 def _build_valid_mask(raw_target: Tensor) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
     return (raw_target != MISSING_VALUE).all(dim=-1)
-
-
-def _latlon_unit_xyz_target(raw_latlon: Tensor) -> Tensor:
-    """Convert normalized (lat, lon) [B, 2] to unit-sphere xyz [B, 3].
-
-    The dataloader normalizes latlon with the predefined min/max config
-    (norm_configs/predefined.json: lat [-90, 90] -> [0, 1], lon [-180, 180] ->
-    [0, 1]); undo that, then map to cartesian coordinates on the unit sphere.
-    xyz is bounded in [-1, 1] and, unlike raw lat/lon, has no +-180 dateline
-    discontinuity or pole degeneracy, so it is well-scaled for MSE/L1.
-    """
-    lat = torch.deg2rad(raw_latlon[..., 0].float() * 180.0 - 90.0)
-    lon = torch.deg2rad(raw_latlon[..., 1].float() * 360.0 - 180.0)
-    cos_lat = torch.cos(lat)
-    return torch.stack(
-        (cos_lat * torch.cos(lon), cos_lat * torch.sin(lon), torch.sin(lat)),
-        dim=-1,
-    )
-
-
-def _latlon_regression_loss(
-    pred: Tensor,
-    raw_latlon: Tensor,
-    regression_loss_type: str = "mse",
-) -> Tensor:
-    """Regression loss between predicted [B, 3] xyz and the sample's location.
-
-    Samples whose latlon is missing-valued are excluded; if none are valid the
-    loss is ``0 * pred.sum()`` so DDP/FSDP still see gradients for the head.
-    """
-    valid = (raw_latlon != MISSING_VALUE).all(dim=-1)  # [B]
-    if not valid.any():
-        return (0 * pred.sum()).to(pred.dtype)
-    target = _latlon_unit_xyz_target(raw_latlon[valid])
-    loss_fn = F.l1_loss if regression_loss_type == "l1" else F.mse_loss
-    return loss_fn(pred[valid].float(), target).to(pred.dtype)
 
 
 def _classification_loss(

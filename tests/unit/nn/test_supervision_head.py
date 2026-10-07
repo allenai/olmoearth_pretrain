@@ -5,47 +5,26 @@ import torch
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.supervision_head import (
-    LATLON_TARGET_DIM,
     SupervisionHead,
     SupervisionHeadConfig,
     SupervisionModalityConfig,
     SupervisionTaskType,
     _build_valid_mask,
-    _day_of_year_encoding,
-    _latlon_regression_loss,
-    _latlon_unit_xyz_target,
     compute_supervision_loss,
 )
 
 B, P_H, P_W, D = 2, 4, 4, 8
+# Output width used for the non-spatial (per-sample) head tests; latlon is the
+# example non-spatial modality but any [B, C] head behaves the same.
+NON_SPATIAL_CHANNELS = 3
 MAX_PATCH_SIZE = 8
 H_PIX, W_PIX = P_H * MAX_PATCH_SIZE, P_W * MAX_PATCH_SIZE  # 32, 32
 
 
-def _make_decoder_output_with_worldcover(
-    mask_value: int = MaskValue.DECODER.value,
-) -> TokensAndMasks:
-    """Decoder output with worldcover tokens (T=1, BS=1)."""
-    return TokensAndMasks(
-        sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
-        sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), mask_value),
-        worldcover=torch.randn(B, P_H, P_W, 1, 1, D),
-        worldcover_mask=torch.full((B, P_H, P_W, 1, 1), mask_value),
-    )
-
-
-def _make_decoder_output_with_srtm(
-    mask_value: int = MaskValue.DECODER.value,
-) -> TokensAndMasks:
-    """Decoder output with srtm tokens (T=1, BS=1)."""
-    return TokensAndMasks(
-        sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
-        sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), mask_value),
-        srtm=torch.randn(B, P_H, P_W, 1, 1, D),
-        srtm_mask=torch.full((B, P_H, P_W, 1, 1), mask_value),
-    )
+def _make_register_grid() -> torch.Tensor:
+    """A register grid [B, n_h, n_w, D] the heads read from."""
+    return torch.randn(B, P_H, P_W, D, requires_grad=True)
 
 
 def _make_batch_with_worldcover() -> MaskedOlmoEarthSample:
@@ -75,7 +54,7 @@ def _make_batch_with_srtm() -> MaskedOlmoEarthSample:
 
 
 class TestSupervisionHead:
-    """Test SupervisionHead forward pass."""
+    """Test SupervisionHead forward pass on the register grid."""
 
     @pytest.fixture
     def worldcover_config(self) -> dict[str, SupervisionModalityConfig]:
@@ -88,71 +67,25 @@ class TestSupervisionHead:
             ),
         }
 
-    def test_forward_shape_t1(
+    def test_forward_shape(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
-        """Non-multitemporal: output is [B, H, W, T=1, C]."""
+        """Spatial head output is resized to the target: [B, H, W, 1, C]."""
         head = SupervisionHead(
             worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
         )
-        decoded = _make_decoder_output_with_worldcover()
-        batch = _make_batch_with_worldcover()
-        preds = head(decoded, batch)
+        preds = head(_make_register_grid(), _make_batch_with_worldcover())
         assert "worldcover" in preds
         assert preds["worldcover"].shape == (B, H_PIX, W_PIX, 1, 11)
-
-    def test_forward_shape_multitemporal(self) -> None:
-        """Multitemporal modality (e.g. NDVI) preserves T > 1."""
-        T = 3
-        cfg = {
-            "ndvi": SupervisionModalityConfig(
-                task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=1,
-            ),
-        }
-        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        decoded = TokensAndMasks(
-            ndvi=torch.randn(B, P_H, P_W, T, 1, D),
-            ndvi_mask=torch.full((B, P_H, P_W, T, 1), MaskValue.DECODER.value),
-        )
-        ndvi_target = torch.rand(B, H_PIX, W_PIX, T, 1)
-        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
-        batch = MaskedOlmoEarthSample(timestamps=timestamps, ndvi=ndvi_target)
-        preds = head(decoded, batch)
-        assert preds["ndvi"].shape == (B, H_PIX, W_PIX, T, 1)
-
-    def test_forward_uses_per_modality_tokens(
-        self, worldcover_config: dict[str, SupervisionModalityConfig]
-    ) -> None:
-        """Each head uses its own modality tokens, not a cross-modality pool."""
-        head = SupervisionHead(
-            worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
-        )
-        wc_tokens = torch.randn(B, P_H, P_W, 1, 1, D)
-        decoded_a = TokensAndMasks(
-            worldcover=wc_tokens,
-            worldcover_mask=torch.full((B, P_H, P_W, 1, 1), MaskValue.DECODER.value),
-        )
-        decoded_b = TokensAndMasks(
-            worldcover=wc_tokens,
-            worldcover_mask=torch.full((B, P_H, P_W, 1, 1), MaskValue.DECODER.value),
-            sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
-            sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), MaskValue.DECODER.value),
-        )
-        batch = _make_batch_with_worldcover()
-        preds_a = head(decoded_a, batch)
-        preds_b = head(decoded_b, batch)
-        torch.testing.assert_close(preds_a["worldcover"], preds_b["worldcover"])
 
     def test_forward_downsample(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
-        """When prediction > target, output is downsampled to target size."""
+        """When the unfolded grid is larger than the target, output is downsampled."""
         small_h, small_w = 16, 16
         head = SupervisionHead(
             worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
         )
-        decoded = _make_decoder_output_with_worldcover()
         wc_values = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
         wc = torch.tensor(wc_values)[
             torch.randint(0, len(wc_values), (B, small_h, small_w))
@@ -166,28 +99,33 @@ class TestSupervisionHead:
                 (B, small_h, small_w, 1, 1), MaskValue.DECODER.value
             ),
         )
-        preds = head(decoded, batch)
+        preds = head(_make_register_grid(), batch)
         assert preds["worldcover"].shape == (B, small_h, small_w, 1, 11)
 
-    def test_missing_modality_tokens_still_produces_output(
+    def test_missing_target_still_produces_output(
         self, worldcover_config: dict[str, SupervisionModalityConfig]
     ) -> None:
-        """Heads run even when the modality is absent from decoder output (FSDP)."""
+        """Heads run even when the batch has no target for them (FSDP)."""
         head = SupervisionHead(
             worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
         )
-        decoded = TokensAndMasks(
-            sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
-            sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), MaskValue.DECODER.value),
-        )
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
-        batch = MaskedOlmoEarthSample(timestamps=timestamps)
-        preds = head(decoded, batch)
+        preds = head(
+            _make_register_grid(), MaskedOlmoEarthSample(timestamps=timestamps)
+        )
         assert "worldcover" in preds
+        # No target to resize to: the unfolded grid is returned as is.
+        assert preds["worldcover"].shape == (
+            B,
+            P_H * MAX_PATCH_SIZE,
+            P_W * MAX_PATCH_SIZE,
+            1,
+            11,
+        )
         assert preds["worldcover"].requires_grad
 
     def test_regression_head(self) -> None:
-        """Regression head produces [B, H, W, T=1, 1] output."""
+        """Regression head produces [B, H, W, 1, 1] output."""
         cfg = {
             "srtm": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
@@ -195,123 +133,25 @@ class TestSupervisionHead:
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        decoded = _make_decoder_output_with_srtm()
-        batch = _make_batch_with_srtm()
-        preds = head(decoded, batch)
+        preds = head(_make_register_grid(), _make_batch_with_srtm())
         assert "srtm" in preds
         assert preds["srtm"].shape == (B, H_PIX, W_PIX, 1, 1)
 
     def test_non_spatial_forward(self) -> None:
-        """Non-spatial modality (latlon) produces [B, C] output."""
+        """Non-spatial modality reads the mean-pooled grid and produces [B, C]."""
         cfg = {
             "latlon": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=LATLON_TARGET_DIM,
+                num_output_channels=NON_SPATIAL_CHANNELS,
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        decoded = TokensAndMasks(
-            latlon=torch.randn(B, 1, D),
-            latlon_mask=torch.full((B, 1), MaskValue.DECODER.value),
-        )
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
-        preds = head(decoded, batch)
+        preds = head(_make_register_grid(), batch)
         assert "latlon" in preds
-        assert preds["latlon"].shape == (B, LATLON_TARGET_DIM)
-
-    def test_non_spatial_missing_tokens(self) -> None:
-        """Non-spatial head runs with dummy zeros when tokens are absent (FSDP)."""
-        cfg = {
-            "latlon": SupervisionModalityConfig(
-                task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=LATLON_TARGET_DIM,
-            ),
-        }
-        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        decoded = TokensAndMasks(
-            sentinel2_l2a=torch.randn(B, P_H, P_W, 3, 2, D),
-            sentinel2_l2a_mask=torch.full((B, P_H, P_W, 3, 2), MaskValue.DECODER.value),
-        )
-        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
-        batch = MaskedOlmoEarthSample(timestamps=timestamps)
-        preds = head(decoded, batch)
-        assert "latlon" in preds
+        assert preds["latlon"].shape == (B, NON_SPATIAL_CHANNELS)
         assert preds["latlon"].requires_grad
-
-
-class TestLatlonSupervision:
-    """Test the latlon unit-sphere xyz target conversion and loss."""
-
-    def _normalize(self, lat: float, lon: float) -> list[float]:
-        """Apply the predefined latlon normalization (degrees -> [0, 1])."""
-        return [(lat + 90.0) / 180.0, (lon + 180.0) / 360.0]
-
-    def test_unit_xyz_target_matches_trig(self) -> None:
-        """Normalized (lat, lon) converts to the expected unit-sphere point."""
-        import math
-
-        cases = [(0.0, 0.0), (90.0, 0.0), (-45.0, 0.0), (47.6, -122.3)]
-        raw = torch.tensor([self._normalize(lat, lon) for lat, lon in cases])
-        xyz = _latlon_unit_xyz_target(raw)
-        for (lat, lon), got in zip(cases, xyz):
-            la, lo = math.radians(lat), math.radians(lon)
-            expected = torch.tensor(
-                [
-                    math.cos(la) * math.cos(lo),
-                    math.cos(la) * math.sin(lo),
-                    math.sin(la),
-                ]
-            )
-            assert torch.allclose(got, expected, atol=1e-5)
-        assert torch.allclose(xyz.norm(dim=-1), torch.ones(len(cases)), atol=1e-5)
-
-    def test_unit_xyz_target_no_dateline_discontinuity(self) -> None:
-        """Lon = +180 and lon = -180 map to the same point on the sphere."""
-        raw = torch.tensor(
-            [self._normalize(10.0, 180.0), self._normalize(10.0, -180.0)]
-        )
-        xyz = _latlon_unit_xyz_target(raw)
-        assert torch.allclose(xyz[0], xyz[1], atol=1e-5)
-
-    def test_loss_zero_for_perfect_prediction(self) -> None:
-        """Predicting the exact xyz target gives zero loss."""
-        raw = torch.rand(B, 2)
-        pred = _latlon_unit_xyz_target(raw)
-        assert _latlon_regression_loss(pred, raw).item() == pytest.approx(0.0)
-
-    def test_loss_excludes_missing_rows(self) -> None:
-        """Missing-valued latlon rows do not contribute to the loss."""
-        raw = torch.rand(B, 2)
-        pred = _latlon_unit_xyz_target(raw)
-        raw[0] = MISSING_VALUE
-        pred[0] = 99.0  # garbage on the missing row must not matter
-        assert _latlon_regression_loss(pred, raw).item() == pytest.approx(0.0)
-
-    def test_loss_all_missing_keeps_grad_path(self) -> None:
-        """All-missing latlon yields zero loss that still touches the prediction."""
-        pred = torch.randn(B, LATLON_TARGET_DIM, requires_grad=True)
-        raw = torch.full((B, 2), float(MISSING_VALUE))
-        loss = _latlon_regression_loss(pred, raw)
-        assert loss.item() == 0.0
-        assert loss.requires_grad
-
-    def test_head_rejects_wrong_latlon_config(self) -> None:
-        """Latlon must be a 3-channel regression head."""
-        for bad in (
-            SupervisionModalityConfig(
-                task_type=SupervisionTaskType.REGRESSION, num_output_channels=2
-            ),
-            SupervisionModalityConfig(
-                task_type=SupervisionTaskType.CLASSIFICATION,
-                num_output_channels=LATLON_TARGET_DIM,
-                class_values=[0.0, 1.0],
-            ),
-        ):
-            with pytest.raises(ValueError, match="unit-sphere"):
-                SupervisionHead(
-                    {"latlon": bad}, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
-                )
 
 
 class TestBuildValidMask:
@@ -403,24 +243,6 @@ class TestComputeSupervisionLoss:
         assert total_loss > 0
         assert "ndvi" in per_mod
 
-    def test_non_spatial_regression_loss(self) -> None:
-        """Non-spatial regression loss (latlon) is positive and finite."""
-        cfg = {
-            "latlon": SupervisionModalityConfig(
-                task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=LATLON_TARGET_DIM,
-                weight=0.3,
-            ),
-        }
-        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        pred = torch.randn(B, LATLON_TARGET_DIM)
-        timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
-        batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
-        total_loss, per_mod = compute_supervision_loss({"latlon": pred}, batch, head)
-        assert total_loss.ndim == 0
-        assert total_loss > 0
-        assert "latlon" in per_mod
-
     def test_all_missing_returns_zero(self) -> None:
         """Entirely missing target yields zero loss."""
         cfg = {
@@ -504,12 +326,12 @@ class TestSupervisionHeadConfig:
             modality_configs={
                 "latlon": SupervisionModalityConfig(
                     task_type=SupervisionTaskType.REGRESSION,
-                    num_output_channels=LATLON_TARGET_DIM,
+                    num_output_channels=NON_SPATIAL_CHANNELS,
                 ),
             }
         )
         head = config.build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        assert head.heads["latlon"].out_features == LATLON_TARGET_DIM
+        assert head.heads["latlon"].out_features == NON_SPATIAL_CHANNELS
         assert "latlon" in head._non_spatial_modalities
 
     def test_classification_requires_class_values(self) -> None:
@@ -518,144 +340,4 @@ class TestSupervisionHeadConfig:
             SupervisionModalityConfig(
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
-            )
-
-
-def _ndvi_time_conditioned_config() -> dict[str, SupervisionModalityConfig]:
-    """NDVI time-conditioned register-supervision config."""
-    return {
-        "ndvi": SupervisionModalityConfig(
-            task_type=SupervisionTaskType.REGRESSION,
-            num_output_channels=1,
-            weight=1.0,
-            time_conditioned=True,
-            time_harmonics=4,
-        )
-    }
-
-
-class TestTimeConditionedSupervision:
-    """Time-conditioned (register grid x day-of-year MLP) supervision, e.g. NDVI."""
-
-    T = 3
-
-    def _make_timestamps(self) -> torch.Tensor:
-        # (day, month0, year): Jan 1, Apr 15, Jul 1 of 2023.
-        return torch.tensor(
-            [[[1, 0, 2023], [15, 3, 2023], [1, 6, 2023]]], dtype=torch.long
-        ).expand(B, -1, -1)
-
-    def _make_head(self) -> SupervisionHead:
-        return SupervisionHead(
-            _ndvi_time_conditioned_config(),
-            embedding_dim=D,
-            max_patch_size=MAX_PATCH_SIZE,
-            register_supervision=True,
-        )
-
-    def test_forward_shape_time_dependence_and_locality(self) -> None:
-        """Per-(cell, timestep) predictions from the time-free register grid.
-
-        With a grid-resolution target (no interpolation): predictions vary across
-        timesteps (the time conditioning is live), and cell (i, j)'s prediction
-        depends ONLY on register_grid[:, i, j] (the per-cell forcing that makes the
-        fitted trajectory readable by a frozen per-cell probe).
-        """
-        head = self._make_head()
-        register_grid = torch.randn(B, P_H, P_W, D)
-        ndvi_target = torch.rand(B, P_H, P_W, self.T, 1)
-        batch = MaskedOlmoEarthSample(
-            timestamps=self._make_timestamps(), ndvi=ndvi_target
-        )
-        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
-        assert preds["ndvi"].shape == (B, P_H, P_W, self.T, 1)
-        # Same cell, different timesteps -> different predictions.
-        assert not torch.allclose(preds["ndvi"][:, :, :, 0], preds["ndvi"][:, :, :, 1])
-        # Perturbing one cell leaves every other cell's predictions unchanged.
-        perturbed = register_grid.clone()
-        perturbed[:, 0, 0] += 1.0
-        preds_perturbed = head(TokensAndMasks(), batch, register_grid=perturbed)
-        assert not torch.allclose(
-            preds_perturbed["ndvi"][:, 0, 0], preds["ndvi"][:, 0, 0]
-        )
-        torch.testing.assert_close(preds_perturbed["ndvi"][:, 1:], preds["ndvi"][:, 1:])
-
-    def test_forward_interpolates_to_pixel_target(self) -> None:
-        """A pixel-resolution target triggers bilinear upsampling of the grid preds."""
-        head = self._make_head()
-        register_grid = torch.randn(B, P_H, P_W, D)
-        ndvi_target = torch.rand(B, H_PIX, W_PIX, self.T, 1)
-        batch = MaskedOlmoEarthSample(
-            timestamps=self._make_timestamps(), ndvi=ndvi_target
-        )
-        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
-        assert preds["ndvi"].shape == (B, H_PIX, W_PIX, self.T, 1)
-
-    def test_loss_and_register_gradients(self) -> None:
-        """The supervision loss backpropagates into the register grid."""
-        head = self._make_head()
-        register_grid = torch.randn(B, P_H, P_W, D, requires_grad=True)
-        ndvi_target = torch.rand(B, H_PIX, W_PIX, self.T, 1)
-        # Punch some MISSING holes (cloud/absent obs); the masked loss skips them.
-        ndvi_target[:, :4, :4, 0] = MISSING_VALUE
-        batch = MaskedOlmoEarthSample(
-            timestamps=self._make_timestamps(), ndvi=ndvi_target
-        )
-        preds = head(TokensAndMasks(), batch, register_grid=register_grid)
-        total_loss, per_mod = compute_supervision_loss(preds, batch, head)
-        assert total_loss.ndim == 0
-        assert torch.isfinite(total_loss)
-        total_loss.backward()
-        assert register_grid.grad is not None
-        assert torch.isfinite(register_grid.grad).all()
-        assert register_grid.grad.abs().sum() > 0
-
-    def test_day_of_year_encoding(self) -> None:
-        """Jan 1 encodes as (sin 0, cos 1) x K, and the encoding is year-invariant."""
-        jan1_2023 = torch.tensor([[[1, 0, 2023]]], dtype=torch.long)
-        phi = _day_of_year_encoding(jan1_2023, num_harmonics=4)  # [1, 1, 8]
-        torch.testing.assert_close(phi[0, 0, :4], torch.zeros(4))
-        torch.testing.assert_close(phi[0, 0, 4:], torch.ones(4))
-        jul15_2019 = torch.tensor([[[15, 6, 2019]]], dtype=torch.long)
-        jul15_2024 = torch.tensor([[[15, 6, 2024]]], dtype=torch.long)
-        torch.testing.assert_close(
-            _day_of_year_encoding(jul15_2019, num_harmonics=4),
-            _day_of_year_encoding(jul15_2024, num_harmonics=4),
-        )
-
-    def test_requires_register_supervision(self) -> None:
-        """time_conditioned without register_supervision raises."""
-        with pytest.raises(ValueError, match="register_supervision"):
-            SupervisionHead(
-                _ndvi_time_conditioned_config(),
-                embedding_dim=D,
-                max_patch_size=MAX_PATCH_SIZE,
-                register_supervision=False,
-            )
-
-    def test_requires_multitemporal_modality(self) -> None:
-        """time_conditioned on a static modality (srtm) raises."""
-        cfg = {
-            "srtm": SupervisionModalityConfig(
-                task_type=SupervisionTaskType.REGRESSION,
-                num_output_channels=1,
-                time_conditioned=True,
-            ),
-        }
-        with pytest.raises(ValueError, match="multitemporal"):
-            SupervisionHead(
-                cfg,
-                embedding_dim=D,
-                max_patch_size=MAX_PATCH_SIZE,
-                register_supervision=True,
-            )
-
-    def test_requires_regression(self) -> None:
-        """time_conditioned classification is rejected at config time."""
-        with pytest.raises(ValueError, match="regression"):
-            SupervisionModalityConfig(
-                task_type=SupervisionTaskType.CLASSIFICATION,
-                num_output_channels=2,
-                class_values=[0.0, 1.0],
-                time_conditioned=True,
             )

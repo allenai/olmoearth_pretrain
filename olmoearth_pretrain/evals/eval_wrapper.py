@@ -12,12 +12,10 @@ from olmoearth_pretrain.evals.datasets.configs import TaskType
 from olmoearth_pretrain.evals.models import (
     AnySat,
     Clay,
-    CopernicusFMWrapper,
     Croma,
     DINOv3,
     GalileoWrapper,
     Panopticon,
-    PrecomputedEmbedding,
     PrestoWrapper,
     PrithviV2,
     Satlas,
@@ -51,9 +49,10 @@ class EvalWrapper:
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
-        eval_on_projected_registers: bool = False,
-        eval_projection_dim: int | None = None,
+        eval_on_student_registers: bool = False,
+        eval_student_dim: int | None = None,
         use_center_token: bool = False,
+        latent_patch_size: int | None = None,
     ):
         """Initialize the eval wrapper.
 
@@ -64,21 +63,24 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
-            eval_on_encoder_tokens: If True and the model has a register bottleneck,
+            eval_on_encoder_tokens: If True and the model has a Perceiver,
                 probe the pooled encoder patch tokens instead of the register latents.
-                No effect when the model has no register bottleneck (encoder tokens are
+                No effect when the model has no Perceiver (encoder tokens are
                 always used in that case).
-            eval_on_projected_registers: If True and the model has a detached register
-                projection (``register_projection_dims``), probe the low-dim
-                ``projected_registers`` instead of the register grid -- the same run
+            eval_on_student_registers: If True and the model has a detached register
+                projection (``perceiver_config.student_dims``), probe the low-dim
+                ``student_registers`` instead of the register grid -- the same run
                 can then be evaluated at both widths. Mutually exclusive with
                 eval_on_encoder_tokens.
-            eval_projection_dim: With ``eval_on_projected_registers``, probe only the
-                first ``eval_projection_dim`` dims of the student (a Matryoshka
+            eval_student_dim: With ``eval_on_student_registers``, probe only the
+                first ``eval_student_dim`` dims of the student (a Matryoshka
                 prefix, e.g. 64 of a [128, 64] student). None (default) probes the
                 full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
+            latent_patch_size: For OlmoEarth models with a Perceiver, pixels per latent
+                along each side (must divide ``patch_size``; 1 = per-pixel latents).
+                None = one latent per token. Other models ignore it.
         """
         super().__init__()
         self.model = model
@@ -95,20 +97,22 @@ class EvalWrapper:
         )
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
-        self.eval_on_projected_registers = eval_on_projected_registers
-        self.eval_projection_dim = eval_projection_dim
+        self.eval_on_student_registers = eval_on_student_registers
+        self.eval_student_dim = eval_student_dim
         self.use_center_token = use_center_token
-        if self.eval_on_projected_registers and self.eval_on_encoder_tokens:
+        self.latent_patch_size = latent_patch_size
+        if self.eval_on_student_registers and self.eval_on_encoder_tokens:
             raise ValueError(
-                "eval_on_projected_registers and eval_on_encoder_tokens are mutually "
+                "eval_on_student_registers and eval_on_encoder_tokens are mutually "
                 "exclusive (projected registers only exist under the bottleneck)"
             )
-        if (
-            self.eval_projection_dim is not None
-            and not self.eval_on_projected_registers
+        if self.eval_student_dim is not None and not self.eval_on_student_registers:
+            raise ValueError("eval_student_dim requires eval_on_student_registers=True")
+        if self.eval_on_student_registers and not getattr(
+            self.model, "use_perceiver", False
         ):
             raise ValueError(
-                "eval_projection_dim requires eval_on_projected_registers=True"
+                "eval_on_student_registers set to True but the model has no perceiver"
             )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
@@ -182,21 +186,21 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         averaging the whole window would mix in unlabeled context. Otherwise the
         registers are pooled across the grid to ``[B, D]``.
 
-        With ``eval_on_projected_registers`` the low-dim detached student
-        (``projected_registers``) is probed instead of the register grid; it shares
+        With ``eval_on_student_registers`` the low-dim detached student
+        (``student_registers``) is probed instead of the register grid; it shares
         the registers' grid layout, so the pooling is identical.
-        ``eval_projection_dim`` keeps only the first d dims (a Matryoshka prefix).
+        ``eval_student_dim`` keeps only the first d dims (a Matryoshka prefix).
         """
-        if self.eval_on_projected_registers:
-            if "projected_registers" not in encoder_output:
+        if self.eval_on_student_registers:
+            if "student_registers" not in encoder_output:
                 raise ValueError(
-                    "eval_on_projected_registers requires a model with "
-                    "register_projection_dims (no projected_registers in the encoder "
+                    "eval_on_student_registers requires a model with "
+                    "perceiver_config.student_dims (no student_registers in the encoder "
                     "output)"
                 )
-            grid = encoder_output["projected_registers"]  # [B, n_h, n_w, d]
-            if self.eval_projection_dim is not None:
-                grid = grid[..., : self.eval_projection_dim]
+            grid = encoder_output["student_registers"]  # [B, n_h, n_w, d]
+            if self.eval_student_dim is not None:
+                grid = grid[..., : self.eval_student_dim]
         else:
             grid = encoder_output["registers"]  # [B, n_h, n_w, D]
         if self.spatial_pool:
@@ -212,21 +216,35 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        # Only forwarded when set, so encoders without the argument keep working.
+        latent_kwargs = (
+            {"latent_patch_size": self.latent_patch_size}
+            if self.latent_patch_size is not None
+            else {}
+        )
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
             encoder_output = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=fast_pass,
+                **latent_kwargs,
             )
             if (
                 not self.eval_on_encoder_tokens
-                and getattr(self.model, "use_register_bottleneck", False)
+                and getattr(self.model, "use_perceiver", False)
                 and "registers" in encoder_output
             ):
-                # Register bottleneck: probe the register grid (the model's compressed,
+                # Perceiver: probe the register grid (the model's compressed,
                 # spatially-anchored representation), not the per-modality patch tokens.
                 # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
                 batch_embeddings = self._pool_registers(encoder_output)
             else:
+                if self.eval_on_student_registers:
+                    raise ValueError(
+                        "eval_on_student_registers set to True but the model has set "
+                        "use_perceiver=False or doesn't have registers in the encoder output"
+                    )
                 tokens_and_masks: TokensAndMasks = encoder_output[
                     "tokens_and_masks"
                 ]  # (bsz, dim)
@@ -249,7 +267,10 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     )
         else:
             pooled_tokens_dict = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=True,
+                **latent_kwargs,
             )["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions
@@ -487,27 +508,6 @@ class PrestoEvalWrapper(EvalWrapper):
         return batch_embeddings, labels
 
 
-class CopernicusFMEvalWrapper(EvalWrapper):
-    """Wrapper for Copernicus-FM model."""
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
-        spatial_pool = self.spatial_pool or self.use_center_token
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=spatial_pool,
-        )
-        if self.use_center_token:
-            batch_embeddings = self._extract_center_token(batch_embeddings)
-        return batch_embeddings, labels
-
-
 class DINOv3EvalWrapper(EvalWrapper):
     """Wrapper for DINOv3 models."""
 
@@ -546,31 +546,6 @@ class SatlasEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
-        spatial_pool = self.spatial_pool or self.use_center_token
-        batch_embeddings = self.model(
-            masked_olmoearth_sample,
-            pooling=self.pooling_type,
-            spatial_pool=spatial_pool,
-        )
-        if self.use_center_token:
-            batch_embeddings = self._extract_center_token(batch_embeddings)
-        return batch_embeddings, labels
-
-
-class PrecomputedEmbeddingEvalWrapper(EvalWrapper):
-    """Wrapper for precomputed embedding products (e.g. AlphaEarth/GSE).
-
-    The "model" reads embeddings baked into the sample as a data modality, so
-    this wrapper only handles the shared pooling/center-token conventions.
-    """
-
-    def __call__(
-        self,
-        masked_olmoearth_sample: MaskedOlmoEarthSample,
-        labels: torch.Tensor,
-        is_train: bool = True,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Read the precomputed embeddings carried by the sample."""
         spatial_pool = self.spatial_pool or self.use_center_token
         batch_embeddings = self.model(
             masked_olmoearth_sample,
@@ -637,9 +612,6 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, PrestoWrapper):
         logger.info("Using PrestoEvalWrapper")
         return PrestoEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, CopernicusFMWrapper):
-        logger.info("Using CopernicusFMEvalWrapper")
-        return CopernicusFMEvalWrapper(model=model, **kwargs)
     elif isinstance(model, AnySat):
         logger.info("Using AnySatEvalWrapper")
         return AnySatEvalWrapper(model=model, **kwargs)
@@ -649,9 +621,6 @@ def get_eval_wrapper(model: nn.Module, **kwargs: Any) -> EvalWrapper:
     elif isinstance(model, Tessera):
         logger.info("Using TesseraEvalWrapper")
         return TesseraEvalWrapper(model=model, **kwargs)
-    elif isinstance(model, PrecomputedEmbedding):
-        logger.info("Using PrecomputedEmbeddingEvalWrapper")
-        return PrecomputedEmbeddingEvalWrapper(model=model, **kwargs)
     elif isinstance(model, PrithviV2):
         logger.info("Using PrithviEvalWrapper")
         return PrithviV2EvalWrapper(model=model, **kwargs)

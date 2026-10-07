@@ -30,6 +30,7 @@ class BackboneWithHead(nn.Module):
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
         head_type: HeadType = "linear",
+        latent_patch_size: int | None = None,
     ) -> None:
         """Initialize the backbone with head."""
         if head_type in _PIXEL_HEADS and task_type not in (
@@ -50,6 +51,7 @@ class BackboneWithHead(nn.Module):
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
+            latent_patch_size=latent_patch_size,
         )
         self.task_type = task_type
         self.patch_size = patch_size

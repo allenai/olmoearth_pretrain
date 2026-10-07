@@ -13,10 +13,10 @@ from einops import rearrange
 from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.nn.encodings import PositionEncoding
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
     MultiModalPatchEmbeddings,
+    PerceiverConfig,
     Predictor,
     TokensAndMasks,
 )
@@ -1063,76 +1063,10 @@ def test_encoder_rope_dynamic_patch_sizes(
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck(
+def test_encoder_perceiver_dynamic_grid(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """The Perceiver-style register bottleneck returns a fixed grid, decoupled from input size."""
-    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
-    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
-    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    grid_size, register_dim = 3, 8
-    encoder = Encoder(
-        supported_modalities=supported_modalities,
-        embedding_size=16,
-        max_patch_size=4,
-        min_patch_size=1,
-        num_heads=2,
-        mlp_ratio=2.0,
-        max_sequence_length=12,
-        depth=2,
-        drop_path=0.0,
-        position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        register_read_depth=1,
-        register_latent_depth=2,
-    )
-
-    B, H, W, T = 2, 8, 8, 2
-    timestamps = torch.tensor(
-        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
-    )
-    prev_max_coord = None
-    for patch_size in (2, 4):
-        s2_mask = torch.zeros(B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long)
-        # Mark the top half decode-only so the read must exclude them via the mask.
-        s2_mask[:, : H // 2] = MaskValue.DECODER.value
-        sample = MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
-            sentinel2_l2a_mask=s2_mask,
-            latlon=torch.randn(B, latlon_num_bands),
-            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
-            timestamps=timestamps,
-        )
-        encoder.zero_grad()
-        output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
-
-        registers = output_dict["registers"]
-        register_positions = output_dict["register_positions"]
-        # Register count is fixed regardless of patch grid; width is the bottleneck dim.
-        assert registers.shape == (B, grid_size, grid_size, register_dim)
-        assert register_positions.shape == (B, grid_size * grid_size, 2)
-        # With a register bottleneck, project_and_aggregate pools the register tokens
-        # (only), so the contrastive projection is sized to register_dim.
-        project_aggregated = output_dict["project_aggregated"]
-        assert project_aggregated.shape == (B, register_dim)
-        # Coordinates are anchored and rescale with the input extent (variable input size).
-        assert register_positions.amax() > 0
-        if prev_max_coord is not None:
-            assert register_positions.amax().item() != prev_max_coord
-        prev_max_coord = register_positions.amax().item()
-
-        registers.sum().backward()
-        assert encoder.register_bottleneck is not None
-        assert encoder.register_bottleneck.registers.grad is not None
-        assert encoder.blocks[0].attn.q.weight.grad is not None
-
-
-def test_encoder_register_bottleneck_dynamic_grid(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-) -> None:
-    """register_grid_size=None clones a single latent across the (dynamic) patch grid."""
+    """A single learned latent is cloned across the patch grid."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
@@ -1148,17 +1082,14 @@ def test_encoder_register_bottleneck_dynamic_grid(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=None,
-        register_dim=register_dim,
-        register_read_depth=1,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
     # Single shared latent, not a per-cell grid of parameters.
-    assert encoder.register_bottleneck is not None
-    assert encoder.register_bottleneck.dynamic_grid
-    assert encoder.register_bottleneck.register.shape == (1, register_dim)
-    assert not hasattr(encoder.register_bottleneck, "registers")
+    assert encoder.perceiver is not None
+    assert encoder.perceiver.register.shape == (1, register_dim)
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1189,13 +1120,13 @@ def test_encoder_register_bottleneck_dynamic_grid(
         assert output_dict["register_positions"].shape == (B, n_reg, 2)
 
         output_dict["registers"].sum().backward()
-        assert encoder.register_bottleneck.register.grad is not None
+        assert encoder.perceiver.register.grad is not None
 
 
-def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
+def test_encoder_perceiver_3d_rope_encoder_2d_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """A 3D-RoPE encoder keeps the register bottleneck spatial: it reads with 2D RoPE.
+    """A 3D-RoPE encoder keeps the Perceiver spatial: it reads with 2D RoPE.
 
     The patch encoder self-attention rotates over ``(t, row, col)`` while the register
     grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
@@ -1216,16 +1147,14 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
         depth=2,
         drop_path=0.0,
         position_encoding="rope_3d_mixed",
-        use_register_bottleneck=True,
-        register_grid_size=0,  # dynamic single-latent grid (gdyn) under a 3D encoder
-        register_dim=register_dim,
-        register_read_depth=1,
-        register_latent_depth=2,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=2,
+        ),
     )
-    assert encoder.register_bottleneck is not None
+    assert encoder.perceiver is not None
     # The bottleneck reads spatially (2D RoPE) even though the encoder is 3D.
-    assert encoder.register_bottleneck.use_2d_rope
-    assert encoder.register_bottleneck.dynamic_grid
+    assert encoder.perceiver.use_2d_rope
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1252,147 +1181,18 @@ def test_encoder_register_bottleneck_3d_rope_encoder_2d_read(
     # Register positions are spatial only -- 2D, regardless of the 3D encoder.
     assert output_dict["register_positions"].shape == (B, n_reg, 2)
     output_dict["registers"].sum().backward()
-    assert encoder.register_bottleneck.register.grad is not None
-    assert torch.isfinite(encoder.register_bottleneck.register.grad).all()
+    assert encoder.perceiver.register.grad is not None
+    assert torch.isfinite(encoder.perceiver.register.grad).all()
 
 
-def _build_temporal_anchor_encoder(anchor: str, register_dim: int = 32) -> Encoder:
-    """3D-RoPE encoder with the temporally-anchored register read."""
-    return Encoder(
-        supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
-        embedding_size=16,
-        max_patch_size=4,
-        min_patch_size=1,
-        num_heads=2,  # register head_dim 16 -> axial 3D split (4, 6, 6)
-        mlp_ratio=2.0,
-        max_sequence_length=12,
-        depth=2,
-        drop_path=0.0,
-        position_encoding="rope_3d_mixed",
-        use_register_bottleneck=True,
-        register_grid_size=0,
-        register_dim=register_dim,
-        register_read_depth=1,
-        register_latent_depth=2,
-        register_temporal_anchor=anchor,
-    )
-
-
-@pytest.mark.parametrize("anchor", ["year_start", "first_timestep"])
-def test_encoder_register_bottleneck_temporal_anchor(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-    anchor: str,
-) -> None:
-    """The anchored read runs 3D RoPE while the register grid stays a 2D map.
-
-    The read blocks rotate over anchor-relative ``(t, row, col)``; the latent
-    self-attention and the returned ``register_positions`` remain purely spatial, so
-    the decoder/eval contract is unchanged.
-    """
-    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
-    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    register_dim = 32
-    encoder = _build_temporal_anchor_encoder(anchor, register_dim)
-    bottleneck = encoder.register_bottleneck
-    assert bottleneck is not None
-    assert bottleneck.temporal_anchor == anchor
-    for blk in bottleneck.read_blocks:
-        assert blk.attn.position_encoding == PositionEncoding.AXIAL_3D_ROPE
-    # Registers all share t=0, so the latent transformer stays 2D.
-    for blk in bottleneck.latent_blocks:
-        assert blk.attn.position_encoding == PositionEncoding.AXIAL_2D_ROPE
-
-    B, H, W, T = 2, 8, 8, 2
-    timestamps = torch.tensor(
-        [[[1, 0, 2020], [2, 1, 2020]], [[15, 5, 2021], [2, 7, 2021]]],
-        dtype=torch.long,
-    )
-    sample = MaskedOlmoEarthSample(
-        sentinel2_l2a=torch.randn(B, H, W, T, sentinel2_l2a_num_bands),
-        sentinel2_l2a_mask=torch.zeros(
-            B, H, W, T, sentinel2_l2a_num_bands, dtype=torch.long
-        ),
-        latlon=torch.randn(B, latlon_num_bands),
-        latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
-        timestamps=timestamps,
-    )
-    output_dict = encoder.forward(sample, patch_size=4, input_res=10)
-    expected_side = H // 4
-    n_reg = expected_side * expected_side
-    assert output_dict["registers"].shape == (
-        B,
-        expected_side,
-        expected_side,
-        register_dim,
-    )
-    # The grid contract is unchanged: spatial-only 2D positions.
-    assert output_dict["register_positions"].shape == (B, n_reg, 2)
-    output_dict["registers"].sum().backward()
-    assert bottleneck.register.grad is not None
-    assert torch.isfinite(bottleneck.register.grad).all()
-
-
-def test_encoder_register_temporal_anchor_relative_coordinates() -> None:
-    """The re-anchored temporal coordinate matches the documented anchors.
-
-    ``year_start``: t becomes days since Jan 1 of the sample's first observation year
-    (in the 365.25 days/year convention of ``timestamps_to_days``); ``first_timestep``:
-    days since the earliest observation. Static tokens sit at the anchor (t=0).
-    """
-    # (t, row, col) for two samples: sample 0 observed in 2020 (Jan 1 of 2020 is day
-    # 20 * 365.25 = 7305), sample 1 has no temporal tokens at all.
-    positions = torch.tensor(
-        [
-            [[7305.0 + 60.0, 0.0, 0.0], [7305.0 + 200.0, 0.0, 1.0], [0.0, 0.0, 2.0]],
-            [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 0.0, 2.0]],
-        ]
-    )
-    temporal_flag = torch.tensor(
-        [[True, True, False], [False, False, False]], dtype=torch.bool
-    )
-
-    encoder = _build_temporal_anchor_encoder("year_start")
-    anchored = encoder._anchor_register_kv_positions(positions, temporal_flag)
-    torch.testing.assert_close(anchored[0, :, 0], torch.tensor([60.0, 200.0, 0.0]))
-    # Spatial coordinates pass through untouched.
-    torch.testing.assert_close(anchored[..., 1:], positions[..., 1:])
-    # No temporal tokens -> no anchor; everything stays at 0.
-    torch.testing.assert_close(anchored[1, :, 0], torch.zeros(3))
-
-    encoder = _build_temporal_anchor_encoder("first_timestep")
-    anchored = encoder._anchor_register_kv_positions(positions, temporal_flag)
-    torch.testing.assert_close(anchored[0, :, 0], torch.tensor([0.0, 140.0, 0.0]))
-
-
-def test_encoder_register_temporal_anchor_requires_3d_rope() -> None:
-    """The anchored read needs the temporal RoPE coordinate to exist."""
-    with pytest.raises(ValueError, match="3D RoPE"):
-        Encoder(
-            supported_modalities=[Modality.SENTINEL2_L2A, Modality.LATLON],
-            embedding_size=16,
-            max_patch_size=4,
-            min_patch_size=1,
-            num_heads=2,
-            mlp_ratio=2.0,
-            max_sequence_length=12,
-            depth=2,
-            drop_path=0.0,
-            position_encoding="rope",  # 2D: no temporal coordinate to anchor
-            use_register_bottleneck=True,
-            register_grid_size=0,
-            register_dim=32,
-            register_temporal_anchor="year_start",
-        )
-
-
-def test_encoder_register_bottleneck_interleave(
+def test_encoder_perceiver_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """register_interleave pairs one read with each latent self-attention block."""
+    """The bottleneck pairs one read with each latent self-attention block."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    grid_size, register_dim, latent_depth = 3, 8, 3
+    register_dim, latent_depth = 8, 3
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1404,17 +1204,14 @@ def test_encoder_register_bottleneck_interleave(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        register_read_depth=1,
-        register_latent_depth=latent_depth,
-        register_interleave=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
-    assert bottleneck.interleave
-    # One read per latent self-attention block (read_depth is ignored when interleaving).
+    # One read per latent self-attention block.
     assert len(bottleneck.read_blocks) == latent_depth
     assert len(bottleneck.latent_blocks) == latent_depth
 
@@ -1432,13 +1229,13 @@ def test_encoder_register_bottleneck_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size, grid_size, register_dim)
+    assert output_dict["registers"].shape == (B, H // 2, W // 2, register_dim)
     output_dict["registers"].sum().backward()
     # Gradients reach the last interleaved read (only reached if reads run between selves).
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
+def test_encoder_perceiver_per_depth_read_proj_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """per_depth_read_proj gives each interleaved read its own input_norm + kv_proj.
@@ -1449,7 +1246,7 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    grid_size, register_dim, latent_depth = 3, 8, 4
+    register_dim, latent_depth = 8, 4
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1461,14 +1258,13 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=grid_size,
-        register_dim=register_dim,
-        register_interleave=True,
-        register_latent_depth=latent_depth,
-        register_per_depth_read_proj=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+            per_depth_read_proj=True,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.per_depth_read_proj
     # Interleave -> one read block per latent block; one norm + projection each, no shared.
@@ -1492,7 +1288,7 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, grid_size, grid_size, register_dim)
+    assert output_dict["registers"].shape == (B, H // 2, W // 2, register_dim)
     output_dict["registers"].sum().backward()
     # Every per-block norm + projection receives gradient.
     for norm in bottleneck.input_norms:
@@ -1501,7 +1297,7 @@ def test_encoder_register_bottleneck_per_depth_read_proj_interleave(
         assert proj.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_decoupled_attn_dim(
+def test_encoder_perceiver_decoupled_attn_dim(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """register_attn_dim decouples the bottleneck attention width from register_dim.
@@ -1525,15 +1321,14 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=0,
-        register_dim=register_dim,
-        register_interleave=True,
-        register_latent_depth=latent_depth,
-        register_per_depth_read_proj=True,
-        register_attn_dim=embedding_size,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=latent_depth,
+            per_depth_read_proj=True,
+            attn_dim=embedding_size,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.attn_dim == embedding_size
     # K/V down-projections are dropped (Identity); the per-depth norms remain.
@@ -1576,7 +1371,7 @@ def test_encoder_register_bottleneck_decoupled_attn_dim(
     assert latent_attn.q.weight.grad is not None
 
 
-def test_encoder_register_bottleneck_attn_dim_default_unchanged(
+def test_encoder_perceiver_attn_dim_default_unchanged(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """Default register_attn_dim=None keeps the classic tied-width parameter set."""
@@ -1593,14 +1388,13 @@ def test_encoder_register_bottleneck_attn_dim_default_unchanged(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        use_register_bottleneck=True,
-        register_grid_size=0,
-        register_dim=register_dim,
-        register_interleave=True,
-        register_latent_depth=4,
-        register_per_depth_read_proj=True,
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim,
+            latent_depth=4,
+            per_depth_read_proj=True,
+        ),
     )
-    bottleneck = encoder.register_bottleneck
+    bottleneck = encoder.perceiver
     assert bottleneck is not None
     assert bottleneck.attn_dim is None
     for proj in bottleneck.kv_projs:
@@ -1608,63 +1402,6 @@ def test_encoder_register_bottleneck_attn_dim_default_unchanged(
     read_attn = bottleneck.read_blocks[0].attn
     assert read_attn.q.weight.shape == (register_dim, register_dim)
     assert read_attn.proj.weight.shape == (register_dim, register_dim)
-
-
-def test_encoder_register_bottleneck_contrastive_source(
-    modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
-) -> None:
-    """register_contrastive_source toggles the contrastive head between latents/tokens."""
-    supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
-    sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
-    latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    embedding_size, register_dim = 16, 8
-
-    def build(source: str) -> Encoder:
-        return Encoder(
-            supported_modalities=supported_modalities,
-            embedding_size=embedding_size,
-            max_patch_size=4,
-            min_patch_size=1,
-            num_heads=2,
-            mlp_ratio=2.0,
-            max_sequence_length=12,
-            depth=2,
-            drop_path=0.0,
-            position_encoding="rope",
-            use_register_bottleneck=True,
-            register_grid_size=3,
-            register_dim=register_dim,
-            register_contrastive_source=source,
-        )
-
-    B, H, W = 2, 8, 8
-    timestamps = torch.tensor(
-        [[[1, 0, 2020], [2, 1, 2020]], [[1, 0, 2020], [2, 1, 2020]]], dtype=torch.long
-    )
-
-    def sample() -> MaskedOlmoEarthSample:
-        return MaskedOlmoEarthSample(
-            sentinel2_l2a=torch.randn(B, H, W, 2, sentinel2_l2a_num_bands),
-            sentinel2_l2a_mask=torch.zeros(
-                B, H, W, 2, sentinel2_l2a_num_bands, dtype=torch.long
-            ),
-            latlon=torch.randn(B, latlon_num_bands),
-            latlon_mask=torch.zeros(B, latlon_num_bands, dtype=torch.long),
-            timestamps=timestamps,
-        )
-
-    # Default: project from the register latents (sized to register_dim).
-    reg_encoder = build("registers")
-    assert reg_encoder.contrastive_from_registers
-    reg_out = reg_encoder.forward(sample(), patch_size=2, input_res=10)
-    assert reg_out["project_aggregated"].shape == (B, register_dim)
-
-    # Opt-in: project from the encoder patch tokens (sized to the final embedding size),
-    # the pre-bottleneck behaviour.
-    tok_encoder = build("encoder_tokens")
-    assert not tok_encoder.contrastive_from_registers
-    tok_out = tok_encoder.forward(sample(), patch_size=2, input_res=10)
-    assert tok_out["project_aggregated"].shape == (B, embedding_size)
 
 
 def test_predictor_forward_rope(
@@ -2229,7 +1966,7 @@ def test_predictor_flash_register_context_matches_packing(
         max_sequence_length=12,
         drop_path=0.0,
         use_flash_attn=True,
-        use_register_bottleneck=True,
+        use_perceiver=True,
         register_dim=register_dim,
     )
 
