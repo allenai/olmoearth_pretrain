@@ -1098,6 +1098,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1110,10 +1111,18 @@ class FlexiVitBase(nn.Module):
         ``timestamps`` (so models see real calendar deltas, not slot indices),
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
+
+        ``query_pixel_shift`` (``[B, h_p, w_p, 2]``, patch units, 2D RoPE only)
+        moves every spatial token of cell ``(i, j)`` off its patch coordinate by that
+        cell's shift -- see ``olmoearth_pretrain.nn.pixel_targets``.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
+            if query_pixel_shift is not None:
+                raise ValueError("query_pixel_shift requires a RoPE position encoding")
             return None
         is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
+        if is_3d and query_pixel_shift is not None:
+            raise NotImplementedError("query_pixel_shift supports 2D RoPE only")
 
         available_modalities = return_modalities_from_dict(tokens_only_dict)
         modalities_to_process = get_modalities_to_process(
@@ -1159,6 +1168,7 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
+                    query_pixel_shift=query_pixel_shift,
                 )
             position_dict[modality_name] = positions
 
@@ -1217,8 +1227,13 @@ class FlexiVitBase(nn.Module):
         modality: ModalitySpec,
         tokens: Tensor,
         gsd_ratio: float,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor:
-        """Build ``(row, col)`` RoPE coordinates for one modality."""
+        """Build ``(row, col)`` RoPE coordinates for one modality.
+
+        ``query_pixel_shift``: optional ``[B, h, w, 2]`` per-cell shift in patch
+        units, added to every token of the cell (all timesteps and band sets).
+        """
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
 
@@ -1227,16 +1242,23 @@ class FlexiVitBase(nn.Module):
         )
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
+        grid = repeat(grid, "h w p -> b h w p", b=batch_size)
+        if query_pixel_shift is not None:
+            if query_pixel_shift.shape != grid.shape:
+                raise ValueError(
+                    f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
+                    f"the {modality_name} token grid {tuple(grid.shape)}"
+                )
+            grid = grid + query_pixel_shift.to(grid.dtype) * gsd_ratio
 
         if tokens.ndim == 5:
             bandsets = tokens.shape[3]
-            return repeat(grid, "h w p -> b h w b_s p", b=batch_size, b_s=bandsets)
+            return repeat(grid, "b h w p -> b h w b_s p", b_s=bandsets)
 
         timesteps, bandsets = tokens.shape[3], tokens.shape[4]
         return repeat(
             grid,
-            "h w p -> b h w t b_s p",
-            b=batch_size,
+            "b h w p -> b h w t b_s p",
             t=timesteps,
             b_s=bandsets,
         )
@@ -1632,30 +1654,36 @@ class Perceiver(nn.Module):
                 student_layers.append(nn.LayerNorm(student_dim))
             self.student = nn.Sequential(*student_layers)
 
+    @staticmethod
     def build_register_positions(
-        self, patch_positions: Tensor, register_grid: tuple[int, int]
+        batch_size: int,
+        register_grid: tuple[int, int],
+        patch_size: int,
+        gsd_ratio: float,
+        device: torch.device,
+        latent_patch_size: int,
     ) -> Tensor:
-        """Place the register grid evenly across the patch extent (GSD-scaled frame).
+        """Register (latent) centre coordinates in the token RoPE frame.
 
-        Args:
-            patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
-            register_grid: ``(n_h, n_w)`` grid to lay down (the patch grid, so the
-                register coords coincide with the patch coords).
+        Token ``i`` sits at ``i * gsd_ratio`` (the token positions of
+        ``FlexiVitBase``). With a latent patch size ``s``, latent ``k`` of an axis
+        covers pixels ``[k * s, (k + 1) * s)`` and has its centre at
+        ``((k + 0.5) * s / patch_size - 0.5) * gsd_ratio``. At ``s = patch_size``
+        these are exactly the token coordinates (one register per token); at
+        ``s = 1`` they are pixel centres.
 
         Returns:
-            ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
+            ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` coordinates.
         """
-        n_h, n_w = register_grid
-        device = patch_positions.device
-        # Patch coords are >= 0 (non-spatial tokens sit at 0), so amax gives the extent.
-        max_pos = patch_positions.amax(dim=1)  # [B, 2]
-        lin_h = torch.linspace(0.0, 1.0, n_h, device=device)
-        lin_w = torch.linspace(0.0, 1.0, n_w, device=device)
-        grid_h, grid_w = torch.meshgrid(lin_h, lin_w, indexing="ij")
-        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(
-            -1, 2
-        )  # [n_reg, 2] in [0, 1]
-        return grid.unsqueeze(0) * max_pos.unsqueeze(1)  # [B, n_reg, 2]
+        lat_h, lat_w = register_grid
+
+        def axis(n: int) -> Tensor:
+            k = torch.arange(n, device=device, dtype=torch.float32)
+            return ((k + 0.5) * latent_patch_size / patch_size - 0.5) * gsd_ratio
+
+        grid_h, grid_w = torch.meshgrid(axis(lat_h), axis(lat_w), indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+        return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
     def forward(
         self,
@@ -1663,6 +1691,9 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
+        patch_size: int,
+        gsd_ratio: float,
+        latent_patch_size: int | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Read the (visible) patch tokens into the register grid.
 
@@ -1672,11 +1703,21 @@ class Perceiver(nn.Module):
                 using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
-            spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
+            spatial_grid: ``(n_h, n_w)`` patch grid of the tokens.
+            patch_size: Token patch size ``p`` of this forward pass.
+            gsd_ratio: Distance between adjacent token centres in the RoPE frame
+                (the ``gsd_ratio`` of ``FlexiVitBase``'s RoPE positions); the
+                registers are placed in the same frame.
+            latent_patch_size: Pixels per latent along each side, ``s``; must divide
+                ``p``. One latent per ``s x s`` pixels at the pixel-block centres
+                (:meth:`build_register_positions`), so ``s = 1`` gives one latent per
+                pixel. The reads are global, so only the grid and its positions
+                change. None = ``p``, one latent per token.
 
         Returns:
-            registers: ``[B, n_h, n_w, register_dim]`` -- the grid, shaped, so callers
-                never rebuild it from a flat sequence.
+            registers: ``[B, n_h, n_w, register_dim]`` (with ``latent_patch_size``,
+                ``[B, n_h * p / s, n_w * p / s, register_dim]``) -- the grid, shaped, so
+                callers never rebuild it from a flat sequence.
             register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
                 only consumer is the decoder's cross-attention, which wants a token
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
@@ -1693,7 +1734,17 @@ class Perceiver(nn.Module):
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        register_grid = spatial_grid
+        if latent_patch_size is None:
+            latent_patch_size = patch_size
+        if patch_size % latent_patch_size != 0:
+            raise ValueError(
+                f"latent_patch_size {latent_patch_size} does not divide "
+                f"patch_size {patch_size}"
+            )
+        register_grid = (
+            spatial_grid[0] * patch_size // latent_patch_size,
+            spatial_grid[1] * patch_size // latent_patch_size,
+        )
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.
@@ -1707,7 +1758,12 @@ class Perceiver(nn.Module):
             if patch_positions is None:
                 raise ValueError("patch_positions are required for the RoPE Perceiver")
             register_positions = self.build_register_positions(
-                patch_positions, register_grid
+                batch_size,
+                register_grid,
+                patch_size,
+                gsd_ratio,
+                reference_tokens.device,
+                latent_patch_size,
             )
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
@@ -2343,8 +2399,15 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``latent_patch_size`` sets the Perceiver's latent grid (see
+        :meth:`Perceiver.forward`); it requires a Perceiver.
+        """
+        if latent_patch_size is not None and self.perceiver is None:
+            raise ValueError("latent_patch_size requires an encoder with a Perceiver")
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2487,6 +2550,10 @@ class Encoder(FlexiVitBase):
                 patch_positions=register_kv_positions,
                 visible_mask=bool_mask,
                 spatial_grid=spatial_grid,
+                patch_size=patch_size,
+                gsd_ratio=CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+                * self.rope_coordinate_scale,
+                latent_patch_size=latent_patch_size,
             )
             register_output = {
                 "registers": registers,
@@ -2509,6 +2576,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -2518,6 +2586,9 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            latent_patch_size: Pixels per Perceiver latent along each side; must
+                divide ``patch_size``. None = one latent per token. Requires a
+                Perceiver.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -2540,6 +2611,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    latent_patch_size=latent_patch_size,
                 )
             )
         else:
@@ -2891,6 +2963,7 @@ class Predictor(PredictorBase):
         input_res: int,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -2905,6 +2978,7 @@ class Predictor(PredictorBase):
             patch_size,
             input_res,
             timestamps=timestamps,
+            query_pixel_shift=query_pixel_shift,
         )
         tokens_dict.update(original_masks_dict)
         all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
@@ -3049,6 +3123,7 @@ class Predictor(PredictorBase):
         input_res: int = BASE_GSD,
         registers: Tensor | None = None,
         register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3063,6 +3138,9 @@ class Predictor(PredictorBase):
                 sequence here.
             register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
                 for RoPE, row-major to match the flattened grid.
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell query shift in
+                patch units (pixel-resolution targets; see
+                ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3093,6 +3171,7 @@ class Predictor(PredictorBase):
             input_res,
             registers=registers,
             register_positions=register_positions,
+            query_pixel_shift=query_pixel_shift,
         )
         # TODO: Factor this out into a more readable function
         output_dict = {}

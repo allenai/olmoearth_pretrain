@@ -35,7 +35,12 @@ What changes, and why:
 Between the first release cut and the student's move onto the Perceiver, the student
 briefly lived on the encoder as ``encoder.register_student``. A checkpoint written (or
 converted) under that interim layout is converted as well: its config is already
-current, and only those two parameters are renamed.
+current, and only those two parameters are renamed. The per-pixel-latent runs
+(``v1_3_rc_*pix512``) were trained in that layout; their configs additionally carry
+inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped, and latent-grid
+settings (``DROPPED_PERCEIVER_RUNTIME_FIELDS``) that are dropped because the latent patch
+size is now chosen per forward pass (their in-loop evals used one latent per pixel:
+pass ``latent_patch_size=1``).
 
 The mapping is pinned by ``tests/unit/test_convert_legacy_checkpoint.py`` against the
 release checkpoint's original config.
@@ -86,6 +91,23 @@ REMOVED_ENCODER_FIELDS: dict[str, tuple[Any, ...]] = {
     "register_latent_self_attn": (True, None),  # no-latent-self-attention (nolsa)
     "register_learned_read_weighting": (False,),  # learned per-read gates
 }
+#: Perceiver fields of the per-pixel-latent (``*pix512*``) training runs whose feature
+#: was never released.
+REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
+    "read_time_range": (False, None),  # time-interval RoPE on the reads
+    "read_time_rope": (False, None),  # temporal RoPE on the reads
+    "share_read_kv": (False, None),  # one K/V projection shared by every read
+}
+#: Perceiver latent-grid settings of those runs. They are not part of the model: the
+#: latent patch size is now a forward argument (``Encoder.forward(latent_patch_size=)``),
+#: drawn by the dataloader under its ``max_latents`` in training and chosen by the
+#: caller at inference. Dropped at any value; the values are logged.
+DROPPED_PERCEIVER_RUNTIME_FIELDS = (
+    "pixel_latents",
+    "random_latent_stride",
+    "max_latents",
+    "eval_latent_stride",
+)
 REMOVED_MODEL_FIELDS: dict[str, tuple[Any, ...]] = {
     "supervision_source": ("registers", None),  # heads on the student instead
 }
@@ -130,6 +152,24 @@ def convert_model_config(model: dict) -> dict:
     dec = model.get("decoder_config")
 
     _strip_removed(enc, REMOVED_ENCODER_FIELDS, "model.encoder_config")
+    if isinstance(enc.get("perceiver_config"), dict):
+        perceiver_section = enc["perceiver_config"]
+        _strip_removed(
+            perceiver_section,
+            REMOVED_PERCEIVER_FIELDS,
+            "model.encoder_config.perceiver_config",
+        )
+        dropped = {
+            name: perceiver_section.pop(name)
+            for name in DROPPED_PERCEIVER_RUNTIME_FIELDS
+            if name in perceiver_section
+        }
+        if dropped:
+            logger.info(
+                "dropping latent-grid settings (now a forward argument, "
+                "latent_patch_size): %s",
+                dropped,
+            )
     _strip_removed(model, REMOVED_MODEL_FIELDS, "model")
     head = model.get("supervision_head_config")
     if isinstance(head, dict):

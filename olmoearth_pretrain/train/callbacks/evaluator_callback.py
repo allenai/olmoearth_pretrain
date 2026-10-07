@@ -116,6 +116,9 @@ class DownstreamTaskConfig:
     # With eval_on_student_registers: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_student_dim: int | None = None
+    # For a Perceiver model: pixels per latent along each side at eval (must divide
+    # patch_size; 1 = per-pixel latents). None = one latent per token.
+    latent_patch_size: int | None = None
     # For geobench segmentation tasks: split each native image into
     # (height_width // tile_size)**2 non-overlapping tile_size x tile_size windows
     # (keeps every pixel, shrinks the token grid the model/register-read sees).
@@ -229,6 +232,7 @@ class DownstreamEvaluator:
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.eval_on_student_registers = task.eval_on_student_registers
         self.eval_student_dim = task.eval_student_dim
+        self.latent_patch_size = task.latent_patch_size
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -409,6 +413,7 @@ class DownstreamEvaluator:
             "eval_on_student_registers": self.eval_on_student_registers,
             "eval_student_dim": self.eval_student_dim,
             "use_center_token": self.use_center_token,
+            "latent_patch_size": self.latent_patch_size,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -635,6 +640,7 @@ class DownstreamEvaluator:
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
             eval_on_encoder_tokens=self.eval_on_encoder_tokens,
+            latent_patch_size=self.latent_patch_size,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
