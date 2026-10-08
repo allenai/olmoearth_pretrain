@@ -19,6 +19,11 @@ open-set probe head on the register grid:
   "after" timestep in the encoder input (temporal crop + time masking, keyed on
   ``open_set_change_boundary``); their labels are only supervised when both sides
   were visible.
+* The v1.3 per-pixel latent updates (``v1_3_rc_pixtgt_pix512``): the dataloader
+  draws a Perceiver latent patch size per rank batch under a ``MAX_LATENTS`` budget
+  (so the register grid, and with it the open-set probe's label blocks, can be finer
+  than the token grid), and the MIM targets are one random pixel per token cell
+  (``pixel_targets``).
 
 The concrete launch scripts (``open_set_only.py``, ``open_set_osm.py`` and
 ``open_set_post_train.py``) import these builders and only supply the dataset,
@@ -118,6 +123,12 @@ RANK_MICROBATCH_SIZE = 32
 # v1.2 runs; the probe converges fine at 0.1 (per-sample-balanced loss).
 SUP_LOSS_WEIGHT = 0.1
 
+# Per-sample Perceiver latent budget (v1.3 "pix512"): each rank batch draws a latent
+# patch size uniformly among the divisors of its patch size whose latent grid fits this
+# budget (one latent per token is always allowed). Evals at patch size 1 are already
+# one latent per pixel.
+MAX_LATENTS = 512
+
 # H5 directory of the open-set supervised dataset (the ..._128_x_1 layout: one H5
 # sample per 128x128 window, zstd level 3). The layout is
 # h5py_data_w_missing_timesteps_zstd_3_128_x_1/<sorted modality names>/<count>. This
@@ -187,6 +198,8 @@ def build_train_module_config(
         sup_loss_weight=SUP_LOSS_WEIGHT,
     )
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE
+    # v1.3 "pixtgt": score each masked token on one random pixel of its cell.
+    config.pixel_targets = True
     # token_exit_cfg is only meaningful for encoded modalities; keep it imagery-only.
     config.token_exit_cfg = {modality: 0 for modality in IMAGERY_MODALITIES}
     # The masking strategy must know the labels are decode-only (never encoded).
@@ -199,6 +212,7 @@ def build_train_module_config(
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """The v1.3 dataloader, carrying labels without treating them as model tokens."""
     config = base_build_dataloader_config(common)
+    config.max_latents = MAX_LATENTS
     # The dataloader excludes only_decode_modalities from the token budget, so
     # listing the label modalities here also keeps them from consuming budget.
     config.masking_config.strategy_config["only_decode_modalities"] = (

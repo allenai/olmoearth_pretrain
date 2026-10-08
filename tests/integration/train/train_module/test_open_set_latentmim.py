@@ -330,3 +330,84 @@ def test_freeze_schedule_trains_probe_only_then_unfreezes(
         assert num_backbone_with_grad > 0
         # The supervised gradient reaches the backbone through the frozen probe.
         assert any(p.grad is not None for p in model.encoder.perceiver.parameters())
+
+
+@pytest.mark.parametrize("latent_patch_size", [None, 1])
+def test_open_set_pixel_targets_and_pixel_latents(
+    set_random_seeds: None, latent_patch_size: int | None
+) -> None:
+    """The v1.3 pix512 + pixtgt path runs, and the probe reads the finer grid.
+
+    At patch size 4 an 8x8 sample is a 2x2 token grid; with ``latent_patch_size=1``
+    the register grid (and with it the probe's label blocks) is 8x8.
+    """
+    register_dim = 8
+    encoder_config = EncoderConfig(
+        supported_modality_names=_IMAGERY,
+        embedding_size=16,
+        max_patch_size=8,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=2,
+        drop_path=0.0,
+        max_sequence_length=12,
+        position_encoding="rope_3d_mixed",
+        perceiver_config=PerceiverConfig(
+            register_dim=register_dim, latent_depth=2, per_depth_read_proj=True
+        ),
+    )
+    decoder_config = PredictorConfig(
+        supported_modality_names=_IMAGERY,
+        encoder_embedding_size=16,
+        decoder_embedding_size=16,
+        depth=2,
+        mlp_ratio=1.0,
+        num_heads=2,
+        max_sequence_length=12,
+        drop_path=0.0,
+        output_embedding_size=None,
+        position_encoding="rope",
+        use_perceiver=True,
+        register_dim=register_dim,
+    )
+    model = OpenSetLatentMIMConfig(
+        encoder_config=encoder_config,
+        decoder_config=decoder_config,
+        projection_only_target=True,
+        open_set_probe_config=OpenSetProbeConfig(
+            class_mapping_path=str(_CLASS_MAPPING_PATH),
+        ),
+    ).build()
+
+    patch_size = 4
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    samples = [(patch_size, sample) for _, sample in _make_samples()]
+    patch_size_out, masked = collate_single_masked_batched(
+        samples, transform=None, masking_strategy=masking_strategy
+    )
+    batch = (patch_size_out, masked, latent_patch_size)
+
+    config = OpenSetLatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4, weight_decay=0.0),
+        rank_microbatch_size=3,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in _IMAGERY},
+        ema_decay=(1.0, 1.0),  # the projection-only target is frozen
+        max_grad_norm=1.0,
+        sup_loss_weight=1.0,
+        pixel_targets=True,
+    )
+    train_module = config.build(model, device=torch.device("cpu"))
+
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        train_module.on_attach = MagicMock(return_value=None)  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+
+    assert torch.isfinite(torch.as_tensor(mock_trainer._metrics["open_set/ce"]))
+    grid = 8 if latent_patch_size == 1 else 8 // patch_size
+    assert model.last_register_grid is not None
+    assert tuple(model.last_register_grid.shape[1:3]) == (grid, grid)
+    assert mock_trainer._metrics["open_set/ce_patches"] == float(3 * grid * grid)
