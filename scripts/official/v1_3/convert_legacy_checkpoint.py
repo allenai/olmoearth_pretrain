@@ -28,9 +28,19 @@ What changes, and why:
   model this code cannot build, and conversion refuses.
 * Parameters moved: ``encoder.register_bottleneck.*`` -> ``encoder.perceiver.*``;
   the student ``encoder.register_projection`` (+ ``_norm``) -> the
-  ``encoder.register_student`` Sequential (``.0`` Linear, ``.1`` LayerNorm);
-  ``encoder.register_back_projections.*`` ->
+  ``encoder.perceiver.student`` Sequential (``.0`` Linear, ``.1`` LayerNorm), owned by
+  the Perceiver whose grid it reads; ``encoder.register_back_projections.*`` ->
   ``register_distillation_head.back_projections.*``.
+
+Between the first release cut and the student's move onto the Perceiver, the student
+briefly lived on the encoder as ``encoder.register_student``. A checkpoint written (or
+converted) under that interim layout is converted as well: its config is already
+current, and only those two parameters are renamed. The per-pixel-latent runs
+(``v1_3_rc_*pix512``) were trained in that layout; their configs additionally carry
+inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped, and latent-grid
+settings (``DROPPED_PERCEIVER_RUNTIME_FIELDS``) that are dropped because the latent patch
+size is now chosen per forward pass (their in-loop evals used one latent per pixel:
+pass ``latent_patch_size=1``).
 
 The mapping is pinned by ``tests/unit/test_convert_legacy_checkpoint.py`` against the
 release checkpoint's original config.
@@ -81,6 +91,23 @@ REMOVED_ENCODER_FIELDS: dict[str, tuple[Any, ...]] = {
     "register_latent_self_attn": (True, None),  # no-latent-self-attention (nolsa)
     "register_learned_read_weighting": (False,),  # learned per-read gates
 }
+#: Perceiver fields of the per-pixel-latent (``*pix512*``) training runs whose feature
+#: was never released.
+REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
+    "read_time_range": (False, None),  # time-interval RoPE on the reads
+    "read_time_rope": (False, None),  # temporal RoPE on the reads
+    "share_read_kv": (False, None),  # one K/V projection shared by every read
+}
+#: Perceiver latent-grid settings of those runs. They are not part of the model: the
+#: latent patch size is now a forward argument (``Encoder.forward(latent_patch_size=)``),
+#: drawn by the dataloader under its ``max_latents`` in training and chosen by the
+#: caller at inference. Dropped at any value; the values are logged.
+DROPPED_PERCEIVER_RUNTIME_FIELDS = (
+    "pixel_latents",
+    "random_latent_stride",
+    "max_latents",
+    "eval_latent_stride",
+)
 REMOVED_MODEL_FIELDS: dict[str, tuple[Any, ...]] = {
     "supervision_source": ("registers", None),  # heads on the student instead
 }
@@ -125,6 +152,24 @@ def convert_model_config(model: dict) -> dict:
     dec = model.get("decoder_config")
 
     _strip_removed(enc, REMOVED_ENCODER_FIELDS, "model.encoder_config")
+    if isinstance(enc.get("perceiver_config"), dict):
+        perceiver_section = enc["perceiver_config"]
+        _strip_removed(
+            perceiver_section,
+            REMOVED_PERCEIVER_FIELDS,
+            "model.encoder_config.perceiver_config",
+        )
+        dropped = {
+            name: perceiver_section.pop(name)
+            for name in DROPPED_PERCEIVER_RUNTIME_FIELDS
+            if name in perceiver_section
+        }
+        if dropped:
+            logger.info(
+                "dropping latent-grid settings (now a forward argument, "
+                "latent_patch_size): %s",
+                dropped,
+            )
     _strip_removed(model, REMOVED_MODEL_FIELDS, "model")
     head = model.get("supervision_head_config")
     if isinstance(head, dict):
@@ -171,30 +216,44 @@ _HEADS_OLD = "encoder.register_back_projections."
 _HEADS_NEW = "register_distillation_head.back_projections."
 
 
+_STUDENT_NEW = "perceiver.student."
+
+
 def convert_key(old: str) -> str:
-    """The current name of a parameter saved under its ``gabi/perceiver`` name."""
+    """The current name of a parameter saved under its ``gabi/perceiver`` name.
+
+    Also accepts the interim ``register_student.*`` name (see the module docstring).
+    """
     key = old
     if key.startswith(_HEADS_OLD):
         key = _HEADS_NEW + key[len(_HEADS_OLD) :]
-    key = re.sub(
-        r"(^|\.)register_projection_norm\.", r"\g<1>register_student.1.", key, 1
-    )
-    key = re.sub(r"(^|\.)register_projection\.", r"\g<1>register_student.0.", key, 1)
+    key = re.sub(r"(^|\.)register_projection_norm\.", rf"\g<1>{_STUDENT_NEW}1.", key, 1)
+    key = re.sub(r"(^|\.)register_projection\.", rf"\g<1>{_STUDENT_NEW}0.", key, 1)
+    key = re.sub(r"(^|\.)register_student\.", rf"\g<1>{_STUDENT_NEW}", key, 1)
     key = re.sub(r"(^|\.)register_bottleneck\.", r"\g<1>perceiver.", key, 1)
     return key
 
 
 def legacy_key(new: str) -> str:
-    """Inverse of :func:`convert_key`."""
+    """Inverse of :func:`convert_key` onto the ``gabi/perceiver`` names."""
     key = new
     if key.startswith(_HEADS_NEW):
         key = _HEADS_OLD + key[len(_HEADS_NEW) :]
-    key = re.sub(r"(^|\.)register_student\.0\.", r"\g<1>register_projection.", key, 1)
+    # The student first: once it is ``register_projection*`` the ``perceiver.`` rename
+    # below no longer sees it.
+    key = re.sub(r"(^|\.)perceiver\.student\.0\.", r"\g<1>register_projection.", key, 1)
     key = re.sub(
-        r"(^|\.)register_student\.1\.", r"\g<1>register_projection_norm.", key, 1
+        r"(^|\.)perceiver\.student\.1\.", r"\g<1>register_projection_norm.", key, 1
     )
     key = re.sub(r"(^|\.)perceiver\.", r"\g<1>register_bottleneck.", key, 1)
     return key
+
+
+def interim_key(new: str) -> str:
+    """The interim (``encoder.register_student``) name of a current parameter."""
+    return re.sub(
+        rf"(^|\.){re.escape(_STUDENT_NEW)}", r"\g<1>register_student.", new, 1
+    )
 
 
 def convert_state_dict(state_dict: dict[str, Any]) -> dict[str, Any]:
@@ -223,10 +282,17 @@ def _load_weights(src: Path, model: torch.nn.Module) -> None:
     weights = src / "weights.pth"
     if dcp_dir.exists():
         from olmo_core.distributed.checkpoint import load_model_and_optim_state
+        from torch.distributed.checkpoint import FileSystemReader
 
-        key_mapping = {
-            k: legacy_key(k) for k in model.state_dict() if legacy_key(k) != k
-        }
+        # A parameter is looked up under whichever of its earlier names the checkpoint
+        # stores: the training branch's, or the interim encoder-level student's.
+        stored = set(FileSystemReader(str(dcp_dir)).read_metadata().state_dict_metadata)
+        key_mapping: dict[str, str] = {}
+        for k in model.state_dict():
+            for candidate in (legacy_key(k), interim_key(k)):
+                if candidate != k and f"model.{candidate}" in stored:
+                    key_mapping[k] = candidate
+                    break
         load_model_and_optim_state(str(dcp_dir), model, key_mapping=key_mapping)
     elif weights.exists():
         state_dict = torch.load(weights, map_location="cpu")

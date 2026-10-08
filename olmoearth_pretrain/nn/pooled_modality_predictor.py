@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.nn as nn
@@ -25,6 +25,9 @@ from olmoearth_pretrain.nn.flexi_vit import (
     return_modalities_from_dict,
 )
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.searchlight import SearchlightSettings
 
 logger = logging.getLogger(__name__)
 
@@ -502,8 +505,14 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
+        if latent_patch_size is not None:
+            raise ValueError("latent_patch_size requires an encoder with a Perceiver")
+        if searchlight is not None:
+            raise NotImplementedError("Searchlight is not supported by this encoder")
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -631,6 +640,8 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        latent_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -640,6 +651,9 @@ class EncodeEarlyAttnPool(Encoder):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
+            latent_patch_size: Unsupported (this encoder has no Perceiver); must be
+                None.
+            searchlight: Unsupported (see ``nn/searchlight.py``); must be None.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -657,6 +671,8 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
+                latent_patch_size=latent_patch_size,
+                searchlight=searchlight,
             )
         else:
             pooled_tokens_and_masks = {}

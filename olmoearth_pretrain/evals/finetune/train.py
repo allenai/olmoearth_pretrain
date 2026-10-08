@@ -190,6 +190,7 @@ def run_finetune_eval(
     ft_grad_accum_steps: int = 1,
     head_type: HeadType = "linear",
     use_dice_loss: bool = False,
+    latent_patch_size: int | None = None,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if task_config.task_type == TaskType.WINDOW_REGRESSION:
@@ -213,6 +214,7 @@ def run_finetune_eval(
         pooling_type=pooling_type,
         num_classes=task_config.num_classes,
         use_pooled_tokens=use_pooled_tokens,
+        latent_patch_size=latent_patch_size,
         eval_on_encoder_tokens=eval_on_encoder_tokens,
         head_type=head_type,
     ).to(device)

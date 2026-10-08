@@ -133,7 +133,7 @@ class DownstreamTaskConfig:
     # If the model has a Perceiver, probe the pooled encoder patch tokens
     # instead of the register latents. No effect without a Perceiver.
     eval_on_encoder_tokens: bool = False
-    # If the model has a detached register projection (register_student_dims),
+    # If the model has a detached register projection (perceiver_config.student_dims),
     # probe the low-dim student_registers instead of the register grid -- the same
     # checkpoint can then be evaluated at both widths by registering the task twice.
     # Mutually exclusive with eval_on_encoder_tokens.
@@ -141,6 +141,9 @@ class DownstreamTaskConfig:
     # With eval_on_student_registers: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_student_dim: int | None = None
+    # For a Perceiver model: pixels per latent along each side at eval (must divide
+    # patch_size; 1 = per-pixel latents). None = one latent per token.
+    latent_patch_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
@@ -350,6 +353,7 @@ class DownstreamEvaluator:
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.eval_on_student_registers = task.eval_on_student_registers
         self.eval_student_dim = task.eval_student_dim
+        self.latent_patch_size = task.latent_patch_size
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -629,6 +633,7 @@ class DownstreamEvaluator:
             "eval_on_student_registers": self.eval_on_student_registers,
             "eval_student_dim": self.eval_student_dim,
             "use_center_token": self.use_center_token,
+            "latent_patch_size": self.latent_patch_size,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -972,6 +977,7 @@ class DownstreamEvaluator:
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
             eval_on_encoder_tokens=self.eval_on_encoder_tokens,
+            latent_patch_size=self.latent_patch_size,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,

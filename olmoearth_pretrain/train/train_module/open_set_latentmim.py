@@ -134,7 +134,7 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
 
     def train_batch(
         self,
-        batch: tuple[int, MaskedOlmoEarthSample],
+        batch: tuple[Any, ...],
         dry_run: bool = False,
     ) -> None:
         """Apply the freeze schedule, then train the batch."""
@@ -175,6 +175,7 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
         self,
         batch: MaskedOlmoEarthSample,
         patch_size: int,
+        latent_patch_size: int | None = None,
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
@@ -191,7 +192,9 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
         ``target`` slots reuse it, as there is no decoder pass.
         """
         with self._model_forward_context(), torch.no_grad():
-            output_dict = self.model.encoder(batch, patch_size=patch_size)
+            output_dict = self.model.encoder(
+                batch, patch_size=patch_size, latent_patch_size=latent_patch_size
+            )
         register_grid = output_dict.get("registers")
         latent, _, _ = unpack_encoder_output(output_dict)
         loss, metrics = self._probe_loss(register_grid, batch)
@@ -202,6 +205,7 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
+        latent_patch_size: int | None = None,
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
@@ -211,10 +215,10 @@ class OpenSetLatentMIMTrainModule(LatentMIMTrainModule):
     ]:
         """Run the base forward, then add the supervised probe loss."""
         if self.backbone_frozen:
-            return self._probe_only_forward(batch, patch_size)
+            return self._probe_only_forward(batch, patch_size, latent_patch_size)
 
         loss, latent, decoded, target_output, extra_metrics = super().model_forward(
-            batch, patch_size, token_exit_cfg
+            batch, patch_size, token_exit_cfg, latent_patch_size=latent_patch_size
         )
         # The probe reads the encoder's register grid, which the model forward
         # stashes on the model.
