@@ -42,10 +42,12 @@ from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
 
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.models import get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import FT_EVAL_TASKS
 from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
 from olmoearth_pretrain.internal.experiment import SubCmd
+from olmoearth_pretrain.train.callbacks.evaluator_callback import EvalMode
 
 logger = getLogger(__name__)
 
@@ -96,7 +98,7 @@ def _format_task_specific_args(task_overrides: dict[str, dict[str, Any]]) -> lis
     return args
 
 
-FT_MODE_ARGS = _format_per_task_args({"eval_mode": "FINETUNE"})
+FT_MODE_ARGS = _format_per_task_args({"eval_mode": EvalMode.FINETUNE.value})
 DATASET_STATS_ARGS = _format_per_task_args({"norm_stats_from_pretrained": "False"})
 
 
@@ -119,25 +121,25 @@ class ModelPreset:
 
 MODEL_PRESETS: dict[str, ModelPreset] = {
     "dino_v3": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_MIN_MAX_INT"},
+        per_task_overrides={"norm_method": NormMethod.NORM_YES_CLIP_MIN_MAX_INT.value},
         launch_script_key="dino_v3",
     ),
     "panopticon": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         launch_script_key="panopticon",
     ),
     "croma": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
+        per_task_overrides={"norm_method": NormMethod.NORM_YES_CLIP_2_STD.value},
         launch_script_key="croma",
     ),
     "croma_large": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP_2_STD"},
+        per_task_overrides={"norm_method": NormMethod.NORM_YES_CLIP_2_STD.value},
         global_args=("--model.size=large",),
         launch_script_key="croma",
     ),
     # by default, AnySat uses patch size of 4
     "anysat": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         task_specific_overrides={
             "m_sa_crop_type": {"ft_batch_size": 4},
             "pastis_sentinel2": {"ft_batch_size": 4},
@@ -146,14 +148,14 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         },
     ),
     "anysat_ps8": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         global_args=("--model.patch_size=8",),
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
         },
     ),
     "anysat_ps16": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         global_args=("--model.patch_size=16",),
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 16},
@@ -162,19 +164,19 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
     ),
     # Models with pretrained normalizer
     "terramind": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         launch_script_key="terramind",
         supports_pretrained_normalizer=True,
     ),
     "terramind_large": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         global_args=("--model.size=large",),
         launch_script_key="terramind",
         supports_pretrained_normalizer=True,
     ),
     # by default, Galileo uses patch size of 4
     "galileo": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
+        per_task_overrides={"norm_method": NormMethod.NORM_NO_CLIP_2_STD.value},
         task_specific_overrides={
             "m_sa_crop_type": {"ft_batch_size": 1},
             "pastis_sentinel2": {"ft_batch_size": 2},
@@ -184,7 +186,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         supports_pretrained_normalizer=True,
     ),
     "galileo_ps8": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
+        per_task_overrides={"norm_method": NormMethod.NORM_NO_CLIP_2_STD.value},
         global_args=("--model.patch_size=8",),
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 8},
@@ -193,7 +195,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         supports_pretrained_normalizer=True,
     ),
     "galileo_ps16": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_NO_CLIP_2_STD"},
+        per_task_overrides={"norm_method": NormMethod.NORM_NO_CLIP_2_STD.value},
         global_args=("--model.patch_size=16",),
         task_specific_overrides={
             "m_cashew_plant": {"ft_batch_size": 4, "patch_size": 16},
@@ -202,7 +204,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         supports_pretrained_normalizer=True,
     ),
     "satlas": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.NORM_YES_CLIP"},
+        per_task_overrides={"norm_method": NormMethod.NORM_YES_CLIP.value},
         task_specific_overrides={
             "pastis_sentinel2": {"ft_batch_size": 4},
         },
@@ -210,12 +212,12 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         supports_pretrained_normalizer=True,
     ),
     "clay": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         launch_script_key="clay",
         supports_pretrained_normalizer=True,
     ),
     "prithvi_v2": ModelPreset(
-        per_task_overrides={"norm_method": "NormMethod.STANDARDIZE"},
+        per_task_overrides={"norm_method": NormMethod.STANDARDIZE.value},
         launch_script_key="prithvi_v2",
         supports_pretrained_normalizer=True,
     ),
@@ -242,7 +244,7 @@ def _build_model_args(
 
     if normalizer is True and preset.supports_pretrained_normalizer:
         args.append("--model.use_pretrained_normalizer=True")
-        args.extend(_format_per_task_args({"norm_method": "NormMethod.NO_NORM"}))
+        args.extend(_format_per_task_args({"norm_method": NormMethod.NO_NORM.value}))
     elif normalizer is False and preset.supports_pretrained_normalizer:
         args.append("--model.use_pretrained_normalizer=False")
 
