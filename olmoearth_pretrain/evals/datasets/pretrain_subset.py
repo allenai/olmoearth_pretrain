@@ -16,10 +16,7 @@ import torch
 from torch.utils.data import Dataset
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import (
-    MISSING_VALUE,
-    Modality,
-)
+from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.constants import (
     WORLDCOVER_CLASSES as WORLDCOVER_CLASS_CODES,
 )

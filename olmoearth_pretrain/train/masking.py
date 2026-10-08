@@ -11,6 +11,10 @@ from class_registry import ClassRegistry
 from einops import rearrange, repeat
 
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.change_boundary import (
+    has_change_boundary,
+    timestep_is_post,
+)
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality, ModalitySpec
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
@@ -1822,6 +1826,41 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
             (bandset_mask[:, :, timestamps] != MaskValue.MISSING.value).any().item()
         )
 
+    @staticmethod
+    def _ensure_pre_and_post_encoded(
+        batch: OlmoEarthSample,
+        instance_idx: int,
+        encode_timestamps: torch.Tensor,
+        decode_timestamps: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Keep at least one pre- and one post-change timestep in the encode set.
+
+        For paired change samples (``open_set_change_boundary`` present), time
+        masking must not hide an entire side of the change from the online encoder:
+        if the encode set has no timestep on one side while the decode set does, one
+        such timestep is moved from the decode set to the encode set (the encode
+        ratio is approximate anyway). Non-change samples are returned unchanged.
+        """
+        boundary = getattr(batch, Modality.OPEN_SET_CHANGE_BOUNDARY.name, None)
+        if boundary is None or batch.timestamps is None or len(decode_timestamps) == 0:
+            return encode_timestamps, decode_timestamps
+        if not bool(has_change_boundary(boundary[instance_idx])):
+            return encode_timestamps, decode_timestamps
+        is_post = timestep_is_post(
+            batch.timestamps[instance_idx], boundary[instance_idx]
+        ).to(encode_timestamps.device)  # [T]
+
+        for side in (~is_post, is_post):
+            if side[encode_timestamps].any():
+                continue
+            candidates = decode_timestamps[side[decode_timestamps]]
+            if len(candidates) == 0:
+                continue
+            moved = candidates[:1]
+            decode_timestamps = decode_timestamps[decode_timestamps != moved]
+            encode_timestamps = torch.cat([encode_timestamps, moved])
+        return encode_timestamps, decode_timestamps
+
     def apply_mask(
         self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
     ) -> MaskedOlmoEarthSample:
@@ -1935,6 +1974,11 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
+                    encode_timestamps, decode_timestamps = (
+                        self._ensure_pre_and_post_encoded(
+                            batch, i, encode_timestamps, decode_timestamps
+                        )
+                    )
 
             if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
                 # this branch should barely ever trigger

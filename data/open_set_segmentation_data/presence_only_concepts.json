@@ -1,0 +1,125 @@
+{
+  "_comment": "Concept annotation for the presence-only pool (assemble_classes.py). Each concept groups presence-only classes referenced as 'slug:class_name' (must match metadata.json class names exactly). 'merge': true collapses all members into ONE global class (same real-world thing across datasets). 'overlaps' pairs list concepts whose members intersect in concept (subsumption / partial overlap) but are NOT identical; every member of one conflicts with every member of the other and they are excluded as each other's negatives at pretraining time. Members within a non-merge concept do NOT conflict with each other (they are only a named group for overlaps references). Untagged pool classes have no conflicts (normal mutual negatives). Only high-value clusters are curated here; extend as needed.",
+  "concepts": {
+    "forest_disturbance": {
+      "members": [
+        "forwind_european_forest_wind_disturbance:wind_disturbance",
+        "bark_beetle_disturbance_pokljuka_slovenia:bark beetle disturbance"
+      ],
+      "merge": true
+    },
+    "gas_flare": {
+      "members": [
+        "viirs_nightfire_gas_flaring:gas flare"
+      ]
+    },
+    "mining_area": {
+      "members": [
+        "global_mining_polygons_maus_et_al_v2:mining area"
+      ]
+    },
+    "oil_gas_platform": {
+      "members": [
+        "global_fishing_watch_sar_fixed_infrastructure:oil",
+        "global_offshore_oil_gas_platforms:offshore_oil_gas_platform"
+      ],
+      "merge": true
+    },
+    "oil_palm_industrial": {
+      "members": [
+        "descals_global_oil_palm_extent_planting_year:industrial oil palm",
+        "olmoearth_descals_oil_palm:Industrial oil palm"
+      ],
+      "merge": true
+    },
+    "oil_palm_smallholder": {
+      "members": [
+        "descals_global_oil_palm_extent_planting_year:smallholder oil palm",
+        "olmoearth_descals_oil_palm:Smallholder oil palm"
+      ],
+      "merge": true
+    },
+    "road": {
+      "members": [
+        "spacenet_3_5_roads:road",
+        "congo_basin_forest_roads:forest_road"
+      ],
+      "merge": true
+    },
+    "rock_glacier_active": {
+      "members": [
+        "rgik_rock_glacier_inventories_rogi:active"
+      ]
+    },
+    "rock_glacier_generic": {
+      "members": [
+        "tprogi_tibetan_plateau_rock_glacier_inventory:rock_glacier"
+      ]
+    },
+    "rock_glacier_relict": {
+      "members": [
+        "rgik_rock_glacier_inventories_rogi:relict"
+      ]
+    },
+    "rock_glacier_transitional": {
+      "members": [
+        "rgik_rock_glacier_inventories_rogi:transitional"
+      ]
+    },
+    "supraglacial_lake": {
+      "members": [
+        "supraglacial_lakes_northeast_greenland:supraglacial_lake",
+        "supraglacial_lakes_channels_west_antarctica:supraglacial_lake"
+      ],
+      "merge": true
+    },
+    "tailings": {
+      "members": [
+        "global_tailings_portal:tailings_facility"
+      ]
+    },
+    "wind_farm": {
+      "members": [
+        "global_wind_power_tracker:onshore_wind_farm",
+        "global_wind_power_tracker:offshore_wind_farm",
+        "deepowt_global_offshore_wind_turbines:under_construction",
+        "deepowt_global_offshore_wind_turbines:substation",
+        "global_fishing_watch_sar_fixed_infrastructure:wind"
+      ]
+    },
+    "wind_turbine": {
+      "members": [
+        "uswtdb_us_wind_turbine_database:turbine",
+        "global_renewables_watch_points:wind_turbine",
+        "deepowt_global_offshore_wind_turbines:offshore_turbine"
+      ],
+      "merge": true
+    }
+  },
+  "overlaps": [
+    [
+      "wind_turbine",
+      "wind_farm"
+    ],
+    [
+      "oil_gas_platform",
+      "gas_flare"
+    ],
+    [
+      "mining_area",
+      "tailings"
+    ],
+    [
+      "rock_glacier_generic",
+      "rock_glacier_active"
+    ],
+    [
+      "rock_glacier_generic",
+      "rock_glacier_transitional"
+    ],
+    [
+      "rock_glacier_generic",
+      "rock_glacier_relict"
+    ]
+  ]
+}
