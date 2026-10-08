@@ -139,6 +139,18 @@ MAX_LATENTS = 512
 # must be regenerated whenever this path changes.
 OPEN_SET_H5_DIR = "/weka/dfive-default/helios/dataset/open_set_dataset/h5py_data_w_missing_timesteps_zstd_3_128_x_1/cdl_landsat_open_set_open_set_change_boundary_open_set_regression_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_wri_canopy_height_map/1448494"
 
+# Keep-list of the open-set H5 samples that do not overlap any AlphaEarth supplemental
+# eval window (any split), produced by
+# ``open_set_aef_clean/select_aef_clean_indices.py`` for this build. The label bank
+# ingests those evals (and many of their sources), so only runs trained on this subset
+# give valid AEF metrics. ``allsplits`` rather than ``valtest`` because the in-loop
+# AEF kNN evals use AEF's balanced-trial protocol, which pools all splits.
+OPEN_SET_FILTERS_DIR = "/weka/dfive-default/helios/dataset/open_set_dataset/filters"
+AEF_CLEAN_FILTER_IDX_FILE = (
+    f"{OPEN_SET_FILTERS_DIR}/open_set_aef_clean_allsplits_"
+    f"{Path(OPEN_SET_H5_DIR).name}.npy"
+)
+
 
 def build_common_components(
     script: str, cmd: SubCmd, run_name: str, cluster: str, overrides: list[str]
@@ -234,26 +246,34 @@ def build_trainer_config(common: CommonComponents, module_path: str):
     return trainer_config
 
 
-def build_open_set_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
-    """Dataset config for the open-set supervised H5s."""
+def build_open_set_dataset_config(
+    common: CommonComponents, filter_idx_file: str | None = None
+) -> OlmoEarthDatasetConfig:
+    """Dataset config for the open-set supervised H5s.
+
+    ``filter_idx_file`` optionally restricts the build to a keep-list of H5 indices
+    (e.g. ``AEF_CLEAN_FILTER_IDX_FILE``).
+    """
     return OlmoEarthDatasetConfig(
         h5py_dir=OPEN_SET_H5_DIR,
         training_modalities=common.training_modalities,
+        filter_idx_file=filter_idx_file,
     )
 
 
 def build_osm_plus_open_set_dataset_config(
-    common: CommonComponents,
+    common: CommonComponents, open_set_filter_idx_file: str | None = None
 ) -> OlmoEarthConcatDatasetConfig:
     """Concatenated dataset: osm_sampling (SSL only) + open-set (SSL + supervised).
 
     Both sub-datasets share ``common.training_modalities`` (imagery + label layers);
     ``osm_sampling`` H5s lack the label layers, so they are missing-filled and
     contribute only the self-supervised (+ map supervision + student) losses.
+    ``open_set_filter_idx_file`` filters the open-set half only.
     """
     return OlmoEarthConcatDatasetConfig(
         dataset_configs=[
             build_osm_dataset_config(common),
-            build_open_set_dataset_config(common),
+            build_open_set_dataset_config(common, open_set_filter_idx_file),
         ],
     )
