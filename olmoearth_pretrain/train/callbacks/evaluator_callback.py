@@ -128,6 +128,11 @@ class DownstreamTaskConfig:
     epochs: int = 50
     # LP / KNN / FT
     patch_size: int = 4
+    # Pixels per latent for Perceiver checkpoints (e.g. the ld1 release
+    # candidates). EvalWrapper already accepts this and the finetune path
+    # passes it; the probe path had no way to set it. None keeps the
+    # wrapper default, so non-Perceiver tasks are unaffected.
+    latent_patch_size: int | None = None
     eval_interval: Duration = field(default_factory=lambda: Duration.epochs(1))
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
@@ -439,6 +444,7 @@ class DownstreamEvaluator:
         self.epochs = task.epochs
         self.linear_probe_eval_interval = task.linear_probe_eval_interval
         self.patch_size = task.patch_size
+        self.latent_patch_size = task.latent_patch_size
         self.max_train_samples = task.max_train_samples
         self.max_train_samples_seed = task.max_train_samples_seed
         self.eval_interval = task.eval_interval
@@ -790,6 +796,7 @@ class DownstreamEvaluator:
             "eval_on_projected_registers": self.eval_on_projected_registers,
             "eval_projection_dim": self.eval_projection_dim,
             "use_center_token": self.use_center_token,
+            "latent_patch_size": self.latent_patch_size,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -1011,6 +1018,7 @@ class DownstreamEvaluator:
             logger.info(
                 f"test embeddings shape for {self.dataset}: {test_embeddings.shape}"
             )
+
         # Drop rows whose embedding is not finite. A released embedding product
         # can have genuine coverage gaps: GeoTessera has no `tessera` (v1) tiles
         # for 6 of the 2750 PLANTEUR windows, recorded by the materializer as
@@ -1019,7 +1027,11 @@ class DownstreamEvaluator:
         # "Input contains NaN" and takes mIoU down with it, losing the whole eval
         # over a few unusable pixels. Filtering here keeps the run and costs only
         # the affected rows.
-        def _drop_nonfinite(emb, lab, split):
+        def _drop_nonfinite(
+            emb: torch.Tensor | None,
+            lab: torch.Tensor | None,
+            split: str,
+        ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
             if emb is None or lab is None:
                 return emb, lab
             keep = torch.isfinite(emb).all(dim=tuple(range(1, emb.ndim)))

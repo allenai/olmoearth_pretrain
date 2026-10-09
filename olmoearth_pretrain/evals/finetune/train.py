@@ -169,7 +169,13 @@ def compute_eval_metrics(
     return EvalTaskResult(val_result=val_result, test_result=test_result)
 
 
-def _train_class_weights(train_loader, num_classes, mode, device, ignore_index=-1):
+def _train_class_weights(
+    train_loader: DataLoader,
+    num_classes: int,
+    mode: str,
+    device: torch.device | str,
+    ignore_index: int = -1,
+) -> torch.Tensor:
     """Inverse train-frequency class weights, normalised to mean 1.
 
     Mirrors utae-paps: w_c = (sum of scored counts)/count_c, optionally
@@ -215,7 +221,12 @@ class _FocalCE(nn.Module):
     loss, not its argmin, so it does not change what the run optimises.
     """
 
-    def __init__(self, weight, gamma, ignore_index=-1):
+    def __init__(
+        self,
+        weight: torch.Tensor | None,
+        gamma: float,
+        ignore_index: int = -1,
+    ) -> None:
         super().__init__()
         self.gamma = gamma
         self.ignore_index = ignore_index
@@ -223,7 +234,7 @@ class _FocalCE(nn.Module):
             weight=weight, ignore_index=ignore_index, reduction="none"
         )
 
-    def forward(self, out, y):
+    def forward(self, out: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         ce = self.ce(out, y)
         valid = y != self.ignore_index
         with torch.no_grad():
