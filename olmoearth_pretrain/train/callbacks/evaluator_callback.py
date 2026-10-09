@@ -793,8 +793,12 @@ class DownstreamEvaluator:
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
             "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
-            "eval_on_projected_registers": self.eval_on_projected_registers,
-            "eval_projection_dim": self.eval_projection_dim,
+            # lighthouse renamed these on the wrapper: projected_registers ->
+            # student_registers (the detached low-dim student off the Perceiver).
+            # Our task configs and task names still use the proj* spelling, so
+            # translate at the boundary instead of renaming 16 registration sites.
+            "eval_on_student_registers": self.eval_on_projected_registers,
+            "eval_student_dim": self.eval_projection_dim,
             "use_center_token": self.use_center_token,
             "latent_patch_size": self.latent_patch_size,
         }
