@@ -3353,6 +3353,11 @@ class PredictorBase(FlexiVitBase):
         )
         # THIS is the learnable mask token
         self.mask_token = nn.Parameter(torch.zeros(decoder_embedding_size))
+        if PositionEncoding.is_gaussian(position_encoding):
+            # A static modality's query is the mask token plus its zero-init channel
+            # embedding (no time or month encoding), so a zero token makes q = 0, where
+            # the Gaussian attention's cosine content has a ~1e12 gradient.
+            nn.init.trunc_normal_(self.mask_token, std=0.02)
 
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)

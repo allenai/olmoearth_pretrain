@@ -1,5 +1,6 @@
 """A small RC-shaped model with Gaussian attention windows, end to end."""
 
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -91,6 +92,28 @@ def _make_sample() -> MaskedOlmoEarthSample:
     )
 
 
+def _train_module(model: LatentMIM) -> Any:
+    """The RC's train module (pixel targets) on CPU."""
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        return config.build(model, device=torch.device("cpu"))
+
+
 def test_every_attention_is_gaussian_and_rope_free() -> None:
     """Encoder, Perceiver read (3D), latent self-attention and decoder (2D)."""
     model: LatentMIM = _model_config().build()
@@ -144,24 +167,7 @@ def test_train_step_with_pixel_targets(patch_size: int) -> None:
     """The RC's train module (pixel targets) runs: non-zero finite loss, finite grads."""
     torch.manual_seed(0)
     model: LatentMIM = _model_config().build()
-    config = LatentMIMTrainModuleConfig(
-        optim_config=AdamWConfig(lr=1e-4),
-        rank_microbatch_size=B,
-        loss_config=LossConfig(
-            loss_config={
-                "type": "modality_patch_discrimination_masked_negatives_vec",
-                "tau": 0.1,
-                "same_target_threshold": 0.999,
-            }
-        ),
-        masking_config=MaskingConfig(strategy_config={"type": "random"}),
-        token_exit_cfg={modality: 0 for modality in Modality.names()},
-        ema_decay=(1.0, 1.0),
-        transform_config=TransformConfig(transform_type="no_transform"),
-        pixel_targets=True,
-    )
-    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
-        train_module = config.build(model, device=torch.device("cpu"))
+    train_module = _train_module(model)
     loss, *_ = train_module.model_forward(
         _make_sample(), patch_size, train_module.token_exit_cfg
     )
@@ -175,6 +181,33 @@ def test_train_step_with_pixel_targets(patch_size: int) -> None:
     assert window_grads
     for name, grad in window_grads.items():
         assert grad is not None and torch.isfinite(grad).all(), name
+
+
+def test_decoded_static_modality_has_a_normal_gradient_at_init() -> None:
+    """No step-1 grad blow-up from static modalities' decoder queries.
+
+    Such a query is the mask token plus a zero-init channel embedding; a zero mask
+    token made q = 0, where the cosine content's normalisation gave a ~1e12 grad norm.
+    """
+    torch.manual_seed(0)
+    s2, wc = Modality.SENTINEL2_L2A, Modality.WORLDCOVER
+    model: LatentMIM = _model_config([s2.name, wc.name]).build()
+    s2_mask = torch.full((B, H, W, T, s2.num_bands), MaskValue.ONLINE_ENCODER.value)
+    s2_mask[:, :, :, -1] = MaskValue.DECODER.value
+    sample = MaskedOlmoEarthSample(
+        sentinel2_l2a=torch.randn(B, H, W, T, s2.num_bands),
+        sentinel2_l2a_mask=s2_mask,
+        worldcover=torch.randn(B, H, W, 1, wc.num_bands),
+        worldcover_mask=torch.full((B, H, W, 1, wc.num_bands), MaskValue.DECODER.value),
+        timestamps=torch.tensor(
+            [[[1, 2, 2020], [1, 5, 2020], [1, 8, 2020]]], dtype=torch.long
+        ).expand(B, -1, -1),
+    )
+    train_module = _train_module(model)
+    loss, *_ = train_module.model_forward(sample, 1, train_module.token_exit_cfg)
+    loss.backward()
+    grads = [p.grad.flatten() for p in model.parameters() if p.grad is not None]
+    assert torch.cat(grads).norm() < 100
 
 
 def test_non_spatial_modalities_are_refused() -> None:
