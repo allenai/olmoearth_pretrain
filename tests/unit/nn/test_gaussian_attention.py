@@ -79,17 +79,80 @@ def test_features_are_the_gaussian_logit(spatiotemporal: bool) -> None:
 def test_zero_init_is_the_prior() -> None:
     """At init every query sits on itself with an axis-aligned sigma0 window.
 
-    sigma0 is geometric over heads; in 3D time runs the opposite way to space.
+    sigma0 is geometric over heads; in 3D time runs the opposite way to space. The
+    width floor adds sigma_min^2 to each variance.
     """
     window = GaussianWindow(DIM, H, spatiotemporal=True)
     offset, lam = window.windows(torch.randn(B, 3, DIM))
     assert torch.equal(offset, torch.zeros_like(offset))
-    expected = torch.diag_embed(window.sigma0**-2).expand_as(lam)
+    variance = window.sigma0**2 + window.sigma_min**2
+    expected = torch.diag_embed(1 / variance).expand_as(lam)
     torch.testing.assert_close(lam, expected)
     spatial, temporal = window.sigma0[:, 1], window.sigma0[:, 0]
     torch.testing.assert_close(spatial[[0, -1]], torch.tensor(SPATIAL_SIGMA0_RANGE))
     torch.testing.assert_close(temporal[[-1, 0]], torch.tensor(TEMPORAL_SIGMA0_RANGE))
     assert torch.equal(window.sigma0[:, 1], window.sigma0[:, 2])
+
+
+def test_window_width_is_floored() -> None:
+    """Covariance = raw window + sigma_min^2: never sharper than sigma_min."""
+    torch.manual_seed(0)
+    window = GaussianWindow(DIM, H, spatiotemporal=True)
+    _randomize(window)
+    x = torch.randn(B, 5, DIM)
+    floor = window.sigma_min.clone()
+    with torch.no_grad():
+        window.sigma_min.fill_(1e-4)
+        _, raw = window.windows(x)
+        window.sigma_min.copy_(floor)
+        _, lam = window.windows(x)
+    cov = torch.linalg.inv(lam.double())
+    expected = torch.linalg.inv(raw.double()) + torch.diag(floor.double() ** 2)
+    torch.testing.assert_close(cov, expected, atol=1e-3, rtol=1e-3)
+    # Arbitrarily sharp raw windows saturate at the floor.
+    with torch.no_grad():
+        window.to_params.bias.add_(30.0)
+        _, sharp = window.windows(x)
+    assert torch.isfinite(sharp).all()
+    in_floor_units = (sharp * (floor[:, None] * floor)).double()  # S Lambda S
+    assert torch.linalg.eigvalsh(in_floor_units).max() <= 1 + 1e-5
+
+
+def _needle_window_grad(sigma_min: float) -> torch.Tensor:
+    """Window-predictor grad for needle-sharp windows centred between four keys."""
+    torch.manual_seed(0)
+    attn = Attention(
+        DIM, num_heads=H, qkv_bias=True, cross_attn=True, position_encoding="gaussian"
+    )
+    assert attn.gaussian is not None
+    n = attn.gaussian.ndim
+    with torch.no_grad():
+        attn.gaussian.sigma_min.fill_(sigma_min)
+        attn.gaussian.to_params.bias.view(H, -1)[:, n : 2 * n] = 12.0  # sigma0 e^-12
+    x, y = torch.randn(B, 4, DIM), torch.randn(B, 16, DIM)
+    rows, cols = torch.meshgrid(torch.arange(4.0), torch.arange(4.0), indexing="ij")
+    grid = torch.stack([rows, cols], dim=-1).reshape(1, 16, 2).expand(B, -1, -1)
+    between = torch.full((B, 4, 2), 1.5)  # equidistant from four keys
+    attn(
+        x, y=y, rope_positions=between, rope_positions_y=grid
+    ).square().sum().backward()
+    grad = attn.gaussian.to_params.weight.grad
+    assert grad is not None
+    return grad.view(H, attn.gaussian.num_params, DIM)
+
+
+def test_needle_window_between_keys_keeps_gradients_bounded() -> None:
+    """gauss_2's blow-up: a needle-sharp window centred off the key grid.
+
+    Raw sigma ~1e-5 px with the nearest keys 0.7 px away puts them at Mahalanobis^2
+    ~1e9, and the gradient with it. Floored, the width's pull saturates (~0 grad) and
+    what remains (the offset's) is bounded.
+    """
+    unfloored = _needle_window_grad(1e-6)
+    floored = _needle_window_grad(GaussianWindow(DIM, H, False).sigma_min[0].item())
+    assert torch.isfinite(floored).all()
+    assert floored.norm() < 1e-6 * unfloored.norm()
+    assert floored[:, 2:].abs().max() < 1e-3  # width / tilt params
 
 
 @pytest.mark.parametrize("position_encoding", ["gaussian_3d", "gaussian"])
@@ -193,7 +256,8 @@ def test_strong_match_outside_the_window_loses_to_the_centre() -> None:
         attn.proj.weight.copy_(torch.eye(DIM))
         attn.proj.bias.zero_()
     assert attn.gaussian is not None
-    sigma = attn.gaussian.sigma0[0, 0].item()
+    sigma0, sigma_min = attn.gaussian.sigma0[0, 0], attn.gaussian.sigma_min[0]
+    sigma = (sigma0**2 + sigma_min**2).sqrt().item()  # floored width
     query = torch.zeros(1, 1, DIM)
     query[..., 0] = 1.0
     keys = torch.zeros(1, 2, DIM)

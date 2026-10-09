@@ -25,10 +25,12 @@ through autograd. The expansion cancels large terms (``|p|^2 / sigma^2`` for a n
 window far from the origin), so (1) coordinates are first centred per sample on the
 keys' mean (exact: the logit depends on ``p_j - mu_i`` only), and (2) under bf16 each
 monomial is split into hi + lo bf16 parts and the dot product taken as
-``hi.hi + hi.lo + lo.hi``. Measured worst case (2 px window, 256 px crop): ~0.09
-logits of error, against ~43 for a plain bf16 expansion; 0.009 on a 64 px crop. The
-error depends on a key only through its position, so keys at the same place share it
-and it cancels in their softmax.
+``hi.hi + hi.lo + lo.hi``. Measured: a 2 px window on a 256 px crop is ~0.09 logits
+off, against ~43 for a plain bf16 expansion. The error grows with the window's
+precision and the crop, but key spacing grows with the crop (bounded token count), so
+at the width floor it stays small next to the gap between neighbouring keys: 0.13
+logits on a 256 px crop with keys 8 px apart (gap 128), 0.04 on a 22 px crop with
+keys 1 px apart (gap 2).
 
 **Time.** Tokens without time (static modalities, which the 3D positions put at
 ``t = 0``, i.e. 2000-01-01, a date no capture has) skip the temporal part of the
@@ -36,11 +38,19 @@ window: a pair where either side has no time uses the spatial block of the preci
 only.
 
 **Parametrization.** All learned quantities are dimensionless and zero at init: the
-offset is in units of a fixed per-head scale ``sigma0``, and the precision is
+offset is in units of a fixed per-head scale ``sigma0``, and the raw precision is
 ``(A D^-1)^T (A D^-1)`` with ``D = diag(sigma0)`` and ``A`` lower-triangular with
 ``exp`` on its diagonal. Zero-initialized, every query starts centred on itself with an
 axis-aligned window of size ``sigma0``, and weight decay pulls back toward that prior
-rather than toward a unit-size window. ``sigma0`` is geometric across heads
+rather than toward a unit-size window.
+
+**Width floor.** The window is blurred by a fixed ``sigma_min`` Gaussian (half the
+finest token spacing: 0.5 px, 0.5 month): covariance ``Lambda^-1 + S^2``,
+``S = diag(sigma_min)``, so no window is sharper than ``sigma_min`` along any axis and
+the predictor's pull saturates there. Without it, windows with nothing but position to
+go on (static-modality decoder queries) shrank to ~0.0005 px; the nearest key, off the
+query's grid, then sat at a Mahalanobis^2 in the millions and the gradient with it
+(grad norm 2 -> inf in ~240 steps). ``sigma0`` is geometric across heads
 (multi-scale, like ALiBi slopes); in 3D the temporal scale runs the opposite way, so
 the most local spatial head is the broadest in time (same place, all dates) and vice
 versa.
@@ -59,6 +69,9 @@ CONTENT_SCALE = 10.0
 # rope_temporal_coordinate_scale (1/30 in v1.3, i.e. ~months).
 SPATIAL_SIGMA0_RANGE = (2.0, 128.0)
 TEMPORAL_SIGMA0_RANGE = (1.0, 24.0)
+# Narrowest window (see "Width floor" in the module docstring), same units.
+SPATIAL_SIGMA_MIN = 0.5
+TEMPORAL_SIGMA_MIN = 0.5
 
 
 def _geometric(lo: float, hi: float, n: int) -> torch.Tensor:
@@ -98,6 +111,8 @@ class GaussianWindow(nn.Module):
             temporal = _geometric(*TEMPORAL_SIGMA0_RANGE, num_heads).flip(0)
             sigma0 = torch.cat([temporal[:, None], sigma0], dim=-1)
         self.register_buffer("sigma0", sigma0, persistent=False)
+        sigma_min = [TEMPORAL_SIGMA_MIN] * (n - 2) + [SPATIAL_SIGMA_MIN] * 2
+        self.register_buffer("sigma_min", torch.tensor(sigma_min), persistent=False)
         rows, cols = torch.tril_indices(n, n, offset=-1)
         self.register_buffer("tril_flat", rows * n + cols, persistent=False)
 
@@ -119,7 +134,12 @@ class GaussianWindow(nn.Module):
         lower[..., self.tril_flat] = params[..., 2 * n :]
         a = torch.diag_embed(params[..., n : 2 * n].exp()) + lower.unflatten(-1, (n, n))
         w = a / self.sigma0[:, None, :]
-        return offset, w.transpose(-1, -2) @ w
+        # Width floor: (Lambda^-1 + S^2)^-1 = S^-1 (I - (I + S Lambda S)^-1) S^-1, which
+        # stays finite as Lambda grows and saturates at S^-2. Tiny matrices, so float64.
+        ws = (w * self.sigma_min).double()
+        eye = torch.eye(n, dtype=torch.float64, device=x.device)
+        inner = eye - torch.linalg.inv(eye + ws.transpose(-1, -2) @ ws)
+        return offset, inner.float() / (self.sigma_min[:, None] * self.sigma_min)
 
     def features(
         self,
