@@ -871,9 +871,9 @@ class CompositeEncodings(nn.Module):
             modality_embed[..., :n] += channel_embed
 
         if modality.is_multitemporal and use_temporal_encodings:
-            # Slot-index temporal encoding (additive). Skipped when 3D RoPE
-            # handles temporal position rotationally inside attention.
-            if not PositionEncoding.is_3d_rope(self.position_encoding):
+            # Slot-index temporal encoding (additive). Skipped when the attention
+            # gets the temporal coordinate itself (3D RoPE or 3D Gaussian windows).
+            if not PositionEncoding.has_3d_positions(self.position_encoding):
                 # Time position encodings (computed on-the-fly for arbitrary t)
                 pos_embed = get_1d_sincos_pos_encoding(
                     torch.arange(t, device=device),
@@ -1000,6 +1000,15 @@ class FlexiVitBase(nn.Module):
                 "rope_temporal_coordinate_scale must be positive, got "
                 f"{rope_temporal_coordinate_scale}"
             )
+        if PositionEncoding.is_gaussian(position_encoding):
+            # Gaussian windows place every token in space; a non-spatial token would
+            # sit at (row, col) = (0, 0), the grid's corner.
+            non_spatial = [m.name for m in supported_modalities if not m.is_spatial]
+            if non_spatial:
+                raise ValueError(
+                    "Gaussian attention needs spatial modalities only, got "
+                    f"{non_spatial}"
+                )
 
         self.embedding_size = embedding_size
         self.supported_modalities = supported_modalities
@@ -1126,11 +1135,11 @@ class FlexiVitBase(nn.Module):
         ``{modality: shift}`` dict gives each modality its own, ``[B, h_p, w_p, T, 2]``
         for a per-timestep shift.
         """
-        if not PositionEncoding.is_rope(self.position_encoding):
+        if not PositionEncoding.has_positions(self.position_encoding):
             if query_pixel_shift is not None:
                 raise ValueError("query_pixel_shift requires a RoPE position encoding")
             return None
-        is_3d = PositionEncoding.is_3d_rope(self.position_encoding)
+        is_3d = PositionEncoding.has_3d_positions(self.position_encoding)
         if is_3d and query_pixel_shift is not None:
             raise NotImplementedError("query_pixel_shift supports 2D RoPE only")
 
@@ -1576,6 +1585,7 @@ class Perceiver(nn.Module):
         max_latents: int | None = None,
         eval_latent_stride: int = 1,
         latent_stride_bias: float = 0.0,
+        gaussian: bool = False,
     ) -> None:
         """Initialize the spatial Perceiver.
 
@@ -1669,17 +1679,27 @@ class Perceiver(nn.Module):
             eval_latent_stride: Stride outside training (1 = one latent per pixel).
             latent_stride_bias: Weight allowed strides by ``(1 / s) ** bias`` (0 =
                 uniform), biasing training toward the finest stride that fits.
+            gaussian: Use Gaussian attention windows (``nn/gaussian_attention.py``)
+                instead of RoPE: 2D windows on the latent self-attention and on reads
+                without ``time_rope_encoding``, which must otherwise be
+                ``gaussian_3d`` (the latent queries sit at the visible tokens' mean
+                time).
         """
         super().__init__()
         self.register_dim = register_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
         self.share_read_kv = share_read_kv
-        if time_rope_encoding is not None and not PositionEncoding.is_3d_rope(
+        if time_rope_encoding is not None and not PositionEncoding.has_3d_positions(
             time_rope_encoding
         ):
             raise ValueError(
                 f"time_rope_encoding must be a 3D RoPE mode, got {time_rope_encoding}"
+            )
+        if gaussian and time_rope_encoding not in (None, PositionEncoding.GAUSSIAN_3D):
+            raise ValueError(
+                "a Gaussian Perceiver's time-aware reads need time_rope_encoding "
+                f"{PositionEncoding.GAUSSIAN_3D}, got {time_rope_encoding}"
             )
         self.time_rope_encoding = time_rope_encoding
         if read_time_range and time_rope_encoding != PositionEncoding.MIXED_3D_ROPE:
@@ -1788,14 +1808,20 @@ class Perceiver(nn.Module):
         # The register grid is a purely spatial map, so the latent self-attention
         # rotates over (row, col) only. The reads do too unless ``time_rope_encoding``
         # puts the tokens' calendar time back into the read.
+        # With ``gaussian`` the 2D modes are Gaussian windows instead of 2D RoPE.
+        grid_position_encoding = (
+            PositionEncoding.ABSOLUTE
+            if not use_2d_rope
+            else (
+                PositionEncoding.GAUSSIAN_2D
+                if gaussian
+                else PositionEncoding.AXIAL_2D_ROPE
+            )
+        )
         if time_rope_encoding is not None:
             read_position_encoding = time_rope_encoding
         else:
-            read_position_encoding = (
-                PositionEncoding.AXIAL_2D_ROPE
-                if use_2d_rope
-                else PositionEncoding.ABSOLUTE
-            )
+            read_position_encoding = grid_position_encoding
         self.read_blocks = nn.ModuleList(
             [
                 Block(
@@ -1827,11 +1853,7 @@ class Perceiver(nn.Module):
                 qk_norm=qk_norm,
                 cross_attn=False,
                 use_flash_attn=False,
-                position_encoding=(
-                    PositionEncoding.AXIAL_2D_ROPE
-                    if use_2d_rope
-                    else PositionEncoding.ABSOLUTE
-                ),
+                position_encoding=grid_position_encoding,
                 rope_base=rope_base,
                 attn_dim=attn_dim,
             )
@@ -2280,7 +2302,7 @@ class PerceiverConfig(Config):
 
     def validate(self, *, encoder_num_heads: int, position_encoding: str) -> None:
         """Check the bottleneck against the encoder it will attach to."""
-        if not PositionEncoding.is_rope(position_encoding):
+        if not PositionEncoding.has_positions(position_encoding):
             raise ValueError(
                 "the Perceiver requires a RoPE position_encoding: the "
                 "register grid is differentiated by per-cell 2D (row, col) "
@@ -2307,7 +2329,9 @@ class PerceiverConfig(Config):
             raise ValueError(
                 "read_time_range requires read_time_rope on a rope_3d_mixed encoder"
             )
-        if self.read_time_rope and not PositionEncoding.is_3d_rope(position_encoding):
+        if self.read_time_rope and not PositionEncoding.has_3d_positions(
+            position_encoding
+        ):
             raise ValueError(
                 "read_time_rope needs a 3D RoPE encoder position_encoding (the reads "
                 f"take the tokens' temporal coordinate from it), got {position_encoding}"
@@ -2396,7 +2420,7 @@ class PerceiverConfig(Config):
             num_heads=self.resolved_num_heads(encoder_num_heads),
             mlp_ratio=mlp_ratio,
             latent_transformer_depth=self.latent_depth,
-            use_2d_rope=PositionEncoding.is_rope(position_encoding),
+            use_2d_rope=PositionEncoding.has_positions(position_encoding),
             rope_base=rope_base,
             qk_norm=qk_norm,
             per_depth_read_proj=self.per_depth_read_proj,
@@ -2422,6 +2446,7 @@ class PerceiverConfig(Config):
             latent_stride_bias=(
                 self.latent_stride_bias if self.latent_stride_bias is not None else 0.0
             ),
+            gaussian=PositionEncoding.is_gaussian(position_encoding),
         )
 
 

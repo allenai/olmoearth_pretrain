@@ -21,6 +21,7 @@ from olmoearth_pretrain.nn.encodings import (
     init_3d_mixed_rope_freqs,
     resolve_position_encoding,
 )
+from olmoearth_pretrain.nn.gaussian_attention import GaussianWindow
 
 try:
     import flash_attn
@@ -145,7 +146,9 @@ class Attention(nn.Module):
             use_flash_attn: Use flash attention
             position_encoding: Position encoding mode. RoPE is applied
                 to queries/keys for the ``rope``, ``rope_mixed``, ``rope_3d``, and
-                ``rope_3d_mixed`` modes; other modes leave q/k unrotated.
+                ``rope_3d_mixed`` modes; ``gaussian`` / ``gaussian_3d`` replace it with
+                predicted Gaussian windows (``nn/gaussian_attention.py``); other modes
+                leave q/k unrotated.
             rope_base: RoPE frequency base (axial; spatial axes for 3D)
             rope_mixed_base: Frequency base used to initialize the learnable
                 RoPE-Mixed frequencies.
@@ -212,6 +215,15 @@ class Attention(nn.Module):
                     base=self.rope_mixed_base,
                 )
             )
+        self.gaussian: GaussianWindow | None = None
+        if PositionEncoding.is_gaussian(position_encoding):
+            if use_flash_attn:
+                raise ValueError("Gaussian attention runs on SDPA, not flash-attn")
+            self.gaussian = GaussianWindow(
+                dim,
+                num_heads,
+                spatiotemporal=PositionEncoding.has_3d_positions(position_encoding),
+            )
         self.fast_attn = hasattr(torch.nn.functional, "scaled_dot_product_attention")
         self.q = nn.Linear(dim, attn_dim, bias=qkv_bias)
         self.k = nn.Linear(kv_in_dim, attn_dim, bias=qkv_bias)
@@ -237,6 +249,7 @@ class Attention(nn.Module):
         max_seqlen_k: int | None = None,
         attn_mask: torch.Tensor | None = None,
         block_mask: Any | None = None,
+        scale: float | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
 
@@ -255,10 +268,14 @@ class Attention(nn.Module):
             block_mask: Optional FlexAttention ``BlockMask`` (CUDA only). Routes the
                 attention through the compiled block-sparse kernel instead of SDPA;
                 ``attn_mask`` must then be None.
+            scale: Softmax scale for the SDPA paths; None uses SDPA's
+                ``1 / sqrt(head_dim)``. Not supported with ``block_mask`` / flash.
 
         Returns:
             Output tensor of shape (B, H, N, D)
         """
+        if scale is not None and (block_mask is not None or self.use_flash_attn):
+            raise ValueError("a custom softmax scale needs the SDPA path")
         if block_mask is not None:
             if attn_mask is not None or self.use_flash_attn:
                 raise ValueError(
@@ -303,12 +320,13 @@ class Attention(nn.Module):
                 # a value of True indicates that the element should take part in attention
                 attn_mask=attn_mask,
                 dropout_p=self.attn_drop.p,
+                scale=scale,
             )
         else:
             # Backward Compatible for older PyTorch versions
             if attn_mask is not None:
                 raise NotImplementedError
-            q = q * self.scale
+            q = q * (self.scale if scale is None else scale)
             attn = q @ k.transpose(-2, -1)
             attn = attn.softmax(dim=-1)
             attn = self.attn_drop(attn)
@@ -370,10 +388,12 @@ class Attention(nn.Module):
             max_seqlen: Optional maximum sequence length for the input tensor, needed for varlen flash attention
             max_seqlen_q: Optional maximum sequence length for the query tensor, needed for cross varlen flash attention
             max_seqlen_k: Optional maximum sequence length for the key tensor, needed for cross varlen flash attention
-            rope_positions: Optional RoPE coordinates for x/query tokens:
-                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
-            rope_positions_y: Optional RoPE coordinates for y/key tokens:
-                ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D modes
+            rope_positions: Optional RoPE (or Gaussian-window) coordinates for
+                x/query tokens: ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D
+                modes
+            rope_positions_y: Optional RoPE (or Gaussian-window) coordinates for
+                y/key tokens: ``(row, col)`` for 2D modes or ``(t, row, col)`` for 3D
+                modes
 
         Returns:
             Output tensor of shape (B, N, C) or (B* N , C) if packed
@@ -466,6 +486,24 @@ class Attention(nn.Module):
                     spatial_extent=k_spatial,
                     extent_start=rope_extent_start if y is None else 0,
                 )
+        scale = None
+        if self.gaussian is not None:
+            k_positions = rope_positions if y is None else rope_positions_y
+            if rope_positions is None or k_positions is None:
+                raise ValueError("Gaussian attention needs query and key positions")
+            if block_mask is not None:
+                raise NotImplementedError("Gaussian attention runs on SDPA only")
+            # Content + window logit as one dot product of augmented q/k; the content
+            # scale is inside q_aug, so SDPA runs at scale 1.
+            q, k = self.gaussian.augment(
+                x,
+                q,
+                k,
+                rope_positions,
+                k_positions,
+                attn_mask if attn_mask is not None and attn_mask.dim() == 2 else None,
+            )
+            scale = 1.0
         x = self.sdpa(
             q,
             k,
@@ -481,6 +519,7 @@ class Attention(nn.Module):
             max_seqlen_k=max_seqlen_k,
             attn_mask=attn_mask,
             block_mask=block_mask,
+            scale=scale,
         )
         # The attention output is at the internal attention width (== the input width
         # unless attn_dim decouples them); proj maps it back to the input width.

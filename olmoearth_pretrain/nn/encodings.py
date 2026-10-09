@@ -32,6 +32,11 @@ class PositionEncoding(StrEnum):
     AXIAL_3D_ROPE = "rope_3d"
     MIXED_3D_ROPE = "rope_3d_mixed"
     NONE = "none"
+    # Gaussian attention windows instead of RoPE (``nn/gaussian_attention.py``): the
+    # per-token coordinates are the same as the 2D / 3D RoPE ones, but they place a
+    # predicted Gaussian over the keys rather than rotating q/k.
+    GAUSSIAN_2D = "gaussian"
+    GAUSSIAN_3D = "gaussian_3d"
 
     @classmethod
     def values(cls) -> tuple[str, ...]:
@@ -56,6 +61,22 @@ class PositionEncoding(StrEnum):
     def is_rope(cls, value: str) -> bool:
         """Return whether ``value`` selects any RoPE encoding."""
         return cls.is_2d_rope(value) or cls.is_3d_rope(value)
+
+    @classmethod
+    def is_gaussian(cls, value: str) -> bool:
+        """Return whether ``value`` selects Gaussian attention windows."""
+        # Plain-string comparison for torch.compile correctness; see is_2d_rope.
+        return value in (cls.GAUSSIAN_2D.value, cls.GAUSSIAN_3D.value)
+
+    @classmethod
+    def has_positions(cls, value: str) -> bool:
+        """Return whether ``value`` consumes per-token coordinates (RoPE or Gaussian)."""
+        return cls.is_rope(value) or cls.is_gaussian(value)
+
+    @classmethod
+    def has_3d_positions(cls, value: str) -> bool:
+        """Return whether ``value`` consumes ``(t, row, col)`` coordinates."""
+        return cls.is_3d_rope(value) or value == cls.GAUSSIAN_3D.value
 
 
 def resolve_position_encoding(
