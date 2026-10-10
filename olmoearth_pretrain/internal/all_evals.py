@@ -4022,35 +4022,6 @@ FT_EVAL_TASKS["planteur_tessera_raw_ft_sentinel1_sentinel2"] = DownstreamTaskCon
     tile_samples=False,
 )
 
-if __name__ == "__main__":
-    module_path = os.environ.get("TRAIN_SCRIPT_PATH")
-    if module_path is None:
-        raise ValueError("TRAIN_SCRIPT_PATH environment variable must be set")
-    user_mod = load_user_module(module_path)
-
-    try:
-        build_common_components = user_mod.build_common_components
-    except AttributeError:
-        from olmoearth_pretrain.internal.common import build_common_components
-
-    # if the user module has no train module config builder, because it is an external model, we can just pass None
-    # If the model is an olmoearth model, we need to build the train module config to load the checkpoint
-    try:
-        build_train_module_config = user_mod.build_train_module_config
-    except AttributeError:
-        build_train_module_config = None
-
-    build_model_config = user_mod.build_model_config
-    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
-    # so train-time architecture overrides don't need to be re-passed at eval time.
-    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
-        build_model_config = build_model_config_from_checkpoint(build_model_config)
-    main(
-        common_components_builder=build_common_components,
-        model_config_builder=build_model_config,
-        trainer_config_builder=build_trainer_config,
-        train_module_config_builder=build_train_module_config,
-    )
 # Calendar-2019 LOIO input ablations. The S2 column already exists via the
 # per-island variants above; these add the other four input combinations for
 # every fold. Each dataset is the same materialized 2019 data with the combo
@@ -4081,6 +4052,36 @@ for _lc_island in _LOIO_ISLANDS:
         FT_EVAL_TASKS[f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"] = (
             _pastis_ft_task(_lc_mod_names, dataset=_loio_combo_ds)
         )
+
+if __name__ == "__main__":
+    module_path = os.environ.get("TRAIN_SCRIPT_PATH")
+    if module_path is None:
+        raise ValueError("TRAIN_SCRIPT_PATH environment variable must be set")
+    user_mod = load_user_module(module_path)
+
+    try:
+        build_common_components = user_mod.build_common_components
+    except AttributeError:
+        from olmoearth_pretrain.internal.common import build_common_components
+
+    # if the user module has no train module config builder, because it is an external model, we can just pass None
+    # If the model is an olmoearth model, we need to build the train module config to load the checkpoint
+    try:
+        build_train_module_config = user_mod.build_train_module_config
+    except AttributeError:
+        build_train_module_config = None
+
+    build_model_config = user_mod.build_model_config
+    # Optionally reconstruct the architecture from the checkpoint's saved config.json,
+    # so train-time architecture overrides don't need to be re-passed at eval time.
+    if os.environ.get("LOAD_ARCH_FROM_CHECKPOINT"):
+        build_model_config = build_model_config_from_checkpoint(build_model_config)
+    main(
+        common_components_builder=build_common_components,
+        model_config_builder=build_model_config,
+        trainer_config_builder=build_trainer_config,
+        train_module_config_builder=build_train_module_config,
+    )
 
 
 # ---------------------------------------------------------------------------
