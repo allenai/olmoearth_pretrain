@@ -221,6 +221,11 @@ def build_launch_config(
         env_vars.append(
             BeakerEnvVar(name="PYTORCH_CUDA_ALLOC_CONF", value=cuda_alloc_conf)
         )
+    # Restrict the evaluator to specific tasks inside the job process.
+    only_tasks = os.environ.get("OE_ONLY_TASKS")
+    if only_tasks is not None:
+        logger.info("Propagating OE_ONLY_TASKS: %s", only_tasks)
+        env_vars.append(BeakerEnvVar(name="OE_ONLY_TASKS", value=only_tasks))
     # Propagate the load-arch-from-checkpoint flag to the experiment if set
     load_arch_from_checkpoint = os.environ.get("LOAD_ARCH_FROM_CHECKPOINT")
     if load_arch_from_checkpoint is not None:

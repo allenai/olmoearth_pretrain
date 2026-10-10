@@ -3665,6 +3665,37 @@ for _fs_ds in (
     )
 
 
+def _restrict_to_requested_tasks(tasks: dict) -> dict:
+    """Narrow the evaluator task dict to OE_ONLY_TASKS when it is set.
+
+    The sweep wrappers narrow EVAL_TASKS in the *launching* process, which
+    only decides which per-task overrides get emitted. The job then runs
+    this module in a fresh subprocess, where the registry is whole again,
+    so a launch meant to score three tasks evaluated every constructible
+    task instead (201 of them, 91 unrelated to the dataset under test).
+    Narrowing has to happen here, in the process that builds the callback.
+
+    OE_ONLY_TASKS is a comma-separated list of task names. An unknown name
+    is an error, not a silent no-op: skipping it would hand back the full
+    registry and look like success.
+    """
+    only = os.environ.get("OE_ONLY_TASKS")
+    if not only:
+        return tasks
+    names = [n.strip() for n in only.split(",") if n.strip()]
+    missing = [n for n in names if n not in tasks]
+    if missing:
+        unknown = ", ".join(sorted(missing))
+        raise KeyError(f"OE_ONLY_TASKS names unregistered task(s): {unknown}")
+    logger.info(
+        "OE_ONLY_TASKS: evaluating %d of %d task(s): %s",
+        len(names),
+        len(tasks),
+        ", ".join(names),
+    )
+    return {n: tasks[n] for n in names}
+
+
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(300)
@@ -3698,7 +3729,7 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
         .with_callback(
             "downstream_evaluator",
             DownstreamEvaluatorCallbackConfig(
-                tasks=(
+                tasks=_restrict_to_requested_tasks(
                     EMBED_DIAG_TASKS
                     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY")
                     else FT_EVAL_TASKS
@@ -3905,12 +3936,12 @@ for _arm in ("plo", "bal", "pxi"):
         )
         EVAL_TASKS[f"planteur_2019_{_arm}{_x}_probe_sentinel2"] = _xs_probe
         for _xs_dim in (128, 64):
-            EVAL_TASKS[
-                f"planteur_2019_{_arm}{_x}_probe_sentinel2_proj{_xs_dim}"
-            ] = replace(
-                _xs_probe,
-                eval_on_projected_registers=True,
-                eval_projection_dim=_xs_dim,
+            EVAL_TASKS[f"planteur_2019_{_arm}{_x}_probe_sentinel2_proj{_xs_dim}"] = (
+                replace(
+                    _xs_probe,
+                    eval_on_projected_registers=True,
+                    eval_projection_dim=_xs_dim,
+                )
             )
         FT_EVAL_TASKS[f"planteur_2019_{_arm}{_x}_ft_sentinel2"] = _pastis_ft_task(
             [Modality.SENTINEL2_L2A.name], dataset=_xs_ds
@@ -3926,11 +3957,17 @@ for _arm in ("plo", "bal", "pxi"):
 _INPUT_COMBOS_2019 = {
     "sentinel1": (["SENTINEL1"], "pastis2_drom_bg8void_2019_s1"),
     "sentinel1_sentinel2": (
-        ["SENTINEL1", "SENTINEL2_L2A"], "pastis2_drom_bg8void_2019_s1s2"),
+        ["SENTINEL1", "SENTINEL2_L2A"],
+        "pastis2_drom_bg8void_2019_s1s2",
+    ),
     "sentinel2_landsat": (
-        ["SENTINEL2_L2A", "LANDSAT"], "pastis2_drom_bg8void_2019_s2ls"),
+        ["SENTINEL2_L2A", "LANDSAT"],
+        "pastis2_drom_bg8void_2019_s2ls",
+    ),
     "sentinel1_sentinel2_landsat": (
-        ["SENTINEL1", "SENTINEL2_L2A", "LANDSAT"], "pastis2_drom_bg8void_2019_s1s2ls"),
+        ["SENTINEL1", "SENTINEL2_L2A", "LANDSAT"],
+        "pastis2_drom_bg8void_2019_s1s2ls",
+    ),
 }
 
 for _combo, (_mods, _ds_name) in _INPUT_COMBOS_2019.items():
@@ -3944,7 +3981,6 @@ for _combo, (_mods, _ds_name) in _INPUT_COMBOS_2019.items():
     FT_EVAL_TASKS[f"planteur_2019_ft_{_combo}"] = _pastis_ft_task(
         _mod_names, dataset=_ds_name
     )
-
 
 
 # Tessera live-encoder raw-acquisition tasks (S1+S2, shared union time axis,
@@ -4042,9 +4078,9 @@ for _lc_island in _LOIO_ISLANDS:
                 eval_on_projected_registers=True,
                 eval_projection_dim=_lc_dim,
             )
-        FT_EVAL_TASKS[
-            f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"
-        ] = _pastis_ft_task(_lc_mod_names, dataset=_loio_combo_ds)
+        FT_EVAL_TASKS[f"planteur_2019_loio_{_lc_island}_ft_{_lc_combo}"] = (
+            _pastis_ft_task(_lc_mod_names, dataset=_loio_combo_ds)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4065,8 +4101,6 @@ for _xs_enc, _xs_mod in (("tessera_v2", Modality.TESSERA_V2), ("aef", Modality.G
     for _xs_arm in _XSHOT_ARMS_2019:
         for _xs_n in _XSHOT_SIZES_2019:
             _xs_ds = f"pastis_planteur_{_xs_arm}{_xs_n}_2019"
-            EVAL_TASKS[
-                f"planteur_2019_{_xs_arm}{_xs_n}_probe_{_xs_enc}"
-            ] = _pastis_ps1_task(
-                [_xs_mod.name], window_size=16, dataset=_xs_ds
+            EVAL_TASKS[f"planteur_2019_{_xs_arm}{_xs_n}_probe_{_xs_enc}"] = (
+                _pastis_ps1_task([_xs_mod.name], window_size=16, dataset=_xs_ds)
             )

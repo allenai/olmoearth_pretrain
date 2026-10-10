@@ -15,16 +15,22 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
-from torch import Tensor
+from torch import Tensor, nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
+
+
+# Lat/lon regression supervises 3 channels: the unit-sphere cartesian
+# encoding of the coordinate. Restored here because the v1_2 launch
+# scripts (regbtl_v1_2_regsup_common) still import it and lighthouse
+# dropped the constant without replacing the concept.
+LATLON_TARGET_DIM = 3
 
 
 class SupervisionTaskType(StrEnum):
