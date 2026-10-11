@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, cast
 
 import numpy as np
+import torch
 from beaker import Beaker
 from beaker.types import BeakerWorkload
 from gantry.api import Recipe as GantryRecipe
@@ -20,6 +21,7 @@ from olmo_core.train import (
 )
 from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
+from upath import UPath
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
@@ -36,6 +38,7 @@ from olmoearth_pretrain.internal.utils import (
     MockLatentMIMTrainModule,
     MockOlmoEarthDataLoader,
 )
+from olmoearth_pretrain.model_loader import WEIGHTS_FILENAME
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
@@ -339,6 +342,21 @@ def evaluate(config: OlmoEarthEvaluateConfig) -> None:
     # Build components.
     # TODO: Setup init device arg and allow the model to be inited on device of our choice rather than moved over allowing for meta
     model = config.model.build()
+
+    # A converted/released checkpoint dir (config.json + a flat weights.pth, e.g.
+    # the output of scripts/official/v1_3/convert_legacy_checkpoint.py) has no
+    # trainer state for olmo-core to resume. Load its weights straight into the
+    # model and evaluate it like any other pre-loaded model.
+    if config.trainer.load_path is not None:
+        ckpt = UPath(config.trainer.load_path)
+        weights = ckpt / WEIGHTS_FILENAME
+        if not (ckpt / "model_and_optim").exists() and weights.exists():
+            logger.info("Loading flat weights from %s (strict)", weights)
+            with weights.open("rb") as f:
+                state_dict = torch.load(f, map_location="cpu")
+            model.load_state_dict(state_dict, strict=True)
+            config.trainer.load_path = None
+
     device = get_default_device()
     model = model.to(device)
     data_loader = MockOlmoEarthDataLoader()
