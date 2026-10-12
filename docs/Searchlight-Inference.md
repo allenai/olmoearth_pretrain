@@ -1,8 +1,6 @@
 # Searchlight inference
 
-Searchlight is an inference-only way of running the v1.3 encoder (ViT + AttentionPooler,
-including the per-pixel-query `pix512` models) over a large area without tiling
-artifacts. Code: `olmoearth_pretrain/nn/searchlight.py`.
+Searchlight is an inference-only way of running the v1.3 encoder over a large area without tiling artifacts. Code: `olmoearth_pretrain/nn/searchlight.py`.
 
 ## Why
 
