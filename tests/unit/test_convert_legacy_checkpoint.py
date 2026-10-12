@@ -285,3 +285,24 @@ def test_pixel_latent_run_config_converts() -> None:
     active["encoder_config"]["perceiver_config"]["share_read_kv"] = True
     with pytest.raises(convert.UnconvertibleCheckpoint, match="share_read_kv"):
         convert.convert_model_config(active)
+
+
+@pytest.mark.parametrize("section", ["train_module", "data_loader"])
+def test_decode_only_modalities_are_kept(section: str) -> None:
+    """Encoder-only loaders read only_decode_modalities, so it survives conversion."""
+    source = {
+        "model": {},
+        section: {
+            "optim": {"lr": 1e-4},
+            "masking_config": {
+                "type": "random",
+                "strategy_config": {"only_decode_modalities": ["srtm", "cdl"]},
+            },
+        },
+    }
+    assert convert.decode_only_section(source) == {
+        "masking_config": {
+            "strategy_config": {"only_decode_modalities": ["srtm", "cdl"]}
+        }
+    }
+    assert convert.decode_only_section({"model": {}}) is None

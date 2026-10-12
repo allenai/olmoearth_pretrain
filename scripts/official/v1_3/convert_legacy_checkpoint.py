@@ -12,9 +12,9 @@ all::
 
 The source directory must hold a ``config.json`` plus either the trainer's distributed
 ``model_and_optim/`` (needs olmo-core) or an already flat ``weights.pth``. The output
-directory gets a ``config.json`` holding just the ``model`` block in the current schema
-(the only part read when loading weights) and a ``weights.pth`` under the current
-parameter names, and is loadable with
+directory gets a ``config.json`` holding the ``model`` block in the current schema
+plus the decode-only modalities (:func:`decode_only_section`), and a ``weights.pth``
+under the current parameter names, and is loadable with
 ``olmoearth_pretrain.model_loader.load_pretrain_checkpoint`` (or
 ``load_model_from_path``). ``--config-only`` converts just the config.
 
@@ -411,6 +411,30 @@ def _load_weights(src: Path, model: torch.nn.Module) -> None:
         raise FileNotFoundError(f"neither {dcp_dir} nor {weights} exists")
 
 
+def decode_only_section(source: dict) -> dict | None:
+    """The ``only_decode_modalities`` record of a training config, as a ``train_module``.
+
+    Loaders that serve only the encoder (``olmoearth_pretrain_minimal``) derive the
+    encoder's input modalities as the supported ones minus these, read from
+    ``train_module`` (else ``data_loader``) ``.masking_config.strategy_config``. None
+    when the config records neither.
+    """
+    for section in ("train_module", "data_loader"):
+        decode_only = (
+            (source.get(section) or {})
+            .get("masking_config", {})
+            .get("strategy_config", {})
+            .get("only_decode_modalities")
+        )
+        if decode_only is not None:
+            return {
+                "masking_config": {
+                    "strategy_config": {"only_decode_modalities": decode_only}
+                }
+            }
+    return None
+
+
 def convert_checkpoint(
     src: Path, dst: Path, *, config_only: bool, verify: bool
 ) -> None:
@@ -420,10 +444,22 @@ def convert_checkpoint(
 
     source = json.loads((src / "config.json").read_text())
     model_config = Config.from_dict(convert_model_config(source["model"]))  # strict
-    # Only the ``model`` block is ever read when loading weights; the trainer, data
+    # Keep the ``model`` block (re-serialized from the parsed config, so it carries
+    # exactly the current schema) and the decode-only modalities, which encoder-only
+    # loaders need to know what the encoder accepts. The rest of the trainer, data
     # loader, eval and launch sections describe the training run, not the artifact.
-    # Re-serialize from the parsed config so the file carries exactly the current schema.
-    config = {"model": model_config.as_config_dict(), "_converted_from": str(src)}
+    config: dict[str, Any] = {
+        "model": model_config.as_config_dict(),
+        "_converted_from": str(src),
+    }
+    decode_only = decode_only_section(source)
+    if decode_only is None:
+        logger.warning(
+            "the source config records no only_decode_modalities; encoder-only "
+            "loaders will not know which modalities the encoder accepts"
+        )
+    else:
+        config["train_module"] = decode_only
 
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "config.json").write_text(
