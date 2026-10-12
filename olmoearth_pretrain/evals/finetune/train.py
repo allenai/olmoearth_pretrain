@@ -191,6 +191,7 @@ def run_finetune_eval(
     head_type: HeadType = "linear",
     use_dice_loss: bool = False,
     latent_patch_size: int | None = None,
+    use_center_token: bool = False,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if task_config.task_type == TaskType.WINDOW_REGRESSION:
@@ -217,7 +218,10 @@ def run_finetune_eval(
         latent_patch_size=latent_patch_size,
         eval_on_encoder_tokens=eval_on_encoder_tokens,
         head_type=head_type,
+        use_center_token=use_center_token,
     ).to(device)
+    # Pixels per head output cell (the latent stride when latent_patch_size is set).
+    patch_size = ft.patch_size
 
     # Trigger _init_head once with a tiny dry pass which initializes the head with the correct dimension.
     with torch.no_grad(), torch.autocast(device_type=device.type, dtype=torch.bfloat16):

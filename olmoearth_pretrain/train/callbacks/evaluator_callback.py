@@ -978,6 +978,7 @@ class DownstreamEvaluator:
             use_pooled_tokens=self.use_pooled_tokens,
             eval_on_encoder_tokens=self.eval_on_encoder_tokens,
             latent_patch_size=self.latent_patch_size,
+            use_center_token=self.use_center_token,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
