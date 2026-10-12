@@ -76,7 +76,8 @@ TIME_RANGE_DAYS = [7.0, 30.0, 90.0, 180.0, 365.0, 730.0, 1825.0]
 ROPE_MIXED_BASE = 10.0
 # v1.2's schedule horizon: 300 epochs x floor(1,138,828 / 512) steps.
 V1_2_TOTAL_STEPS = 667_200
-MAX_STEPS = 100_000
+# joer 2026-10-12: extended from 100k (finished 2026-10-08) to 600k.
+MAX_STEPS = 600_000
 RANK_MICROBATCH_SIZE = 8
 
 
@@ -149,9 +150,12 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents):
-    """base_faster's trainer, 100k steps, own W&B project, in-loop eurosat + pastis."""
+    """base_faster's trainer, MAX_STEPS, own W&B project, in-loop eurosat + pastis."""
     config = v1_2_faster.build_trainer_config(common)
     config.max_duration = Duration.steps(MAX_STEPS)
+    # Keep every permanent checkpoint (1.8 GB each) for later evals; olmo-core's
+    # default keeps only a job's last 3 and deleted step15000-step75000.
+    config.callbacks["checkpointer"].max_checkpoints = None
     config.callbacks["wandb"].project = WANDB_PROJECT
     evaluator = config.callbacks["downstream_evaluator"]
     evaluator.run_as_beaker_job = False
