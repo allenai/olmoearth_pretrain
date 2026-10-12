@@ -1596,6 +1596,13 @@ EMBEDDING_EVAL_TASKS["pastis_year_aligned_ld1pool320zarr_ws16_ps1"] = replace(
     dataset="pastis_year_aligned_ld1pool320zarr",
 )
 
+# The same, for OlmoEarth-v1_3-Base embeddings as published on the public CDN
+# (embeddings-cdn.olmoearth.allenai.org, a newer build than the 2026-09-25 store).
+EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13cdnzarr_ws16_ps1"] = replace(
+    EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"],
+    dataset="pastis_year_aligned_oe13cdnzarr",
+)
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
