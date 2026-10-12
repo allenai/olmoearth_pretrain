@@ -5,7 +5,7 @@ so a pixel's context jumps at every tile seam. Searchlight instead runs a whole 
 in one pass and gives every query the window it would see if a 16 px training window
 were centred on it: ``W = neighborhood_attention_size_px / patch_size`` cells per side, sliding one cell at a
 time and shifted inward (not shrunk) at the domain edge. The rule applies to all three
-attentions of the ViT + AttentionPooler encoder (v1.3 RC, pix512):
+attentions of the v1.3 encoder (ViT + AttentionPooler):
 
 * ViT self-attention: a token attends every token whose cell is in its box;
 * AttentionPooler read: a location query attends every token in the box around its cell;
@@ -21,7 +21,7 @@ faster (see :func:`neighborhood_attention`). On CPU a dense masked reference is 
 A domain one window wide reproduces the stock forward; larger domains are run as
 overlapping crops by :func:`embed_domain`.
 
-How to run it, setup and measured speed / quality: ``docs/Searchlight-Inference.md``.
+How to run it and set it up: ``docs/Searchlight-Inference.md``.
 
 Installing NATTEN (not a declared dependency; what worked on our H100 nodes):
 
