@@ -14,9 +14,9 @@ from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
     Encoder,
     MultiModalPatchEmbeddings,
-    PerceiverConfig,
     Predictor,
     TokensAndMasks,
 )
@@ -1063,14 +1063,14 @@ def test_encoder_rope_dynamic_patch_sizes(
         assert encoder.blocks[0].attn.q.weight.grad is not None
 
 
-def test_encoder_perceiver_dynamic_grid(
+def test_encoder_attention_pooler_dynamic_grid(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """A single learned latent is cloned across the patch grid."""
+    """A single learned location query is cloned across the patch grid."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    register_dim = 8
+    pooler_dim = 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1082,14 +1082,14 @@ def test_encoder_perceiver_dynamic_grid(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=2,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=2,
         ),
     )
     # Single shared latent, not a per-cell grid of parameters.
-    assert encoder.perceiver is not None
-    assert encoder.perceiver.register.shape == (1, register_dim)
+    assert encoder.attention_pooler is not None
+    assert encoder.attention_pooler.location_queries.shape == (1, pooler_dim)
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1108,25 +1108,25 @@ def test_encoder_perceiver_dynamic_grid(
         encoder.zero_grad()
         output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
 
-        # The register grid tracks the patch grid (H//patch_size) instead of being fixed.
+        # The pooled grid tracks the patch grid (H//patch_size) instead of being fixed.
         expected_side = H // patch_size
         n_reg = expected_side * expected_side
         assert output_dict["registers"].shape == (
             B,
             expected_side,
             expected_side,
-            register_dim,
+            pooler_dim,
         )
-        assert output_dict["register_positions"].shape == (B, n_reg, 2)
+        assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
 
         output_dict["registers"].sum().backward()
-        assert encoder.perceiver.register.grad is not None
+        assert encoder.attention_pooler.location_queries.grad is not None
 
 
-def test_encoder_perceiver_3d_rope_encoder_2d_read(
+def test_encoder_attention_pooler_3d_rope_encoder_2d_read(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """A 3D-RoPE encoder keeps the Perceiver spatial: it reads with 2D RoPE.
+    """A 3D-RoPE encoder keeps the AttentionPooler spatial: it reads with 2D RoPE.
 
     The patch encoder self-attention rotates over ``(t, row, col)`` while the register
     grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
@@ -1135,7 +1135,7 @@ def test_encoder_perceiver_3d_rope_encoder_2d_read(
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    register_dim = 8
+    pooler_dim = 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1147,14 +1147,14 @@ def test_encoder_perceiver_3d_rope_encoder_2d_read(
         depth=2,
         drop_path=0.0,
         position_encoding="rope_3d_mixed",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=2,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=2,
         ),
     )
-    assert encoder.perceiver is not None
+    assert encoder.attention_pooler is not None
     # The bottleneck reads spatially (2D RoPE) even though the encoder is 3D.
-    assert encoder.perceiver.use_2d_rope
+    assert encoder.attention_pooler.use_2d_rope
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1176,23 +1176,23 @@ def test_encoder_perceiver_3d_rope_encoder_2d_read(
         B,
         expected_side,
         expected_side,
-        register_dim,
+        pooler_dim,
     )
     # Register positions are spatial only -- 2D, regardless of the 3D encoder.
-    assert output_dict["register_positions"].shape == (B, n_reg, 2)
+    assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
     output_dict["registers"].sum().backward()
-    assert encoder.perceiver.register.grad is not None
-    assert torch.isfinite(encoder.perceiver.register.grad).all()
+    assert encoder.attention_pooler.location_queries.grad is not None
+    assert torch.isfinite(encoder.attention_pooler.location_queries.grad).all()
 
 
-def test_encoder_perceiver_interleave(
+def test_encoder_attention_pooler_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """The bottleneck pairs one read with each latent self-attention block."""
+    """The bottleneck pairs one read with each query self-attention block."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    register_dim, latent_depth = 8, 3
+    pooler_dim, pooler_depth = 8, 3
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1204,16 +1204,16 @@ def test_encoder_perceiver_interleave(
         depth=2,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=latent_depth,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=pooler_depth,
         ),
     )
-    bottleneck = encoder.perceiver
+    bottleneck = encoder.attention_pooler
     assert bottleneck is not None
-    # One read per latent self-attention block.
-    assert len(bottleneck.read_blocks) == latent_depth
-    assert len(bottleneck.latent_blocks) == latent_depth
+    # One read per self-attention block.
+    assert len(bottleneck.read_blocks) == pooler_depth
+    assert len(bottleneck.self_attn_blocks) == pooler_depth
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1229,13 +1229,13 @@ def test_encoder_perceiver_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, H // 2, W // 2, register_dim)
+    assert output_dict["registers"].shape == (B, H // 2, W // 2, pooler_dim)
     output_dict["registers"].sum().backward()
     # Gradients reach the last interleaved read (only reached if reads run between selves).
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
 
 
-def test_encoder_perceiver_per_depth_read_proj_interleave(
+def test_encoder_attention_pooler_per_depth_read_proj_interleave(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """per_depth_read_proj gives each interleaved read its own input_norm + kv_proj.
@@ -1246,7 +1246,7 @@ def test_encoder_perceiver_per_depth_read_proj_interleave(
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    register_dim, latent_depth = 8, 4
+    pooler_dim, pooler_depth = 8, 4
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -1258,19 +1258,19 @@ def test_encoder_perceiver_per_depth_read_proj_interleave(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=latent_depth,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=pooler_depth,
             per_depth_read_proj=True,
         ),
     )
-    bottleneck = encoder.perceiver
+    bottleneck = encoder.attention_pooler
     assert bottleneck is not None
     assert bottleneck.per_depth_read_proj
-    # Interleave -> one read block per latent block; one norm + projection each, no shared.
-    assert len(bottleneck.read_blocks) == latent_depth
-    assert len(bottleneck.input_norms) == latent_depth
-    assert len(bottleneck.kv_projs) == latent_depth
+    # Interleave -> one read block per self-attention block; one norm + projection each, no shared.
+    assert len(bottleneck.read_blocks) == pooler_depth
+    assert len(bottleneck.input_norms) == pooler_depth
+    assert len(bottleneck.kv_projs) == pooler_depth
     assert not hasattr(bottleneck, "input_norm")
     assert not hasattr(bottleneck, "kv_proj")
 
@@ -1288,7 +1288,7 @@ def test_encoder_perceiver_per_depth_read_proj_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, H // 2, W // 2, register_dim)
+    assert output_dict["registers"].shape == (B, H // 2, W // 2, pooler_dim)
     output_dict["registers"].sum().backward()
     # Every per-block norm + projection receives gradient.
     for norm in bottleneck.input_norms:
@@ -1297,19 +1297,19 @@ def test_encoder_perceiver_per_depth_read_proj_interleave(
         assert proj.weight.grad is not None
 
 
-def test_encoder_perceiver_decoupled_attn_dim(
+def test_encoder_attention_pooler_decoupled_attn_dim(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """register_attn_dim decouples the bottleneck attention width from register_dim.
+    """register_attn_dim decouples the bottleneck attention width from pooler_dim.
 
-    The read + latent blocks run attention internally at attn_dim (here the encoder
-    width) while the register stream stays at register_dim; the K/V down-projections
+    The read + self-attention blocks run attention internally at attn_dim (here the encoder
+    width) while the register stream stays at pooler_dim; the K/V down-projections
     become Identity so reads consume the encoder tokens at full width.
     """
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
-    embedding_size, register_dim, latent_depth, num_heads = 16, 8, 4, 2
+    embedding_size, pooler_dim, pooler_depth, num_heads = 16, 8, 4, 2
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=embedding_size,
@@ -1321,14 +1321,14 @@ def test_encoder_perceiver_decoupled_attn_dim(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=latent_depth,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=pooler_depth,
             per_depth_read_proj=True,
             attn_dim=embedding_size,
         ),
     )
-    bottleneck = encoder.perceiver
+    bottleneck = encoder.attention_pooler
     assert bottleneck is not None
     assert bottleneck.attn_dim == embedding_size
     # K/V down-projections are dropped (Identity); the per-depth norms remain.
@@ -1336,17 +1336,17 @@ def test_encoder_perceiver_decoupled_attn_dim(
         assert isinstance(proj, torch.nn.Identity)
     for norm in bottleneck.input_norms:
         assert norm.weight.shape == (embedding_size,)
-    # Reads: q register_dim -> attn_dim, k/v encoder width -> attn_dim, out -> register_dim.
+    # Reads: q pooler_dim -> attn_dim, k/v encoder width -> attn_dim, out -> pooler_dim.
     read_attn = bottleneck.read_blocks[0].attn
     assert read_attn.num_heads == num_heads
     assert read_attn.head_dim == embedding_size // num_heads
-    assert read_attn.q.weight.shape == (embedding_size, register_dim)
+    assert read_attn.q.weight.shape == (embedding_size, pooler_dim)
     assert read_attn.k.weight.shape == (embedding_size, embedding_size)
-    assert read_attn.proj.weight.shape == (register_dim, embedding_size)
-    # Latent self-attention: q/k/v register_dim -> attn_dim, out -> register_dim.
-    latent_attn = bottleneck.latent_blocks[0].attn
-    assert latent_attn.k.weight.shape == (embedding_size, register_dim)
-    assert latent_attn.proj.weight.shape == (register_dim, embedding_size)
+    assert read_attn.proj.weight.shape == (pooler_dim, embedding_size)
+    # Query self-attention: q/k/v pooler_dim -> attn_dim, out -> pooler_dim.
+    self_attn = bottleneck.self_attn_blocks[0].attn
+    assert self_attn.k.weight.shape == (embedding_size, pooler_dim)
+    assert self_attn.proj.weight.shape == (pooler_dim, embedding_size)
 
     B, H, W = 2, 8, 8
     timestamps = torch.tensor(
@@ -1364,19 +1364,19 @@ def test_encoder_perceiver_decoupled_attn_dim(
     patch_size = 2
     output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
     grid = (H // patch_size, W // patch_size)
-    assert output_dict["registers"].shape == (B, grid[0], grid[1], register_dim)
+    assert output_dict["registers"].shape == (B, grid[0], grid[1], pooler_dim)
     output_dict["registers"].sum().backward()
     assert read_attn.q.weight.grad is not None
     assert read_attn.k.weight.grad is not None
-    assert latent_attn.q.weight.grad is not None
+    assert self_attn.q.weight.grad is not None
 
 
-def test_encoder_perceiver_attn_dim_default_unchanged(
+def test_encoder_attention_pooler_attn_dim_default_unchanged(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """Default register_attn_dim=None keeps the classic tied-width parameter set."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
-    embedding_size, register_dim = 16, 8
+    embedding_size, pooler_dim = 16, 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=embedding_size,
@@ -1388,20 +1388,20 @@ def test_encoder_perceiver_attn_dim_default_unchanged(
         depth=4,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=4,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=4,
             per_depth_read_proj=True,
         ),
     )
-    bottleneck = encoder.perceiver
+    bottleneck = encoder.attention_pooler
     assert bottleneck is not None
     assert bottleneck.attn_dim is None
     for proj in bottleneck.kv_projs:
-        assert proj.weight.shape == (register_dim, embedding_size)
+        assert proj.weight.shape == (pooler_dim, embedding_size)
     read_attn = bottleneck.read_blocks[0].attn
-    assert read_attn.q.weight.shape == (register_dim, register_dim)
-    assert read_attn.proj.weight.shape == (register_dim, register_dim)
+    assert read_attn.q.weight.shape == (pooler_dim, pooler_dim)
+    assert read_attn.proj.weight.shape == (pooler_dim, pooler_dim)
 
 
 def test_predictor_forward_rope(
@@ -1954,7 +1954,7 @@ def test_predictor_flash_register_context_matches_packing(
     """
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     B, H, W, T = 2, 2, 2, 3
-    grid_h, grid_w, register_dim = 3, 4, 8
+    grid_h, grid_w, pooler_dim = 3, 4, 8
     n_reg = grid_h * grid_w
     predictor = Predictor(
         supported_modalities=supported_modalities,
@@ -1966,8 +1966,8 @@ def test_predictor_flash_register_context_matches_packing(
         max_sequence_length=12,
         drop_path=0.0,
         use_flash_attn=True,
-        use_perceiver=True,
-        register_dim=register_dim,
+        use_attention_pooler=True,
+        pooler_dim=pooler_dim,
     )
 
     # Capture what the block is handed, then pass the queries through untouched so
@@ -2000,7 +2000,7 @@ def test_predictor_flash_register_context_matches_packing(
         ),
         "b d t -> b t d",
     )
-    registers = torch.randn(B, grid_h, grid_w, register_dim)
+    registers = torch.randn(B, grid_h, grid_w, pooler_dim)
 
     with torch.no_grad():
         predictor.forward(

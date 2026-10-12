@@ -1,7 +1,7 @@
 """Pixel-resolution MIM targets, subsampled to one pixel per token cell.
 
-With per-pixel Perceiver latents (``Encoder.forward(latent_patch_size=...)``) the
-latents can sit at pixel resolution while the MIM queries and targets sit at the sampled
+With per-pixel location queries (``Encoder.forward(location_query_patch_size=...)``) the
+location queries can sit at pixel resolution while the MIM decode queries and targets sit at the sampled
 patch size. These helpers move the queries and targets to pixel resolution WITHOUT
 changing the number of decode queries: every token cell draws one pixel uniformly at
 random, the decoder query of each masked token in that cell is placed at that pixel's
@@ -77,10 +77,10 @@ def sample_pixel_offsets(
 def offsets_to_query_shift(offsets: Tensor, patch_size: int) -> Tensor:
     """Pixel offsets -> the query shift in patch units: ``(o + 0.5) / p - 0.5``.
 
-    Matches ``Perceiver.build_register_positions`` at latent patch size 1: pixel
+    Matches ``AttentionPooler.build_location_query_positions`` at location-query patch size 1: pixel
     ``o`` of patch ``i`` has its center at ``i + (o + 0.5) / p - 0.5`` patch units, so a
-    shifted query lands exactly on its per-pixel latent's coordinate (at a coarser
-    latent patch size it lands inside that latent's footprint).
+    shifted query lands exactly on its per-pixel location query's coordinate (at a coarser
+    location-query patch size it lands inside that query's footprint).
     """
     return (offsets.to(torch.float32) + 0.5) / patch_size - 0.5
 

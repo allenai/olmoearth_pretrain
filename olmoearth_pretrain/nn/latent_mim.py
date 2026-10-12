@@ -97,8 +97,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             decoder: The decoder to use.
             reconstructor: Optional reconstructor for auto-encoding.
             supervision_head: Optional supervision head for direct supervision of
-                decode-only modalities from the encoder's register grid.
-            register_distillation_head: Optional head that distils the register grid
+                decode-only modalities from the encoder's pooled grid.
+            register_distillation_head: Optional head that distils the pooled grid
                 into the encoder's detached student (owns the per-prefix
                 back-projections and computes the loss). Training-only, like the
                 supervision head.
@@ -126,7 +126,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         x: MaskedOlmoEarthSample,
         patch_size: int,
         query_pixel_shift: torch.Tensor | None = None,
-        latent_patch_size: int | None = None,
+        location_query_patch_size: int | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -145,8 +145,8 @@ class LatentMIM(nn.Module, DistributedMixins):
                 shift for pixel-resolution targets (see
                 ``olmoearth_pretrain.nn.pixel_targets``). None keeps the queries on
                 the patch grid.
-            latent_patch_size: Pixels per Perceiver latent along each side (see
-                ``Encoder.forward``). None = one latent per token.
+            location_query_patch_size: Pixels per location query along each side (see
+                ``Encoder.forward``). None = one location query per token.
 
         Returns:
             latent: embeddings from encoder
@@ -156,7 +156,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             extra_metrics: additional metrics to log
             supervision_preds: per-modality supervision predictions (or None)
             student_outputs: register-grid outputs when the encoder has a
-                Perceiver (else None): the teacher ``registers`` and, with a
+                AttentionPooler (else None): the teacher ``registers`` and, with a
                 student, the ``student_registers``. Consumed by the train module's
                 distillation losses. The two grids are FLATTENED to ``[B, N, D]``
                 here: every consumer (Gram, cosine) is relational over cells and
@@ -164,7 +164,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
         output_dict = self.encoder(
-            x, patch_size=patch_size, latent_patch_size=latent_patch_size
+            x,
+            patch_size=patch_size,
+            location_query_patch_size=location_query_patch_size,
         )
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
@@ -185,13 +187,13 @@ class LatentMIM(nn.Module, DistributedMixins):
             latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
         )
 
-        # The encoder hands back the register grid as [B, n_h, n_w, D]; it is
+        # The encoder hands back the pooled grid as [B, n_h, n_w, D]; it is
         # otherwise visible only inside decoder_kwargs.
         registers = decoder_kwargs.get("registers")
         supervision_preds = None
         if self.supervision_head is not None:
             if registers is None:
-                raise ValueError("the supervision head requires a Perceiver")
+                raise ValueError("the supervision head requires an AttentionPooler")
             supervision_preds = self.supervision_head(registers, x)
 
         student_outputs: dict | None = None
@@ -202,7 +204,7 @@ class LatentMIM(nn.Module, DistributedMixins):
             }
         if student_registers is not None:
             assert student_outputs is not None, (
-                "a projection student cannot exist without a Perceiver"
+                "a projection student cannot exist without an AttentionPooler"
             )
             student_outputs["student_registers"] = rearrange(
                 student_registers, "b h w d -> b (h w) d"
@@ -271,9 +273,9 @@ class LatentMIMConfig(Config):
     encoder_config: Config
     decoder_config: Config
     reconstructor_config: Config | None = None
-    # Register-grid supervision heads (read the encoder's Perceiver).
+    # Register-grid supervision heads (read the encoder's AttentionPooler).
     supervision_head_config: SupervisionHeadConfig | None = None
-    # Distillation of the register grid into the Perceiver's detached student.
+    # Distillation of the pooled grid into the AttentionPooler's detached student.
     register_distillation_head_config: RegisterDistillationHeadConfig | None = None
     projection_only_target: bool = False
 
@@ -297,34 +299,39 @@ class LatentMIMConfig(Config):
         )
         if encoder_output_size != self.decoder_config.encoder_embedding_size:
             raise ValueError("Encoder embedding size must be consistent!")
-        encoder_uses_registers = self.encoder_config.perceiver_config is not None
-        decoder_uses_registers = getattr(self.decoder_config, "use_perceiver", False)
+        encoder_uses_registers = self.encoder_config.attention_pooler_config is not None
+        decoder_uses_registers = getattr(
+            self.decoder_config, "use_attention_pooler", False
+        )
         if encoder_uses_registers != decoder_uses_registers:
             raise ValueError(
-                "the decoder's use_perceiver must match whether the encoder "
-                "has a perceiver_config"
+                "the decoder's use_attention_pooler must match whether the encoder "
+                "has a attention_pooler_config"
             )
-        if self.encoder_config.perceiver_config is not None:
+        if self.encoder_config.attention_pooler_config is not None:
             # The decoder cross-attends the grid the encoder ships, so its width must
-            # match the bottleneck's register_dim.
-            encoder_register_dim = self.encoder_config.perceiver_config.register_dim
-            if self.decoder_config.register_dim != encoder_register_dim:
+            # match the bottleneck's pooler_dim.
+            encoder_pooler_dim = self.encoder_config.attention_pooler_config.pooler_dim
+            if self.decoder_config.pooler_dim != encoder_pooler_dim:
                 raise ValueError(
-                    "decoder_config.register_dim "
-                    f"({self.decoder_config.register_dim}) must match the encoder's "
-                    f"shipped register dim ({encoder_register_dim})"
+                    "decoder_config.pooler_dim "
+                    f"({self.decoder_config.pooler_dim}) must match the encoder's "
+                    f"shipped register dim ({encoder_pooler_dim})"
                 )
         if self.supervision_head_config is not None and not encoder_uses_registers:
             raise ValueError(
-                "the supervision heads read the register grid, so "
-                "supervision_head_config requires the encoder Perceiver"
+                "the supervision heads read the pooled grid, so "
+                "supervision_head_config requires the encoder AttentionPooler"
             )
         if self.register_distillation_head_config is not None:
-            perceiver_config = self.encoder_config.perceiver_config
-            if perceiver_config is None or perceiver_config.sorted_student_dims is None:
+            attention_pooler_config = self.encoder_config.attention_pooler_config
+            if (
+                attention_pooler_config is None
+                or attention_pooler_config.sorted_student_dims is None
+            ):
                 raise ValueError(
-                    "register_distillation_head_config requires a Perceiver with a "
-                    "student (perceiver_config.student_dims)"
+                    "register_distillation_head_config requires an AttentionPooler with a "
+                    "student (attention_pooler_config.student_dims)"
                 )
 
     def build(self) -> "LatentMIM":
@@ -339,21 +346,21 @@ class LatentMIMConfig(Config):
         )
         supervision_head = None
         if self.supervision_head_config is not None:
-            # Heads read the register grid, so embedding_dim is the width that grid is
-            # shipped at: the bottleneck's register_dim.
-            assert self.encoder_config.perceiver_config is not None
+            # Heads read the pooled grid, so embedding_dim is the width that grid is
+            # shipped at: the bottleneck's pooler_dim.
+            assert self.encoder_config.attention_pooler_config is not None
             supervision_head = self.supervision_head_config.build(
-                embedding_dim=self.encoder_config.perceiver_config.register_dim,
+                embedding_dim=self.encoder_config.attention_pooler_config.pooler_dim,
                 max_patch_size=self.encoder_config.max_patch_size,
             )
         register_distillation_head = None
         if self.register_distillation_head_config is not None:
-            perceiver_config = self.encoder_config.perceiver_config
-            assert perceiver_config is not None
-            assert perceiver_config.sorted_student_dims is not None
+            attention_pooler_config = self.encoder_config.attention_pooler_config
+            assert attention_pooler_config is not None
+            assert attention_pooler_config.sorted_student_dims is not None
             register_distillation_head = self.register_distillation_head_config.build(
-                register_dim=perceiver_config.register_dim,
-                student_dims=perceiver_config.sorted_student_dims,
+                pooler_dim=attention_pooler_config.pooler_dim,
+                student_dims=attention_pooler_config.sorted_student_dims,
             )
         return LatentMIM(
             encoder=encoder,

@@ -231,8 +231,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         NOTE: For non contrastive losses, the loss is invariant to the global batch size across GPUS as well
 
         Args:
-            batch: A ``(patch_size, MaskedOlmoEarthSample, latent_patch_size)`` tuple
-                from the dataloader (``latent_patch_size`` None = one Perceiver latent
+            batch: A ``(patch_size, MaskedOlmoEarthSample, location_query_patch_size)`` tuple
+                from the dataloader (``location_query_patch_size`` None = one location query
                 per token; a 2-tuple is read the same way).
             dry_run: If True, skip metric recording and just run forward/backward.
         """
@@ -246,7 +246,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         extra_metric_counts: dict[str, int] = {}
         patch_size = batch[0]
         batch_data = batch[1]
-        latent_patch_size = batch[2] if len(batch) > 2 else None
+        location_query_patch_size = batch[2] if len(batch) > 2 else None
 
         # Split batch into microbatches
         masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
@@ -267,7 +267,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         masked_batch,
                         patch_size,
                         self.token_exit_cfg,
-                        latent_patch_size=latent_patch_size,
+                        location_query_patch_size=location_query_patch_size,
                     )
                 )
                 if extra_metrics is not None:
@@ -317,7 +317,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
-        latent_patch_size: int | None = None,
+        location_query_patch_size: int | None = None,
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
@@ -327,8 +327,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
     ]:
         """Run a forward pass.
 
-        ``latent_patch_size``: pixels per Perceiver latent along each side, drawn by
-        the dataloader (None = one latent per token).
+        ``location_query_patch_size``: pixels per location query along each side, drawn by
+        the dataloader (None = one location query per token).
         """
         # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
         # the pixel, so the standard path is already pixel-resolution.
@@ -355,7 +355,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 batch,
                 patch_size,
                 query_pixel_shift=query_pixel_shift,
-                latent_patch_size=latent_patch_size,
+                location_query_patch_size=location_query_patch_size,
             )
 
             with torch.no_grad():
@@ -407,7 +407,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 ):
                     # Detached-student loss: the head detaches the teacher registers and
                     # the student's inputs were detached inside the encoder, so none of
-                    # this reaches the encoder or the Perceiver.
+                    # this reaches the encoder or the AttentionPooler.
                     distill_loss, distill_metrics = (
                         self.model.register_distillation_head(
                             student_outputs["registers"],

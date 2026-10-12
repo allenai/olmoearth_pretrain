@@ -5,11 +5,11 @@ so a pixel's context jumps at every tile seam. Searchlight instead runs a whole 
 in one pass and gives every query the window it would see if a 16 px training window
 were centred on it: ``W = neighborhood_attention_size_px / patch_size`` cells per side, sliding one cell at a
 time and shifted inward (not shrunk) at the domain edge. The rule applies to all three
-attentions of the ViT + Perceiver encoder (v1.3 RC, pix512):
+attentions of the ViT + AttentionPooler encoder (v1.3 RC, pix512):
 
 * ViT self-attention: a token attends every token whose cell is in its box;
-* Perceiver read: a latent attends every token in the box of the latent's cell;
-* latent self-attention: a latent attends every latent whose cell is in that box.
+* AttentionPooler read: a location query attends every token in the box around its cell;
+* query self-attention: a location query attends every query whose cell is in that box.
 
 Each is neighbourhood attention over a ``(rows, cols, K)`` grid with kernel
 ``(W, W, K)``, where ``K`` is the number of elements per cell; this needs the same
@@ -96,17 +96,17 @@ def searchlight_reach_px(
     neighborhood_attention_size_px: int,
     patch_size: int,
     vit_depth: int,
-    perceiver_depth: int,
+    pooler_depth: int,
 ) -> int:
     """Pixels an output can depend on in each direction.
 
     Every attention spreads context by at most ``W // 2`` cells: each ViT block, the
-    last read (earlier reads see the same tokens) and each latent self-attention.
+    last read (earlier reads see the same tokens) and each query self-attention.
     An ``embed_domain`` overlap of twice this is exact; a much smaller one is enough
     in practice (see ``docs/Searchlight-Inference.md``).
     """
     return (
-        (vit_depth + 1 + perceiver_depth)
+        (vit_depth + 1 + pooler_depth)
         * (neighborhood_attention_size_px // patch_size // 2)
         * patch_size
     )
@@ -448,7 +448,7 @@ def _block(
 
     ``x`` is ``[1, h * w * K, D]`` in ``(row, col, k)`` order with RoPE positions
     ``x_pos``. ``keys`` = ``(inputs, positions, K)`` makes it cross-attention (the
-    Perceiver read) over those key inputs.
+    AttentionPooler read) over those key inputs.
     """
     attn = blk.attn
     project = _maybe_compiled(_project, settings.compile)
@@ -512,15 +512,15 @@ def encoder_searchlight(
     modalities_to_dims_dict: dict[str, Any],
     patch_size: int,
     input_res: int,
-    latent_patch_size: int | None,
+    location_query_patch_size: int | None,
 ) -> tuple[dict[str, Tensor], None, dict[str, Any] | None]:
-    """The ViT, norm and Perceiver of :meth:`Encoder.apply_attn` in sliding neighborhoods.
+    """The ViT, norm and AttentionPooler of :meth:`Encoder.apply_attn` in sliding neighborhoods.
 
     Takes ``apply_attn``'s collapsed ``tokens``, ``mask`` and RoPE ``positions`` of a
     single domain (batch size 1) and returns what ``apply_attn`` returns. Tokens that
     are not ``ONLINE_ENCODER`` are dropped (and come back as zeros).
     """
-    perceiver = encoder.perceiver
+    attention_pooler = encoder.attention_pooler
     _BLOCK_MASKS.clear()  # a new domain: the previous one's block masks are stale
     if encoder.has_register_tokens:
         raise NotImplementedError("Searchlight: encoder register tokens are global")
@@ -562,10 +562,10 @@ def encoder_searchlight(
     tokens_out[:, order] = x.to(tokens.dtype)
 
     register_output = None
-    if perceiver is not None:
-        s = latent_patch_size or patch_size
+    if attention_pooler is not None:
+        s = location_query_patch_size or patch_size
         r = patch_size // s
-        lat_positions = perceiver.build_register_positions(
+        location_query_positions = attention_pooler.build_location_query_positions(
             1,
             (n_h * r, n_w * r),
             patch_size,
@@ -573,40 +573,49 @@ def encoder_searchlight(
             device,
             s,
         )
-        # Latents in (row, col, k) grid order: the r x r latents of each cell.
-        lat_pos = rearrange(
-            lat_positions[0], "(h a w b) c -> 1 (h w a b) c", h=n_h, a=r, b=r
+        # Queries in (row, col, k) grid order: the r x r queries of each cell.
+        q_pos = rearrange(
+            location_query_positions[0], "(h a w b) c -> 1 (h w a b) c", h=n_h, a=r, b=r
         )
-        lat = perceiver.register.to(x.dtype).expand(1, n_h * n_w * r * r, -1)
+        q = attention_pooler.location_queries.to(x.dtype).expand(
+            1, n_h * n_w * r * r, -1
+        )
         key_pos = pos[..., -2:]  # the reads rotate over (row, col) only
-        for i, (read_blk, lat_blk) in enumerate(
-            zip(perceiver.read_blocks, perceiver.latent_blocks)
+        for i, (read_blk, self_attn_blk) in enumerate(
+            zip(attention_pooler.read_blocks, attention_pooler.self_attn_blocks)
         ):
-            if perceiver.per_depth_read_proj:
-                norm, proj = perceiver.input_norms[i], perceiver.kv_projs[i]
+            if attention_pooler.per_depth_read_proj:
+                norm, proj = (
+                    attention_pooler.input_norms[i],
+                    attention_pooler.kv_projs[i],
+                )
             else:
-                norm, proj = perceiver.input_norm, perceiver.kv_proj
-            lat = _block(
+                norm, proj = attention_pooler.input_norm, attention_pooler.kv_proj
+            q = _block(
                 read_blk,
-                lat,
-                lat_pos,
+                q,
+                q_pos,
                 (n_h, n_w, r * r),
                 neighborhood_cells,
                 settings,
                 keys=(proj(norm(x)), key_pos, k_tok),
             )
-            lat = _block(
-                lat_blk, lat, lat_pos, (n_h, n_w, r * r), neighborhood_cells, settings
+            q = _block(
+                self_attn_blk, q, q_pos, (n_h, n_w, r * r), neighborhood_cells, settings
             )
         registers = rearrange(
-            perceiver.norm(lat), "1 (h w a b) d -> 1 (h a) (w b) d", h=n_h, a=r, b=r
+            attention_pooler.norm(q),
+            "1 (h w a b) d -> 1 (h a) (w b) d",
+            h=n_h,
+            a=r,
+            b=r,
         )
         register_output = {
             "registers": registers,
-            "register_positions": lat_positions,
+            "location_query_positions": location_query_positions,
         }
-        if perceiver.student is not None:
-            register_output["student_registers"] = perceiver.student(registers)
+        if attention_pooler.student is not None:
+            register_output["student_registers"] = attention_pooler.student(registers)
 
     _BLOCK_MASKS.clear()  # free the tables (~0.5 GB per chunk and attention kind)
     tokens_dict = encoder.split_and_expand_per_modality(
@@ -624,7 +633,7 @@ def embed_domain(
     encoder: Encoder,
     sample: MaskedOlmoEarthSample,
     patch_size: int,
-    latent_patch_size: int | None,
+    location_query_patch_size: int | None,
     crop_px: int,
     overlap_px: int,
     output_key: str = "student_registers",
@@ -636,11 +645,11 @@ def embed_domain(
     As rslearn's sliding-window inference: each forward covers a ``crop_px`` square,
     neighbouring crops share ``overlap_px`` pixels, and half of the overlap is
     dropped from each side of a crop (not at the domain edge). ``sample`` has batch
-    size 1 and covers the domain. Returns ``[H / s, W / s, D]`` for latent patch size
+    size 1 and covers the domain. Returns ``[H / s, W / s, D]`` for location-query patch size
     ``s``.
     """
     settings = settings or SearchlightSettings()
-    s = latent_patch_size or patch_size
+    s = location_query_patch_size or patch_size
     halo_px, core_px = overlap_px // 2, crop_px - overlap_px
     if overlap_px % 2 or halo_px % patch_size or core_px <= 0 or core_px % patch_size:
         raise ValueError(
@@ -658,7 +667,7 @@ def embed_domain(
                 sample.crop(slice(r0, r1), slice(c0, c1)),
                 patch_size=patch_size,
                 input_res=input_res,
-                latent_patch_size=latent_patch_size,
+                location_query_patch_size=location_query_patch_size,
                 searchlight=settings,
             )[output_key][0]
             if out is None:

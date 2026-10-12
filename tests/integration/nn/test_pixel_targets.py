@@ -3,9 +3,9 @@
 Covers the three pieces the ``rc_pixtgt_pix512`` arms rely on:
 
 * ``gather_pixels`` keeps exactly the drawn pixel of every token cell;
-* a shifted decoder query lands on the coordinate of the per-pixel latent it targets;
+* a shifted decoder query lands on the coordinate of the per-pixel location query it targets;
 * the train module's pixel-target forward runs end to end on a small per-pixel
-  latent model, with the same decode-query count as the patch-target forward.
+  location-query model, with the same decode-query count as the patch-target forward.
 """
 
 from unittest.mock import patch
@@ -17,10 +17,10 @@ from olmo_core.optim.adamw import AdamWConfig
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPooler,
+    AttentionPoolerConfig,
     CompositeEncodings,
     EncoderConfig,
-    Perceiver,
-    PerceiverConfig,
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
@@ -63,7 +63,7 @@ def _make_sample() -> MaskedOlmoEarthSample:
 def _model_config() -> LatentMIMConfig:
     """Small rc_pix512-shaped model with a projection-only target.
 
-    A Perceiver (run at ``latent_patch_size=1``: per-pixel latents) and a 2D-RoPE
+    An AttentionPooler (run at ``location_query_patch_size=1``: per-pixel location queries) and a 2D-RoPE
     decoder over it. Default tokenization: Sentinel-2 in three band sets.
     """
     encoder_config = EncoderConfig(
@@ -77,7 +77,7 @@ def _model_config() -> LatentMIMConfig:
         max_sequence_length=12,
         drop_path=0.0,
         position_encoding="rope",
-        perceiver_config=PerceiverConfig(register_dim=16, latent_depth=2),
+        attention_pooler_config=AttentionPoolerConfig(pooler_dim=16, pooler_depth=2),
     )
     decoder_config = PredictorConfig(
         supported_modality_names=MODALITIES,
@@ -89,8 +89,8 @@ def _model_config() -> LatentMIMConfig:
         max_sequence_length=12,
         drop_path=0.0,
         position_encoding="rope",
-        use_perceiver=True,
-        register_dim=16,
+        use_attention_pooler=True,
+        pooler_dim=16,
     )
     return LatentMIMConfig(
         encoder_config=encoder_config,
@@ -135,8 +135,8 @@ def test_gather_pixels_keeps_the_drawn_pixel() -> None:
 
 
 @pytest.mark.parametrize("patch_size", [2, 4])
-def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
-    """A shifted query's coordinate is its pixel's latent (latent patch size 1)."""
+def test_shifted_query_lands_on_its_pixel_location_query(patch_size: int) -> None:
+    """A shifted query's coordinate is its pixel's location query (location-query patch size 1)."""
     torch.manual_seed(0)
     model = _model_config().build()
     decoder = model.decoder
@@ -148,15 +148,20 @@ def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
         * decoder.rope_coordinate_scale
     )
     tokens = torch.zeros(B, h_p, w_p, T, 1, 16)
-    query_positions = decoder._build_2d_rope_positions_for_modality(
+    decode_query_positions = decoder._build_2d_rope_positions_for_modality(
         modality_name="sentinel2_l2a",
         modality=Modality.SENTINEL2_L2A,
         tokens=tokens,
         gsd_ratio=gsd_ratio,
         query_pixel_shift=shift,
     )
-    register_positions = Perceiver.build_register_positions(
-        B, (H, W), patch_size, gsd_ratio, torch.device("cpu"), latent_patch_size=1
+    location_query_positions = AttentionPooler.build_location_query_positions(
+        B,
+        (H, W),
+        patch_size,
+        gsd_ratio,
+        torch.device("cpu"),
+        location_query_patch_size=1,
     ).view(B, H, W, 2)
     for b in range(B):
         for i in range(h_p):
@@ -165,7 +170,8 @@ def test_shifted_query_lands_on_its_pixel_latent(patch_size: int) -> None:
                 c = j * patch_size + int(offsets[b, i, j, 1])
                 for t in range(T):
                     torch.testing.assert_close(
-                        query_positions[b, i, j, t, 0], register_positions[b, r, c]
+                        decode_query_positions[b, i, j, t, 0],
+                        location_query_positions[b, r, c],
                     )
 
 
@@ -178,18 +184,20 @@ def test_zero_shift_is_the_patch_query_and_a_shift_moves_it() -> None:
     patch_size = 2
     grid = (H // patch_size, W // patch_size)
     with torch.no_grad():
-        base = model.forward(sample, patch_size, latent_patch_size=1)[1].sentinel2_l2a
+        base = model.forward(sample, patch_size, location_query_patch_size=1)[
+            1
+        ].sentinel2_l2a
         zero = model.forward(
             sample,
             patch_size,
             query_pixel_shift=torch.zeros(B, *grid, 2),
-            latent_patch_size=1,
+            location_query_patch_size=1,
         )[1].sentinel2_l2a
         shifted = model.forward(
             sample,
             patch_size,
             query_pixel_shift=torch.full((B, *grid, 2), 0.25),
-            latent_patch_size=1,
+            location_query_patch_size=1,
         )[1].sentinel2_l2a
     assert base is not None and zero is not None and shifted is not None
     torch.testing.assert_close(zero, base)
@@ -221,7 +229,7 @@ def test_train_module_pixel_target_forward(patch_size: int) -> None:
         train_module = config.build(model, device=torch.device("cpu"))
     sample = _make_sample()
     loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
-        sample, patch_size, train_module.token_exit_cfg, latent_patch_size=1
+        sample, patch_size, train_module.token_exit_cfg, location_query_patch_size=1
     )
     assert torch.isfinite(loss)
     # One query and one target per token, exactly as with patch targets.

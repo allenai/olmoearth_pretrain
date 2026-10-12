@@ -8,7 +8,11 @@ import torch
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn import searchlight
-from olmoearth_pretrain.nn.flexi_vit import Encoder, EncoderConfig, PerceiverConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
+    Encoder,
+    EncoderConfig,
+)
 from olmoearth_pretrain.nn.searchlight import (
     SearchlightSettings,
     _flex_cells,
@@ -44,7 +48,7 @@ def _sample(
 
 
 def _encoder() -> Encoder:
-    """A small v1.3-shaped encoder: 3D mixed RoPE ViT + per-depth-read Perceiver."""
+    """A small v1.3-shaped encoder: 3D mixed RoPE ViT + per-depth-read AttentionPooler."""
     torch.manual_seed(0)
     return (
         EncoderConfig(
@@ -58,9 +62,9 @@ def _encoder() -> Encoder:
             max_sequence_length=12,
             drop_path=0.0,
             position_encoding="rope_3d_mixed",
-            perceiver_config=PerceiverConfig(
-                register_dim=16,
-                latent_depth=2,
+            attention_pooler_config=AttentionPoolerConfig(
+                pooler_dim=16,
+                pooler_depth=2,
                 attn_dim=32,
                 per_depth_read_proj=True,
                 student_dims=[8],
@@ -78,10 +82,10 @@ def _encoder() -> Encoder:
     ids=["none", "all", "s1_only"],
 )
 @pytest.mark.parametrize(
-    ("patch_size", "latent_patch_size"), [(2, 1), (2, None), (4, 2), (1, None)]
+    ("patch_size", "location_query_patch_size"), [(2, 1), (2, None), (4, 2), (1, None)]
 )
 def test_one_window_domain_matches_the_stock_forward(
-    patch_size: int, latent_patch_size: int | None, missing_in: tuple[str, ...]
+    patch_size: int, location_query_patch_size: int | None, missing_in: tuple[str, ...]
 ) -> None:
     """A domain exactly one neighborhood wide: every query's box is the whole window.
 
@@ -91,7 +95,9 @@ def test_one_window_domain_matches_the_stock_forward(
     encoder = _encoder()
     sample = _sample(16, missing_t=1, missing_in=missing_in)
     kwargs = dict(
-        patch_size=patch_size, input_res=10, latent_patch_size=latent_patch_size
+        patch_size=patch_size,
+        input_res=10,
+        location_query_patch_size=location_query_patch_size,
     )
     with torch.no_grad():
         stock = encoder(sample, **kwargs)
@@ -100,7 +106,7 @@ def test_one_window_domain_matches_the_stock_forward(
             **kwargs,
             searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
         )
-    for key in ("registers", "student_registers", "register_positions"):
+    for key in ("registers", "student_registers", "location_query_positions"):
         torch.testing.assert_close(searchlight[key], stock[key], atol=1e-5, rtol=1e-5)
     for name in MODALITIES:
         torch.testing.assert_close(
@@ -222,7 +228,7 @@ def test_embed_domain_chunks_match_one_pass() -> None:
     """Overlapping crops with the exact overlap reproduce the single-pass forward."""
     encoder = _encoder()
     sample = _sample(64)
-    reach = searchlight_reach_px(16, 4, vit_depth=2, perceiver_depth=2)
+    reach = searchlight_reach_px(16, 4, vit_depth=2, pooler_depth=2)
     one_pass = embed_domain(encoder, sample, 4, 2, crop_px=64, overlap_px=0)
     chunked = embed_domain(
         encoder, sample, 4, 2, crop_px=16 + 2 * reach, overlap_px=2 * reach

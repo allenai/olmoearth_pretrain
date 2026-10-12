@@ -1,6 +1,6 @@
 """Supervision heads for direct supervision of decode-only modalities.
 
-Every head reads the encoder's register grid (the Perceiver bottleneck), so the
+Every head reads the encoder's pooled grid (the AttentionPooler bottleneck), so the
 supervision gradient flows straight into the representation the decoder and the
 downstream probes consume. Per-modality linear heads predict a
 max_patch_size x max_patch_size sub-patch grid per register cell, unfolded and
@@ -108,7 +108,7 @@ class SupervisionHeadConfig(Config):
         """Build the supervision head.
 
         Args:
-            embedding_dim: Width of the register grid the heads read (the bottleneck's
+            embedding_dim: Width of the pooled grid the heads read (the bottleneck's
                 register dim, resolved by LatentMIMConfig).
             max_patch_size: Maximum patch size; each register cell predicts a
                 max_patch_size x max_patch_size sub-patch grid.
@@ -121,10 +121,10 @@ class SupervisionHeadConfig(Config):
 
 
 class SupervisionHead(nn.Module):
-    """Per-modality linear heads on the encoder register grid.
+    """Per-modality linear heads on the encoder pooled grid.
 
     Forward path (per supervised spatial modality):
-      1. Read the shared register grid ``[B, n_h, n_w, D]``.
+      1. Read the shared pooled grid ``[B, n_h, n_w, D]``.
       2. Linear head predicting max_patch_size^2 * C values per cell.
       3. Unfold to ``[B, n_h * max_ps, n_w * max_ps, 1, C]``.
       4. Bilinearly resize to the target's pixel resolution.
@@ -149,7 +149,7 @@ class SupervisionHead(nn.Module):
             if modality_spec.is_spatial:
                 # The max_patch_size^2 unfold predates register supervision (each decoder
                 # token was one real patch of up to max_patch_size px). The registers are
-                # a coarse latent grid and the output is interpolated to the target
+                # a coarse grid and the output is interpolated to the target
                 # resolution regardless, so the factor is not strictly needed; it is kept
                 # because the shipped checkpoints were trained with these head shapes.
                 out_dim = cfg.num_output_channels * max_patch_size * max_patch_size
@@ -199,7 +199,7 @@ class SupervisionHead(nn.Module):
         rank), whether or not the batch carries that modality's target.
 
         Args:
-            register_grid: The encoder register grid ``[B, n_h, n_w, register_dim]``.
+            register_grid: The encoder pooled grid ``[B, n_h, n_w, pooler_dim]``.
             batch: The original batch (used to determine target spatial dims).
 
         Returns:

@@ -7,9 +7,9 @@ import torch
 
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
     Encoder,
     EncoderConfig,
-    PerceiverConfig,
     Predictor,
     PredictorConfig,
 )
@@ -45,11 +45,11 @@ def modality_band_set_len_and_total_bands(
     }
 
 
-def test_latentmim_perceiver(
+def test_latentmim_attention_pooler(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """End-to-end LatentMIM where the decoder reads ONLY the Perceiver."""
+    """End-to-end LatentMIM where the decoder reads ONLY the AttentionPooler."""
     supported_modalities = [
         Modality.SENTINEL2_L2A,
         Modality.LATLON,
@@ -62,7 +62,7 @@ def test_latentmim_perceiver(
     x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
-    register_dim = 8
+    pooler_dim = 8
     encoder_config = EncoderConfig(
         supported_modality_names=[m.name for m in supported_modalities],
         embedding_size=16,
@@ -74,9 +74,9 @@ def test_latentmim_perceiver(
         max_sequence_length=12,
         drop_path=0.1,
         spatial_pos_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=2,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=2,
         ),
     )
     decoder_config = PredictorConfig(
@@ -89,8 +89,8 @@ def test_latentmim_perceiver(
         max_sequence_length=12,
         drop_path=0.1,
         spatial_pos_encoding="rope",
-        use_perceiver=True,
-        register_dim=register_dim,
+        use_attention_pooler=True,
+        pooler_dim=pooler_dim,
     )
     # Low-weight supervision on the registers: a spatial-salience nudge, not a learning
     # signal. Regression (not classification) so the random worldcover target is valid.
@@ -145,25 +145,25 @@ def test_latentmim_perceiver(
     )
     (contrastive_loss + supervision_loss).backward()
 
-    # Gradients reach the Perceiver (read + latent transformer), the decoder's
+    # Gradients reach the AttentionPooler (reads + self-attention), the decoder's
     # register->decoder projection (the only context it attends to), and the (register-fed)
     # supervision head.
-    assert model.encoder.perceiver.register.grad is not None
-    assert model.encoder.perceiver.kv_proj.weight.grad is not None
-    assert model.encoder.perceiver.read_blocks[0].attn.q.weight.grad is not None
+    assert model.encoder.attention_pooler.location_queries.grad is not None
+    assert model.encoder.attention_pooler.kv_proj.weight.grad is not None
+    assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.register_to_decoder_embed.weight.grad is not None
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
 
 
-def test_latentmim_perceiver_3d_encoder_2d_decoder(
+def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """3D-RoPE encoder + spatial (2D) Perceiver + 2D decoder, end-to-end.
+    """3D-RoPE encoder + spatial (2D) AttentionPooler + 2D decoder, end-to-end.
 
     The patch encoder self-attention keeps 3D RoPE over ``(t, row, col)``; the register
     grid is a spatial summary read with 2D RoPE; and the decoder cross-attends the mask
-    tokens to that 2D register grid (so it runs in 2D and recovers the timestep from the
+    tokens to that 2D pooled grid (so it runs in 2D and recovers the timestep from the
     additive slot-index + month encodings). Verifies gradients flow through the whole path.
     """
     supported_modalities = [
@@ -175,7 +175,7 @@ def test_latentmim_perceiver_3d_encoder_2d_decoder(
     x = MaskedOlmoEarthSample(**masked_sample_dict)
 
     patch_size = 4
-    register_dim = 8
+    pooler_dim = 8
     encoder_config = EncoderConfig(
         supported_modality_names=[m.name for m in supported_modalities],
         embedding_size=16,
@@ -187,8 +187,8 @@ def test_latentmim_perceiver_3d_encoder_2d_decoder(
         max_sequence_length=12,
         drop_path=0.1,
         position_encoding="rope_3d_mixed",  # 3D encoder self-attention
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
             per_depth_read_proj=True,
         ),
     )
@@ -201,9 +201,9 @@ def test_latentmim_perceiver_3d_encoder_2d_decoder(
         mlp_ratio=4.0,
         max_sequence_length=12,
         drop_path=0.1,
-        position_encoding="rope",  # 2D decoder: cross-attends the spatial register grid
-        use_perceiver=True,
-        register_dim=register_dim,
+        position_encoding="rope",  # 2D decoder: cross-attends the spatial pooled grid
+        use_attention_pooler=True,
+        pooler_dim=pooler_dim,
     )
     model = LatentMIMConfig(
         encoder_config=encoder_config,
@@ -236,8 +236,8 @@ def test_latentmim_perceiver_3d_encoder_2d_decoder(
 
     # Gradients reach the (2D) register read and the decoder's register projection, and the
     # 3D encoder self-attention still trains.
-    assert model.encoder.perceiver.register.grad is not None
-    assert model.encoder.perceiver.read_blocks[0].attn.q.weight.grad is not None
+    assert model.encoder.attention_pooler.location_queries.grad is not None
+    assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.register_to_decoder_embed.weight.grad is not None
     assert model.encoder.blocks[0].attn.q.weight.grad is not None
 
@@ -245,7 +245,7 @@ def test_latentmim_perceiver_3d_encoder_2d_decoder(
 def test_eval_wrapper_probes_register_grid(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """The frozen eval wrapper probes the register grid for bottleneck models."""
+    """The frozen eval wrapper probes the pooled grid for bottleneck models."""
     from olmoearth_pretrain.evals.datasets.configs import TaskType
     from olmoearth_pretrain.evals.eval_wrapper import OlmoEarthEvalWrapper
     from olmoearth_pretrain.nn.pooling import PoolingType
@@ -257,7 +257,7 @@ def test_eval_wrapper_probes_register_grid(
     ]
     x = MaskedOlmoEarthSample(**masked_sample_dict).unmask()
     B, H, W = masked_sample_dict["sentinel2_l2a"].shape[:3]
-    register_dim = 8
+    pooler_dim = 8
     encoder = Encoder(
         supported_modalities=supported_modalities,
         embedding_size=16,
@@ -269,27 +269,27 @@ def test_eval_wrapper_probes_register_grid(
         depth=2,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=register_dim,
-            latent_depth=2,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=pooler_dim,
+            pooler_depth=2,
         ),
     )
     encoder.eval()
     labels = torch.zeros(B)
 
-    # Classification: registers pooled across the grid -> [B, register_dim].
+    # Classification: registers pooled across the grid -> [B, pooler_dim].
     clf_wrapper = OlmoEarthEvalWrapper(
         encoder, TaskType.CLASSIFICATION, patch_size=4, pooling_type=PoolingType.MEAN
     )
     clf_emb, _ = clf_wrapper(x, labels)
-    assert clf_emb.shape == (B, register_dim)
+    assert clf_emb.shape == (B, pooler_dim)
 
-    # Segmentation: registers kept as a coarse [B, n_h, n_w, register_dim] spatial map.
+    # Segmentation: registers kept as a coarse [B, n_h, n_w, pooler_dim] spatial map.
     seg_wrapper = OlmoEarthEvalWrapper(
         encoder, TaskType.SEGMENTATION, patch_size=4, pooling_type=PoolingType.MEAN
     )
     seg_emb, _ = seg_wrapper(x, labels)
-    assert seg_emb.shape == (B, H // 4, W // 4, register_dim)
+    assert seg_emb.shape == (B, H // 4, W // 4, pooler_dim)
 
 
 def test_latentmim_with_loss(

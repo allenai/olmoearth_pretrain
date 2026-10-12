@@ -505,12 +505,14 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-        latent_patch_size: int | None = None,
+        location_query_patch_size: int | None = None,
         searchlight: "SearchlightSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
-        if latent_patch_size is not None:
-            raise ValueError("latent_patch_size requires an encoder with a Perceiver")
+        if location_query_patch_size is not None:
+            raise ValueError(
+                "location_query_patch_size requires an encoder with an AttentionPooler"
+            )
         if searchlight is not None:
             raise NotImplementedError("Searchlight is not supported by this encoder")
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
@@ -630,7 +632,7 @@ class EncodeEarlyAttnPool(Encoder):
             tokens, pooled_dims
         )
         out_dict["modality_pooled_masks"] = original_pooled_masks
-        # Third element (register_output) is None: this variant has no Perceiver.
+        # Third element (register_output) is None: this variant has no AttentionPooler.
         return out_dict, token_norm_stats, None
 
     def forward(
@@ -640,7 +642,7 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
-        latent_patch_size: int | None = None,
+        location_query_patch_size: int | None = None,
         searchlight: "SearchlightSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
@@ -651,7 +653,7 @@ class EncodeEarlyAttnPool(Encoder):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention
-            latent_patch_size: Unsupported (this encoder has no Perceiver); must be
+            location_query_patch_size: Unsupported (this encoder has no AttentionPooler); must be
                 None.
             searchlight: Unsupported (see ``nn/searchlight.py``); must be None.
 
@@ -671,7 +673,7 @@ class EncodeEarlyAttnPool(Encoder):
                 input_res=input_res,
                 token_exit_cfg=token_exit_cfg,
                 fast_pass=fast_pass,
-                latent_patch_size=latent_patch_size,
+                location_query_patch_size=location_query_patch_size,
                 searchlight=searchlight,
             )
         else:

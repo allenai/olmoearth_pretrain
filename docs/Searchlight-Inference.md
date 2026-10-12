@@ -1,7 +1,7 @@
 # Searchlight inference
 
-Searchlight is an inference-only way of running the v1.3 encoder (ViT + Perceiver,
-including the per-pixel-latent `pix512` models) over a large area without tiling
+Searchlight is an inference-only way of running the v1.3 encoder (ViT + AttentionPooler,
+including the per-pixel-query `pix512` models) over a large area without tiling
 artifacts. Code: `olmoearth_pretrain/nn/searchlight.py`.
 
 ## Why
@@ -16,8 +16,8 @@ centred on it, sliding one cell at a time and shifted inward (not shrunk) at the
 area's edge. The rule applies to all three attentions of the encoder:
 
 - ViT self-attention: a token attends every token whose cell is in its box;
-- Perceiver read: a latent attends every token in the box around its cell;
-- latent self-attention: a latent attends every latent whose cell is in that box.
+- AttentionPooler read: a location query attends every token in the box around its cell;
+- query self-attention: a location query attends every query whose cell is in that box.
 
 An area exactly one window wide reproduces the stock forward. Larger areas differ
 from tiled inference by design: no pixel sits at a seam.
@@ -33,7 +33,7 @@ with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
         encoder,
         sample,                 # MaskedOlmoEarthSample, batch size 1, the whole area
         patch_size=2,
-        latent_patch_size=1,    # one embedding per pixel (pix512 models)
+        location_query_patch_size=1,    # one embedding per pixel (pix512 models)
         crop_px=480,
         overlap_px=32,
         settings=SearchlightSettings(compile=True),
@@ -47,7 +47,7 @@ from each side of a crop. One forward is the ordinary encoder call with one extr
 argument:
 
 ```python
-out = encoder(sample, patch_size=2, input_res=10, latent_patch_size=1,
+out = encoder(sample, patch_size=2, input_res=10, location_query_patch_size=1,
               searchlight=SearchlightSettings())
 ```
 
@@ -64,7 +64,7 @@ whole timesteps, so this holds for them.
 **Crop sizes.**
 
 - `overlap_px`: an output depends on inputs up to `searchlight_reach_px(...)` away
-  (120 px for 12 ViT + 2 Perceiver layers at ps2), so an overlap of twice that is
+  (120 px for 12 ViT + 2 AttentionPooler layers at ps2), so an overlap of twice that is
   exact, but 32 px is enough. Measured on Seattle (`v1_3_rc_ld2_pix512`, ps2, H100)
   against the exact overlap: per-pixel cosine mean 0.99997 within 2 px of a crop
   boundary and 0.99999 from 8 px in (the bf16 floor), and no seam at the crop
@@ -92,8 +92,8 @@ The attention kernel depends on the GPU (`backend="auto"`):
 
 ## Results
 
-All numbers are for `v1_3_rc_ld2_pix512` at step 320k (2 Perceiver layers, mid
-training), patch size 2, latent patch size 1, `crop_px=480`, `overlap_px=32`,
+All numbers are for `v1_3_rc_ld2_pix512` at step 320k (2 AttentionPooler layers, mid
+training), patch size 2, location-query patch size 1, `crop_px=480`, `overlap_px=32`,
 `compile=True`, bf16 autocast, unless stated otherwise. Speeds are model forward
 only (no data loading or writing), per km^2 of output.
 

@@ -105,8 +105,8 @@ class TestPoolStudentRegisters:
         eval_on_encoder_tokens: bool = False,
     ) -> OlmoEarthEvalWrapper:
         return OlmoEarthEvalWrapper(
-            # A Perceiver model with a student, which the constructor now checks for.
-            model=SimpleNamespace(use_perceiver=True),  # type: ignore[arg-type]
+            # An AttentionPooler model with a student, which the constructor now checks for.
+            model=SimpleNamespace(use_attention_pooler=True),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
