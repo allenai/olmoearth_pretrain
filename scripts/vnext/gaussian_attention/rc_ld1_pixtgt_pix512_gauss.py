@@ -10,7 +10,7 @@ bounded cosine content times that Gaussian (``olmoearth_pretrain/nn/gaussian_att
 - Perceiver latent self-attention: ``(row, col)`` windows (was 2D RoPE);
 - decoder cross-attention: ``(row, col)`` windows (was 2D RoPE).
 
-Everything else -- data, masking, pixel targets, losses, optimizer, schedule, evals --
+Everything else -- data, masking, pixel targets, losses, optimizer, schedule --
 is ``rc_ld1_pixtgt_pix512.py``, trained as ``v1_3_rc_ld1_pixtgt_pix512`` at 9f5a25b02
 (W&B ``20260921_perceiver_shapes``, the project this run logs to as well).
 """
@@ -29,7 +29,10 @@ from base import (  # noqa: E402
     build_dataset_config,
     build_visualize_config,
 )
-from pure_perceiver_mix import build_mix_trainer_config  # noqa: E402
+from pure_perceiver_mix import (  # noqa: E402
+    REGISTER_EVAL_TASKS,
+    build_mix_trainer_config,
+)
 from rc_ld1_pix512 import build_model_config as _rc_ld1_model_config  # noqa: E402
 from rc_pixtgt_pix512 import build_train_module_config  # noqa: E402
 
@@ -55,10 +58,11 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 
 def build_trainer_config(common: CommonComponents):
-    """The RC's evals (ps1 + ps4 + ps2 student), re-importing THIS module."""
-    return build_mix_trainer_config(
-        common, MODULE_PATH, ps4_student_evals=True, ps2_student_evals=True
-    )
+    """The RC's m-eurosat and pastis register evals only, re-importing THIS module."""
+    config = build_mix_trainer_config(common, MODULE_PATH)
+    evaluator = config.callbacks["downstream_evaluator"]
+    evaluator.tasks = {name: evaluator.tasks[name] for name in REGISTER_EVAL_TASKS}
+    return config
 
 
 def run() -> None:
