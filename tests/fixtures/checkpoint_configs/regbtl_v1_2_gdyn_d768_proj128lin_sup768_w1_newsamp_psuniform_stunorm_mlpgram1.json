@@ -178,12 +178,12 @@
       "use_flash_attn": false,
       "use_linear_patch_embed": true
     },
-    "projection_only_target": true,
-    "register_distillation_head_config": {
-      "_CLASS_": "olmoearth_pretrain.nn.register_distillation_head.RegisterDistillationHeadConfig",
+    "location_token_distillation_head_config": {
+      "_CLASS_": "olmoearth_pretrain.nn.location_token_distillation_head.LocationTokenDistillationHeadConfig",
       "back_projection_hidden": 256,
       "gram_max_tokens": 2048
     },
+    "projection_only_target": true,
     "supervision_head_config": {
       "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionHeadConfig",
       "modality_configs": {

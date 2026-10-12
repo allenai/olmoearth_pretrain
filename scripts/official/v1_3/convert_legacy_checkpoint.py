@@ -41,8 +41,13 @@ What changes, and why:
   ``pooler_dim`` / ``pooler_depth``; the decoder's ``use_perceiver`` / ``register_dim``
   -> ``use_attention_pooler`` / ``pooler_dim``; and ``encoder.perceiver.*`` ->
   ``encoder.attention_pooler.*`` with ``.register`` -> ``.location_queries`` and
-  ``.latent_blocks`` -> ``.self_attn_blocks``. A checkpoint already in the pre-rename
-  release layout gets only this step.
+  ``.latent_blocks`` -> ``.self_attn_blocks``. Its outputs became location tokens:
+  ``register_distillation_head_config`` (``RegisterDistillationHeadConfig``) ->
+  ``location_token_distillation_head_config``
+  (``LocationTokenDistillationHeadConfig``), ``register_distillation_head.*`` ->
+  ``location_token_distillation_head.*`` and ``decoder.register_to_decoder_embed.*``
+  -> ``decoder.location_tokens_to_decoder_embed.*``. A checkpoint already in the
+  pre-rename release layout gets only this step.
 
 Between the first release cut and the student's move onto the Perceiver, the student
 briefly lived on the encoder as ``encoder.register_student``. A checkpoint written (or
@@ -77,6 +82,10 @@ logger = logging.getLogger("convert_legacy_checkpoint")
 
 PERCEIVER_CONFIG_CLASS = "olmoearth_pretrain.nn.flexi_vit.PerceiverConfig"
 ATTENTION_POOLER_CONFIG_CLASS = "olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig"
+LOCATION_TOKEN_DISTILLATION_HEAD_CONFIG_CLASS = (  # nosec B105 (a class path)
+    "olmoearth_pretrain.nn.location_token_distillation_head."
+    "LocationTokenDistillationHeadConfig"
+)
 DISTILLATION_HEAD_CONFIG_CLASS = (
     "olmoearth_pretrain.nn.register_distillation_head.RegisterDistillationHeadConfig"
 )
@@ -245,6 +254,11 @@ def _rename_attention_pooler_config(model: dict) -> None:
         for old, new in RENAMED_DECODER_FIELDS.items():
             if old in dec:
                 dec[new] = dec.pop(old)
+    if "register_distillation_head_config" in model:
+        head = model.pop("register_distillation_head_config")
+        if isinstance(head, dict):
+            head["_CLASS_"] = LOCATION_TOKEN_DISTILLATION_HEAD_CONFIG_CLASS
+        model["location_token_distillation_head_config"] = head
 
 
 # ---------------------------------------------------------------------------------------
@@ -272,11 +286,32 @@ def _rename_attention_pooler_key(key: str) -> str:
         key,
         1,
     )
-    return key
+    if key.startswith("register_distillation_head."):
+        key = (
+            "location_token_distillation_head."
+            + key[len("register_distillation_head.") :]
+        )
+    return re.sub(
+        r"(^|\.)register_to_decoder_embed\.",
+        r"\g<1>location_tokens_to_decoder_embed.",
+        key,
+        1,
+    )
 
 
 def pre_rename_key(new: str) -> str:
     """Inverse of :func:`_rename_attention_pooler_key` (the pre-rename release name)."""
+    if new.startswith("location_token_distillation_head."):
+        new = (
+            "register_distillation_head."
+            + new[len("location_token_distillation_head.") :]
+        )
+    new = re.sub(
+        r"(^|\.)location_tokens_to_decoder_embed\.",
+        r"\g<1>register_to_decoder_embed.",
+        new,
+        1,
+    )
     key = re.sub(
         r"(^|\.)attention_pooler\.location_queries$", r"\g<1>perceiver.register", new
     )

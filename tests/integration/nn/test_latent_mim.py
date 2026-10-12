@@ -92,7 +92,7 @@ def test_latentmim_attention_pooler(
         use_attention_pooler=True,
         pooler_dim=pooler_dim,
     )
-    # Low-weight supervision on the registers: a spatial-salience nudge, not a learning
+    # Low-weight supervision on the location tokens: a spatial-salience nudge, not a learning
     # signal. Regression (not classification) so the random worldcover target is valid.
     supervision_config = SupervisionHeadConfig(
         modality_configs={
@@ -123,7 +123,7 @@ def test_latentmim_attention_pooler(
         sentinel2_l2a_num_band_sets,
         model.decoder.output_embedding_size,
     )
-    # Register supervision predicts worldcover at the target pixel resolution.
+    # Location-token supervision predicts worldcover at the target pixel resolution.
     worldcover_target = x.worldcover
     assert worldcover_target is not None
     assert supervision_preds["worldcover"].shape[1] == worldcover_target.shape[1]
@@ -146,12 +146,12 @@ def test_latentmim_attention_pooler(
     (contrastive_loss + supervision_loss).backward()
 
     # Gradients reach the AttentionPooler (reads + self-attention), the decoder's
-    # register->decoder projection (the only context it attends to), and the (register-fed)
+    # location-token->decoder projection (the only context it attends to), and the (location-token-fed)
     # supervision head.
     assert model.encoder.attention_pooler.location_queries.grad is not None
     assert model.encoder.attention_pooler.kv_proj.weight.grad is not None
     assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
-    assert model.decoder.register_to_decoder_embed.weight.grad is not None
+    assert model.decoder.location_tokens_to_decoder_embed.weight.grad is not None
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
 
 
@@ -161,9 +161,9 @@ def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
 ) -> None:
     """3D-RoPE encoder + spatial (2D) AttentionPooler + 2D decoder, end-to-end.
 
-    The patch encoder self-attention keeps 3D RoPE over ``(t, row, col)``; the register
+    The patch encoder self-attention keeps 3D RoPE over ``(t, row, col)``; the location-token
     grid is a spatial summary read with 2D RoPE; and the decoder cross-attends the mask
-    tokens to that 2D pooled grid (so it runs in 2D and recovers the timestep from the
+    tokens to that 2D location-token grid (so it runs in 2D and recovers the timestep from the
     additive slot-index + month encodings). Verifies gradients flow through the whole path.
     """
     supported_modalities = [
@@ -201,7 +201,7 @@ def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
         mlp_ratio=4.0,
         max_sequence_length=12,
         drop_path=0.1,
-        position_encoding="rope",  # 2D decoder: cross-attends the spatial pooled grid
+        position_encoding="rope",  # 2D decoder: cross-attends the spatial location-token grid
         use_attention_pooler=True,
         pooler_dim=pooler_dim,
     )
@@ -234,18 +234,18 @@ def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
         target_output, _, _ = unpack_encoder_output(output_dict)
     loss_fn.compute(decoded, target_output).backward()
 
-    # Gradients reach the (2D) register read and the decoder's register projection, and the
+    # Gradients reach the (2D) pooler read and the decoder's location-token projection, and the
     # 3D encoder self-attention still trains.
     assert model.encoder.attention_pooler.location_queries.grad is not None
     assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
-    assert model.decoder.register_to_decoder_embed.weight.grad is not None
+    assert model.decoder.location_tokens_to_decoder_embed.weight.grad is not None
     assert model.encoder.blocks[0].attn.q.weight.grad is not None
 
 
-def test_eval_wrapper_probes_register_grid(
+def test_eval_wrapper_probes_location_token_grid(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """The frozen eval wrapper probes the pooled grid for bottleneck models."""
+    """The frozen eval wrapper probes the location-token grid for bottleneck models."""
     from olmoearth_pretrain.evals.datasets.configs import TaskType
     from olmoearth_pretrain.evals.eval_wrapper import OlmoEarthEvalWrapper
     from olmoearth_pretrain.nn.pooling import PoolingType
@@ -277,14 +277,14 @@ def test_eval_wrapper_probes_register_grid(
     encoder.eval()
     labels = torch.zeros(B)
 
-    # Classification: registers pooled across the grid -> [B, pooler_dim].
+    # Classification: location tokens pooled across the grid -> [B, pooler_dim].
     clf_wrapper = OlmoEarthEvalWrapper(
         encoder, TaskType.CLASSIFICATION, patch_size=4, pooling_type=PoolingType.MEAN
     )
     clf_emb, _ = clf_wrapper(x, labels)
     assert clf_emb.shape == (B, pooler_dim)
 
-    # Segmentation: registers kept as a coarse [B, n_h, n_w, pooler_dim] spatial map.
+    # Segmentation: location tokens kept as a coarse [B, n_h, n_w, pooler_dim] spatial map.
     seg_wrapper = OlmoEarthEvalWrapper(
         encoder, TaskType.SEGMENTATION, patch_size=4, pooling_type=PoolingType.MEAN
     )

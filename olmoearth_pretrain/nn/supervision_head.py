@@ -1,11 +1,11 @@
 """Supervision heads for direct supervision of decode-only modalities.
 
-Every head reads the encoder's pooled grid (the AttentionPooler bottleneck), so the
+Every head reads the encoder's location-token grid (the AttentionPooler bottleneck), so the
 supervision gradient flows straight into the representation the decoder and the
 downstream probes consume. Per-modality linear heads predict a
-max_patch_size x max_patch_size sub-patch grid per register cell, unfolded and
+max_patch_size x max_patch_size sub-patch grid per location token, unfolded and
 then bilinearly resized to the target's pixel resolution; non-spatial modalities
-read the mean-pooled grid and predict one vector per sample.
+read the mean-location-token grid and predict one vector per sample.
 """
 
 from __future__ import annotations
@@ -108,9 +108,9 @@ class SupervisionHeadConfig(Config):
         """Build the supervision head.
 
         Args:
-            embedding_dim: Width of the pooled grid the heads read (the bottleneck's
-                register dim, resolved by LatentMIMConfig).
-            max_patch_size: Maximum patch size; each register cell predicts a
+            embedding_dim: Width of the location-token grid the heads read (the bottleneck's
+                location-token dim, resolved by LatentMIMConfig).
+            max_patch_size: Maximum patch size; each location token predicts a
                 max_patch_size x max_patch_size sub-patch grid.
         """
         return SupervisionHead(
@@ -121,15 +121,15 @@ class SupervisionHeadConfig(Config):
 
 
 class SupervisionHead(nn.Module):
-    """Per-modality linear heads on the encoder pooled grid.
+    """Per-modality linear heads on the encoder location-token grid.
 
     Forward path (per supervised spatial modality):
-      1. Read the shared pooled grid ``[B, n_h, n_w, D]``.
+      1. Read the shared location-token grid ``[B, n_h, n_w, D]``.
       2. Linear head predicting max_patch_size^2 * C values per cell.
       3. Unfold to ``[B, n_h * max_ps, n_w * max_ps, 1, C]``.
       4. Bilinearly resize to the target's pixel resolution.
 
-    Non-spatial modalities read the mean-pooled grid and predict ``[B, C]``.
+    Non-spatial modalities read the mean-location-token grid and predict ``[B, C]``.
     """
 
     def __init__(
@@ -147,8 +147,8 @@ class SupervisionHead(nn.Module):
         for name, cfg in modality_configs.items():
             modality_spec = Modality.get(name)
             if modality_spec.is_spatial:
-                # The max_patch_size^2 unfold predates register supervision (each decoder
-                # token was one real patch of up to max_patch_size px). The registers are
+                # The max_patch_size^2 unfold predates location-token supervision (each decoder
+                # token was one real patch of up to max_patch_size px). The location tokens are
                 # a coarse grid and the output is interpolated to the target
                 # resolution regardless, so the factor is not strictly needed; it is kept
                 # because the shipped checkpoints were trained with these head shapes.
@@ -191,7 +191,7 @@ class SupervisionHead(nn.Module):
         return rearrange(output, "(b t) c h w -> b h w t c", b=b, t=t)
 
     def forward(
-        self, register_grid: Tensor, batch: MaskedOlmoEarthSample
+        self, location_tokens: Tensor, batch: MaskedOlmoEarthSample
     ) -> dict[str, Tensor]:
         """Produce per-supervised-modality predictions at pixel resolution.
 
@@ -199,7 +199,7 @@ class SupervisionHead(nn.Module):
         rank), whether or not the batch carries that modality's target.
 
         Args:
-            register_grid: The encoder pooled grid ``[B, n_h, n_w, pooler_dim]``.
+            location_tokens: The encoder location-token grid ``[B, n_h, n_w, pooler_dim]``.
             batch: The original batch (used to determine target spatial dims).
 
         Returns:
@@ -210,10 +210,10 @@ class SupervisionHead(nn.Module):
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
             if sup_name in self._non_spatial_modalities:
-                output = head(register_grid.mean(dim=(1, 2)))  # [B, C]
+                output = head(location_tokens.mean(dim=(1, 2)))  # [B, C]
             else:
                 num_channels = self.modality_configs[sup_name].num_output_channels
-                raw = head(register_grid.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
+                raw = head(location_tokens.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
                 output = rearrange(
                     raw,
                     "b ph pw t (c i j) -> b (ph i) (pw j) t c",

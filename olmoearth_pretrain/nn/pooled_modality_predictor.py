@@ -632,7 +632,7 @@ class EncodeEarlyAttnPool(Encoder):
             tokens, pooled_dims
         )
         out_dict["modality_pooled_masks"] = original_pooled_masks
-        # Third element (register_output) is None: this variant has no AttentionPooler.
+        # Third element (location_token_output) is None: this variant has no AttentionPooler.
         return out_dict, token_norm_stats, None
 
     def forward(

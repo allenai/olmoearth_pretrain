@@ -106,7 +106,11 @@ def test_one_window_domain_matches_the_stock_forward(
             **kwargs,
             searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
         )
-    for key in ("registers", "student_registers", "location_query_positions"):
+    for key in (
+        "location_tokens",
+        "student_location_tokens",
+        "location_query_positions",
+    ):
         torch.testing.assert_close(searchlight[key], stock[key], atol=1e-5, rtol=1e-5)
     for name in MODALITIES:
         torch.testing.assert_close(

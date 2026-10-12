@@ -57,7 +57,7 @@ def test_location_query_patch_size_equal_to_patch_size_is_the_patch_grid() -> No
     with torch.no_grad():
         a = encoder(sample, patch_size=2, input_res=10)
         b = encoder(sample, patch_size=2, input_res=10, location_query_patch_size=2)
-    torch.testing.assert_close(a["registers"], b["registers"])
+    torch.testing.assert_close(a["location_tokens"], b["location_tokens"])
     torch.testing.assert_close(
         a["location_query_positions"], b["location_query_positions"]
     )
@@ -79,10 +79,10 @@ def test_location_query_patch_size_sets_the_grid(
         input_res=10,
         location_query_patch_size=location_query_patch_size,
     )
-    assert out["registers"].shape == (B, grid, grid, 16)
+    assert out["location_tokens"].shape == (B, grid, grid, 16)
     assert out["location_query_positions"].shape == (B, grid * grid, 2)
     if training:
-        out["registers"].sum().backward()
+        out["location_tokens"].sum().backward()
         assert encoder.attention_pooler is not None
         for blk in encoder.attention_pooler.read_blocks:
             assert any(

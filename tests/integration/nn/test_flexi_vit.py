@@ -1108,10 +1108,10 @@ def test_encoder_attention_pooler_dynamic_grid(
         encoder.zero_grad()
         output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
 
-        # The pooled grid tracks the patch grid (H//patch_size) instead of being fixed.
+        # The location-token grid tracks the patch grid (H//patch_size) instead of being fixed.
         expected_side = H // patch_size
         n_reg = expected_side * expected_side
-        assert output_dict["registers"].shape == (
+        assert output_dict["location_tokens"].shape == (
             B,
             expected_side,
             expected_side,
@@ -1119,7 +1119,7 @@ def test_encoder_attention_pooler_dynamic_grid(
         )
         assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
 
-        output_dict["registers"].sum().backward()
+        output_dict["location_tokens"].sum().backward()
         assert encoder.attention_pooler.location_queries.grad is not None
 
 
@@ -1128,7 +1128,7 @@ def test_encoder_attention_pooler_3d_rope_encoder_2d_read(
 ) -> None:
     """A 3D-RoPE encoder keeps the AttentionPooler spatial: it reads with 2D RoPE.
 
-    The patch encoder self-attention rotates over ``(t, row, col)`` while the register
+    The patch encoder self-attention rotates over ``(t, row, col)`` while the location-token
     grid is a purely spatial summary; the bottleneck therefore reads with the ``(row, col)``
     axes only (temporal coordinate sliced off). Exercises the decoupled path.
     """
@@ -1172,15 +1172,15 @@ def test_encoder_attention_pooler_3d_rope_encoder_2d_read(
     output_dict = encoder.forward(sample, patch_size=4, input_res=10)
     expected_side = H // 4
     n_reg = expected_side * expected_side
-    assert output_dict["registers"].shape == (
+    assert output_dict["location_tokens"].shape == (
         B,
         expected_side,
         expected_side,
         pooler_dim,
     )
-    # Register positions are spatial only -- 2D, regardless of the 3D encoder.
+    # Location-query positions are spatial only -- 2D, regardless of the 3D encoder.
     assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
-    output_dict["registers"].sum().backward()
+    output_dict["location_tokens"].sum().backward()
     assert encoder.attention_pooler.location_queries.grad is not None
     assert torch.isfinite(encoder.attention_pooler.location_queries.grad).all()
 
@@ -1229,8 +1229,8 @@ def test_encoder_attention_pooler_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, H // 2, W // 2, pooler_dim)
-    output_dict["registers"].sum().backward()
+    assert output_dict["location_tokens"].shape == (B, H // 2, W // 2, pooler_dim)
+    output_dict["location_tokens"].sum().backward()
     # Gradients reach the last interleaved read (only reached if reads run between selves).
     assert bottleneck.read_blocks[-1].attn.q.weight.grad is not None
 
@@ -1288,8 +1288,8 @@ def test_encoder_attention_pooler_per_depth_read_proj_interleave(
         timestamps=timestamps,
     )
     output_dict = encoder.forward(sample, patch_size=2, input_res=10)
-    assert output_dict["registers"].shape == (B, H // 2, W // 2, pooler_dim)
-    output_dict["registers"].sum().backward()
+    assert output_dict["location_tokens"].shape == (B, H // 2, W // 2, pooler_dim)
+    output_dict["location_tokens"].sum().backward()
     # Every per-block norm + projection receives gradient.
     for norm in bottleneck.input_norms:
         assert norm.weight.grad is not None
@@ -1303,7 +1303,7 @@ def test_encoder_attention_pooler_decoupled_attn_dim(
     """register_attn_dim decouples the bottleneck attention width from pooler_dim.
 
     The read + self-attention blocks run attention internally at attn_dim (here the encoder
-    width) while the register stream stays at pooler_dim; the K/V down-projections
+    width) while the location-token stream stays at pooler_dim; the K/V down-projections
     become Identity so reads consume the encoder tokens at full width.
     """
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
@@ -1364,8 +1364,8 @@ def test_encoder_attention_pooler_decoupled_attn_dim(
     patch_size = 2
     output_dict = encoder.forward(sample, patch_size=patch_size, input_res=10)
     grid = (H // patch_size, W // patch_size)
-    assert output_dict["registers"].shape == (B, grid[0], grid[1], pooler_dim)
-    output_dict["registers"].sum().backward()
+    assert output_dict["location_tokens"].shape == (B, grid[0], grid[1], pooler_dim)
+    output_dict["location_tokens"].sum().backward()
     assert read_attn.q.weight.grad is not None
     assert read_attn.k.weight.grad is not None
     assert self_attn.q.weight.grad is not None
@@ -1940,12 +1940,12 @@ def test_predictor_forward_rope_3d_mixed(
     assert sum(g.abs().sum() for g in grads) > 0
 
 
-def test_predictor_flash_register_context_matches_packing(
+def test_predictor_flash_location_token_context_matches_packing(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
     """The flash varlen K side is whatever ``pack_tokens`` would have produced.
 
-    Every register is valid, so packing the context for varlen degenerates to a plain
+    Every location token is valid, so packing the context for varlen degenerates to a plain
     flatten -- which is what the decoder does, to avoid the mask-gather. This pins the
     EQUIVALENCE rather than the implementation: it passes whether the context is
     flattened or packed, and fails only if the two stop agreeing. Asserted on the
@@ -2000,20 +2000,24 @@ def test_predictor_flash_register_context_matches_packing(
         ),
         "b d t -> b t d",
     )
-    registers = torch.randn(B, grid_h, grid_w, pooler_dim)
+    location_tokens = torch.randn(B, grid_h, grid_w, pooler_dim)
 
     with torch.no_grad():
         predictor.forward(
-            encoded, timestamps, patch_size=4, input_res=1, registers=registers
+            encoded,
+            timestamps,
+            patch_size=4,
+            input_res=1,
+            location_tokens=location_tokens,
         )
 
         # The reference: project the grid, then pack it the way genuinely ragged
-        # patch tokens are packed -- with an all-valid mask, since no register is
+        # patch tokens are packed -- with an all-valid mask, since no location token is
         # ever masked out.
-        assert predictor.register_to_decoder_embed is not None
+        assert predictor.location_tokens_to_decoder_embed is not None
         expected = predictor.pack_tokens(
-            predictor.register_to_decoder_embed(
-                rearrange(registers, "b h w d -> b (h w) d")
+            predictor.location_tokens_to_decoder_embed(
+                rearrange(location_tokens, "b h w d -> b (h w) d")
             ),
             torch.ones(B, n_reg, dtype=torch.bool),
         )
@@ -2026,5 +2030,5 @@ def test_predictor_flash_register_context_matches_packing(
         kwargs["cu_seqlens_k"], torch.arange(B + 1, dtype=torch.int32) * n_reg
     )
     assert kwargs["max_seqlen_k"] == n_reg
-    # Every register is valid, so there is nothing to mask on the context side.
+    # Every location token is valid, so there is nothing to mask on the context side.
     assert kwargs["attn_mask"] is None

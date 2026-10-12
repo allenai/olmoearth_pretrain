@@ -561,7 +561,7 @@ def encoder_searchlight(
     tokens_out = torch.zeros_like(tokens)
     tokens_out[:, order] = x.to(tokens.dtype)
 
-    register_output = None
+    location_token_output = None
     if attention_pooler is not None:
         s = location_query_patch_size or patch_size
         r = patch_size // s
@@ -603,26 +603,28 @@ def encoder_searchlight(
             q = _block(
                 self_attn_blk, q, q_pos, (n_h, n_w, r * r), neighborhood_cells, settings
             )
-        registers = rearrange(
+        location_tokens = rearrange(
             attention_pooler.norm(q),
             "1 (h w a b) d -> 1 (h a) (w b) d",
             h=n_h,
             a=r,
             b=r,
         )
-        register_output = {
-            "registers": registers,
+        location_token_output = {
+            "location_tokens": location_tokens,
             "location_query_positions": location_query_positions,
         }
         if attention_pooler.student is not None:
-            register_output["student_registers"] = attention_pooler.student(registers)
+            location_token_output["student_location_tokens"] = attention_pooler.student(
+                location_tokens
+            )
 
     _BLOCK_MASKS.clear()  # free the tables (~0.5 GB per chunk and attention kind)
     tokens_dict = encoder.split_and_expand_per_modality(
         tokens_out, modalities_to_dims_dict
     )
     tokens_dict.update(original_masks_dict)
-    return tokens_dict, None, register_output
+    return tokens_dict, None, location_token_output
 
 
 # -------------------------------------------------------------------------- domain
@@ -636,7 +638,7 @@ def embed_domain(
     location_query_patch_size: int | None,
     crop_px: int,
     overlap_px: int,
-    output_key: str = "student_registers",
+    output_key: str = "student_location_tokens",
     settings: SearchlightSettings | None = None,
     input_res: int = 10,
 ) -> Tensor:

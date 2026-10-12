@@ -271,6 +271,13 @@
     "decoder.input_norm.weight": [
       768
     ],
+    "decoder.location_tokens_to_decoder_embed.bias": [
+      768
+    ],
+    "decoder.location_tokens_to_decoder_embed.weight": [
+      768,
+      768
+    ],
     "decoder.mask_token": [
       768
     ],
@@ -278,13 +285,6 @@
       768
     ],
     "decoder.norm.weight": [
-      768
-    ],
-    "decoder.register_to_decoder_embed.bias": [
-      768
-    ],
-    "decoder.register_to_decoder_embed.weight": [
-      768,
       768
     ],
     "decoder.to_output_embed.bias": [
@@ -1660,43 +1660,43 @@
       768,
       768
     ],
-    "register_distillation_head.back_projections.128.0.bias": [
+    "location_token_distillation_head.back_projections.128.0.bias": [
       256
     ],
-    "register_distillation_head.back_projections.128.0.weight": [
+    "location_token_distillation_head.back_projections.128.0.weight": [
       256,
       128
     ],
-    "register_distillation_head.back_projections.128.1.bias": [
+    "location_token_distillation_head.back_projections.128.1.bias": [
       256
     ],
-    "register_distillation_head.back_projections.128.1.weight": [
+    "location_token_distillation_head.back_projections.128.1.weight": [
       256
     ],
-    "register_distillation_head.back_projections.128.3.bias": [
+    "location_token_distillation_head.back_projections.128.3.bias": [
       768
     ],
-    "register_distillation_head.back_projections.128.3.weight": [
+    "location_token_distillation_head.back_projections.128.3.weight": [
       768,
       256
     ],
-    "register_distillation_head.back_projections.64.0.bias": [
+    "location_token_distillation_head.back_projections.64.0.bias": [
       256
     ],
-    "register_distillation_head.back_projections.64.0.weight": [
+    "location_token_distillation_head.back_projections.64.0.weight": [
       256,
       64
     ],
-    "register_distillation_head.back_projections.64.1.bias": [
+    "location_token_distillation_head.back_projections.64.1.bias": [
       256
     ],
-    "register_distillation_head.back_projections.64.1.weight": [
+    "location_token_distillation_head.back_projections.64.1.weight": [
       256
     ],
-    "register_distillation_head.back_projections.64.3.bias": [
+    "location_token_distillation_head.back_projections.64.3.bias": [
       768
     ],
-    "register_distillation_head.back_projections.64.3.weight": [
+    "location_token_distillation_head.back_projections.64.3.weight": [
       768,
       256
     ],

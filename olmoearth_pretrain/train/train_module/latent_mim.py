@@ -201,7 +201,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             )
             self.total_loss_name = f"{self.total_loss_name}+supervision"
 
-        if self.model.register_distillation_head is not None:
+        if self.model.location_token_distillation_head is not None:
             self.total_loss_name = f"{self.total_loss_name}+student"
         self.pixel_targets = pixel_targets
         if pixel_targets and not isinstance(
@@ -401,17 +401,17 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         extra_metrics[f"supervision/{mod_name}"] = mod_loss
 
                 if (
-                    self.model.register_distillation_head is not None
+                    self.model.location_token_distillation_head is not None
                     and student_outputs is not None
-                    and student_outputs["student_registers"] is not None
+                    and student_outputs["student_location_tokens"] is not None
                 ):
-                    # Detached-student loss: the head detaches the teacher registers and
+                    # Detached-student loss: the head detaches the teacher location tokens and
                     # the student's inputs were detached inside the encoder, so none of
                     # this reaches the encoder or the AttentionPooler.
                     distill_loss, distill_metrics = (
-                        self.model.register_distillation_head(
-                            student_outputs["registers"],
-                            student_outputs["student_registers"],
+                        self.model.location_token_distillation_head(
+                            student_outputs["location_tokens"],
+                            student_outputs["student_location_tokens"],
                         )
                     )
                     loss = loss + distill_loss

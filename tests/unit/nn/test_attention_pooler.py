@@ -1,4 +1,4 @@
-"""Unit tests for the spatial AttentionPooler register bottleneck."""
+"""Unit tests for the spatial AttentionPooler."""
 
 import weakref
 from collections.abc import Callable
@@ -25,7 +25,7 @@ def _build_attention_pooler(
     torch.manual_seed(0)
     attention_pooler = AttentionPooler(
         encoder_embedding_size=ENCODER_DIM,
-        # A narrower register dim exercises the kv_proj Linear when attn_dim is None.
+        # A narrower location-token dim exercises the kv_proj Linear when attn_dim is None.
         pooler_dim=32,
         num_heads=4,
         mlp_ratio=2.0,
@@ -88,10 +88,10 @@ def _reference_forward(
         kv = attention_pooler.kv_proj(attention_pooler.input_norm(patch_tokens))
         kv_per_read = [kv] * len(attention_pooler.read_blocks)
     batch_size = patch_tokens.shape[0]
-    num_registers = spatial_grid[0] * spatial_grid[1]
-    registers = (
+    num_location_tokens = spatial_grid[0] * spatial_grid[1]
+    location_tokens = (
         attention_pooler.location_queries.unsqueeze(0)
-        .expand(batch_size, num_registers, -1)
+        .expand(batch_size, num_location_tokens, -1)
         .contiguous()
     )
     location_query_positions = attention_pooler.build_location_query_positions(
@@ -99,25 +99,25 @@ def _reference_forward(
     )
     read_attn_mask = visible_mask.bool()
     for i, (read_blk, kv) in enumerate(zip(attention_pooler.read_blocks, kv_per_read)):
-        registers = read_blk(
-            x=registers,
+        location_tokens = read_blk(
+            x=location_tokens,
             y=kv,
             attn_mask=read_attn_mask,
             rope_positions=location_query_positions,
             rope_positions_y=patch_positions,
         )
-        registers = attention_pooler.self_attn_blocks[i](
-            x=registers,
+        location_tokens = attention_pooler.self_attn_blocks[i](
+            x=location_tokens,
             rope_positions=location_query_positions,
         )
-    out = attention_pooler.norm(registers)
+    out = attention_pooler.norm(location_tokens)
     out = rearrange(out, "b (h w) d -> b h w d", h=spatial_grid[0], w=spatial_grid[1])
-    student_registers = (
+    student_location_tokens = (
         attention_pooler.student(out.detach())
         if attention_pooler.student is not None
         else None
     )
-    return out, location_query_positions, student_registers
+    return out, location_query_positions, student_location_tokens
 
 
 _CONFIGS = pytest.mark.parametrize(

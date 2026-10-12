@@ -70,6 +70,9 @@ def _pre_rename(model: dict) -> dict:
     enc["perceiver_config"] = pooler
     dec["use_perceiver"] = dec.pop("use_attention_pooler")
     dec["register_dim"] = dec.pop("pooler_dim")
+    head = model.pop("location_token_distillation_head_config")
+    head["_CLASS_"] = convert.DISTILLATION_HEAD_CONFIG_CLASS
+    model["register_distillation_head_config"] = head
     return model
 
 
@@ -117,7 +120,7 @@ def test_active_removed_feature_is_refused() -> None:
         ),
         (
             "encoder.register_back_projections.128.0.weight",
-            "register_distillation_head.back_projections.128.0.weight",
+            "location_token_distillation_head.back_projections.128.0.weight",
         ),
         ("encoder.norm.weight", "encoder.norm.weight"),
         ("register_bottleneck.norm.weight", "attention_pooler.norm.weight"),
@@ -165,7 +168,11 @@ def test_interim_student_names_convert(interim: str, new: str) -> None:
         ("perceiver.kv_proj.weight", "attention_pooler.kv_proj.weight"),
         (
             "register_distillation_head.back_projections.128.0.weight",
-            "register_distillation_head.back_projections.128.0.weight",
+            "location_token_distillation_head.back_projections.128.0.weight",
+        ),
+        (
+            "decoder.register_to_decoder_embed.weight",
+            "decoder.location_tokens_to_decoder_embed.weight",
         ),
     ],
 )
@@ -201,8 +208,8 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
         PredictorConfig,
     )
     from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
-    from olmoearth_pretrain.nn.register_distillation_head import (
-        RegisterDistillationHeadConfig,
+    from olmoearth_pretrain.nn.location_token_distillation_head import (
+        LocationTokenDistillationHeadConfig,
     )
 
     modalities = ["sentinel2_l2a", "latlon"]
@@ -233,7 +240,7 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
             use_attention_pooler=True,
             pooler_dim=8,
         ),
-        register_distillation_head_config=RegisterDistillationHeadConfig(),
+        location_token_distillation_head_config=LocationTokenDistillationHeadConfig(),
     )
     model = config.build()
     legacy = {convert.legacy_key(k): v for k, v in model.state_dict().items()}
