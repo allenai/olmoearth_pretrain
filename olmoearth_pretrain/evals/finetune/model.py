@@ -31,8 +31,15 @@ class BackboneWithHead(nn.Module):
         eval_on_encoder_tokens: bool = False,
         head_type: HeadType = "linear",
         latent_patch_size: int | None = None,
+        use_center_token: bool = False,
     ) -> None:
-        """Initialize the backbone with head."""
+        """Initialize the backbone with head.
+
+        With ``latent_patch_size`` the Perceiver emits one register per
+        ``latent_patch_size`` pixels instead of one per token, so the dense heads
+        decode each register cell to ``latent_patch_size**2`` pixels;
+        ``self.patch_size`` is that per-cell pixel stride.
+        """
         if head_type in _PIXEL_HEADS and task_type not in (
             TaskType.SEGMENTATION,
             TaskType.PER_PIXEL_REGRESSION,
@@ -52,9 +59,12 @@ class BackboneWithHead(nn.Module):
             use_pooled_tokens=use_pooled_tokens,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
             latent_patch_size=latent_patch_size,
+            use_center_token=use_center_token,
         )
         self.task_type = task_type
-        self.patch_size = patch_size
+        self.patch_size = (
+            latent_patch_size if latent_patch_size is not None else patch_size
+        )
         self.num_classes = num_classes
         self.head_type: HeadType = head_type
         # True when the head already outputs (B, num_classes, H, W) pixel-space logits.

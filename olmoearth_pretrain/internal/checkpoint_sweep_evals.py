@@ -50,6 +50,7 @@ from olmo_core.utils import get_default_device, prepare_cli_environment, seed_al
 
 from olmoearth_pretrain.internal.all_evals import (
     EMBED_DIAG_TASKS,
+    EMBEDDING_EVAL_TASKS,
     EVAL_TASKS,
     load_user_module,
 )
@@ -74,6 +75,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamEvaluatorCallback,
     define_checkpoint_step_metrics,
     eval_result_log_dict,
+    extra_results_log_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -189,6 +191,15 @@ def evaluate_checkpoints(
                     )
                 )
 
+            if result.extra_results:
+                metrics.update(extra_results_log_dict(result.extra_results))
+            if eval_callback.run_on_test and result.extra_test_results:
+                metrics.update(
+                    extra_results_log_dict(
+                        result.extra_test_results, prefix="eval/test"
+                    )
+                )
+
             if result.embedding_diagnostics:
                 for k, v in result.embedding_diagnostics.items():
                     metrics[
@@ -220,9 +231,11 @@ def evaluate_checkpoints(
 
 
 def _get_eval_tasks() -> dict:
-    """Select task set based on EMBEDDING_DIAGNOSTICS_ONLY env var."""
+    """Select task set based on the EMBEDDING_* env vars."""
     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY"):
         return EMBED_DIAG_TASKS
+    if os.environ.get("EMBEDDING_EVALS"):
+        return EMBEDDING_EVAL_TASKS
     return EVAL_TASKS
 
 

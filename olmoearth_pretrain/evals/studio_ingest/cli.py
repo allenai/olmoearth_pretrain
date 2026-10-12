@@ -101,6 +101,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
         split_seed=args.split_seed,
         num_samples=args.num_samples,
         untar_source=args.untar_source,
+        start_time=args.start_time,
+        end_time=args.end_time,
+        overwrite_configs=args.overwrite,
     )
 
     entry = ingest_dataset(config)
@@ -185,6 +188,19 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
         help="Source is a .tar.gz archive on GCS; stream and extract directly to Weka",
     )
 
+    # Timestamps
+    parser.add_argument(
+        "--start-time",
+        default=None,
+        help="Imagery time range start (YYYY-MM-DD), recorded on the registry "
+        "entry so eval-time timestamps match the imagery months",
+    )
+    parser.add_argument(
+        "--end-time",
+        default=None,
+        help="Imagery time range end (YYYY-MM-DD)",
+    )
+
     # Registry arguments
     parser.add_argument(
         "--register",
@@ -194,7 +210,9 @@ def add_ingest_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--overwrite",
         action="store_true",
-        help="Overwrite existing registry entry if it exists",
+        help="Overwrite the existing registry entry and refresh the "
+        "model.yaml copy at the dataset folder (otherwise a re-ingest "
+        "silently keeps the stale copy)",
     )
 
 

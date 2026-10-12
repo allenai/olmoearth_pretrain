@@ -54,6 +54,46 @@ def mock_pastis_data(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def test_pastis_dataset_window_size_tiles_samples(mock_pastis_data: Path) -> None:
+    """window_size tiles imagery and labels consistently."""
+    full = PASTISRDataset(
+        path_to_splits=mock_pastis_data,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+    )
+    tiled = PASTISRDataset(
+        path_to_splits=mock_pastis_data,
+        split="train",
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        window_size=32,
+    )
+    assert len(full) == 1
+    assert len(tiled) == 4
+
+    full_sample, full_labels = full[0]
+    # Tile 3 is (row 1, col 1) -> the bottom-right 32x32 window.
+    sample, labels = tiled[3]
+    assert sample.sentinel2_l2a is not None
+    assert full_sample.sentinel2_l2a is not None
+    assert sample.sentinel2_l2a.shape[:2] == (32, 32)
+    assert labels.shape == (32, 32)
+    torch.testing.assert_close(
+        sample.sentinel2_l2a, full_sample.sentinel2_l2a[32:, 32:]
+    )
+    torch.testing.assert_close(labels, full_labels[32:, 32:])
+
+
+def test_pastis_dataset_window_size_must_divide(mock_pastis_data: Path) -> None:
+    """A window_size that doesn't divide the sample size raises."""
+    with pytest.raises(ValueError, match="must divide"):
+        PASTISRDataset(
+            path_to_splits=mock_pastis_data,
+            split="train",
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            window_size=48,
+        )
+
+
 def test_pastis_dataset_initialization(mock_pastis_data: Path) -> None:
     """Test basic initialization and functionality of PASTISRDataset."""
     # Test multimodal initialization

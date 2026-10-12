@@ -74,16 +74,21 @@ class BandSet:
         """Compute the resolution."""
         return get_resolution(self.resolution_factor)
 
-    def get_expected_image_size(self, modality_resolution_factor: int) -> int:
+    def get_expected_image_size(
+        self, modality_resolution_factor: int, image_tile_size: int = IMAGE_TILE_SIZE
+    ) -> int:
         """Get the expected size of images containing these bands.
 
         Args:
             modality_resolution_factor: the resolution factor of the modality.
+            image_tile_size: the modality grid tile size in pixels. Defaults to
+                IMAGE_TILE_SIZE (256); per-window datasets (e.g. open-set) pass their
+                own window size.
 
         Returns:
             the expected image size.
         """
-        return IMAGE_TILE_SIZE // (self.resolution_factor // modality_resolution_factor)
+        return image_tile_size // (self.resolution_factor // modality_resolution_factor)
 
 
 class TimeSpan(str, Enum):
@@ -512,6 +517,23 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Tessera v2 student embeddings (128-dim Matryoshka), produced by running
+    # the released v2 inference ourselves (evals/datasets/tessera_v2_export.py) —
+    # no precomputed v2 product is published yet. The student size used is
+    # recorded in the provenance manifest, not the modality name.
+    TESSERA_V2 = ModalitySpec(
+        name="tessera_v2",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [f"T{idx:03d}" for idx in range(128)],
+                16,
+            ),
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     CDL = ModalitySpec(
         name="cdl",
         tile_resolution_factor=16,
@@ -552,6 +574,47 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Open-set segmentation label layer: a single band of globally-unique class ids
+    # (uint16; nodata = 65535). Categorical, so normalization is skipped. 10 m/pixel.
+    OPEN_SET = ModalitySpec(
+        name="open_set",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["class"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        skip_normalization=True,
+    )
+
+    # Open-set regression label layer: two bands (dataset_id, value) as uint16. band 0 is
+    # the 1-based regression dataset id (0 = no label); band 1 is the value linearly
+    # remapped into [1, 65535] (0 = nodata). Values are pre-normalized, so normalization
+    # is skipped. 10 m/pixel.
+    OPEN_SET_REGRESSION = ModalitySpec(
+        name="open_set_regression",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["dataset_id", "value"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        skip_normalization=True,
+    )
+
+    # Open-set change boundary: for paired pre/post change samples, the date that
+    # separates the "before" timesteps from the "after" timesteps, stored in the same
+    # [day, month (0-based), year] convention as ``timestamps`` so a timestep is
+    # post-change iff its timestamp >= this boundary. Static in space and time (one
+    # 3-vector per sample, materialized as a 1x1 pixel raster like era5_10);
+    # missing-filled for non-change samples. Not an encoder input.
+    OPEN_SET_CHANGE_BOUNDARY = ModalitySpec(
+        name="open_set_change_boundary",
+        tile_resolution_factor=16,
+        # 128 px window at 10 m -> one 1280 m pixel (resolution factor 2048).
+        band_sets=[BandSet(["day", "month", "year"], 2048)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        image_tile_size_factor=-256,
+        skip_normalization=True,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
@@ -579,6 +642,16 @@ class Modality:
 # Latlon and timestamps
 LATLON = ["lat", "lon"]
 TIMESTAMPS = ["day", "month", "year"]
+
+# Modalities that carry precomputed embedding products (e.g. AlphaEarth/GSE,
+# Tessera) rather than imagery. Eval loaders consume these exactly as stored —
+# imagery normalization does not apply to them.
+EMBEDDING_PRODUCT_MODALITIES = frozenset(
+    {
+        Modality.GSE.name,
+        Modality.TESSERA_V2.name,
+    }
+)
 
 
 def get_modality_specs_from_names(names: list[str]) -> list[ModalitySpec]:
