@@ -175,7 +175,7 @@ def get_dino_v3_args() -> str:
     dino_v3_args = dataset_args
     dino_v3_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_MIN_MAX_INT"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_yes_clip_min_max_int"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -187,7 +187,7 @@ def get_croma_args() -> str:
     croma_args = dataset_args
     croma_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_yes_clip_2_std"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -205,7 +205,7 @@ def get_copernicus_fm_args() -> str:
     copernicus_fm_args = dataset_args
     copernicus_fm_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP_2_STD"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_yes_clip_2_std"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -219,7 +219,7 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
         tessera_args = dataset_args
         tessera_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -229,7 +229,7 @@ def get_tessera_args(pretrained_normalizer: bool = True) -> str:
         tessera_args += " " + "--model.use_pretrained_normalizer=False"
         tessera_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -269,7 +269,7 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
     capable_tasks = _modality_capable_tasks(modality_name)
     args = dataset_args
     args += " " + " ".join(
-        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+        f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
         for task_name in capable_tasks
     )
     args += " " + " ".join(
@@ -315,7 +315,7 @@ def get_panopticon_args() -> str:
     panopticon_args = dataset_args
     panopticon_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -329,7 +329,7 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
         # To use terramind pretrained normalizer we want to leave normalization to the terramind wrapper
         terramind_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -338,7 +338,7 @@ def get_terramind_args(pretrained_normalizer: bool = True) -> str:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         terramind_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -353,7 +353,7 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
         # To use clay pretrained normalizer we want to leave normalization to the clay wrapper
         clay_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -362,7 +362,7 @@ def get_clay_args(pretrained_normalizer: bool = True) -> str:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         clay_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -375,7 +375,7 @@ def get_anysat_args() -> str:
     anysat_args = dataset_args
     anysat_args += " " + " ".join(
         [
-            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
             for task_name in EVAL_TASKS.keys()
         ]
     )
@@ -396,7 +396,7 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
         galileo_args = dataset_args
         galileo_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -407,7 +407,7 @@ def get_galileo_args(pretrained_normalizer: bool = True) -> str:
         galileo_args += " " + "--model.use_pretrained_normalizer=False"
         galileo_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_no_clip_2_std"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -427,7 +427,7 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
         # To use satlas pretrained normalizer we want to leave normalization to the satlas wrapper
         satlas_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -436,7 +436,7 @@ def get_satlas_args(pretrained_normalizer: bool = True) -> str:
     else:
         satlas_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_YES_CLIP"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_yes_clip"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -453,7 +453,7 @@ def get_presto_args(pretrained_normalizer: bool = True) -> str:
         presto_args = dataset_args
         presto_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -463,7 +463,7 @@ def get_presto_args(pretrained_normalizer: bool = True) -> str:
         # IF we use dataset stats we want to turn off the pretrained normalizer
         presto_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -479,7 +479,7 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
         prithvi_args = dataset_args
         prithvi_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NO_NORM"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=no_norm"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -488,7 +488,7 @@ def get_prithviv2_args(pretrained_normalizer: bool = True) -> str:
     else:
         prithvi_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.STANDARDIZE"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=standardize"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
@@ -578,7 +578,7 @@ def get_olmoearth_args(pretrained_normalizer: bool = True) -> str:
         olmoearth_dataset_args = dataset_args
         olmoearth_dataset_args += " " + " ".join(
             [
-                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=NormMethod.NORM_NO_CLIP_2_STD"
+                f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.norm_method=norm_no_clip_2_std"
                 for task_name in EVAL_TASKS.keys()
             ]
         )
