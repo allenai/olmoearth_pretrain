@@ -1,6 +1,6 @@
 """Tests for subsampled pixel-resolution MIM targets (``nn/pixel_targets.py``).
 
-Covers the three pieces the ``rc_pixtgt_pix512`` arms rely on:
+Covers the three pieces pixel-resolution MIM targets rely on:
 
 * ``gather_pixels`` keeps exactly the drawn pixel of every token cell;
 * a shifted decoder query lands on the coordinate of the per-pixel location query it targets;
@@ -61,7 +61,7 @@ def _make_sample() -> MaskedOlmoEarthSample:
 
 
 def _model_config() -> LatentMIMConfig:
-    """Small rc_pix512-shaped model with a projection-only target.
+    """Small v1.3-shaped model with a projection-only target.
 
     An AttentionPooler (run at ``location_query_patch_size=1``: per-pixel location queries) and a 2D-RoPE
     decoder over it. Default tokenization: Sentinel-2 in three band sets.

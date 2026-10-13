@@ -102,8 +102,8 @@ def searchlight_reach_px(
 
     Every attention spreads context by at most ``W // 2`` cells: each ViT block, the
     last read (earlier reads see the same tokens) and each query self-attention.
-    An ``embed_domain`` overlap of twice this is exact; a much smaller one is enough
-    in practice (see ``docs/Searchlight-Inference.md``).
+    An ``embed_domain`` overlap of twice this is exact; a smaller one is an
+    approximation near crop boundaries (see ``docs/Searchlight-Inference.md``).
     """
     return (
         (vit_depth + 1 + pooler_depth)
