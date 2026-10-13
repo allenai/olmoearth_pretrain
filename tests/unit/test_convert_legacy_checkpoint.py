@@ -104,7 +104,7 @@ def test_active_removed_feature_is_refused() -> None:
         ),
         (
             "encoder.register_bottleneck.register",
-            "encoder.attention_pooler.location_queries",
+            "encoder.attention_pooler.learned_query",
         ),
         (
             "encoder.register_bottleneck.latent_blocks.1.attn.q.weight",
@@ -155,7 +155,7 @@ def test_interim_student_names_convert(interim: str, new: str) -> None:
 @pytest.mark.parametrize(
     "pre_rename,new",
     [
-        ("encoder.perceiver.register", "encoder.attention_pooler.location_queries"),
+        ("encoder.perceiver.register", "encoder.attention_pooler.learned_query"),
         (
             "encoder.perceiver.latent_blocks.0.mlp.fc1.bias",
             "encoder.attention_pooler.self_attn_blocks.0.mlp.fc1.bias",

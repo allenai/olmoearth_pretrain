@@ -147,7 +147,7 @@ def test_encoder_registers_grad_without_student_interference(
     encoder.zero_grad()
     output_dict["location_tokens"].sum().backward()
     assert encoder.attention_pooler is not None
-    assert encoder.attention_pooler.location_queries.grad is not None
+    assert encoder.attention_pooler.learned_query.grad is not None
     assert encoder.attention_pooler.student is not None
     assert encoder.attention_pooler.student[0].weight.grad is None
 

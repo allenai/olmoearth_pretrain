@@ -148,7 +148,7 @@ def test_latentmim_attention_pooler(
     # Gradients reach the AttentionPooler (reads + self-attention), the decoder's
     # location-token->decoder projection (the only context it attends to), and the (location-token-fed)
     # supervision head.
-    assert model.encoder.attention_pooler.location_queries.grad is not None
+    assert model.encoder.attention_pooler.learned_query.grad is not None
     assert model.encoder.attention_pooler.kv_proj.weight.grad is not None
     assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.location_tokens_to_decoder_embed.weight.grad is not None
@@ -236,7 +236,7 @@ def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
 
     # Gradients reach the (2D) pooler read and the decoder's location-token projection, and the
     # 3D encoder self-attention still trains.
-    assert model.encoder.attention_pooler.location_queries.grad is not None
+    assert model.encoder.attention_pooler.learned_query.grad is not None
     assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.location_tokens_to_decoder_embed.weight.grad is not None
     assert model.encoder.blocks[0].attn.q.weight.grad is not None

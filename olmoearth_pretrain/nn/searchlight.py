@@ -577,9 +577,7 @@ def encoder_searchlight(
         q_pos = rearrange(
             location_query_positions[0], "(h a w b) c -> 1 (h w a b) c", h=n_h, a=r, b=r
         )
-        q = attention_pooler.location_queries.to(x.dtype).expand(
-            1, n_h * n_w * r * r, -1
-        )
+        q = attention_pooler.learned_query.to(x.dtype).expand(1, n_h * n_w * r * r, -1)
         key_pos = pos[..., -2:]  # the reads rotate over (row, col) only
         for i, (read_blk, self_attn_blk) in enumerate(
             zip(attention_pooler.read_blocks, attention_pooler.self_attn_blocks)

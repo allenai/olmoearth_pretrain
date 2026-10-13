@@ -1487,9 +1487,10 @@ class FlexiVitBase(nn.Module):
 class AttentionPooler(nn.Module):
     """Dense spatial attention pooling of the encoder tokens onto a location grid.
 
-    Naming: the *inputs* are **location queries** (``location_queries``, one learned
-    vector cloned per grid cell); the *outputs* are **location tokens**
-    (``location_tokens``, plus the detached ``student_location_tokens``).
+    Naming: a single **learned query** (``learned_query``) is repeated into one
+    **location query** per grid cell; after the read + self-attention layers and the
+    final norm, the location queries are the **location tokens** (``location_tokens``,
+    plus the detached ``student_location_tokens``).
 
     The location queries cross-attention *read* the encoded (visible) patch tokens, then
     self-attend over the grid. The resulting location tokens are the model's compressed,
@@ -1501,7 +1502,7 @@ class AttentionPooler(nn.Module):
     the queries re-read the input after each refinement (the Perceiver/DETR/Flamingo
     pattern).
 
-    A *single* learned location query is cloned across a grid that matches the input
+    The *single* learned query is repeated across a grid that matches the input
     patch grid at forward time. RS imagery is translation-invariant, so every spatial query starts
     from the same content; spatial identity comes entirely from 2D RoPE on the per-cell
     positions. This enforces a translation-invariant prior and removes the grid size as
@@ -1576,8 +1577,8 @@ class AttentionPooler(nn.Module):
             raise ValueError(
                 "AttentionPooler requires use_2d_rope=True to differentiate grid cells."
             )
-        self.location_queries = nn.Parameter(torch.empty(1, pooler_dim))
-        nn.init.trunc_normal_(self.location_queries, std=0.02)
+        self.learned_query = nn.Parameter(torch.empty(1, pooler_dim))
+        nn.init.trunc_normal_(self.learned_query, std=0.02)
         # The read + self-attention blocks run on small unpacked [B, N, D] tensors with an
         num_read_blocks = pooler_depth
         self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
@@ -1757,10 +1758,11 @@ class AttentionPooler(nn.Module):
             spatial_grid[1] * patch_size // location_query_patch_size,
         )
         num_queries = query_grid[0] * query_grid[1]
-        # Clone the single learned location query across the batch and all grid cells;
-        # RoPE on the per-cell location_query_positions is what differentiates them.
-        location_tokens = (
-            self.location_queries.unsqueeze(0)
+        # Repeat the learned query into one location query per grid cell (and batch
+        # element); RoPE on the per-cell location_query_positions is what tells them
+        # apart.
+        location_queries = (
+            self.learned_query.unsqueeze(0)
             .expand(batch_size, num_queries, -1)
             .contiguous()
         )
@@ -1783,9 +1785,9 @@ class AttentionPooler(nn.Module):
             visible_mask.bool() if visible_mask is not None else None
         )
 
-        def read(location_tokens: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
+        def read(queries: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
-                x=location_tokens,
+                x=queries,
                 y=kv,
                 attn_mask=read_attn_mask,
                 rope_positions=location_query_positions,
@@ -1799,28 +1801,34 @@ class AttentionPooler(nn.Module):
                 if shared_kv is not None
                 else self.kv_projs[i](self.input_norms[i](patch_tokens))
             )
-            location_tokens = read(location_tokens, i, read_blk, kv)
+            location_queries = read(location_queries, i, read_blk, kv)
             del kv
-            location_tokens = self.self_attn_blocks[i](
-                x=location_tokens,
+            location_queries = self.self_attn_blocks[i](
+                x=location_queries,
                 rope_positions=location_query_positions,
             )
-        out = self.norm(location_tokens)
-        out = rearrange(out, "b (h w) d -> b h w d", h=query_grid[0], w=query_grid[1])
+        # After every read + self-attention layer and the final norm, the location
+        # queries are the location tokens.
+        location_tokens = rearrange(
+            self.norm(location_queries),
+            "b (h w) d -> b h w d",
+            h=query_grid[0],
+            w=query_grid[1],
+        )
         # The student reads a detached copy: its losses train the student alone.
         student_location_tokens = (
-            self.student(out.detach()) if self.student is not None else None
+            self.student(location_tokens.detach()) if self.student is not None else None
         )
-        return out, location_query_positions, student_location_tokens
+        return location_tokens, location_query_positions, student_location_tokens
 
 
 @dataclass
 class AttentionPoolerConfig(Config):
     """Dense spatial attention pooler on the encoder.
 
-    Attaching this to :class:`EncoderConfig` turns the bottleneck on: one shared
-    location query is cloned across a grid matching the input patch grid and reads the
-    encoded patch tokens (see :class:`AttentionPooler`); the decoder cross-attends the
+    Attaching this to :class:`EncoderConfig` turns the bottleneck on: the learned
+    query is repeated into location queries over a grid matching the input patch grid,
+    which read the encoded patch tokens (see :class:`AttentionPooler`); the decoder cross-attends the
     resulting location-token grid and frozen evals probe it. Requires a RoPE position
     encoding on the encoder, since the grid cells are told apart by 2D RoPE alone.
 

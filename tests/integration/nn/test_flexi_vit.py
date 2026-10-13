@@ -1066,7 +1066,7 @@ def test_encoder_rope_dynamic_patch_sizes(
 def test_encoder_attention_pooler_dynamic_grid(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
 ) -> None:
-    """A single learned location query is cloned across the patch grid."""
+    """A single learned query is repeated into one location query per patch."""
     supported_modalities = [Modality.SENTINEL2_L2A, Modality.LATLON]
     sentinel2_l2a_num_bands = modality_band_set_len_and_total_bands["sentinel2_l2a"][1]
     latlon_num_bands = modality_band_set_len_and_total_bands["latlon"][1]
@@ -1089,7 +1089,7 @@ def test_encoder_attention_pooler_dynamic_grid(
     )
     # Single shared latent, not a per-cell grid of parameters.
     assert encoder.attention_pooler is not None
-    assert encoder.attention_pooler.location_queries.shape == (1, pooler_dim)
+    assert encoder.attention_pooler.learned_query.shape == (1, pooler_dim)
 
     B, H, W, T = 2, 8, 8, 2
     timestamps = torch.tensor(
@@ -1120,7 +1120,7 @@ def test_encoder_attention_pooler_dynamic_grid(
         assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
 
         output_dict["location_tokens"].sum().backward()
-        assert encoder.attention_pooler.location_queries.grad is not None
+        assert encoder.attention_pooler.learned_query.grad is not None
 
 
 def test_encoder_attention_pooler_3d_rope_encoder_2d_read(
@@ -1181,8 +1181,8 @@ def test_encoder_attention_pooler_3d_rope_encoder_2d_read(
     # Location-query positions are spatial only -- 2D, regardless of the 3D encoder.
     assert output_dict["location_query_positions"].shape == (B, n_reg, 2)
     output_dict["location_tokens"].sum().backward()
-    assert encoder.attention_pooler.location_queries.grad is not None
-    assert torch.isfinite(encoder.attention_pooler.location_queries.grad).all()
+    assert encoder.attention_pooler.learned_query.grad is not None
+    assert torch.isfinite(encoder.attention_pooler.learned_query.grad).all()
 
 
 def test_encoder_attention_pooler_interleave(

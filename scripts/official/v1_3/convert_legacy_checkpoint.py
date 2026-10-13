@@ -40,7 +40,7 @@ What changes, and why:
   (``AttentionPoolerConfig``) with ``register_dim`` / ``latent_depth`` ->
   ``pooler_dim`` / ``pooler_depth``; the decoder's ``use_perceiver`` / ``register_dim``
   -> ``use_attention_pooler`` / ``pooler_dim``; and ``encoder.perceiver.*`` ->
-  ``encoder.attention_pooler.*`` with ``.register`` -> ``.location_queries`` and
+  ``encoder.attention_pooler.*`` with ``.register`` -> ``.learned_query`` and
   ``.latent_blocks`` -> ``.self_attn_blocks``. Its outputs became location tokens:
   ``register_distillation_head_config`` (``RegisterDistillationHeadConfig``) ->
   ``location_token_distillation_head_config``
@@ -123,7 +123,8 @@ REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
 #: Perceiver latent-grid settings of those runs. They are not part of the model: the
 #: latent patch size is now a forward argument
 #: (``Encoder.forward(location_query_patch_size=)``), drawn by the dataloader under its
-#: ``max_location_queries`` in training and chosen by the caller at inference. Dropped at any value; the values are logged.
+#: ``max_location_queries`` in training and chosen by the caller at inference. Dropped
+#: at any value; the values are logged.
 DROPPED_PERCEIVER_RUNTIME_FIELDS = (
     "pixel_latents",
     "random_latent_stride",
@@ -277,7 +278,7 @@ def _rename_attention_pooler_key(key: str) -> str:
     key = re.sub(r"(^|\.)perceiver\.", r"\g<1>attention_pooler.", key, 1)
     key = re.sub(
         r"(^|\.)attention_pooler\.register$",
-        r"\g<1>attention_pooler.location_queries",
+        r"\g<1>attention_pooler.learned_query",
         key,
     )
     key = re.sub(
@@ -313,7 +314,7 @@ def pre_rename_key(new: str) -> str:
         1,
     )
     key = re.sub(
-        r"(^|\.)attention_pooler\.location_queries$", r"\g<1>perceiver.register", new
+        r"(^|\.)attention_pooler\.learned_query$", r"\g<1>perceiver.register", new
     )
     key = re.sub(
         r"(^|\.)attention_pooler\.self_attn_blocks\.",

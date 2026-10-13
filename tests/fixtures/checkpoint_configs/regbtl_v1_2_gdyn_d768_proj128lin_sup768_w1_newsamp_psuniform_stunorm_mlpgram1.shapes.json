@@ -318,7 +318,7 @@
     "encoder.attention_pooler.input_norms.3.weight": [
       768
     ],
-    "encoder.attention_pooler.location_queries": [
+    "encoder.attention_pooler.learned_query": [
       1,
       768
     ],
