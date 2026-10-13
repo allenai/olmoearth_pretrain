@@ -38,8 +38,8 @@ class TestExtractCenterToken:
         assert torch.equal(result, x[:, 2, 3, :])
 
 
-class TestPoolRegisters:
-    """Tests for the register-bottleneck eval embedding."""
+class TestPoolLocationTokens:
+    """Tests for the AttentionPooler eval embedding."""
 
     GRID = (4, 4)
     DIM = 8
@@ -55,34 +55,34 @@ class TestPoolRegisters:
             use_center_token=use_center_token,
         )
 
-    def _registers(self, batch: int = 2) -> torch.Tensor:
+    def _location_tokens(self, batch: int = 2) -> torch.Tensor:
         n_h, n_w = self.GRID
         return torch.randn(batch, n_h, n_w, self.DIM)
 
     def test_center_token_takes_center_cell(self) -> None:
-        """Center-pixel classification keeps only the center register, not the mean."""
+        """Center-pixel classification keeps only the center location token, not the mean."""
         wrapper = self._wrapper(TaskType.CLASSIFICATION, use_center_token=True)
-        registers = self._registers()
-        out = wrapper._pool_registers({"registers": registers})
+        location_tokens = self._location_tokens()
+        out = wrapper._pool_location_tokens({"location_tokens": location_tokens})
         n_h, n_w = self.GRID
-        expected = registers[:, n_h // 2, n_w // 2, :]
-        assert out.shape == (registers.shape[0], self.DIM)
+        expected = location_tokens[:, n_h // 2, n_w // 2, :]
+        assert out.shape == (location_tokens.shape[0], self.DIM)
         assert torch.equal(out, expected)
 
     def test_classification_without_center_token_pools(self) -> None:
         """Window-level classification still averages the whole grid."""
         wrapper = self._wrapper(TaskType.CLASSIFICATION, use_center_token=False)
-        registers = self._registers()
-        out = wrapper._pool_registers({"registers": registers})
-        assert out.shape == (registers.shape[0], self.DIM)
-        assert torch.allclose(out, registers.mean(dim=(1, 2)))
+        location_tokens = self._location_tokens()
+        out = wrapper._pool_location_tokens({"location_tokens": location_tokens})
+        assert out.shape == (location_tokens.shape[0], self.DIM)
+        assert torch.allclose(out, location_tokens.mean(dim=(1, 2)))
 
     def test_segmentation_keeps_grid(self) -> None:
         """Dense tasks get the coarse spatial map."""
         wrapper = self._wrapper(TaskType.SEGMENTATION, use_center_token=False)
-        registers = self._registers()
-        out = wrapper._pool_registers({"registers": registers})
-        assert out.shape == (registers.shape[0], *self.GRID, self.DIM)
+        location_tokens = self._location_tokens()
+        out = wrapper._pool_location_tokens({"location_tokens": location_tokens})
+        assert out.shape == (location_tokens.shape[0], *self.GRID, self.DIM)
 
     def test_center_token_rejected_for_segmentation(self) -> None:
         """The existing guard still forbids center-token dense tasks."""
@@ -90,8 +90,8 @@ class TestPoolRegisters:
             self._wrapper(TaskType.SEGMENTATION, use_center_token=True)
 
 
-class TestPoolStudentRegisters:
-    """Tests for probing the detached low-dim register projection."""
+class TestPoolStudentLocationTokens:
+    """Tests for probing the detached low-dim student projection."""
 
     GRID = (4, 4)
     DIM = 16
@@ -101,16 +101,16 @@ class TestPoolStudentRegisters:
         self,
         task_type: TaskType = TaskType.SEGMENTATION,
         eval_student_dim: int | None = None,
-        eval_on_student_registers: bool = True,
+        eval_on_student_location_tokens: bool = True,
         eval_on_encoder_tokens: bool = False,
     ) -> OlmoEarthEvalWrapper:
         return OlmoEarthEvalWrapper(
-            # A Perceiver model with a student, which the constructor now checks for.
-            model=SimpleNamespace(use_perceiver=True),  # type: ignore[arg-type]
+            # An AttentionPooler model with a student, which the constructor now checks for.
+            model=SimpleNamespace(use_attention_pooler=True),  # type: ignore[arg-type]
             task_type=task_type,
             patch_size=1,
             pooling_type=PoolingType.MEAN,
-            eval_on_student_registers=eval_on_student_registers,
+            eval_on_student_location_tokens=eval_on_student_location_tokens,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
             eval_student_dim=eval_student_dim,
         )
@@ -118,30 +118,32 @@ class TestPoolStudentRegisters:
     def _encoder_output(self, batch: int = 2) -> dict[str, torch.Tensor]:
         n_h, n_w = self.GRID
         return {
-            "registers": torch.randn(batch, n_h, n_w, self.DIM),
-            "student_registers": torch.randn(batch, n_h, n_w, self.PROJ_DIM),
+            "location_tokens": torch.randn(batch, n_h, n_w, self.DIM),
+            "student_location_tokens": torch.randn(batch, n_h, n_w, self.PROJ_DIM),
         }
 
     def test_projected_grid_for_segmentation(self) -> None:
         """Dense tasks get the student grid at the student width."""
         wrapper = self._wrapper()
-        out = wrapper._pool_registers(self._encoder_output())
+        out = wrapper._pool_location_tokens(self._encoder_output())
         assert out.shape == (2, *self.GRID, self.PROJ_DIM)
 
     def test_projection_dim_takes_matryoshka_prefix(self) -> None:
         """eval_student_dim slices the first d dims of the student."""
         wrapper = self._wrapper(eval_student_dim=4)
         encoder_output = self._encoder_output()
-        out = wrapper._pool_registers(encoder_output)
+        out = wrapper._pool_location_tokens(encoder_output)
         assert out.shape == (2, *self.GRID, 4)
-        expected = encoder_output["student_registers"][..., :4]
+        expected = encoder_output["student_location_tokens"][..., :4]
         assert torch.equal(out, expected)
 
     def test_missing_projection_raises(self) -> None:
         """A model without the student cannot be probed on it."""
         wrapper = self._wrapper()
         with pytest.raises(ValueError, match="student_dims"):
-            wrapper._pool_registers({"registers": torch.randn(2, 16, self.DIM)})
+            wrapper._pool_location_tokens(
+                {"location_tokens": torch.randn(2, 16, self.DIM)}
+            )
 
     def test_projected_and_encoder_tokens_mutually_exclusive(self) -> None:
         """Both opt-outs at once are contradictory."""
@@ -149,6 +151,6 @@ class TestPoolStudentRegisters:
             self._wrapper(eval_on_encoder_tokens=True)
 
     def test_projection_dim_requires_projected_flag(self) -> None:
-        """A prefix width without the projected-registers flag is rejected."""
-        with pytest.raises(ValueError, match="eval_on_student_registers"):
-            self._wrapper(eval_student_dim=4, eval_on_student_registers=False)
+        """A prefix width without the projected-location_tokens flag is rejected."""
+        with pytest.raises(ValueError, match="eval_on_student_location_tokens"):
+            self._wrapper(eval_student_dim=4, eval_on_student_location_tokens=False)

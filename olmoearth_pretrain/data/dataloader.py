@@ -81,7 +81,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         min_tokens_per_instance: int = 0,
         max_timesteps: int = 12,
         tile_size: int = 128,
-        max_latents: int | None = None,
+        max_location_queries: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -146,12 +146,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
             max_timesteps: Maximum number of timesteps a sample can contribute.
             tile_size: Spatial extent (in base-resolution pixels) of a training tile.
                 Used to bound the sampled grid so ``sampled_hw_p * patch_size`` fits.
-            max_latents: Per-sample Perceiver latent budget. If set, every rank batch
-                also draws a ``latent_patch_size`` next to its patch size: uniform
-                among the divisors ``s`` of the patch size whose latent count
+            max_location_queries: Per-sample location-query budget. If set, every rank batch
+                also draws a ``location_query_patch_size`` next to its patch size: uniform
+                among the divisors ``s`` of the patch size whose query count
                 ``(sampled_hw_p * patch_size / s) ** 2`` fits the budget (``s ==
-                patch_size``, one latent per token, is always allowed). None leaves
-                it None (one latent per token).
+                patch_size``, one location query per token, is always allowed). None leaves
+                it None (one location query per token).
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -191,9 +191,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.min_tokens_per_instance = min_tokens_per_instance
         self.max_timesteps = max_timesteps
         self.tile_size = tile_size
-        if max_latents is not None and max_latents < 1:
-            raise ValueError(f"max_latents must be positive, got {max_latents}")
-        self.max_latents = max_latents
+        if max_location_queries is not None and max_location_queries < 1:
+            raise ValueError(
+                f"max_location_queries must be positive, got {max_location_queries}"
+            )
+        self.max_location_queries = max_location_queries
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -546,11 +548,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         """Get a mock batch, for dry-run of forward and backward pass.
 
         Returns the appropriate batch format based on num_masked_views:
-        - 1: (patch_size, MaskedOlmoEarthSample, latent_patch_size) - single masked view
+        - 1: (patch_size, MaskedOlmoEarthSample, location_query_patch_size) - single masked view
         - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample,
-          latent_patch_size) - double masked
+          location_query_patch_size) - double masked
 
-        ``latent_patch_size`` is None: at the mock batch's patch size 1 a token is a
+        ``location_query_patch_size`` is None: at the mock batch's patch size 1 a token is a
         pixel, so there is nothing to choose.
         """
         logger.info("Getting mock batch NOT FROM DATASET")
@@ -660,7 +662,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         hw_p_to_sample: list[int],
         rank_batch_size: int,
     ) -> Iterator[tuple[int, int, int, int, int | None]]:
-        """Yield ``(idx, patch_size, sampled_hw_p, target_t, latent_patch_size)`` per instance.
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t, location_query_patch_size)`` per instance.
 
         See the OlmoEarthDataLoader.__init__ docstring for a description
         of the subsetting behaviour.
@@ -679,7 +681,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         time_priority_prob = dl.time_priority_prob
         temporal_bias = dl.temporal_bias
         min_tokens = dl.min_tokens_per_instance
-        max_latents = dl.max_latents
+        max_location_queries = dl.max_location_queries
 
         def max_t_for(hw: int) -> int:
             """Largest number of timesteps that fits the budget for this grid."""
@@ -717,18 +719,21 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             weights /= weights.sum()
             return int(rng.choice(ts, p=weights))
 
-        def sample_latent_patch_size(patch_size: int, hw: int) -> int | None:
-            """Uniform over the latent patch sizes that fit max_latents (see __init__).
+        def sample_location_query_patch_size(patch_size: int, hw: int) -> int | None:
+            """Uniform over the location-query patch sizes that fit max_location_queries (see __init__).
 
             None without a budget, and then no draw is taken from ``rng``.
             """
-            if max_latents is None:
+            if max_location_queries is None:
                 return None
             allowed = [
                 s
                 for s in range(1, patch_size + 1)
                 if patch_size % s == 0
-                and (s == patch_size or (hw * patch_size // s) ** 2 <= max_latents)
+                and (
+                    s == patch_size
+                    or (hw * patch_size // s) ** 2 <= max_location_queries
+                )
             ]
             return int(rng.choice(allowed))
 
@@ -791,7 +796,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     sampled_hw_p = int(rng.choice(candidates))
                     lo, hi = windows[sampled_hw_p]
                     target_t = sample_t(lo, hi)
-                latent_patch_size = sample_latent_patch_size(
+                location_query_patch_size = sample_location_query_patch_size(
                     int(patch_size), sampled_hw_p
                 )
             yield (
@@ -799,7 +804,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 int(patch_size),
                 int(sampled_hw_p),
                 int(target_t),
-                latent_patch_size,
+                location_query_patch_size,
             )
             instances_processed += 1
 
@@ -817,12 +822,12 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         """Iterate over the dataset.
 
         Yields batches in one of two formats depending on num_masked_views:
-        - 1: (patch_size, MaskedOlmoEarthSample, latent_patch_size) - single masked view
+        - 1: (patch_size, MaskedOlmoEarthSample, location_query_patch_size) - single masked view
         - 2: (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample,
-          latent_patch_size) - double masked views
+          location_query_patch_size) - double masked views
 
-        ``latent_patch_size`` is drawn per rank batch alongside ``patch_size`` when the
-        loader has a ``max_latents`` budget, and is None otherwise.
+        ``location_query_patch_size`` is drawn per rank batch alongside ``patch_size`` when the
+        loader has a ``max_location_queries`` budget, and is None otherwise.
 
         Transform and masking are applied in the batched collator for better vectorization.
         """
@@ -830,15 +835,15 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         indices = self.data_loader._get_local_instance_indices(global_indices)
 
         # Create iterator that fetches samples from the dataset, each carrying the
-        # latent patch size of its rank batch.
+        # location-query patch size of its rank batch.
         instance_iterator = (
             (
                 self.data_loader._get_dataset_item(
                     int(idx), patch_size, sampled_hw_p, target_t
                 ),
-                latent_patch_size,
+                location_query_patch_size,
             )
-            for idx, patch_size, sampled_hw_p, target_t, latent_patch_size in (
+            for idx, patch_size, sampled_hw_p, target_t, location_query_patch_size in (
                 self._get_batch_item_params_iterator(
                     indices,
                     self.data_loader.patch_sizes,
@@ -889,9 +894,9 @@ class OlmoEarthDataLoaderConfig(Config):
     masking_config_b: MaskingConfig | None = None
     num_masked_views: int = 1  # 1 = single, 2 = double
     tokenization_config: TokenizationConfig | None = None
-    # Per-sample Perceiver latent budget: if set, each rank batch draws a
-    # latent_patch_size (pixels per latent along each side) that fits it.
-    max_latents: int | None = None
+    # Per-sample location-query budget: if set, each rank batch draws a
+    # location_query_patch_size (pixels per location query along each side) that fits it.
+    max_location_queries: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -972,7 +977,7 @@ class OlmoEarthDataLoaderConfig(Config):
             min_tokens_per_instance=self.min_tokens_per_instance,
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
-            max_latents=self.max_latents,
+            max_location_queries=self.max_location_queries,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

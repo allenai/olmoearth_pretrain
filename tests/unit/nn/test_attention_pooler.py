@@ -1,4 +1,4 @@
-"""Unit tests for the spatial Perceiver register bottleneck."""
+"""Unit tests for the spatial AttentionPooler."""
 
 import weakref
 from collections.abc import Callable
@@ -9,7 +9,7 @@ import torch
 from einops import rearrange
 from torch import Tensor, nn
 
-from olmoearth_pretrain.nn.flexi_vit import Perceiver
+from olmoearth_pretrain.nn.flexi_vit import AttentionPooler
 
 ENCODER_DIM = 64
 DEPTH = 4
@@ -19,15 +19,17 @@ PATCH_SIZE = 1
 GSD_RATIO = 10.0
 
 
-def _build_perceiver(per_depth_read_proj: bool, attn_dim: int | None) -> Perceiver:
+def _build_attention_pooler(
+    per_depth_read_proj: bool, attn_dim: int | None
+) -> AttentionPooler:
     torch.manual_seed(0)
-    perceiver = Perceiver(
+    attention_pooler = AttentionPooler(
         encoder_embedding_size=ENCODER_DIM,
-        # A narrower register dim exercises the kv_proj Linear when attn_dim is None.
-        register_dim=32,
+        # A narrower location-token dim exercises the kv_proj Linear when attn_dim is None.
+        pooler_dim=32,
         num_heads=4,
         mlp_ratio=2.0,
-        latent_transformer_depth=DEPTH,
+        pooler_depth=DEPTH,
         use_2d_rope=True,
         per_depth_read_proj=per_depth_read_proj,
         attn_dim=attn_dim,
@@ -36,11 +38,11 @@ def _build_perceiver(per_depth_read_proj: bool, attn_dim: int | None) -> Perceiv
     )
     # Randomize the LayerNorm affines so each per-depth read produces distinct K/V.
     with torch.no_grad():
-        for module in perceiver.modules():
+        for module in attention_pooler.modules():
             if isinstance(module, torch.nn.LayerNorm):
                 module.weight.normal_()
                 module.bias.normal_()
-    return perceiver.eval()
+    return attention_pooler.eval()
 
 
 def _make_inputs(
@@ -63,7 +65,7 @@ ForwardFn = Callable[
 
 
 def _reference_forward(
-    perceiver: Perceiver,
+    attention_pooler: AttentionPooler,
     patch_tokens: Tensor,
     patch_positions: Tensor,
     visible_mask: Tensor,
@@ -71,47 +73,55 @@ def _reference_forward(
     patch_size: int,
     gsd_ratio: float,
 ) -> tuple[Tensor, Tensor | None, Tensor | None]:
-    """Frozen copy of ``Perceiver.forward`` from before K/V was built lazily per read.
+    """Frozen copy of ``AttentionPooler.forward`` from before K/V was built lazily per read.
 
     Builds every read's K/V up front. Kept as the reference the lazy forward must match.
     """
-    if perceiver.per_depth_read_proj:
+    if attention_pooler.per_depth_read_proj:
         kv_per_read = [
             proj(norm(patch_tokens))
-            for norm, proj in zip(perceiver.input_norms, perceiver.kv_projs)
+            for norm, proj in zip(
+                attention_pooler.input_norms, attention_pooler.kv_projs
+            )
         ]
     else:
-        kv = perceiver.kv_proj(perceiver.input_norm(patch_tokens))
-        kv_per_read = [kv] * len(perceiver.read_blocks)
+        kv = attention_pooler.kv_proj(attention_pooler.input_norm(patch_tokens))
+        kv_per_read = [kv] * len(attention_pooler.read_blocks)
     batch_size = patch_tokens.shape[0]
-    num_registers = spatial_grid[0] * spatial_grid[1]
-    registers = (
-        perceiver.register.unsqueeze(0)
-        .expand(batch_size, num_registers, -1)
+    num_queries = spatial_grid[0] * spatial_grid[1]
+    location_queries = (
+        attention_pooler.learned_query.unsqueeze(0)
+        .expand(batch_size, num_queries, -1)
         .contiguous()
     )
-    register_positions = perceiver.build_register_positions(
+    location_query_positions = attention_pooler.build_location_query_positions(
         batch_size, spatial_grid, patch_size, gsd_ratio, patch_tokens.device, patch_size
     )
     read_attn_mask = visible_mask.bool()
-    for i, (read_blk, kv) in enumerate(zip(perceiver.read_blocks, kv_per_read)):
-        registers = read_blk(
-            x=registers,
+    for i, (read_blk, kv) in enumerate(zip(attention_pooler.read_blocks, kv_per_read)):
+        location_queries = read_blk(
+            x=location_queries,
             y=kv,
             attn_mask=read_attn_mask,
-            rope_positions=register_positions,
+            rope_positions=location_query_positions,
             rope_positions_y=patch_positions,
         )
-        registers = perceiver.latent_blocks[i](
-            x=registers,
-            rope_positions=register_positions,
+        location_queries = attention_pooler.self_attn_blocks[i](
+            x=location_queries,
+            rope_positions=location_query_positions,
         )
-    out = perceiver.norm(registers)
-    out = rearrange(out, "b (h w) d -> b h w d", h=spatial_grid[0], w=spatial_grid[1])
-    student_registers = (
-        perceiver.student(out.detach()) if perceiver.student is not None else None
+    location_tokens = rearrange(
+        attention_pooler.norm(location_queries),
+        "b (h w) d -> b h w d",
+        h=spatial_grid[0],
+        w=spatial_grid[1],
     )
-    return out, register_positions, student_registers
+    student_location_tokens = (
+        attention_pooler.student(location_tokens.detach())
+        if attention_pooler.student is not None
+        else None
+    )
+    return location_tokens, location_query_positions, student_location_tokens
 
 
 _CONFIGS = pytest.mark.parametrize(
@@ -121,16 +131,16 @@ _CONFIGS = pytest.mark.parametrize(
 
 
 @_CONFIGS
-def test_perceiver_forward_matches_reference(
+def test_attention_pooler_forward_matches_reference(
     per_depth_read_proj: bool, attn_dim: int | None
 ) -> None:
     """The lazy per-read K/V forward is bit-identical to the eager reference."""
-    perceiver = _build_perceiver(per_depth_read_proj, attn_dim)
+    attention_pooler = _build_attention_pooler(per_depth_read_proj, attn_dim)
     patch_tokens, patch_positions, visible_mask = _make_inputs()
 
     with torch.no_grad():
         expected = _reference_forward(
-            perceiver,
+            attention_pooler,
             patch_tokens,
             patch_positions,
             visible_mask,
@@ -138,7 +148,7 @@ def test_perceiver_forward_matches_reference(
             PATCH_SIZE,
             GSD_RATIO,
         )
-        actual = perceiver(
+        actual = attention_pooler(
             patch_tokens,
             patch_positions,
             visible_mask,
@@ -155,15 +165,15 @@ def test_perceiver_forward_matches_reference(
 
 
 @_CONFIGS
-def test_perceiver_gradients_match_reference(
+def test_attention_pooler_gradients_match_reference(
     per_depth_read_proj: bool, attn_dim: int | None
 ) -> None:
     """Parameter and input gradients are bit-identical to the eager reference."""
-    perceiver = _build_perceiver(per_depth_read_proj, attn_dim)
+    attention_pooler = _build_attention_pooler(per_depth_read_proj, attn_dim)
     patch_tokens, patch_positions, visible_mask = _make_inputs()
 
     def grads(forward_fn: ForwardFn) -> tuple[Tensor, dict[str, Tensor]]:
-        perceiver.zero_grad(set_to_none=True)
+        attention_pooler.zero_grad(set_to_none=True)
         tokens = patch_tokens.clone().requires_grad_(True)
         out, _, student = forward_fn(
             tokens, patch_positions, visible_mask, SPATIAL_GRID, PATCH_SIZE, GSD_RATIO
@@ -173,15 +183,15 @@ def test_perceiver_gradients_match_reference(
         assert tokens.grad is not None
         param_grads = {
             name: param.grad.clone()
-            for name, param in perceiver.named_parameters()
+            for name, param in attention_pooler.named_parameters()
             if param.grad is not None
         }
         return tokens.grad, param_grads
 
     expected_token_grad, expected_param_grads = grads(
-        lambda *args: _reference_forward(perceiver, *args)
+        lambda *args: _reference_forward(attention_pooler, *args)
     )
-    actual_token_grad, actual_param_grads = grads(perceiver)
+    actual_token_grad, actual_param_grads = grads(attention_pooler)
 
     assert torch.equal(actual_token_grad, expected_token_grad)
     assert actual_param_grads.keys() == expected_param_grads.keys()
@@ -190,7 +200,7 @@ def test_perceiver_gradients_match_reference(
 
 
 @pytest.mark.parametrize("attn_dim", [ENCODER_DIM, None])
-def test_perceiver_keeps_one_per_read_kv_alive_at_inference(
+def test_attention_pooler_keeps_one_per_read_kv_alive_at_inference(
     attn_dim: int | None,
 ) -> None:
     """Under no_grad, each read's K/V is built just before that read and freed after.
@@ -198,7 +208,9 @@ def test_perceiver_keeps_one_per_read_kv_alive_at_inference(
     Regression test for the v1.3 inference OOM, where all per-read K/V copies were
     built before the first read and held for the whole loop.
     """
-    perceiver = _build_perceiver(per_depth_read_proj=True, attn_dim=attn_dim)
+    attention_pooler = _build_attention_pooler(
+        per_depth_read_proj=True, attn_dim=attn_dim
+    )
     patch_tokens, patch_positions, visible_mask = _make_inputs()
 
     kv_refs: list[weakref.ref] = []
@@ -217,14 +229,16 @@ def test_perceiver_keeps_one_per_read_kv_alive_at_inference(
         )
         state_at_read.append((len(kv_refs), alive, consumed))
 
-    handles = [proj.register_forward_hook(record_kv) for proj in perceiver.kv_projs]
+    handles = [
+        proj.register_forward_hook(record_kv) for proj in attention_pooler.kv_projs
+    ]
     handles += [
         blk.register_forward_pre_hook(record_read, with_kwargs=True)
-        for blk in perceiver.read_blocks
+        for blk in attention_pooler.read_blocks
     ]
     try:
         with torch.no_grad():
-            perceiver(
+            attention_pooler(
                 patch_tokens,
                 patch_positions,
                 visible_mask,
@@ -240,12 +254,12 @@ def test_perceiver_keeps_one_per_read_kv_alive_at_inference(
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_perceiver_inference_peak_memory_cuda() -> None:
+def test_attention_pooler_inference_peak_memory_cuda() -> None:
     """On CUDA, the lazy forward's inference peak is ~3 token-sized tensors lower."""
     device = torch.device("cuda")
-    perceiver = _build_perceiver(per_depth_read_proj=True, attn_dim=ENCODER_DIM).to(
-        device
-    )
+    attention_pooler = _build_attention_pooler(
+        per_depth_read_proj=True, attn_dim=ENCODER_DIM
+    ).to(device)
     patch_tokens, patch_positions, visible_mask = (
         t.to(device) for t in _make_inputs(batch_size=4, num_tokens=200_000)
     )
@@ -267,7 +281,9 @@ def test_perceiver_inference_peak_memory_cuda() -> None:
         torch.cuda.synchronize()
         return torch.cuda.max_memory_allocated()
 
-    reference_peak = peak_bytes(lambda *args: _reference_forward(perceiver, *args))
-    lazy_peak = peak_bytes(perceiver)
+    reference_peak = peak_bytes(
+        lambda *args: _reference_forward(attention_pooler, *args)
+    )
+    lazy_peak = peak_bytes(attention_pooler)
 
     assert reference_peak - lazy_peak >= 2.5 * token_bytes

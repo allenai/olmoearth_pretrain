@@ -1,4 +1,4 @@
-"""The v1.3 checkpoint converter turns the training branch's layout into the current one.
+"""The v1.3 checkpoint converter turns earlier layouts into the current one.
 
 Pinned against the release checkpoint's ORIGINAL config (``tests/fixtures/perceiver_legacy``)
 and its converted twin (``tests/fixtures/checkpoint_configs``), plus a state-dict round
@@ -59,6 +59,34 @@ def test_original_release_config_needs_converting() -> None:
         Config.from_dict(_release_legacy_model())
 
 
+def _pre_rename(model: dict) -> dict:
+    """A current-schema ``model`` config under the pre-AttentionPooler names."""
+    model = copy.deepcopy(model)
+    enc, dec = model["encoder_config"], model["decoder_config"]
+    pooler = enc.pop("attention_pooler_config")
+    pooler["_CLASS_"] = convert.PERCEIVER_CONFIG_CLASS
+    pooler["register_dim"] = pooler.pop("pooler_dim")
+    pooler["latent_depth"] = pooler.pop("pooler_depth")
+    enc["perceiver_config"] = pooler
+    dec["use_perceiver"] = dec.pop("use_attention_pooler")
+    dec["register_dim"] = dec.pop("pooler_dim")
+    head = model.pop("location_token_distillation_head_config")
+    head["_CLASS_"] = convert.DISTILLATION_HEAD_CONFIG_CLASS
+    model["register_distillation_head_config"] = head
+    return model
+
+
+def test_pre_rename_config_converts_to_the_fixture() -> None:
+    """A config saved under the ``perceiver_config`` names converts to the current one."""
+    from olmoearth_pretrain.config import Config
+
+    current = json.loads((CURRENT_DIR / f"{RELEASE}.json").read_text())["model"]
+    pre_rename = _pre_rename(current)
+    with pytest.raises(Exception):
+        Config.from_dict(pre_rename)
+    assert convert.convert_model_config(pre_rename) == current
+
+
 def test_active_removed_feature_is_refused() -> None:
     """A checkpoint that USED a removed feature cannot be converted."""
     model = _release_legacy_model()
@@ -70,18 +98,32 @@ def test_active_removed_feature_is_refused() -> None:
 @pytest.mark.parametrize(
     "old,new",
     [
-        ("encoder.register_bottleneck.norm.weight", "encoder.perceiver.norm.weight"),
-        ("encoder.register_projection.weight", "encoder.perceiver.student.0.weight"),
+        (
+            "encoder.register_bottleneck.norm.weight",
+            "encoder.attention_pooler.norm.weight",
+        ),
+        (
+            "encoder.register_bottleneck.register",
+            "encoder.attention_pooler.learned_query",
+        ),
+        (
+            "encoder.register_bottleneck.latent_blocks.1.attn.q.weight",
+            "encoder.attention_pooler.self_attn_blocks.1.attn.q.weight",
+        ),
+        (
+            "encoder.register_projection.weight",
+            "encoder.attention_pooler.student.0.weight",
+        ),
         (
             "encoder.register_projection_norm.bias",
-            "encoder.perceiver.student.1.bias",
+            "encoder.attention_pooler.student.1.bias",
         ),
         (
             "encoder.register_back_projections.128.0.weight",
-            "register_distillation_head.back_projections.128.0.weight",
+            "location_token_distillation_head.back_projections.128.0.weight",
         ),
         ("encoder.norm.weight", "encoder.norm.weight"),
-        ("register_bottleneck.norm.weight", "perceiver.norm.weight"),
+        ("register_bottleneck.norm.weight", "attention_pooler.norm.weight"),
     ],
 )
 def test_key_mapping_round_trips(old: str, new: str) -> None:
@@ -93,10 +135,13 @@ def test_key_mapping_round_trips(old: str, new: str) -> None:
 @pytest.mark.parametrize(
     "interim,new",
     [
-        ("encoder.register_student.0.weight", "encoder.perceiver.student.0.weight"),
-        ("encoder.register_student.1.bias", "encoder.perceiver.student.1.bias"),
-        ("register_student.0.bias", "perceiver.student.0.bias"),
-        ("encoder.perceiver.norm.weight", "encoder.perceiver.norm.weight"),
+        (
+            "encoder.register_student.0.weight",
+            "encoder.attention_pooler.student.0.weight",
+        ),
+        ("encoder.register_student.1.bias", "encoder.attention_pooler.student.1.bias"),
+        ("register_student.0.bias", "attention_pooler.student.0.bias"),
+        ("encoder.perceiver.norm.weight", "encoder.attention_pooler.norm.weight"),
     ],
 )
 def test_interim_student_names_convert(interim: str, new: str) -> None:
@@ -104,6 +149,37 @@ def test_interim_student_names_convert(interim: str, new: str) -> None:
     assert convert.convert_key(interim) == new
     assert convert.interim_key(new) == interim
     # Idempotent on a current name.
+    assert convert.convert_key(new) == new
+
+
+@pytest.mark.parametrize(
+    "pre_rename,new",
+    [
+        ("encoder.perceiver.register", "encoder.attention_pooler.learned_query"),
+        (
+            "encoder.perceiver.latent_blocks.0.mlp.fc1.bias",
+            "encoder.attention_pooler.self_attn_blocks.0.mlp.fc1.bias",
+        ),
+        (
+            "encoder.perceiver.read_blocks.0.attn.q.weight",
+            "encoder.attention_pooler.read_blocks.0.attn.q.weight",
+        ),
+        ("encoder.perceiver.student.1.bias", "encoder.attention_pooler.student.1.bias"),
+        ("perceiver.kv_proj.weight", "attention_pooler.kv_proj.weight"),
+        (
+            "register_distillation_head.back_projections.128.0.weight",
+            "location_token_distillation_head.back_projections.128.0.weight",
+        ),
+        (
+            "decoder.register_to_decoder_embed.weight",
+            "decoder.location_tokens_to_decoder_embed.weight",
+        ),
+    ],
+)
+def test_pre_rename_names_convert(pre_rename: str, new: str) -> None:
+    """The pre-AttentionPooler release names convert, and are recoverable."""
+    assert convert.convert_key(pre_rename) == new
+    assert convert.pre_rename_key(new) == pre_rename
     assert convert.convert_key(new) == new
 
 
@@ -127,13 +203,13 @@ def test_release_manifest_keys_map_onto_the_current_model() -> None:
 def test_state_dict_round_trip_on_a_small_model() -> None:
     """A state dict saved under the old names converts and strict-loads."""
     from olmoearth_pretrain.nn.flexi_vit import (
+        AttentionPoolerConfig,
         EncoderConfig,
-        PerceiverConfig,
         PredictorConfig,
     )
     from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig
-    from olmoearth_pretrain.nn.register_distillation_head import (
-        RegisterDistillationHeadConfig,
+    from olmoearth_pretrain.nn.location_token_distillation_head import (
+        LocationTokenDistillationHeadConfig,
     )
 
     modalities = ["sentinel2_l2a", "latlon"]
@@ -148,8 +224,8 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
             min_patch_size=1,
             max_sequence_length=4,
             position_encoding="rope",
-            perceiver_config=PerceiverConfig(
-                register_dim=8, student_dims=[4, 2], student_output_norm=True
+            attention_pooler_config=AttentionPoolerConfig(
+                pooler_dim=8, student_dims=[4, 2], student_output_norm=True
             ),
         ),
         decoder_config=PredictorConfig(
@@ -161,10 +237,10 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
             mlp_ratio=2.0,
             max_sequence_length=4,
             position_encoding="rope",
-            use_perceiver=True,
-            register_dim=8,
+            use_attention_pooler=True,
+            pooler_dim=8,
         ),
-        register_distillation_head_config=RegisterDistillationHeadConfig(),
+        location_token_distillation_head_config=LocationTokenDistillationHeadConfig(),
     )
     model = config.build()
     legacy = {convert.legacy_key(k): v for k, v in model.state_dict().items()}
@@ -174,6 +250,10 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
     interim = {convert.interim_key(k): v for k, v in model.state_dict().items()}
     assert any(k.startswith("encoder.register_student.") for k in interim)
     model.load_state_dict(convert.convert_state_dict(interim), strict=True)
+    # As does one under the pre-AttentionPooler release names.
+    pre_rename = {convert.pre_rename_key(k): v for k, v in model.state_dict().items()}
+    assert "encoder.perceiver.register" in pre_rename
+    model.load_state_dict(convert.convert_state_dict(pre_rename), strict=True)
     # An encoder-only dump drops the heads it cannot house.
     enc_only = {
         k[len("encoder.") :]: v for k, v in legacy.items() if k.startswith("encoder.")
@@ -183,7 +263,7 @@ def test_state_dict_round_trip_on_a_small_model() -> None:
 
 
 def test_pixel_latent_run_config_converts() -> None:
-    """A ``v1_3_rc_*pix512`` run's config converts to per-pixel latents.
+    """A ``v1_3_rc_*pix512`` run's config converts to per-pixel location queries.
 
     Its inert ``REMOVED_PERCEIVER_FIELDS`` are dropped; at an active value the
     conversion refuses.
@@ -195,13 +275,34 @@ def test_pixel_latent_run_config_converts() -> None:
         "model"
     ]
     converted = convert.convert_model_config(legacy)
-    perceiver = converted["encoder_config"]["perceiver_config"]
-    assert not set(convert.REMOVED_PERCEIVER_FIELDS) & set(perceiver)
-    assert not set(convert.DROPPED_PERCEIVER_RUNTIME_FIELDS) & set(perceiver)
+    pooler = converted["encoder_config"]["attention_pooler_config"]
+    assert not set(convert.REMOVED_PERCEIVER_FIELDS) & set(pooler)
+    assert not set(convert.DROPPED_PERCEIVER_RUNTIME_FIELDS) & set(pooler)
     config = Config.from_dict(converted)
-    assert config.encoder_config.perceiver_config.latent_depth == 4
+    assert config.encoder_config.attention_pooler_config.pooler_depth == 4
 
     active = copy.deepcopy(legacy)
     active["encoder_config"]["perceiver_config"]["share_read_kv"] = True
     with pytest.raises(convert.UnconvertibleCheckpoint, match="share_read_kv"):
         convert.convert_model_config(active)
+
+
+@pytest.mark.parametrize("section", ["train_module", "data_loader"])
+def test_decode_only_modalities_are_kept(section: str) -> None:
+    """Encoder-only loaders read only_decode_modalities, so it survives conversion."""
+    source = {
+        "model": {},
+        section: {
+            "optim": {"lr": 1e-4},
+            "masking_config": {
+                "type": "random",
+                "strategy_config": {"only_decode_modalities": ["srtm", "cdl"]},
+            },
+        },
+    }
+    assert convert.decode_only_section(source) == {
+        "masking_config": {
+            "strategy_config": {"only_decode_modalities": ["srtm", "cdl"]}
+        }
+    }
+    assert convert.decode_only_section({"model": {}}) is None

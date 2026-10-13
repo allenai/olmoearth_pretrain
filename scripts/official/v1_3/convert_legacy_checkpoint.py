@@ -1,18 +1,20 @@
 r"""Convert a v1.3 checkpoint trained on ``gabi/perceiver`` to the released layout.
 
 The Perceiver code was cleaned up before release: config fields were renamed and
-nested, and several parameters moved. A checkpoint written by the training branch
-therefore neither deserializes nor loads under the released code. This tool rewrites
-such a checkpoint ONCE, after which it loads with no compatibility code at all::
+nested, and several parameters moved. It was later renamed to the ``AttentionPooler``.
+A checkpoint written by the training branch, or under the pre-rename ``perceiver``
+names, therefore neither deserializes nor loads under the current code. This tool
+rewrites such a checkpoint ONCE, after which it loads with no compatibility code at
+all::
 
     python scripts/official/v1_3/convert_legacy_checkpoint.py \
         /weka/.../regbtl_v1_2_gdyn_d768_..._mlpgram1/step667200  /weka/.../v1_3_release
 
 The source directory must hold a ``config.json`` plus either the trainer's distributed
 ``model_and_optim/`` (needs olmo-core) or an already flat ``weights.pth``. The output
-directory gets a ``config.json`` holding just the ``model`` block in the current schema
-(the only part read when loading weights) and a ``weights.pth`` under the current
-parameter names, and is loadable with
+directory gets a ``config.json`` holding the ``model`` block in the current schema
+plus the decode-only modalities (:func:`decode_only_section`), and a ``weights.pth``
+under the current parameter names, and is loadable with
 ``olmoearth_pretrain.model_loader.load_pretrain_checkpoint`` (or
 ``load_model_from_path``). ``--config-only`` converts just the config.
 
@@ -31,6 +33,21 @@ What changes, and why:
   ``encoder.perceiver.student`` Sequential (``.0`` Linear, ``.1`` LayerNorm), owned by
   the Perceiver whose grid it reads; ``encoder.register_back_projections.*`` ->
   ``register_distillation_head.back_projections.*``.
+* The Perceiver was then renamed to the ``AttentionPooler``, and its learned latent to
+  the location query (:func:`_rename_attention_pooler_config`,
+  :func:`_rename_attention_pooler_key`): ``encoder_config.perceiver_config``
+  (``PerceiverConfig``) -> ``encoder_config.attention_pooler_config``
+  (``AttentionPoolerConfig``) with ``register_dim`` / ``latent_depth`` ->
+  ``pooler_dim`` / ``pooler_depth``; the decoder's ``use_perceiver`` / ``register_dim``
+  -> ``use_attention_pooler`` / ``pooler_dim``; and ``encoder.perceiver.*`` ->
+  ``encoder.attention_pooler.*`` with ``.register`` -> ``.learned_query`` and
+  ``.latent_blocks`` -> ``.self_attn_blocks``. Its outputs became location tokens:
+  ``register_distillation_head_config`` (``RegisterDistillationHeadConfig``) ->
+  ``location_token_distillation_head_config``
+  (``LocationTokenDistillationHeadConfig``), ``register_distillation_head.*`` ->
+  ``location_token_distillation_head.*`` and ``decoder.register_to_decoder_embed.*``
+  -> ``decoder.location_tokens_to_decoder_embed.*``. A checkpoint already in the
+  pre-rename release layout gets only this step.
 
 Between the first release cut and the student's move onto the Perceiver, the student
 briefly lived on the encoder as ``encoder.register_student``. A checkpoint written (or
@@ -40,7 +57,7 @@ current, and only those two parameters are renamed. The per-pixel-latent runs
 inert Perceiver fields (``REMOVED_PERCEIVER_FIELDS``) that are dropped, and latent-grid
 settings (``DROPPED_PERCEIVER_RUNTIME_FIELDS``) that are dropped because the latent patch
 size is now chosen per forward pass (their in-loop evals used one latent per pixel:
-pass ``latent_patch_size=1``).
+pass ``location_query_patch_size=1``).
 
 The mapping is pinned by ``tests/unit/test_convert_legacy_checkpoint.py`` against the
 release checkpoint's original config.
@@ -64,11 +81,16 @@ logger = logging.getLogger("convert_legacy_checkpoint")
 # ---------------------------------------------------------------------------------------
 
 PERCEIVER_CONFIG_CLASS = "olmoearth_pretrain.nn.flexi_vit.PerceiverConfig"
+ATTENTION_POOLER_CONFIG_CLASS = "olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig"
+LOCATION_TOKEN_DISTILLATION_HEAD_CONFIG_CLASS = (  # nosec B105 (a class path)
+    "olmoearth_pretrain.nn.location_token_distillation_head."
+    "LocationTokenDistillationHeadConfig"
+)
 DISTILLATION_HEAD_CONFIG_CLASS = (
     "olmoearth_pretrain.nn.register_distillation_head.RegisterDistillationHeadConfig"
 )
 
-#: Flat encoder fields -> their name inside ``perceiver_config``.
+#: Flat encoder fields -> their (pre-rename) name inside ``perceiver_config``.
 FLAT_PERCEIVER_FIELDS: dict[str, str] = {
     "register_dim": "register_dim",
     "register_latent_depth": "latent_depth",
@@ -99,9 +121,10 @@ REMOVED_PERCEIVER_FIELDS: dict[str, tuple[Any, ...]] = {
     "share_read_kv": (False, None),  # one K/V projection shared by every read
 }
 #: Perceiver latent-grid settings of those runs. They are not part of the model: the
-#: latent patch size is now a forward argument (``Encoder.forward(latent_patch_size=)``),
-#: drawn by the dataloader under its ``max_latents`` in training and chosen by the
-#: caller at inference. Dropped at any value; the values are logged.
+#: latent patch size is now a forward argument
+#: (``Encoder.forward(location_query_patch_size=)``), drawn by the dataloader under its
+#: ``max_location_queries`` in training and chosen by the caller at inference. Dropped
+#: at any value; the values are logged.
 DROPPED_PERCEIVER_RUNTIME_FIELDS = (
     "pixel_latents",
     "random_latent_stride",
@@ -167,7 +190,7 @@ def convert_model_config(model: dict) -> dict:
         if dropped:
             logger.info(
                 "dropping latent-grid settings (now a forward argument, "
-                "latent_patch_size): %s",
+                "location_query_patch_size): %s",
                 dropped,
             )
     _strip_removed(model, REMOVED_MODEL_FIELDS, "model")
@@ -205,7 +228,38 @@ def convert_model_config(model: dict) -> dict:
 
     if isinstance(dec, dict) and "use_register_bottleneck" in dec:
         dec["use_perceiver"] = dec.pop("use_register_bottleneck")
+    _rename_attention_pooler_config(model)
     return model
+
+
+#: Pre-rename ``PerceiverConfig`` fields -> their ``AttentionPoolerConfig`` names.
+RENAMED_POOLER_FIELDS = {"register_dim": "pooler_dim", "latent_depth": "pooler_depth"}
+#: Pre-rename decoder (``PredictorConfig``) fields -> their current names.
+RENAMED_DECODER_FIELDS = {
+    "use_perceiver": "use_attention_pooler",
+    "register_dim": "pooler_dim",
+}
+
+
+def _rename_attention_pooler_config(model: dict) -> None:
+    """Rename the Perceiver config to the AttentionPooler one, in place."""
+    enc = model["encoder_config"]
+    if "perceiver_config" in enc:
+        section = enc.pop("perceiver_config")
+        if isinstance(section, dict):
+            section = {RENAMED_POOLER_FIELDS.get(k, k): v for k, v in section.items()}
+            section["_CLASS_"] = ATTENTION_POOLER_CONFIG_CLASS
+        enc["attention_pooler_config"] = section
+    dec = model.get("decoder_config")
+    if isinstance(dec, dict):
+        for old, new in RENAMED_DECODER_FIELDS.items():
+            if old in dec:
+                dec[new] = dec.pop(old)
+    if "register_distillation_head_config" in model:
+        head = model.pop("register_distillation_head_config")
+        if isinstance(head, dict):
+            head["_CLASS_"] = LOCATION_TOKEN_DISTILLATION_HEAD_CONFIG_CLASS
+        model["location_token_distillation_head_config"] = head
 
 
 # ---------------------------------------------------------------------------------------
@@ -219,10 +273,63 @@ _HEADS_NEW = "register_distillation_head.back_projections."
 _STUDENT_NEW = "perceiver.student."
 
 
-def convert_key(old: str) -> str:
-    """The current name of a parameter saved under its ``gabi/perceiver`` name.
+def _rename_attention_pooler_key(key: str) -> str:
+    """The AttentionPooler name of a parameter saved under its pre-rename name."""
+    key = re.sub(r"(^|\.)perceiver\.", r"\g<1>attention_pooler.", key, 1)
+    key = re.sub(
+        r"(^|\.)attention_pooler\.register$",
+        r"\g<1>attention_pooler.learned_query",
+        key,
+    )
+    key = re.sub(
+        r"(^|\.)attention_pooler\.latent_blocks\.",
+        r"\g<1>attention_pooler.self_attn_blocks.",
+        key,
+        1,
+    )
+    if key.startswith("register_distillation_head."):
+        key = (
+            "location_token_distillation_head."
+            + key[len("register_distillation_head.") :]
+        )
+    return re.sub(
+        r"(^|\.)register_to_decoder_embed\.",
+        r"\g<1>location_tokens_to_decoder_embed.",
+        key,
+        1,
+    )
 
-    Also accepts the interim ``register_student.*`` name (see the module docstring).
+
+def pre_rename_key(new: str) -> str:
+    """Inverse of :func:`_rename_attention_pooler_key` (the pre-rename release name)."""
+    if new.startswith("location_token_distillation_head."):
+        new = (
+            "register_distillation_head."
+            + new[len("location_token_distillation_head.") :]
+        )
+    new = re.sub(
+        r"(^|\.)location_tokens_to_decoder_embed\.",
+        r"\g<1>register_to_decoder_embed.",
+        new,
+        1,
+    )
+    key = re.sub(
+        r"(^|\.)attention_pooler\.learned_query$", r"\g<1>perceiver.register", new
+    )
+    key = re.sub(
+        r"(^|\.)attention_pooler\.self_attn_blocks\.",
+        r"\g<1>perceiver.latent_blocks.",
+        key,
+        1,
+    )
+    return re.sub(r"(^|\.)attention_pooler\.", r"\g<1>perceiver.", key, 1)
+
+
+def convert_key(old: str) -> str:
+    """The current name of a parameter saved under an earlier name.
+
+    Accepts the ``gabi/perceiver`` name, the interim ``register_student.*`` name and the
+    pre-rename release name (see the module docstring).
     """
     key = old
     if key.startswith(_HEADS_OLD):
@@ -231,12 +338,12 @@ def convert_key(old: str) -> str:
     key = re.sub(r"(^|\.)register_projection\.", rf"\g<1>{_STUDENT_NEW}0.", key, 1)
     key = re.sub(r"(^|\.)register_student\.", rf"\g<1>{_STUDENT_NEW}", key, 1)
     key = re.sub(r"(^|\.)register_bottleneck\.", r"\g<1>perceiver.", key, 1)
-    return key
+    return _rename_attention_pooler_key(key)
 
 
 def legacy_key(new: str) -> str:
     """Inverse of :func:`convert_key` onto the ``gabi/perceiver`` names."""
-    key = new
+    key = pre_rename_key(new)
     if key.startswith(_HEADS_NEW):
         key = _HEADS_OLD + key[len(_HEADS_NEW) :]
     # The student first: once it is ``register_projection*`` the ``perceiver.`` rename
@@ -252,7 +359,10 @@ def legacy_key(new: str) -> str:
 def interim_key(new: str) -> str:
     """The interim (``encoder.register_student``) name of a current parameter."""
     return re.sub(
-        rf"(^|\.){re.escape(_STUDENT_NEW)}", r"\g<1>register_student.", new, 1
+        rf"(^|\.){re.escape(_STUDENT_NEW)}",
+        r"\g<1>register_student.",
+        pre_rename_key(new),
+        1,
     )
 
 
@@ -285,11 +395,12 @@ def _load_weights(src: Path, model: torch.nn.Module) -> None:
         from torch.distributed.checkpoint import FileSystemReader
 
         # A parameter is looked up under whichever of its earlier names the checkpoint
-        # stores: the training branch's, or the interim encoder-level student's.
+        # stores: the training branch's, the interim encoder-level student's, or the
+        # pre-rename release name.
         stored = set(FileSystemReader(str(dcp_dir)).read_metadata().state_dict_metadata)
         key_mapping: dict[str, str] = {}
         for k in model.state_dict():
-            for candidate in (legacy_key(k), interim_key(k)):
+            for candidate in (legacy_key(k), interim_key(k), pre_rename_key(k)):
                 if candidate != k and f"model.{candidate}" in stored:
                     key_mapping[k] = candidate
                     break
@@ -301,6 +412,30 @@ def _load_weights(src: Path, model: torch.nn.Module) -> None:
         raise FileNotFoundError(f"neither {dcp_dir} nor {weights} exists")
 
 
+def decode_only_section(source: dict) -> dict | None:
+    """The ``only_decode_modalities`` record of a training config, as a ``train_module``.
+
+    Loaders that serve only the encoder (``olmoearth_pretrain_minimal``) derive the
+    encoder's input modalities as the supported ones minus these, read from
+    ``train_module`` (else ``data_loader``) ``.masking_config.strategy_config``. None
+    when the config records neither.
+    """
+    for section in ("train_module", "data_loader"):
+        decode_only = (
+            (source.get(section) or {})
+            .get("masking_config", {})
+            .get("strategy_config", {})
+            .get("only_decode_modalities")
+        )
+        if decode_only is not None:
+            return {
+                "masking_config": {
+                    "strategy_config": {"only_decode_modalities": decode_only}
+                }
+            }
+    return None
+
+
 def convert_checkpoint(
     src: Path, dst: Path, *, config_only: bool, verify: bool
 ) -> None:
@@ -310,10 +445,22 @@ def convert_checkpoint(
 
     source = json.loads((src / "config.json").read_text())
     model_config = Config.from_dict(convert_model_config(source["model"]))  # strict
-    # Only the ``model`` block is ever read when loading weights; the trainer, data
+    # Keep the ``model`` block (re-serialized from the parsed config, so it carries
+    # exactly the current schema) and the decode-only modalities, which encoder-only
+    # loaders need to know what the encoder accepts. The rest of the trainer, data
     # loader, eval and launch sections describe the training run, not the artifact.
-    # Re-serialize from the parsed config so the file carries exactly the current schema.
-    config = {"model": model_config.as_config_dict(), "_converted_from": str(src)}
+    config: dict[str, Any] = {
+        "model": model_config.as_config_dict(),
+        "_converted_from": str(src),
+    }
+    decode_only = decode_only_section(source)
+    if decode_only is None:
+        logger.warning(
+            "the source config records no only_decode_modalities; encoder-only "
+            "loaders will not know which modalities the encoder accepts"
+        )
+    else:
+        config["train_module"] = decode_only
 
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "config.json").write_text(
@@ -342,7 +489,9 @@ def main(argv: list[str] | None = None) -> int:
     """Command-line entry point."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument(
-        "src", type=Path, help="checkpoint dir written on gabi/perceiver"
+        "src",
+        type=Path,
+        help="checkpoint dir written on gabi/perceiver or before the AttentionPooler rename",
     )
     parser.add_argument(
         "dst", type=Path, help="output dir for config.json + weights.pth"

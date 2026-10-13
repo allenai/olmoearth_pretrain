@@ -135,7 +135,7 @@ def _build_shape_sampling_dataloader(
     min_patch_size: int = 1,
     max_patch_size: int = 1,
     tile_size: int = 256,
-    max_latents: int | None = None,
+    max_location_queries: int | None = None,
 ) -> OlmoEarthDataLoader:
     """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
     training_modalities = [
@@ -183,18 +183,18 @@ def _build_shape_sampling_dataloader(
         min_tokens_per_instance=min_tokens_per_instance,
         max_timesteps=12,
         tile_size=tile_size,
-        max_latents=max_latents,
+        max_location_queries=max_location_queries,
         masking_strategy=masking_strategy,
         num_masked_views=1,
     )
 
 
-def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
+def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     tmp_path: Path, setup_h5py_dir: Path
 ) -> None:
-    """With max_latents each rank batch draws one in-budget latent patch size.
+    """With max_location_queries each rank batch draws one in-budget location-query patch size.
 
-    It divides the batch's patch size and fits the budget; without max_latents it is
+    It divides the batch's patch size and fits the budget; without max_location_queries it is
     None.
     """
     dl = _build_shape_sampling_dataloader(
@@ -205,7 +205,7 @@ def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
         time_priority_prob=0.5,
         min_patch_size=1,
         max_patch_size=4,
-        max_latents=256,
+        max_location_queries=256,
     )
     dl.reshuffle()
     items = list(
@@ -223,7 +223,7 @@ def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
         seen.add(lps)
     assert len(seen) > 1
 
-    # A budget too small for any sub-token grid falls back to one latent per token.
+    # A budget too small for any sub-token grid falls back to one location query per token.
     dl_tiny = _build_shape_sampling_dataloader(
         tmp_path / "tiny",
         setup_h5py_dir,
@@ -231,7 +231,7 @@ def test_latent_patch_size_is_drawn_per_rank_batch_under_the_budget(
         sampled_hw_p_list=[2, 4, 8],
         time_priority_prob=0.5,
         max_patch_size=4,
-        max_latents=1,
+        max_location_queries=1,
     )
     dl_tiny.reshuffle()
     assert all(
@@ -651,10 +651,10 @@ class TestGetMockBatch:
 
         mock_batch = dataloader.get_mock_batch()
 
-        # Should return (patch_size, MaskedOlmoEarthSample, latent_patch_size)
+        # Should return (patch_size, MaskedOlmoEarthSample, location_query_patch_size)
         assert len(mock_batch) == 3
-        patch_size, sample, latent_patch_size = mock_batch
-        assert latent_patch_size is None
+        patch_size, sample, location_query_patch_size = mock_batch
+        assert location_query_patch_size is None
         assert patch_size == 1
         assert isinstance(sample, MaskedOlmoEarthSample)
 
@@ -703,10 +703,10 @@ class TestGetMockBatch:
         mock_batch = dataloader.get_mock_batch()
 
         # Should return (patch_size, MaskedOlmoEarthSample, MaskedOlmoEarthSample,
-        # latent_patch_size)
+        # location_query_patch_size)
         assert len(mock_batch) == 4
-        patch_size, sample_a, sample_b, latent_patch_size = mock_batch
-        assert latent_patch_size is None
+        patch_size, sample_a, sample_b, location_query_patch_size = mock_batch
+        assert location_query_patch_size is None
         assert patch_size == 1
         assert isinstance(sample_a, MaskedOlmoEarthSample)
         assert isinstance(sample_b, MaskedOlmoEarthSample)
