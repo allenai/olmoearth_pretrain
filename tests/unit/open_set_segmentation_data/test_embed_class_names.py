@@ -62,6 +62,12 @@ def test_class_texts_follow_global_id_order_and_template() -> None:
     ]
 
 
+def test_simple_class_texts_drop_dataset_names() -> None:
+    """The simple template is the class (or merged concept) name alone."""
+    texts = class_texts(_mapping(), _registry(), simple=True)
+    assert texts == ["Wheat", "Maize", "forest disturbance"]
+
+
 def test_class_texts_reject_non_contiguous_ids() -> None:
     """Rows must line up with global ids 0..num_classes-1."""
     mapping = _mapping()

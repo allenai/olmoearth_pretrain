@@ -10,7 +10,9 @@ Writes, for the frozen ``class_mapping.json``:
 
 The text for a class is ``"{class name}; {dataset name}"`` (the dataset name from the
 label-bank registry, so e.g. "Wheat; AgriFieldNet India"); merged presence-only
-classes use ``"{concept}; {member class names}"``.
+classes use ``"{concept}; {member class names}"``. With ``--simple`` the text is the
+class name alone (``"Wheat"``; merged classes ``"{concept}"``), so classes sharing a
+name across datasets share one embedding; write those to ``SIMPLE_OUTPUT_DIR``.
 
 The encoder (``sentence-transformers/all-mpnet-base-v2``, 768-d, matching the v1.3
 register dim) is imported lazily so ``sentence-transformers`` is NOT a repo
@@ -42,15 +44,23 @@ logger = logging.getLogger(__name__)
 DEFAULT_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
 # Next to the label bank on weka (see manifest.OUTPUT_ROOT); read by the v1.3 scripts.
 DEFAULT_OUTPUT_DIR = Path(str(OUTPUT_ROOT)) / "class_text_embeddings"
+SIMPLE_OUTPUT_DIR = Path(str(OUTPUT_ROOT)) / "class_text_embeddings_simple"
 TEXT_TEMPLATE = "{class_name}; {dataset_name}"
+SIMPLE_TEXT_TEMPLATE = "{class_name}"
 OUTPUT_STEM = "class_text_embeddings"
 
 # ``encode(texts) -> (N, dim)`` float array.
 TextEncoder = Callable[[Sequence[str]], np.ndarray]
 
 
-def class_texts(class_mapping: dict[str, Any], registry: dict[str, Any]) -> list[str]:
-    """One text per global class id, in id order."""
+def class_texts(
+    class_mapping: dict[str, Any], registry: dict[str, Any], simple: bool = False
+) -> list[str]:
+    """One text per global class id, in id order.
+
+    ``simple`` drops the dataset (or member class) names, leaving the class name.
+    """
+    template = SIMPLE_TEXT_TEMPLATE if simple else TEXT_TEMPLATE
     dataset_names = {
         entry["slug"]: entry.get("name") or entry["slug"]
         for entry in registry["datasets"]
@@ -67,14 +77,14 @@ def class_texts(class_mapping: dict[str, Any], registry: dict[str, Any]) -> list
             # Merged presence-only concept: name the concept and its member classes.
             member_names = sorted({str(m["name"]) for m in members})
             texts.append(
-                TEXT_TEMPLATE.format(
+                template.format(
                     class_name=str(c["name"]).replace("_", " "),
                     dataset_name=", ".join(member_names),
                 )
             )
         else:
             texts.append(
-                TEXT_TEMPLATE.format(
+                template.format(
                     class_name=str(c["name"]),
                     dataset_name=dataset_names.get(c["slug"], c["slug"]),
                 )
@@ -107,6 +117,7 @@ def embed_class_names(
     output_dir: Path,
     encoder: TextEncoder,
     model_name: str,
+    simple: bool = False,
 ) -> tuple[Path, Path]:
     """Embed every class text and write the ``.npy`` + ``.json`` sidecar.
 
@@ -117,7 +128,7 @@ def embed_class_names(
     with registry_path.open() as f:
         registry = json.load(f)
 
-    texts = class_texts(class_mapping, registry)
+    texts = class_texts(class_mapping, registry, simple=simple)
     logger.info("embedding %d class texts with %s", len(texts), model_name)
     embeddings = np.asarray(encoder(texts), dtype=np.float32)
     if embeddings.shape[0] != len(texts) or embeddings.ndim != 2:
@@ -133,7 +144,7 @@ def embed_class_names(
     np.save(npy_path, embeddings.astype(np.float16))
     sidecar = {
         "model_name": model_name,
-        "text_template": TEXT_TEMPLATE,
+        "text_template": SIMPLE_TEXT_TEMPLATE if simple else TEXT_TEMPLATE,
         "class_mapping_sha256": hashlib.sha256(mapping_bytes).hexdigest(),
         "num_classes": int(embeddings.shape[0]),
         "dim": int(embeddings.shape[1]),
@@ -172,6 +183,11 @@ def main() -> None:
         help=f"Directory to write {OUTPUT_STEM}.npy / .json into",
     )
     parser.add_argument(
+        "--simple",
+        action="store_true",
+        help=f"Embed the class name alone (write to {SIMPLE_OUTPUT_DIR})",
+    )
+    parser.add_argument(
         "--model",
         type=str,
         default=DEFAULT_MODEL_NAME,
@@ -184,6 +200,7 @@ def main() -> None:
         args.output,
         sentence_transformer_encoder(args.model),
         args.model,
+        simple=args.simple,
     )
 
 

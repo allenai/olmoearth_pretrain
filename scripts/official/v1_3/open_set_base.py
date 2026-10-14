@@ -111,6 +111,12 @@ CLASS_TEXT_EMBEDDINGS_PATH = (
     "/weka/dfive-default/helios/dataset_creation/open_set_segmentation/"
     "class_text_embeddings/class_text_embeddings.npy"
 )
+# Same, but each class's text is its name alone (``embed_class_names --simple``), with
+# no dataset name appended.
+CLASS_TEXT_EMBEDDINGS_SIMPLE_PATH = (
+    "/weka/dfive-default/helios/dataset_creation/open_set_segmentation/"
+    "class_text_embeddings_simple/class_text_embeddings.npy"
+)
 
 # Half the v1.3 base microbatch (64). The label layers make the open-set batches
 # variable-shape enough that per-step active memory swung 5-67 GiB at 64 and the

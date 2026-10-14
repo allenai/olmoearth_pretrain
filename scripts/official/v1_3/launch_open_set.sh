@@ -18,6 +18,8 @@
 #   8. open_set_aef_clean/open_set_only_text_aef_clean -- open_set_only_text.
 #   9. open_set_aef_clean/open_set_osm_text_aef_clean  -- osm_sampling + open-set with
 #                                                         the text probe.
+#  10. open_set_aef_clean/open_set_osm_text_simple     -- 9 with class-name-only text
+#                                                         embeddings (no dataset name).
 #
 # All inherit the v1.3 release recipe (Perceiver registers + map supervision +
 # distilled student, single-forward LatentMIM, DDP + bf16, student in-loop evals as
@@ -34,7 +36,7 @@ set -e
 LAUNCH_ARGS="--launch.num_gpus=8 --launch.priority=urgent --launch.clusters=[ai2/jupiter,ai2/ceres]"
 
 if [ "$#" -eq 0 ]; then
-    echo "usage: $0 {open_set_only|open_set_osm|open_set_post_train|open_set_only_mlp|open_set_only_text|open_set_only_dsbal|open_set_aef_clean/open_set_osm_aef_clean|open_set_aef_clean/open_set_only_text_aef_clean|open_set_aef_clean/open_set_osm_text_aef_clean} [...]"
+    echo "usage: $0 {open_set_only|open_set_osm|open_set_post_train|open_set_only_mlp|open_set_only_text|open_set_only_dsbal|open_set_aef_clean/open_set_osm_aef_clean|open_set_aef_clean/open_set_only_text_aef_clean|open_set_aef_clean/open_set_osm_text_aef_clean|open_set_aef_clean/open_set_osm_text_simple} [...]"
     exit 1
 fi
 
