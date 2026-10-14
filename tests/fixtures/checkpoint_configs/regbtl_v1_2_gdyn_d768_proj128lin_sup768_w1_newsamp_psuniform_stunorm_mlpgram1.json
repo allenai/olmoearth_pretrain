@@ -12,10 +12,10 @@
       "max_sequence_length": 12,
       "mlp_ratio": 4.0,
       "num_heads": 12,
+      "pooler_dim": 768,
       "position_encoding": "rope",
       "qk_norm": false,
       "random_channel_embeddings": false,
-      "register_dim": 768,
       "rope_base": 10000.0,
       "rope_coordinate_scale": 1.0,
       "rope_mixed_base": 10000.0,
@@ -74,12 +74,24 @@
           }
         }
       },
-      "use_flash_attn": false,
-      "use_perceiver": true
+      "use_attention_pooler": true,
+      "use_flash_attn": false
     },
     "encoder_config": {
       "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.EncoderConfig",
       "aggregate_then_project": true,
+      "attention_pooler_config": {
+        "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.AttentionPoolerConfig",
+        "attn_dim": 768,
+        "per_depth_read_proj": true,
+        "pooler_depth": 4,
+        "pooler_dim": 768,
+        "student_dims": [
+          128,
+          64
+        ],
+        "student_output_norm": true
+      },
       "band_dropout_modalities": [
         "sentinel2_l2a",
         "landsat"
@@ -101,21 +113,6 @@
       "patch_embed_hidden_sizes": [
         64
       ],
-      "perceiver_config": {
-        "_CLASS_": "olmoearth_pretrain.nn.flexi_vit.PerceiverConfig",
-        "attn_dim": 768,
-        "latent_depth": 4,
-        "per_depth_read_proj": true,
-        "read_time_range": false,
-        "read_time_rope": false,
-        "register_dim": 768,
-        "share_read_kv": false,
-        "student_dims": [
-          128,
-          64
-        ],
-        "student_output_norm": true
-      },
       "position_encoding": "rope_3d_mixed",
       "qk_norm": false,
       "random_band_dropout": true,
@@ -181,12 +178,12 @@
       "use_flash_attn": false,
       "use_linear_patch_embed": true
     },
-    "projection_only_target": true,
-    "register_distillation_head_config": {
-      "_CLASS_": "olmoearth_pretrain.nn.register_distillation_head.RegisterDistillationHeadConfig",
+    "location_token_distillation_head_config": {
+      "_CLASS_": "olmoearth_pretrain.nn.location_token_distillation_head.LocationTokenDistillationHeadConfig",
       "back_projection_hidden": 256,
       "gram_max_tokens": 2048
     },
+    "projection_only_target": true,
     "supervision_head_config": {
       "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionHeadConfig",
       "modality_configs": {

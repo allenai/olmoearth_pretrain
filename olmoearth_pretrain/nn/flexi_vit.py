@@ -4,7 +4,7 @@ import logging
 import math
 import warnings
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 from einops import rearrange, reduce, repeat
@@ -37,18 +37,12 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
-from olmoearth_pretrain.nn.joint_latent import (
-    JointLatentConfig,
-    JointLatentTransformer,
-    build_pixel_latent_positions,
-    build_register_grid_positions,
-    choose_latent_stride,
-    sort_tokens_by_cell,
-    token_mix_attention_kwargs,
-)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
+
+if TYPE_CHECKING:
+    from olmoearth_pretrain.nn.searchlight import SearchlightSettings
 
 logger = logging.getLogger(__name__)
 
@@ -392,9 +386,10 @@ class MultiModalPatchEmbeddings(nn.Module):
                 # Only apply band dropout if there are more than 1 band
                 if num_bands > 1:
                     if self.random_band_dropout:
-                        # Drawn on the CPU: a GPU draw + .item() synchronised the
-                        # stream once per band set per forward.
-                        rate = torch.rand(1).item() * self.band_dropout_rate
+                        rate = (
+                            torch.rand(1, device=inp_data.device).item()
+                            * self.band_dropout_rate
+                        )
                     else:
                         rate = self.band_dropout_rate
                     inp_data = self._apply_band_dropout(inp_data, rate)
@@ -1106,7 +1101,7 @@ class FlexiVitBase(nn.Module):
         patch_size: int,
         input_res: int,
         timestamps: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> Tensor | None:
         """Build per-token coordinates for RoPE.
 
@@ -1120,11 +1115,9 @@ class FlexiVitBase(nn.Module):
         scaled by ``self.rope_temporal_coordinate_scale``. Static modalities
         keep ``t=0`` (no temporal anchor).
 
-        ``query_pixel_shift`` (patch units, 2D RoPE only) moves spatial tokens off
-        their patch coordinates -- see ``olmoearth_pretrain.nn.pixel_targets``. One
-        ``[B, h_p, w_p, 2]`` tensor shifts every token of a cell alike; a
-        ``{modality: shift}`` dict gives each modality its own, ``[B, h_p, w_p, T, 2]``
-        for a per-timestep shift.
+        ``query_pixel_shift`` (``[B, h_p, w_p, 2]``, patch units, 2D RoPE only)
+        moves every spatial token of cell ``(i, j)`` off its patch coordinate by that
+        cell's shift -- see ``olmoearth_pretrain.nn.pixel_targets``.
         """
         if not PositionEncoding.is_rope(self.position_encoding):
             if query_pixel_shift is not None:
@@ -1178,11 +1171,7 @@ class FlexiVitBase(nn.Module):
                     modality=modality,
                     tokens=tokens,
                     gsd_ratio=gsd_ratio,
-                    query_pixel_shift=(
-                        query_pixel_shift.get(modality_name)
-                        if isinstance(query_pixel_shift, dict)
-                        else query_pixel_shift
-                    ),
+                    query_pixel_shift=query_pixel_shift,
                 )
             position_dict[modality_name] = positions
 
@@ -1190,46 +1179,10 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
-    def build_cell_ids(
-        self,
-        tokens_only_dict: dict[str, Tensor],
-        original_masks_dict: dict[str, Tensor],
-    ) -> Tensor:
-        """Row-major patch-cell index per token, ``[B, N, 1]`` long, in collapsed order.
-
-        Spatial modalities index into the shared patch grid (``h * n_w + w``, repeated
-        over their time and bandset axes); non-spatial tokens get ``-1``. Every spatial
-        modality must sit on the same grid as :meth:`_patch_grid_hw` reports.
-        """
-        n_h, n_w = self._patch_grid_hw(tokens_only_dict)
-        available_modalities = return_modalities_from_dict(tokens_only_dict)
-        modalities_to_process = get_modalities_to_process(
-            available_modalities, self.supported_modality_names
-        )
-        ids_dict: dict[str, Tensor] = {}
-        for modality_name in modalities_to_process:
-            tokens = tokens_only_dict[modality_name]
-            shape = (*tokens.shape[:-1], 1)
-            if Modality.get(modality_name).is_spatial:
-                h, w = tokens.shape[1:3]
-                if (h, w) != (n_h, n_w):
-                    raise ValueError(
-                        f"{modality_name} patch grid {(h, w)} differs from the finest "
-                        f"grid {(n_h, n_w)}; joint latent attention needs one shared grid"
-                    )
-                grid = torch.arange(n_h * n_w, device=tokens.device).view(n_h, n_w)
-                ids = grid.view(1, n_h, n_w, *([1] * (tokens.ndim - 3))).expand(shape)
-            else:
-                ids = torch.full(shape, -1, dtype=torch.long, device=tokens.device)
-            ids_dict[modality_name] = ids
-        ids_dict.update(original_masks_dict)
-        cell_ids, _ = self.collapse_and_combine_hwtc(ids_dict)
-        return cell_ids
-
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
 
-        Used by the dynamic Perceiver to size + place its grid to match the
+        Used by the dynamic AttentionPooler to size + place its grid to match the
         patches. All spatial modalities share the GSD-scaled coordinate frame, so the
         max over them gives the finest grid (and the largest coordinate extent).
         """
@@ -1244,7 +1197,9 @@ class FlexiVitBase(nn.Module):
             h, w = tokens_only_dict[modality_name].shape[1:3]
             h_max, w_max = max(h_max, h), max(w_max, w)
         if h_max == 0 or w_max == 0:
-            raise ValueError("dynamic Perceiver requires at least one spatial modality")
+            raise ValueError(
+                "dynamic AttentionPooler requires at least one spatial modality"
+            )
         return (h_max, w_max)
 
     @staticmethod
@@ -1281,9 +1236,8 @@ class FlexiVitBase(nn.Module):
     ) -> Tensor:
         """Build ``(row, col)`` RoPE coordinates for one modality.
 
-        ``query_pixel_shift``: optional shift in patch units, ``[B, h, w, 2]`` (added
-        to every token of the cell) or ``[B, h, w, T, 2]`` (one per timestep of a
-        multitemporal modality); broadcast over band sets.
+        ``query_pixel_shift``: optional ``[B, h, w, 2]`` per-cell shift in patch
+        units, added to every token of the cell (all timesteps and band sets).
         """
         if not modality.is_spatial:
             return self._zero_rope_positions(tokens, coord_dim=2)
@@ -1294,24 +1248,25 @@ class FlexiVitBase(nn.Module):
         row_g, col_g = torch.meshgrid(grid_row, grid_col, indexing="ij")
         grid = torch.stack([row_g, col_g], dim=-1)
         grid = repeat(grid, "h w p -> b h w p", b=batch_size)
-        if tokens.ndim == 6:
-            # Multitemporal: lay the grid out per timestep so a shift can vary in t.
-            grid = repeat(grid, "b h w p -> b h w t p", t=tokens.shape[3])
         if query_pixel_shift is not None:
-            shift = query_pixel_shift
-            if shift.ndim == 4 and grid.ndim == 5:
-                shift = shift.unsqueeze(3)  # one shift for every timestep
-            if shift.ndim != grid.ndim or any(
-                s not in (1, g) for s, g in zip(shift.shape, grid.shape)
-            ):
+            if query_pixel_shift.shape != grid.shape:
                 raise ValueError(
                     f"query_pixel_shift {tuple(query_pixel_shift.shape)} does not match "
                     f"the {modality_name} token grid {tuple(grid.shape)}"
                 )
-            grid = grid + shift.to(grid.dtype) * gsd_ratio
+            grid = grid + query_pixel_shift.to(grid.dtype) * gsd_ratio
 
-        bandsets = tokens.shape[-2]
-        return repeat(grid, "... p -> ... b_s p", b_s=bandsets)
+        if tokens.ndim == 5:
+            bandsets = tokens.shape[3]
+            return repeat(grid, "b h w p -> b h w b_s p", b_s=bandsets)
+
+        timesteps, bandsets = tokens.shape[3], tokens.shape[4]
+        return repeat(
+            grid,
+            "b h w p -> b h w t b_s p",
+            t=timesteps,
+            b_s=bandsets,
+        )
 
     def _build_3d_rope_positions_for_modality(
         self,
@@ -1529,21 +1484,26 @@ class FlexiVitBase(nn.Module):
             block.apply_compile()
 
 
-class Perceiver(nn.Module):
-    """A Perceiver-style spatial Perceiver.
+class AttentionPooler(nn.Module):
+    """Dense spatial attention pooling of the encoder tokens onto a location grid.
 
-    A grid of learned latent tokens cross-attention *reads* the encoded (visible) patch
-    tokens, then a small *latent transformer* self-attends over the grid. The grid is
-    the model's compressed, spatially-anchored representation: the decoder reads only
-    this grid, and frozen evals probe it. Register coordinates are placed in the same
-    GSD-scaled frame as the patches, so 2D RoPE relative offsets are meaningful.
+    Naming: a single **learned query** (``learned_query``) is repeated into one
+    **location query** per grid cell; after the read + self-attention layers and the
+    final norm, the location queries are the **location tokens** (``location_tokens``,
+    plus the detached ``student_location_tokens``).
+
+    The location queries cross-attention *read* the encoded (visible) patch tokens, then
+    self-attend over the grid. The resulting location tokens are the model's compressed,
+    spatially-anchored representation: the decoder reads only them, and frozen evals
+    probe them. Query coordinates are placed in the same GSD-scaled frame as the
+    patches, so 2D RoPE relative offsets are meaningful.
 
     Reads and self-attention are interleaved, ``[read -> self-attend]`` per layer, so
-    the latents re-query the input after each refinement (the Perceiver/DETR/Flamingo
+    the queries re-read the input after each refinement (the Perceiver/DETR/Flamingo
     pattern).
 
-    A *single* learned latent is cloned across a grid that matches the input patch grid
-    at forward time. RS imagery is translation-invariant, so every spatial query starts
+    The *single* learned query is repeated across a grid that matches the input
+    patch grid at forward time. RS imagery is translation-invariant, so every spatial query starts
     from the same content; spatial identity comes entirely from 2D RoPE on the per-cell
     positions. This enforces a translation-invariant prior and removes the grid size as
     a baked hyperparameter (it follows the input).
@@ -1552,41 +1512,28 @@ class Perceiver(nn.Module):
     def __init__(
         self,
         encoder_embedding_size: int,
-        register_dim: int,
+        pooler_dim: int,
         num_heads: int,
         mlp_ratio: float,
-        latent_transformer_depth: int,
+        pooler_depth: int,
         use_2d_rope: bool,
         rope_base: float = 10000.0,
         qk_norm: bool = False,
         per_depth_read_proj: bool = False,
         attn_dim: int | None = None,
-        share_read_kv: bool = False,
-        time_rope_encoding: str | None = None,
-        rope_mixed_base: float = 10.0,
-        temporal_rope_dim_frac: float = 0.25,
-        rope_temporal_base: float | None = None,
-        read_time_range: bool = False,
-        token_mix_layout: str | None = None,
-        token_mix_radius: int = 1,
-        token_mix_dim: int | None = None,
-        token_mix_num_heads: int | None = None,
-        pixel_latents: bool = False,
-        random_latent_stride: bool = False,
-        max_latents: int | None = None,
-        eval_latent_stride: int = 1,
-        latent_stride_bias: float = 0.0,
+        student_dims: list[int] | None = None,
+        student_output_norm: bool = False,
     ) -> None:
-        """Initialize the spatial Perceiver.
+        """Initialize the AttentionPooler.
 
         Args:
             encoder_embedding_size: Dimension of the encoded patch tokens (the read's K/V source).
-            register_dim: Dimension of the register grid (the bottleneck width, typically < encoder dim).
-            num_heads: Number of attention heads for the read + latent transformer blocks.
+            pooler_dim: Dimension of the location-token grid (the bottleneck width, typically < encoder dim).
+            num_heads: Number of attention heads for the read + self-attention blocks.
             mlp_ratio: MLP ratio for the blocks.
-            latent_transformer_depth: Number of ``[read -> self-attend]`` layers: one
+            pooler_depth: Number of ``[read -> self-attend]`` layers: one
                 cross-attention read paired with each self-attention block over the
-                register grid.
+                location-token grid.
             use_2d_rope: Whether to apply 2D RoPE (requires per-token positions at call time).
             rope_base: RoPE frequency base.
             qk_norm: Whether to apply QK normalization in attention.
@@ -1599,208 +1546,73 @@ class Perceiver(nn.Module):
                 different views through their own lens. Requires more than one read block
                 (ignored otherwise). False (default) keeps the shared norm + projection
                 (backwards compatible).
-            attn_dim: If set, DECOUPLE the attention width from ``register_dim``: the
-                read and latent blocks run their attention internally at ``attn_dim``
-                (typically the encoder width, giving encoder-shaped heads, e.g. 12x64)
-                while the register residual stream, MLPs, and outputs stay at
-                ``register_dim``. The read K/V source is consumed at the FULL encoder
+            attn_dim: If set, DECOUPLE the attention width from ``pooler_dim``: the
+                read and self-attention blocks run their attention internally at
+                ``attn_dim`` (typically the encoder width, giving encoder-shaped heads,
+                e.g. 12x64) while the location-token residual stream, MLPs, and outputs stay at
+                ``pooler_dim``. The read K/V source is consumed at the FULL encoder
                 width -- the ``kv_proj`` down-projections are dropped (the per-depth /
                 shared ``input_norm`` LayerNorms remain, at encoder width) and the read
                 blocks' internal K/V projections map ``encoder_embedding_size ->
                 attn_dim`` directly, so read *selection* sees uncompressed token
-                content. Rationale: ``register_dim`` alone cannot fund both routing
+                content. Rationale: ``pooler_dim`` alone cannot fund both routing
                 diversity (head count) and RoPE anchoring (head dim) at narrow widths
                 -- observed as 2x slowdowns at <8 heads and degrading spatial evals at
                 head_dim <64. ``None`` (default) keeps the classic tied-width blocks.
-            share_read_kv: If True, ONE K/V projection of the read source is computed
-                and attended over by every read block, instead of each read block
-                projecting the same source through its own K and V layers. The read
-                blocks keep their own queries, output projections and MLPs. The K/V
-                source is identical for every read (they all re-query the same tokens),
-                so this removes ``latent_transformer_depth - 1`` full-width projections
-                of the input, the dominant per-token cost of a Perceiver with no ViT
-                blocks in front of it. Incompatible with ``per_depth_read_proj`` (which
-                gives each read a differently normalised source).
-            time_rope_encoding: If set (a 3D RoPE mode, normally the encoder's), the
-                READS rotate over ``(t, row, col)`` instead of ``(row, col)``: keys carry
-                each token's calendar-day coordinate and the register queries are
-                anchored at the mean time of the sample's visible tokens (the window
-                centre), so a read sees each token's offset within the window. The
-                latent self-attention stays 2D (the grid has no time axis). ``None``
-                keeps the time-blind 2D reads.
-            rope_mixed_base: Mixed-RoPE frequency base for time-aware reads.
-            temporal_rope_dim_frac: Fraction of head dims on the temporal axis for
-                time-aware reads.
-            rope_temporal_base: Optional separate temporal base for time-aware reads.
-            read_time_range: With ``time_rope_encoding`` set to the mixed 3D mode,
-                encode the register queries as temporal INTERVALS spanning the visible
-                tokens' time range (sinc-gated RoPE, see :func:`apply_3d_mixed_rope`)
-                instead of points at the window centre, so a read attends over its
-                window as a soft box rather than a peak at the centre.
-            token_mix_layout: If set, the layer schedule as a string over ``M`` (a
-                token-mixing block), ``R`` (a read + its paired latent block, exactly
-                the default layer), ``L`` (a latent-only block) and ``W`` (a
-                write-back: the tokens cross-attend the current latent grid, then an
-                MLP, so later mixing blocks and reads see tokens that carry the
-                latents' pooled context), run left to right;
-                e.g. ``"MRMRMRMRMRMRLLLLLL"``. The number of ``R`` must equal
-                ``latent_transformer_depth``. A token-mixing block is self-attention
-                over the patch tokens restricted to a spatial neighbourhood of cells
-                (all timesteps and modalities of the cells within ``token_mix_radius``
-                in row and column), so each read sees tokens refined by the mixing
-                blocks before it. Mixing runs on a Perceiver-internal copy: the
-                encoder's returned tokens (and the MIM target) are unchanged. Needs
-                ``time_rope_encoding == MIXED_3D_ROPE`` and ``cell_ids`` at forward.
-            token_mix_radius: Neighbourhood radius in cells (1 = 3x3, 0 = own cell).
-            token_mix_dim: Width of the token-mixing stream. None mixes at the encoder
-                width; a smaller value linearly projects the tokens down first, and the
-                reads then consume the narrow tokens.
-            token_mix_num_heads: Heads of the token-mixing blocks (None = ``num_heads``).
-            pixel_latents: Lay the register grid at sub-patch resolution: one latent per
-                ``stride x stride`` pixels (``stride`` divides the patch size), at the
-                pixel-block centres (:func:`build_pixel_latent_positions`), instead of
-                one per patch. The reads are global, so nothing else changes; the grid
-                returned is ``[B, n_h * p / stride, n_w * p / stride, D]``. Same
-                convention as the joint module's pixel latents.
-            random_latent_stride: With ``pixel_latents``, draw the stride per forward
-                pass in training under ``max_latents`` (the patch stride is always
-                allowed); see :func:`choose_latent_stride`.
-            max_latents: Per-sample latent budget for ``random_latent_stride``.
-            eval_latent_stride: Stride outside training (1 = one latent per pixel, 0 =
-                one latent per token cell at the forward pass's patch size).
-            latent_stride_bias: Weight allowed strides by ``(1 / s) ** bias`` (0 =
-                uniform), biasing training toward the finest stride that fits.
+            student_dims: If set, add a DETACHED low-dim "student" readout of the
+                location-token grid, returned alongside the grid at width ``max(student_dims)``.
+                Smaller entries are Matryoshka prefixes of that output. The student's
+                input is detached, so losses on it never reach the reads, the
+                self-attention blocks or the encoder.
+            student_output_norm: Put a ``LayerNorm`` on the student's output (at the
+                full student width; a prefix is then a slice of a normalized vector).
         """
         super().__init__()
-        self.register_dim = register_dim
+        self.pooler_dim = pooler_dim
         self.use_2d_rope = use_2d_rope
         self.attn_dim = attn_dim
-        self.share_read_kv = share_read_kv
-        if time_rope_encoding is not None and not PositionEncoding.is_3d_rope(
-            time_rope_encoding
-        ):
-            raise ValueError(
-                f"time_rope_encoding must be a 3D RoPE mode, got {time_rope_encoding}"
-            )
-        self.time_rope_encoding = time_rope_encoding
-        if read_time_range and time_rope_encoding != PositionEncoding.MIXED_3D_ROPE:
-            raise ValueError(
-                "read_time_range needs time_rope_encoding == MIXED_3D_ROPE, got "
-                f"{time_rope_encoding}"
-            )
-        self.read_time_range = read_time_range
         if not use_2d_rope:
-            # With a single cloned latent the cells are identical at init and stay
+            # With a single cloned query the cells are identical at init and stay
             # symmetric without a per-cell positional signal; RoPE is what breaks it.
             raise ValueError(
-                "Perceiver requires use_2d_rope=True to differentiate grid cells."
+                "AttentionPooler requires use_2d_rope=True to differentiate grid cells."
             )
-        self.register = nn.Parameter(torch.empty(1, register_dim))
-        nn.init.trunc_normal_(self.register, std=0.02)
-        num_read_blocks = latent_transformer_depth
-        self.token_mix_layout = token_mix_layout
-        self.token_mix_radius = token_mix_radius
-        if (random_latent_stride or eval_latent_stride != 1) and not pixel_latents:
-            raise ValueError("latent strides require pixel_latents=True")
-        if random_latent_stride and (max_latents is None or max_latents < 1):
-            raise ValueError("random_latent_stride needs a positive max_latents budget")
-        self.pixel_latents = pixel_latents
-        self.random_latent_stride = random_latent_stride
-        self.max_latents = max_latents
-        self.eval_latent_stride = eval_latent_stride
-        self.latent_stride_bias = latent_stride_bias
-        n_mix = n_extra_latent = n_write = 0
-        if token_mix_layout is not None:
-            if set(token_mix_layout) - set("MRLW"):
-                raise ValueError(
-                    "token_mix_layout may only contain M, R, L and W, got "
-                    f"{token_mix_layout}"
-                )
-            if "W" in token_mix_layout and token_mix_layout.index(
-                "W"
-            ) < token_mix_layout.find("R"):
-                raise ValueError(
-                    "a write-back (W) before the first read (R) would broadcast the "
-                    f"cloned, content-free latents: {token_mix_layout}"
-                )
-            if token_mix_layout.count("R") != num_read_blocks:
-                raise ValueError(
-                    f"token_mix_layout has {token_mix_layout.count('R')} reads but "
-                    f"latent_transformer_depth is {num_read_blocks}"
-                )
-            if time_rope_encoding != PositionEncoding.MIXED_3D_ROPE:
-                raise ValueError(
-                    "token mixing needs time_rope_encoding == MIXED_3D_ROPE (the mixing "
-                    f"blocks rotate over the tokens' (t, row, col)), got {time_rope_encoding}"
-                )
-            if share_read_kv:
-                raise ValueError(
-                    "share_read_kv projects the read source once, but token mixing "
-                    "changes the tokens between reads"
-                )
-            if token_mix_radius < 0:
-                raise ValueError(
-                    f"token_mix_radius must be >= 0, got {token_mix_radius}"
-                )
-            n_mix = token_mix_layout.count("M")
-            n_extra_latent = token_mix_layout.count("L")
-            n_write = token_mix_layout.count("W")
-        # With token mixing the reads consume the (possibly narrower) mixing stream.
-        token_dim = (
-            token_mix_dim
-            if token_mix_layout is not None and token_mix_dim is not None
-            else encoder_embedding_size
-        )
-        self.token_mix_in: nn.Module | None = (
-            nn.Linear(encoder_embedding_size, token_dim)
-            if token_dim != encoder_embedding_size
-            else None
-        )
-        read_src_dim = token_dim
-        # The read + latent transformer run on small unpacked [B, N, D] tensors with an
+        self.learned_query = nn.Parameter(torch.empty(1, pooler_dim))
+        nn.init.trunc_normal_(self.learned_query, std=0.02)
+        # The read + self-attention blocks run on small unpacked [B, N, D] tensors with an
+        num_read_blocks = pooler_depth
         self.per_depth_read_proj = per_depth_read_proj and num_read_blocks > 1
-        if self.per_depth_read_proj and share_read_kv:
-            raise ValueError(
-                "share_read_kv needs one shared read source; it cannot be combined "
-                "with per_depth_read_proj"
-            )
         if self.per_depth_read_proj:
             # One norm + projection per read block.
             self.input_norms = nn.ModuleList(
-                [nn.LayerNorm(read_src_dim) for _ in range(num_read_blocks)]
+                [nn.LayerNorm(encoder_embedding_size) for _ in range(num_read_blocks)]
             )
             self.kv_projs = nn.ModuleList(
                 [
                     (
                         nn.Identity()
                         if attn_dim is not None
-                        else nn.Linear(read_src_dim, register_dim)
+                        else nn.Linear(encoder_embedding_size, pooler_dim)
                     )
                     for _ in range(num_read_blocks)
                 ]
             )
         else:
-            self.input_norm = nn.LayerNorm(read_src_dim)
+            self.input_norm = nn.LayerNorm(encoder_embedding_size)
             self.kv_proj: nn.Module = (
                 nn.Identity()
                 if attn_dim is not None
-                else nn.Linear(read_src_dim, register_dim)
+                else nn.Linear(encoder_embedding_size, pooler_dim)
             )
-        # The register grid is a purely spatial map, so the latent self-attention
-        # rotates over (row, col) only. The reads do too unless ``time_rope_encoding``
-        # puts the tokens' calendar time back into the read.
-        if time_rope_encoding is not None:
-            read_position_encoding = time_rope_encoding
-        else:
-            read_position_encoding = (
-                PositionEncoding.AXIAL_2D_ROPE
-                if use_2d_rope
-                else PositionEncoding.ABSOLUTE
-            )
+        # The location-token grid is a purely spatial map, so the reads and the
+        # self-attention both rotate over (row, col) only.
+        read_position_encoding = (
+            PositionEncoding.AXIAL_2D_ROPE if use_2d_rope else PositionEncoding.ABSOLUTE
+        )
         self.read_blocks = nn.ModuleList(
             [
                 Block(
-                    register_dim,
+                    pooler_dim,
                     num_heads,
                     mlp_ratio,
                     qkv_bias=True,
@@ -1809,132 +1621,81 @@ class Perceiver(nn.Module):
                     use_flash_attn=False,
                     position_encoding=read_position_encoding,
                     rope_base=rope_base,
-                    rope_mixed_base=rope_mixed_base,
-                    temporal_rope_dim_frac=temporal_rope_dim_frac,
-                    rope_temporal_base=rope_temporal_base,
                     attn_dim=attn_dim,
-                    kv_in_dim=(read_src_dim if attn_dim is not None else None),
+                    kv_in_dim=(
+                        encoder_embedding_size if attn_dim is not None else None
+                    ),
                 )
                 for i in range(num_read_blocks)
             ]
         )
-
-        def latent_block() -> Block:
-            return Block(
-                register_dim,
-                num_heads,
-                mlp_ratio,
-                qkv_bias=True,
-                qk_norm=qk_norm,
-                cross_attn=False,
-                use_flash_attn=False,
-                position_encoding=(
-                    PositionEncoding.AXIAL_2D_ROPE
-                    if use_2d_rope
-                    else PositionEncoding.ABSOLUTE
-                ),
-                rope_base=rope_base,
-                attn_dim=attn_dim,
-            )
-
-        self.latent_blocks = nn.ModuleList(
-            [latent_block() for _ in range(latent_transformer_depth)]
-        )
-        # Token-mixing blocks: self-attention over the tokens of neighbouring cells,
-        # rotating over the tokens' (t, row, col) like the time-aware reads.
-        self.token_mix_blocks = nn.ModuleList(
+        self.self_attn_blocks = nn.ModuleList(
             [
                 Block(
-                    token_dim,
-                    token_mix_num_heads or num_heads,
+                    pooler_dim,
+                    num_heads,
                     mlp_ratio,
                     qkv_bias=True,
                     qk_norm=qk_norm,
                     cross_attn=False,
                     use_flash_attn=False,
-                    position_encoding=PositionEncoding.MIXED_3D_ROPE,
+                    position_encoding=(
+                        PositionEncoding.AXIAL_2D_ROPE
+                        if use_2d_rope
+                        else PositionEncoding.ABSOLUTE
+                    ),
                     rope_base=rope_base,
-                    rope_mixed_base=rope_mixed_base,
-                    temporal_rope_dim_frac=temporal_rope_dim_frac,
-                    rope_temporal_base=rope_temporal_base,
+                    attn_dim=attn_dim,
                 )
-                for _ in range(n_mix)
+                for _ in range(pooler_depth)
             ]
         )
-        self.extra_latent_blocks = nn.ModuleList(
-            [latent_block() for _ in range(n_extra_latent)]
-        )
-        # Write-backs: tokens (queries) cross-attend the latent grid (keys/values).
-        # The block does not norm its cross-attention context, so each gets a norm on
-        # the latents. Created last, so layouts without W keep their init order.
-        self.write_norms = nn.ModuleList(
-            [nn.LayerNorm(register_dim) for _ in range(n_write)]
-        )
-        self.write_blocks = nn.ModuleList(
-            [
-                Block(
-                    token_dim,
-                    token_mix_num_heads or num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    qk_norm=qk_norm,
-                    cross_attn=True,
-                    use_flash_attn=False,
-                    position_encoding=PositionEncoding.MIXED_3D_ROPE,
-                    rope_base=rope_base,
-                    rope_mixed_base=rope_mixed_base,
-                    temporal_rope_dim_frac=temporal_rope_dim_frac,
-                    rope_temporal_base=rope_temporal_base,
-                    kv_in_dim=register_dim if register_dim != token_dim else None,
-                )
-                for _ in range(n_write)
-            ]
-        )
-        if share_read_kv:
-            # One K and one V projection for all reads, sized like the per-block layers
-            # they replace; the blocks' own K/V layers are removed so no parameter is
-            # left unused (DDP would otherwise wait on their gradients).
-            first_attn = self.read_blocks[0].attn
-            kv_in, kv_out = first_attn.k.in_features, first_attn.k.out_features
-            self.read_k = nn.Linear(kv_in, kv_out, bias=True)
-            self.read_v = nn.Linear(kv_in, kv_out, bias=True)
-            for blk in self.read_blocks:
-                del blk.attn.k
-                del blk.attn.v
-        self.norm = nn.LayerNorm(register_dim)
+        self.norm = nn.LayerNorm(pooler_dim)
+        # Detached low-dim student readout of the location-token grid. Dims are stored
+        # descending: the student runs at dims[0] and the smaller entries are
+        # Matryoshka prefixes of its output.
+        self.student_dims: list[int] | None = None
+        self.student: nn.Sequential | None = None
+        if student_dims:
+            self.student_dims = sorted(set(student_dims), reverse=True)
+            student_dim = self.student_dims[0]
+            student_layers: list[nn.Module] = [nn.Linear(pooler_dim, student_dim)]
+            if student_output_norm:
+                student_layers.append(nn.LayerNorm(student_dim))
+            self.student = nn.Sequential(*student_layers)
 
-    def build_register_positions(
-        self, patch_positions: Tensor, register_grid: tuple[int, int]
+    @staticmethod
+    def build_location_query_positions(
+        batch_size: int,
+        query_grid: tuple[int, int],
+        patch_size: int,
+        gsd_ratio: float,
+        device: torch.device,
+        location_query_patch_size: int,
     ) -> Tensor:
-        """Place the register grid evenly across the patch extent (GSD-scaled frame).
+        """Location-query centre coordinates in the token RoPE frame.
 
-        Args:
-            patch_positions: ``[B, N, 2]`` GSD-scaled ``(row, col)`` patch coordinates.
-            register_grid: ``(n_h, n_w)`` grid to lay down (the patch grid, so the
-                register coords coincide with the patch coords).
+        Token ``i`` sits at ``i * gsd_ratio`` (the token positions of
+        ``FlexiVitBase``). With a location-query patch size ``s``, query ``k`` of an axis
+        covers pixels ``[k * s, (k + 1) * s)`` and has its centre at
+        ``((k + 0.5) * s / patch_size - 0.5) * gsd_ratio``. At ``s = patch_size``
+        these are exactly the token coordinates (one query per token); at
+        ``s = 1`` they are pixel centres.
 
         Returns:
-            ``[B, n_h * n_w, 2]`` register coordinates spanning ``[0, max_patch_coord]``.
+            ``[B, n_h * n_w, 2]`` row-major ``(row, col)`` coordinates.
         """
-        return build_register_grid_positions(patch_positions, register_grid)
+        q_h, q_w = query_grid
 
-    def choose_stride(self, spatial_grid: tuple[int, int], patch_size: int) -> int:
-        """This forward pass's latent stride (see :func:`choose_latent_stride`).
+        def axis(n: int) -> Tensor:
+            k = torch.arange(n, device=device, dtype=torch.float32)
+            return (
+                (k + 0.5) * location_query_patch_size / patch_size - 0.5
+            ) * gsd_ratio
 
-        Callers that must know the stride before the forward pass (latent-resolution
-        MIM targets) draw it here and pass it back in as ``latent_stride``.
-        """
-        if not self.pixel_latents:
-            return patch_size
-        return choose_latent_stride(
-            training=self.training,
-            spatial_grid=spatial_grid,
-            patch_size=patch_size,
-            random_latent_stride=self.random_latent_stride,
-            max_latents=self.max_latents,
-            eval_latent_stride=self.eval_latent_stride,
-            stride_bias=self.latent_stride_bias,
-        )
+        grid_h, grid_w = torch.meshgrid(axis(q_h), axis(q_w), indexing="ij")
+        grid = torch.stack([grid_h, grid_w], dim=-1).reshape(-1, 2)
+        return grid.unsqueeze(0).expand(batch_size, -1, -1)
 
     def forward(
         self,
@@ -1942,13 +1703,11 @@ class Perceiver(nn.Module):
         patch_positions: Tensor | None,
         visible_mask: Tensor | None,
         spatial_grid: tuple[int, int],
-        grid_extent_positions: Tensor | None = None,
-        cell_ids: Tensor | None = None,
-        patch_size: int = 1,
-        patch_spacing: float | None = None,
-        latent_stride: int | None = None,
-    ) -> tuple[Tensor, Tensor | None]:
-        """Read the (visible) patch tokens into the register grid.
+        patch_size: int,
+        gsd_ratio: float,
+        location_query_patch_size: int | None = None,
+    ) -> tuple[Tensor, Tensor | None, Tensor | None]:
+        """Pool the (visible) patch tokens onto the location-query grid.
 
         Args:
             patch_tokens: Encoded tokens ``[B, N, encoder_embedding_size]``.
@@ -1956,280 +1715,140 @@ class Perceiver(nn.Module):
                 using RoPE).
             visible_mask: Bool ``[B, N]``, True where a token is a valid key
                 (``MaskValue.ONLINE_ENCODER``). None means attend to all tokens.
-            spatial_grid: ``(n_h, n_w)`` patch grid the single latent is cloned to.
-            grid_extent_positions: Optional ``[B, M, >=2]`` positions whose last two
-                coordinates give the full (pre-masking) patch extent to lay the grid
-                over. Defaults to ``patch_positions``. Pass the unmasked positions when
-                ``patch_tokens`` is the compact visible-only sequence, so a masking
-                pattern that hides an edge row/column of cells cannot shrink the grid.
-            cell_ids: ``[B, N]`` row-major patch-cell index per token (``-1`` for
-                non-spatial tokens), in the same order as ``patch_tokens``. Required
-                with ``token_mix_layout``; ignored otherwise.
-            patch_size: Patch size of this forward pass (``pixel_latents`` only).
-            latent_stride: Latent stride for this pass (``pixel_latents`` only;
-                must divide ``patch_size``). None draws it with ``choose_stride``.
-            patch_spacing: Distance between adjacent patch centres in the RoPE frame
-                (``pixel_latents`` only), to place the sub-patch latent centres.
+            spatial_grid: ``(n_h, n_w)`` patch grid of the tokens.
+            patch_size: Token patch size ``p`` of this forward pass.
+            gsd_ratio: Distance between adjacent token centres in the RoPE frame
+                (the ``gsd_ratio`` of ``FlexiVitBase``'s RoPE positions); the
+                queries are placed in the same frame.
+            location_query_patch_size: Pixels per location query along each side, ``s``; must
+                divide ``p``. One query per ``s x s`` pixels at the pixel-block centres
+                (:meth:`build_location_query_positions`), so ``s = 1`` gives one query per
+                pixel. The reads are global, so only the grid and its positions
+                change. None = ``p``, one query per token.
 
         Returns:
-            registers: ``[B, n_h, n_w, register_dim]`` (with ``pixel_latents``,
-                ``[B, n_h * p / s, n_w * p / s, register_dim]``) -- the grid, shaped, so callers
-                never rebuild it from a flat sequence.
-            register_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
+            location_tokens: ``[B, n_h, n_w, pooler_dim]`` (with ``location_query_patch_size``,
+                ``[B, n_h * p / s, n_w * p / s, pooler_dim]``) -- the grid, shaped, so
+                callers never rebuild it from a flat sequence.
+            location_query_positions: ``[B, n_h * n_w, 2]`` or None. Deliberately FLAT: its
                 only consumer is the decoder's cross-attention, which wants a token
                 sequence. Row-major (``indexing="ij"``), so cell ``[i, j]`` of
-                ``registers`` is entry ``i * n_w + j`` of ``register_positions``.
+                ``location_tokens`` is entry ``i * n_w + j`` of ``location_query_positions``.
+            student_location_tokens: ``[B, n_h, n_w, max(student_dims)]`` -- the detached
+                student's readout of ``location_tokens`` -- or None without a student.
         """
-        if self.token_mix_layout is not None:
-            if cell_ids is None:
-                raise ValueError("token_mix_layout needs per-token cell_ids")
-            # Cell-contiguous token order, so a neighbourhood's tokens fall in few
-            # attention blocks. Reads are permutation-invariant over their keys
-            # (positions and the key mask move with the tokens), so this changes
-            # nothing but speed.
-            valid = (
-                visible_mask.bool()
-                if visible_mask is not None
-                else torch.ones(
-                    cell_ids.shape, dtype=torch.bool, device=cell_ids.device
-                )
-            )
-            patch_tokens, patch_positions, valid, cell_ids = sort_tokens_by_cell(
-                patch_tokens, patch_positions, valid, cell_ids
-            )
-            visible_mask = valid
-        if self.token_mix_layout is not None:
-            kv_per_read = []  # built lazily, from the tokens as mixed so far
-        elif self.per_depth_read_proj:
-            kv_per_read = [
-                proj(norm(patch_tokens))
-                for norm, proj in zip(self.input_norms, self.kv_projs)
-            ]
-        else:
-            kv = self.kv_proj(self.input_norm(patch_tokens))
-            kv_per_read = [kv] * len(self.read_blocks)
-        # With a shared K/V projection, project the read source once here; the read
-        # blocks then only compute their queries against it.
-        shared_kv: tuple[Tensor, Tensor] | None = (
-            (self.read_k(kv_per_read[0]), self.read_v(kv_per_read[0]))
-            if self.share_read_kv
-            else None
+        # With per-depth projections, each read's K/V is built inside the loop below
+        # and freed after that read, so only one token-sized copy is alive at a time.
+        shared_kv = (
+            None
+            if self.per_depth_read_proj
+            else self.kv_proj(self.input_norm(patch_tokens))
         )
         reference_tokens = patch_tokens
         batch_size = reference_tokens.shape[0]
-        requested_stride = latent_stride
-        latent_stride = patch_size
-        if self.pixel_latents:
-            if patch_spacing is None:
-                raise ValueError("pixel_latents requires patch_spacing")
-            if requested_stride is None:
-                latent_stride = self.choose_stride(spatial_grid, patch_size)
-            elif patch_size % requested_stride == 0:
-                latent_stride = requested_stride
-            else:
-                raise ValueError(
-                    f"latent_stride {requested_stride} does not divide patch_size "
-                    f"{patch_size}"
-                )
-            register_grid = (
-                spatial_grid[0] * patch_size // latent_stride,
-                spatial_grid[1] * patch_size // latent_stride,
+        if location_query_patch_size is None:
+            location_query_patch_size = patch_size
+        if patch_size % location_query_patch_size != 0:
+            raise ValueError(
+                f"location_query_patch_size {location_query_patch_size} does not divide "
+                f"patch_size {patch_size}"
             )
-        else:
-            register_grid = spatial_grid
-        num_registers = register_grid[0] * register_grid[1]
-        # Clone the single learned latent across the batch and all grid cells; RoPE on
-        # the per-cell register_positions is what differentiates them.
-        registers = (
-            self.register.unsqueeze(0)
-            .expand(batch_size, num_registers, -1)
+        query_grid = (
+            spatial_grid[0] * patch_size // location_query_patch_size,
+            spatial_grid[1] * patch_size // location_query_patch_size,
+        )
+        num_queries = query_grid[0] * query_grid[1]
+        # Repeat the learned query into one location query per grid cell (and batch
+        # element); RoPE on the per-cell location_query_positions is what tells them
+        # apart.
+        location_queries = (
+            self.learned_query.unsqueeze(0)
+            .expand(batch_size, num_queries, -1)
             .contiguous()
         )
-        register_positions = None
-        read_query_positions: Tensor | None = None
-        read_key_positions: Tensor | None = None
-        read_query_extent: Tensor | None = None
+        location_query_positions = None
         if self.use_2d_rope:
             if patch_positions is None:
-                raise ValueError("patch_positions are required for the RoPE Perceiver")
-            # ``patch_positions`` may be ``(t, row, col)`` from a 3D encoder; the grid
-            # and the latent blocks only ever use the spatial (last two) coordinates.
-            spatial_positions = patch_positions[..., -2:]
-            extent_source = (
-                grid_extent_positions
-                if grid_extent_positions is not None
-                else patch_positions
+                raise ValueError(
+                    "patch_positions are required for the RoPE AttentionPooler"
+                )
+            location_query_positions = self.build_location_query_positions(
+                batch_size,
+                query_grid,
+                patch_size,
+                gsd_ratio,
+                reference_tokens.device,
+                location_query_patch_size,
             )
-            if self.pixel_latents:
-                assert patch_spacing is not None
-                register_positions = build_pixel_latent_positions(
-                    batch_size,
-                    register_grid,
-                    patch_size,
-                    patch_spacing,
-                    reference_tokens.device,
-                    latent_stride,
-                )
-            else:
-                register_positions = self.build_register_positions(
-                    extent_source[..., -2:], register_grid
-                )
-            if self.time_rope_encoding is not None:
-                if patch_positions.shape[-1] != 3:
-                    raise ValueError(
-                        "time_rope_encoding needs (t, row, col) patch positions from a "
-                        f"3D-RoPE encoder, got {patch_positions.shape[-1]} coordinates"
-                    )
-                # Anchor every register at the window centre: the mean time of the
-                # sample's visible tokens. A key's rotation relative to its register is
-                # then its offset within the window, bounded and year-independent.
-                t = patch_positions[..., 0]
-                valid = (
-                    visible_mask.bool()
-                    if visible_mask is not None
-                    else torch.ones_like(t, dtype=torch.bool)
-                )
-                if self.read_time_range:
-                    # Interval queries: midpoint + full width of the visible time range.
-                    big = torch.finfo(t.dtype).max
-                    t_min = torch.where(valid, t, torch.full_like(t, big)).amin(1)
-                    t_max = torch.where(valid, t, torch.full_like(t, -big)).amax(1)
-                    t_anchor = (t_min + t_max) / 2
-                    read_query_extent = (
-                        (t_max - t_min).clamp(min=0)[:, None].expand(-1, num_registers)
-                    )
-                else:
-                    weights = valid.to(t.dtype)
-                    t_anchor = (t * weights).sum(1) / weights.sum(1).clamp(min=1)
-                read_query_positions = torch.cat(
-                    [
-                        t_anchor[:, None, None].expand(-1, num_registers, 1),
-                        register_positions,
-                    ],
-                    dim=-1,
-                )
-                read_key_positions = patch_positions
-            else:
-                read_query_positions = register_positions
-                read_key_positions = spatial_positions
         # Read mask: the [B, N] key-visibility mask.
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
 
-        def read(registers: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
+        def read(queries: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
-                x=registers,
+                x=queries,
                 y=kv,
                 attn_mask=read_attn_mask,
-                rope_positions=read_query_positions,
-                rope_positions_y=read_key_positions,
-                kv=shared_kv,
-                rope_extent=read_query_extent,
+                rope_positions=location_query_positions,
+                rope_positions_y=patch_positions,
             )
             return out
 
-        if self.token_mix_layout is None:
-            for i, (read_blk, kv) in enumerate(zip(self.read_blocks, kv_per_read)):
-                registers = read(registers, i, read_blk, kv)
-                registers = self.latent_blocks[i](
-                    x=registers,
-                    rope_positions=register_positions,
-                )
-        else:
-            assert cell_ids is not None and patch_positions is not None
-            tokens = (
-                self.token_mix_in(patch_tokens)
-                if self.token_mix_in is not None
-                else patch_tokens
+        for i, read_blk in enumerate(self.read_blocks):
+            kv = (
+                shared_kv
+                if shared_kv is not None
+                else self.kv_projs[i](self.input_norms[i](patch_tokens))
             )
-            mix_kwargs = token_mix_attention_kwargs(
-                cell_ids, read_attn_mask, spatial_grid[1], self.token_mix_radius
+            location_queries = read(location_queries, i, read_blk, kv)
+            del kv
+            location_queries = self.self_attn_blocks[i](
+                x=location_queries,
+                rope_positions=location_query_positions,
             )
-            i_mix = i_read = i_latent = i_write = 0
-            for layer in self.token_mix_layout:
-                if layer == "M":
-                    tokens = self.token_mix_blocks[i_mix](
-                        x=tokens, rope_positions=patch_positions, **mix_kwargs
-                    )
-                    i_mix += 1
-                elif layer == "R":
-                    if self.per_depth_read_proj:
-                        norm, proj = self.input_norms[i_read], self.kv_projs[i_read]
-                    else:
-                        norm, proj = self.input_norm, self.kv_proj
-                    registers = read(
-                        registers, i_read, self.read_blocks[i_read], proj(norm(tokens))
-                    )
-                    registers = self.latent_blocks[i_read](
-                        x=registers, rope_positions=register_positions
-                    )
-                    i_read += 1
-                elif layer == "W":
-                    # Tokens read the latents back, under the same (t, row, col)
-                    # RoPE frame as the reads, with the roles swapped.
-                    tokens = self.write_blocks[i_write](
-                        x=tokens,
-                        y=self.write_norms[i_write](registers),
-                        rope_positions=patch_positions,
-                        rope_positions_y=read_query_positions,
-                    )
-                    i_write += 1
-                else:
-                    registers = self.extra_latent_blocks[i_latent](
-                        x=registers, rope_positions=register_positions
-                    )
-                    i_latent += 1
-        out = self.norm(registers)
-        out = rearrange(
-            out, "b (h w) d -> b h w d", h=register_grid[0], w=register_grid[1]
+        # After every read + self-attention layer and the final norm, the location
+        # queries are the location tokens.
+        location_tokens = rearrange(
+            self.norm(location_queries),
+            "b (h w) d -> b h w d",
+            h=query_grid[0],
+            w=query_grid[1],
         )
-        return out, register_positions
+        # The student reads a detached copy: its losses train the student alone.
+        student_location_tokens = (
+            self.student(location_tokens.detach()) if self.student is not None else None
+        )
+        return location_tokens, location_query_positions, student_location_tokens
 
 
 @dataclass
-class PerceiverConfig(Config):
-    """Perceiver-style spatial Perceiver on the encoder.
+class AttentionPoolerConfig(Config):
+    """Dense spatial attention pooler on the encoder.
 
-    Attaching this to :class:`EncoderConfig` turns the bottleneck on: one shared latent
-    is cloned across a grid matching the input patch grid and reads the encoded patch
-    tokens (see :class:`Perceiver`); the decoder cross-attends the
-    resulting register grid and frozen evals probe it. Requires a RoPE position
+    Attaching this to :class:`EncoderConfig` turns the bottleneck on: the learned
+    query is repeated into location queries over a grid matching the input patch grid,
+    which read the encoded patch tokens (see :class:`AttentionPooler`); the decoder cross-attends the
+    resulting location-token grid and frozen evals probe it. Requires a RoPE position
     encoding on the encoder, since the grid cells are told apart by 2D RoPE alone.
 
     Args:
-        register_dim: Width of the register grid (the bottleneck dim). The decoder
+        pooler_dim: Width of the location-token grid (the bottleneck dim). The decoder
             cross-attends this same width, so it is stated rather than defaulted.
-        latent_depth: Number of ``[read -> self-attend]`` layers: one cross-attention
-            read paired with each latent self-attention block over the register grid.
+        pooler_depth: Number of ``[read -> self-attend]`` layers: one cross-attention
+            read paired with each self-attention block over the location-token grid.
         num_heads: Attention heads in the bottleneck blocks. None uses the encoder's
             ``num_heads``.
         per_depth_read_proj: If True, give each read block its own input LayerNorm
             and K/V down-projection instead of one shared pair, so each read gets its
             own lens on the final layer. Requires more than one read block.
-        attn_dim: If set, the read + latent attention runs internally at this width
+        attn_dim: If set, the read + self-attention runs internally at this width
             (e.g. the encoder ``embedding_size`` for encoder-shaped heads) while the
-            register stream stays at ``register_dim``; the read K/V source is then
+            location-token stream stays at ``pooler_dim``; the read K/V source is then
             consumed at full encoder width with no down-projection. None ties the
-            attention width to ``register_dim``.
-        share_read_kv: If True, all read blocks attend over ONE K/V projection of the
-            read source instead of each projecting it through its own K and V layers
-            (queries, output projections and MLPs stay per block). Cuts the per-token
-            read cost from ``latent_depth`` K/V projections to one; matters when there
-            are no ViT blocks and the reads are the only per-token compute. Cannot be
-            combined with ``per_depth_read_proj``.
-        read_time_rope: If True, the reads rotate over ``(t, row, col)`` with the
-            encoder's 3D RoPE mode: keys carry each token's calendar time and the
-            register queries sit at the window-centre time (mean over visible tokens),
-            so a read sees each token's offset within the window. Without it the reads
-            are time-blind and the only temporal signal on the tokens that reach them
-            is the additive month embedding (plus whatever the encoder blocks mixed
-            in). Requires a 3D RoPE encoder. Latent self-attention stays 2D.
-        read_time_range: With ``read_time_rope`` on a ``rope_3d_mixed`` encoder, the
-            register queries are encoded as temporal intervals over the visible time
-            range (sinc-gated RoPE) rather than points at its centre.
+            attention width to ``pooler_dim``.
         student_dims: If set, add a DETACHED low-dim "student" readout of the
-            register grid, exported alongside the registers as ``student_registers``
+            location-token grid, exported alongside it as ``student_location_tokens``
             at width ``max(student_dims)``. The student's input is detached, so its
             gradients (the train module's distillation and supervision losses) never
             reach the encoder or the primary bottleneck: the encoder trains exactly as
@@ -2245,51 +1864,16 @@ class PerceiverConfig(Config):
             rather than a normalized slice; a truncating deployment reads exactly that
             slice.
             The heads that distil the teacher into the student are configured
-            separately (``LatentMIMConfig.register_distillation_head_config``).
-        token_mix_layout: Layer schedule over ``M`` (token mixing within a spatial
-            neighbourhood of cells), ``R`` (read + paired latent block), ``L``
-            (latent-only block) and ``W`` (write-back: tokens cross-attend the latents),
-            e.g. ``"MMMMRWMMMMR"``; the ``R`` count must
-            equal ``latent_depth``. Needs ``read_time_rope`` on a ``rope_3d_mixed``
-            encoder. None (default) keeps the plain ``[read -> self-attend]`` stack.
-            See :class:`Perceiver`.
-        token_mix_radius: Neighbourhood radius in cells for the mixing blocks (1 =
-            3x3, 0 = own cell only). None means 1.
-        token_mix_dim: Width of the token-mixing stream (the tokens are linearly
-            projected down to it and the reads consume it). None = encoder width.
-        token_mix_num_heads: Heads of the mixing blocks. None = the bottleneck's.
-        pixel_latents: Sub-patch register grid (one latent per ``stride x stride``
-            pixels); see :class:`Perceiver`. None = False.
-        random_latent_stride: With ``pixel_latents``, draw the stride per forward pass
-            in training under ``max_latents``. None = False.
-        max_latents: Per-sample latent budget for ``random_latent_stride``.
-        eval_latent_stride: Stride outside training. None = 1 (one latent per pixel);
-            0 = one latent per token cell (the KNN/LP/finetune sweeps).
-        latent_stride_bias: Bias the drawn stride toward the finest that fits
-            (weights ``(1 / s) ** bias``). None = 0 (uniform).
+            separately (``LatentMIMConfig.location_token_distillation_head_config``).
     """
 
-    register_dim: int
-    latent_depth: int = 2
+    pooler_dim: int
+    pooler_depth: int = 2
     num_heads: int | None = None
     per_depth_read_proj: bool = False
     attn_dim: int | None = None
-    share_read_kv: bool = False
-    read_time_rope: bool = False
-    read_time_range: bool = False
     student_dims: list[int] | None = None
     student_output_norm: bool = False
-    # None defaults: ``as_config_dict`` drops None fields, so checkpoints saved before
-    # these existed round-trip unchanged.
-    token_mix_layout: str | None = None
-    token_mix_radius: int | None = None
-    token_mix_dim: int | None = None
-    token_mix_num_heads: int | None = None
-    pixel_latents: bool | None = None
-    random_latent_stride: bool | None = None
-    max_latents: int | None = None
-    eval_latent_stride: int | None = None
-    latent_stride_bias: float | None = None
 
     def resolved_num_heads(self, encoder_num_heads: int) -> int:
         """Heads for the bottleneck blocks (the encoder's when unset)."""
@@ -2306,87 +1890,25 @@ class PerceiverConfig(Config):
         """Check the bottleneck against the encoder it will attach to."""
         if not PositionEncoding.is_rope(position_encoding):
             raise ValueError(
-                "the Perceiver requires a RoPE position_encoding: the "
-                "register grid is differentiated by per-cell 2D (row, col) "
+                "the AttentionPooler requires a RoPE position_encoding: the "
+                "location-token grid is differentiated by per-cell 2D (row, col) "
                 "coordinates. A 3D encoder is fine -- the bottleneck reads with the "
                 "spatial axes only."
             )
         heads = self.resolved_num_heads(encoder_num_heads)
-        # With a decoupled attn_dim the heads live at that width, not at register_dim
+        # With a decoupled attn_dim the heads live at that width, not at pooler_dim
         # (which only sizes the residual stream).
-        attn_width = self.attn_dim if self.attn_dim is not None else self.register_dim
+        attn_width = self.attn_dim if self.attn_dim is not None else self.pooler_dim
         if attn_width % heads != 0:
             raise ValueError(
-                f"register attention width ({attn_width}) must be divisible by the "
+                f"pooler attention width ({attn_width}) must be divisible by the "
                 f"bottleneck num_heads ({heads})"
             )
         if (attn_width // heads) % 4 != 0:
             raise ValueError(
-                "2D RoPE requires register head_dim divisible by 4, got "
+                "2D RoPE requires pooler head_dim divisible by 4, got "
                 f"{attn_width // heads}"
             )
-        if self.read_time_range and not (
-            self.read_time_rope and position_encoding == PositionEncoding.MIXED_3D_ROPE
-        ):
-            raise ValueError(
-                "read_time_range requires read_time_rope on a rope_3d_mixed encoder"
-            )
-        if self.read_time_rope and not PositionEncoding.is_3d_rope(position_encoding):
-            raise ValueError(
-                "read_time_rope needs a 3D RoPE encoder position_encoding (the reads "
-                f"take the tokens' temporal coordinate from it), got {position_encoding}"
-            )
-        if self.share_read_kv and self.per_depth_read_proj and self.latent_depth > 1:
-            raise ValueError(
-                "share_read_kv and per_depth_read_proj are mutually exclusive: a shared "
-                "K/V projection needs one shared read source"
-            )
-        if self.token_mix_layout is not None:
-            if not (
-                self.read_time_rope
-                and position_encoding == PositionEncoding.MIXED_3D_ROPE
-            ):
-                raise ValueError(
-                    "token_mix_layout requires read_time_rope on a rope_3d_mixed encoder"
-                )
-            if self.token_mix_layout.count("R") != self.latent_depth:
-                raise ValueError(
-                    f"token_mix_layout has {self.token_mix_layout.count('R')} reads, "
-                    f"latent_depth is {self.latent_depth}"
-                )
-            if self.share_read_kv:
-                raise ValueError(
-                    "token_mix_layout cannot be combined with share_read_kv"
-                )
-            mix_heads = self.token_mix_num_heads or heads
-            if self.token_mix_dim is not None and self.token_mix_dim % mix_heads != 0:
-                raise ValueError(
-                    f"token_mix_dim {self.token_mix_dim} must be divisible by "
-                    f"{mix_heads} mixing heads"
-                )
-        elif any(
-            v is not None
-            for v in (
-                self.token_mix_radius,
-                self.token_mix_dim,
-                self.token_mix_num_heads,
-            )
-        ):
-            raise ValueError("token_mix_* settings need token_mix_layout")
-        if not self.pixel_latents and any(
-            v is not None
-            for v in (
-                self.random_latent_stride,
-                self.max_latents,
-                self.eval_latent_stride,
-                self.latent_stride_bias,
-            )
-        ):
-            raise ValueError("latent stride settings need pixel_latents=True")
-        if self.random_latent_stride and (
-            self.max_latents is None or self.max_latents < 1
-        ):
-            raise ValueError("random_latent_stride needs a positive max_latents budget")
         if self.student_dims is not None:
             if len(self.student_dims) == 0 or any(d <= 0 for d in self.student_dims):
                 raise ValueError(
@@ -2403,49 +1925,21 @@ class PerceiverConfig(Config):
         position_encoding: str,
         rope_base: float,
         qk_norm: bool,
-        rope_mixed_base: float = 10.0,
-        temporal_rope_dim_frac: float = 0.25,
-        rope_temporal_base: float | None = None,
-        drop_path: float = 0.0,
-    ) -> "Perceiver":
-        """Build the bottleneck module for an encoder with these settings.
-
-        The encoder's 3D RoPE settings only matter to the reads when
-        ``read_time_rope`` is set; ``drop_path`` is accepted for interface parity with
-        :class:`JointLatentConfig` and unused (the Perceiver blocks never used it).
-        """
-        return Perceiver(
+    ) -> "AttentionPooler":
+        """Build the bottleneck module for an encoder with these settings."""
+        return AttentionPooler(
             encoder_embedding_size=encoder_embedding_size,
-            register_dim=self.register_dim,
+            pooler_dim=self.pooler_dim,
             num_heads=self.resolved_num_heads(encoder_num_heads),
             mlp_ratio=mlp_ratio,
-            latent_transformer_depth=self.latent_depth,
+            pooler_depth=self.pooler_depth,
             use_2d_rope=PositionEncoding.is_rope(position_encoding),
             rope_base=rope_base,
             qk_norm=qk_norm,
             per_depth_read_proj=self.per_depth_read_proj,
             attn_dim=self.attn_dim,
-            share_read_kv=self.share_read_kv,
-            time_rope_encoding=position_encoding if self.read_time_rope else None,
-            rope_mixed_base=rope_mixed_base,
-            temporal_rope_dim_frac=temporal_rope_dim_frac,
-            rope_temporal_base=rope_temporal_base,
-            read_time_range=self.read_time_range,
-            token_mix_layout=self.token_mix_layout,
-            token_mix_radius=(
-                self.token_mix_radius if self.token_mix_radius is not None else 1
-            ),
-            token_mix_dim=self.token_mix_dim,
-            token_mix_num_heads=self.token_mix_num_heads,
-            pixel_latents=bool(self.pixel_latents),
-            random_latent_stride=bool(self.random_latent_stride),
-            max_latents=self.max_latents,
-            eval_latent_stride=(
-                self.eval_latent_stride if self.eval_latent_stride is not None else 1
-            ),
-            latent_stride_bias=(
-                self.latent_stride_bias if self.latent_stride_bias is not None else 0.0
-            ),
+            student_dims=self.sorted_student_dims,
+            student_output_norm=self.student_output_norm,
         )
 
 
@@ -2490,7 +1984,7 @@ class Encoder(FlexiVitBase):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
-        perceiver_config: PerceiverConfig | JointLatentConfig | None = None,
+        attention_pooler_config: AttentionPoolerConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -2549,11 +2043,9 @@ class Encoder(FlexiVitBase):
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
-            perceiver_config: If set, add a Perceiver-style spatial register
+            attention_pooler_config: If set, add an AttentionPooler: a dense spatial attention-pooling
                 bottleneck (and optionally its detached student readout); see
-                :class:`PerceiverConfig`. Requires a RoPE position encoding. A
-                :class:`JointLatentConfig` instead produces the register grid by joint
-                token-latent attention (no ViT blocks, no reads; use ``depth=0``).
+                :class:`AttentionPoolerConfig`. Requires a RoPE position encoding.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2624,54 +2116,33 @@ class Encoder(FlexiVitBase):
             final_embedding_size = self.embedding_size
         self.norm = nn.LayerNorm(self.embedding_size)
 
-        self.perceiver_config = perceiver_config
-        self.use_perceiver = perceiver_config is not None
-        self.perceiver: Perceiver | JointLatentTransformer | None = None
-        self.register_dim: int | None = None
-        # Detached low-dim student readout of the register grid (see
-        # PerceiverConfig). Dims are stored descending; the student runs at
-        # dims[0] and the smaller entries are Matryoshka prefixes of its output.
-        self.register_student_dims: list[int] | None = None
-        self.register_student: nn.Sequential | None = None
-        if perceiver_config is not None:
-            perceiver_config.validate(
+        self.attention_pooler_config = attention_pooler_config
+        self.use_attention_pooler = attention_pooler_config is not None
+        self.attention_pooler: AttentionPooler | None = None
+        self.pooler_dim: int | None = None
+        if attention_pooler_config is not None:
+            attention_pooler_config.validate(
                 encoder_num_heads=num_heads, position_encoding=self.position_encoding
             )
-            self.register_dim = perceiver_config.register_dim
-            if isinstance(perceiver_config, JointLatentConfig) and self.use_flash_attn:
-                raise ValueError(
-                    "JointLatentTransformer needs unpacked [B, N, D] tokens; it does not "
-                    "support the packed flash-attention encoder path"
-                )
-            self.perceiver = perceiver_config.build(
+            self.pooler_dim = attention_pooler_config.pooler_dim
+            self.attention_pooler = attention_pooler_config.build(
                 encoder_embedding_size=embedding_size,
                 encoder_num_heads=num_heads,
                 mlp_ratio=mlp_ratio,
                 position_encoding=self.position_encoding,
                 rope_base=rope_base,
                 qk_norm=qk_norm,
-                rope_mixed_base=self.rope_mixed_base,
-                temporal_rope_dim_frac=self.temporal_rope_dim_frac,
-                rope_temporal_base=self.rope_temporal_base,
-                drop_path=drop_path,
             )
-            self.register_student_dims = perceiver_config.sorted_student_dims
-            if self.register_student_dims is not None:
-                student_dim = self.register_student_dims[0]
-                student_layers = [nn.Linear(self.register_dim, student_dim)]
-                if perceiver_config.student_output_norm:
-                    student_layers.append(nn.LayerNorm(student_dim))
-                self.register_student = nn.Sequential(*student_layers)
 
-        # With a bottleneck the contrastive head projects from the register latents;
+        # With a bottleneck the contrastive head projects from the location-token grid;
         # otherwise from the encoder patch-token output.
-        self.contrastive_from_registers = self.perceiver is not None
+        self.contrastive_from_location_tokens = self.attention_pooler is not None
         # When projecting from the register tokens the head operates at the width the
-        # bottleneck ships (its register_dim); the head reads the returned grid, not the
+        # bottleneck ships (its pooler_dim); the head reads the returned grid, not the
         # stack's residual stream. Otherwise it reads the encoder's final-embedding-size
         # patch tokens.
-        if self.register_dim is not None:
-            project_aggregate_embedding_size = self.register_dim
+        if self.pooler_dim is not None:
+            project_aggregate_embedding_size = self.pooler_dim
         else:
             project_aggregate_embedding_size = final_embedding_size
         self.project_and_aggregate = ProjectAndAggregate(
@@ -2793,11 +2264,8 @@ class Encoder(FlexiVitBase):
         )
         # can't set value on leaf variable
         out = masked_tokens.clone()
-        # Put the kept tokens at the first N positions of every row: those positions
-        # are exactly where ``full_mask`` is True, so a slice + where is the boolean
-        # assignment ``out[full_mask] = x[mask]`` without its host sync.
-        n_kept = x.shape[1]
-        out[:, :n_kept] = torch.where(mask.unsqueeze(-1), x, out[:, :n_kept])
+        # put tokens in full masked tensor (at the first N positions in every row)
+        out[full_mask] = x[mask]
         # then move them to their original positions
         out = out.scatter(1, indices[:, :, None].expand_as(out), out)
         full_mask = full_mask.scatter(1, indices.expand_as(full_mask), full_mask)
@@ -2955,9 +2423,19 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
-        latent_stride: int | None = None,
+        location_query_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``location_query_patch_size`` sets the AttentionPooler's location-query grid
+        (see :meth:`AttentionPooler.forward`); it requires an AttentionPooler. ``searchlight`` runs the
+        attention under a sliding neighborhood (``nn/searchlight.py``).
+        """
+        if location_query_patch_size is not None and self.attention_pooler is None:
+            raise ValueError(
+                "location_query_patch_size requires an encoder with an AttentionPooler"
+            )
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2981,35 +2459,56 @@ class Encoder(FlexiVitBase):
             input_res,
             timestamps=timestamps,
         )
-        # Joint latent-token attention needs each token's patch cell (row-major index
-        # in the patch grid) to restrict token<->token attention to one cell. Built in
-        # the same collapsed order as the tokens and reduced alongside them below.
-        # A token-mixing Perceiver needs them too, for its neighbourhood of cells.
-        cell_ids: Tensor | None = None
-        if isinstance(self.perceiver, JointLatentTransformer) or (
-            isinstance(self.perceiver, Perceiver)
-            and self.perceiver.token_mix_layout is not None
-        ):
-            cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
-        # Full (pre-masking) positions in collapsed order, kept for the register
-        # bottleneck read so registers attend over the encoded *visible* patch tokens
+        # Full (pre-masking) positions in collapsed order, kept for the AttentionPooler
+        # read so the location queries attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
-        register_kv_positions = positions
-        # Passed in full (``(t, row, col)`` under 3D RoPE): the Perceiver takes the
-        # spatial coordinates for its grid and latent blocks itself, and uses the
-        # temporal one only when its reads are configured to rotate over time.
+        pooler_kv_positions = positions
+        # The location-token grid has no temporal axis, so the bottleneck reads with 2D
+        # (row, col) positions even when the encoder self-attention uses 3D RoPE: drop
+        # the leading temporal coordinate (3D positions are ``(t, row, col)``). This
+        # does not touch `positions`, which the encoder blocks still use for full 3D
+        # RoPE.
+        if pooler_kv_positions is not None and PositionEncoding.is_3d_rope(
+            self.position_encoding
+        ):
+            pooler_kv_positions = pooler_kv_positions[..., 1:]
 
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        if searchlight is not None:
+            from olmoearth_pretrain.nn.searchlight import encoder_searchlight
+
+            # Searchlight replaces batching with one large domain per forward: the
+            # sample is a whole area ([1, H, W, T, C], H and W any multiple of the
+            # patch size), and the parallelism comes from its millions of tokens.
+            # Larger areas are run in pieces by searchlight.embed_domain.
+            if tokens.shape[0] != 1:
+                raise ValueError(
+                    "Searchlight runs one domain per forward (batch size 1), "
+                    f"got batch size {tokens.shape[0]}"
+                )
+
+            return encoder_searchlight(
+                self,
+                searchlight,
+                tokens,
+                mask,
+                positions,
+                tokens_only_dict,
+                original_masks_dict,
+                modalities_to_dims_dict,
+                patch_size,
+                input_res,
+                location_query_patch_size,
+            )
 
         tokens, indices, new_mask, seq_lengths, max_seqlen, bool_mask = (
             self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
         )
         if positions is not None and bool_mask is not None:
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
-        if cell_ids is not None and bool_mask is not None:
-            cell_ids, _, _, _, _ = self.remove_masked_tokens(cell_ids, bool_mask)
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -3094,68 +2593,42 @@ class Encoder(FlexiVitBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
-
-        # Both register modules run on the COMPACT sequence -- the visible tokens only,
-        # padded to the batch's longest sample -- BEFORE the removed tokens are added
-        # back. Masked-out tokens were never valid keys, so the registers are the same
-        # as reading the full sequence under a key mask, but the reads' norms, K/V
-        # projections and rotary tensors are computed for ~half the tokens (the
-        # masking recipe hides about half). Under ``fast_pass`` nothing was removed and
-        # the compact sequence IS the full one. The full pre-masking coordinates only
-        # set the register grid's extent.
-        register_output = None
-        if self.perceiver is not None:
-            spatial_grid = self._patch_grid_hw(tokens_only_dict)
-            if isinstance(self.perceiver, JointLatentTransformer):
-                assert cell_ids is not None and positions is not None
-                registers, register_positions = self.perceiver(
-                    patch_tokens=tokens,
-                    patch_positions=positions,
-                    visible_mask=new_mask,
-                    cell_ids=cell_ids[..., 0],
-                    spatial_grid=spatial_grid,
-                    grid_extent_positions=register_kv_positions,
-                    patch_size=patch_size,
-                    patch_spacing=CompositeEncodings.calculate_gsd_ratio(
-                        input_res, patch_size
-                    )
-                    * self.rope_coordinate_scale,
-                )
-            else:
-                registers, register_positions = self.perceiver(
-                    patch_tokens=tokens,
-                    patch_positions=positions,
-                    visible_mask=new_mask,
-                    spatial_grid=spatial_grid,
-                    grid_extent_positions=register_kv_positions,
-                    cell_ids=cell_ids[..., 0] if cell_ids is not None else None,
-                    patch_size=patch_size,
-                    patch_spacing=CompositeEncodings.calculate_gsd_ratio(
-                        input_res, patch_size
-                    )
-                    * self.rope_coordinate_scale,
-                    latent_stride=latent_stride,
-                )
-            register_output = {
-                "registers": registers,
-                "register_positions": register_positions,
-            }
         # we don't care about the mask returned by add_removed_tokens, since we will
         # just use the original, unclipped mask here
         tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
 
-        if register_output is not None and self.register_student is not None:
-            # Detached student readout of the registers just computed.
-            register_output["student_registers"] = self.register_student(
-                register_output["registers"].detach()
+        location_token_output = None
+        if self.attention_pooler is not None:
+            spatial_grid = self._patch_grid_hw(tokens_only_dict)
+            location_tokens, location_query_positions, student_location_tokens = (
+                self.attention_pooler(
+                    patch_tokens=tokens,
+                    patch_positions=pooler_kv_positions,
+                    visible_mask=bool_mask,
+                    spatial_grid=spatial_grid,
+                    patch_size=patch_size,
+                    gsd_ratio=CompositeEncodings.calculate_gsd_ratio(
+                        input_res, patch_size
+                    )
+                    * self.rope_coordinate_scale,
+                    location_query_patch_size=location_query_patch_size,
+                )
             )
+            location_token_output = {
+                "location_tokens": location_tokens,
+                "location_query_positions": location_query_positions,
+            }
+            if student_location_tokens is not None:
+                location_token_output["student_location_tokens"] = (
+                    student_location_tokens
+                )
 
         tokens_per_modality_dict = self.split_and_expand_per_modality(
             tokens, modalities_to_dims_dict
         )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
-        return tokens_per_modality_dict, token_norm_stats, register_output
+        return tokens_per_modality_dict, token_norm_stats, location_token_output
 
     def forward(
         self,
@@ -3164,18 +2637,25 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
-        latent_stride: int | None = None,
+        location_query_patch_size: int | None = None,
+        searchlight: "SearchlightSettings | None" = None,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
         Args:
             x: Masked input sample containing the data to be encoded
             patch_size: Size of patches to divide the input into
-            latent_stride: Optional Perceiver latent stride for this pass (see
-                ``Perceiver.forward``).
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            location_query_patch_size: Pixels per location query along each side; must
+                divide ``patch_size``. None = one query per token. Requires an
+                AttentionPooler.
+            searchlight: Inference only: every token and location query attends within its
+                own sliding neighborhood over one whole domain (batch size 1),
+                instead of the window it was cropped to. None = the stock forward.
+                See ``nn/searchlight.py``; ``searchlight.embed_domain`` runs large
+                areas in pieces.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -3185,12 +2665,12 @@ class Encoder(FlexiVitBase):
 
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
-        register_output: dict[str, Any] | None = None
+        location_token_output: dict[str, Any] | None = None
         token_norm_stats: dict[str, Any] | None = None
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
-            patchified_tokens_and_masks, token_norm_stats, register_output = (
+            patchified_tokens_and_masks, token_norm_stats, location_token_output = (
                 self.apply_attn(
                     x=patchified_tokens_and_masks,
                     timestamps=x.timestamps,
@@ -3198,7 +2678,8 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
-                    latent_stride=latent_stride,
+                    location_query_patch_size=location_query_patch_size,
+                    searchlight=searchlight,
                 )
             )
         else:
@@ -3215,21 +2696,25 @@ class Encoder(FlexiVitBase):
         if token_norm_stats:
             output_dict["token_norm_stats"] = token_norm_stats
 
-        if register_output is not None:
-            output_dict["registers"] = register_output["registers"]
-            output_dict["register_positions"] = register_output["register_positions"]
-            if "student_registers" in register_output:
-                output_dict["student_registers"] = register_output["student_registers"]
+        if location_token_output is not None:
+            output_dict["location_tokens"] = location_token_output["location_tokens"]
+            output_dict["location_query_positions"] = location_token_output[
+                "location_query_positions"
+            ]
+            if "student_location_tokens" in location_token_output:
+                output_dict["student_location_tokens"] = location_token_output[
+                    "student_location_tokens"
+                ]
 
         if not fast_pass:
-            if self.contrastive_from_registers:
+            if self.contrastive_from_location_tokens:
                 # The contrastive projection reads the register tokens (only) and is sized
-                # to register_dim. Registers are produced whenever attention runs (the
+                # to pooler_dim. Location tokens are produced whenever attention runs (the
                 # standard, token_exit_cfg=None pass); the only path that skips them is the
                 # all-zero-exit target pass, which discards project_aggregated anyway.
-                if register_output is not None:
+                if location_token_output is not None:
                     output_dict["project_aggregated"] = self.project_and_aggregate(
-                        register_output["registers"]
+                        location_token_output["location_tokens"]
                     )
             else:
                 # No bottleneck: project from the encoder's patch-token output
@@ -3288,8 +2773,8 @@ class PredictorBase(FlexiVitBase):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
-        use_perceiver: bool = False,
-        register_dim: int | None = None,
+        use_attention_pooler: bool = False,
+        pooler_dim: int | None = None,
     ):
         """Initialize the predictor.
 
@@ -3322,9 +2807,9 @@ class PredictorBase(FlexiVitBase):
                 temporal RoPE coordinates (default 1.0 = raw days). E.g. set to
                 1/30 for months.
             spatial_pos_encoding: Deprecated alias for ``position_encoding``.
-            use_perceiver: If True, the decoder cross-attends to the encoder
-                register grid instead of the visible patch tokens.
-            register_dim: Width of the register grid; required when use_perceiver.
+            use_attention_pooler: If True, the decoder cross-attends to the encoder
+                location-token grid instead of the visible patch tokens.
+            pooler_dim: Width of the location-token grid; required when use_attention_pooler.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -3367,13 +2852,15 @@ class PredictorBase(FlexiVitBase):
         self.input_norm = nn.LayerNorm(encoder_embedding_size)
         self.norm = nn.LayerNorm(decoder_embedding_size)
 
-        self.use_perceiver = use_perceiver
-        self.register_to_decoder_embed: nn.Linear | None = None
-        if use_perceiver:
-            if register_dim is None:
-                raise ValueError("register_dim is required when use_perceiver is True")
-            self.register_to_decoder_embed = nn.Linear(
-                register_dim, decoder_embedding_size, bias=True
+        self.use_attention_pooler = use_attention_pooler
+        self.location_tokens_to_decoder_embed: nn.Linear | None = None
+        if use_attention_pooler:
+            if pooler_dim is None:
+                raise ValueError(
+                    "pooler_dim is required when use_attention_pooler is True"
+                )
+            self.location_tokens_to_decoder_embed = nn.Linear(
+                pooler_dim, decoder_embedding_size, bias=True
             )
 
         self.apply(self._init_weights)
@@ -3548,9 +3035,9 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int,
-        registers: Tensor | None = None,
-        register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
+        location_tokens: Tensor | None = None,
+        location_query_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> dict[str, Tensor]:
         """Apply attention to the tokens."""
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
@@ -3619,26 +3106,26 @@ class Predictor(PredictorBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
-        # Decoder context: either the visible patch tokens (default) or, for the register
-        # bottleneck, the encoder register grid (projected to the decoder dim). The decode
+        # Decoder context: either the visible patch tokens (default) or, for the AttentionPooler,
+        # the encoder location-token grid (projected to the decoder dim). The decode
         # queries are mask tokens at masked-patch coords; they attend only to this context.
-        if registers is not None:
-            if self.register_to_decoder_embed is None:
+        if location_tokens is not None:
+            if self.location_tokens_to_decoder_embed is None:
                 raise ValueError(
-                    "Predictor received registers but was built without "
-                    "use_perceiver=True"
+                    "Predictor received location_tokens but was built without "
+                    "use_attention_pooler=True"
                 )
             # Cross-attention consumes a token sequence, so flatten the grid here.
-            # register_positions is already flat and in the same row-major order.
-            context = self.register_to_decoder_embed(
-                rearrange(registers, "b h w d -> b (h w) d")
+            # location_query_positions is already flat and in the same row-major order.
+            context = self.location_tokens_to_decoder_embed(
+                rearrange(location_tokens, "b h w d -> b (h w) d")
             )
-            context_positions = register_positions
-            batch_size, num_registers = context.shape[0], context.shape[1]
+            context_positions = location_query_positions
+            batch_size, num_location_tokens = context.shape[0], context.shape[1]
             if self.use_flash_attn:
-                # Every register is valid, so "packing" for varlen is just a flatten --
+                # Every location token is valid, so "packing" for varlen is just a flatten --
                 # a view, not the gather pack_tokens does for a real validity mask --
-                # and every sample contributes the same num_registers keys, so
+                # and every sample contributes the same num_location_tokens keys, so
                 # cu_seqlens is a fixed stride.
                 context = torch.flatten(context, end_dim=1)
                 if context_positions is not None:
@@ -3646,14 +3133,14 @@ class Predictor(PredictorBase):
                 cu_seqlens_context = get_cumulative_sequence_lengths(
                     torch.full(
                         (batch_size,),
-                        num_registers,
+                        num_location_tokens,
                         dtype=torch.int32,
                         device=context.device,
                     )
                 )
             else:
                 cu_seqlens_context = None
-            max_length_of_context = num_registers
+            max_length_of_context = num_location_tokens
             context_attn_mask = None
         else:
             context = unmasked_tokens
@@ -3708,9 +3195,9 @@ class Predictor(PredictorBase):
         timestamps: Tensor,
         patch_size: int,
         input_res: int = BASE_GSD,
-        registers: Tensor | None = None,
-        register_positions: Tensor | None = None,
-        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
+        location_tokens: Tensor | None = None,
+        location_query_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | None = None,
     ) -> TokensAndMasks:
         """Generate predictions from encoded token representations.
 
@@ -3719,15 +3206,15 @@ class Predictor(PredictorBase):
             timestamps: Timestamps of the tokens
             patch_size: Patch size of the tokens
             input_res: Input resolution of the tokens
-            registers: Optional encoder register grid ``[B, n_h, n_w, register_dim]``.
-                When provided (Perceiver), the decoder cross-attends to it
+            location_tokens: Optional encoder location-token grid ``[B, n_h, n_w, pooler_dim]``.
+                When provided (AttentionPooler), the decoder cross-attends to it
                 instead of the visible patch tokens; it is flattened to a token
                 sequence here.
-            register_positions: Optional flat ``[B, n_h * n_w, 2]`` register coordinates
+            location_query_positions: Optional flat ``[B, n_h * n_w, 2]`` location-query coordinates
                 for RoPE, row-major to match the flattened grid.
-            query_pixel_shift: Optional query shift in patch units for
-                pixel-resolution targets: one ``[B, h_p, w_p, 2]`` tensor, or a
-                ``{modality: shift}`` dict (see ``olmoearth_pretrain.nn.pixel_targets``).
+            query_pixel_shift: Optional ``[B, h_p, w_p, 2]`` per-cell query shift in
+                patch units (pixel-resolution targets; see
+                ``olmoearth_pretrain.nn.pixel_targets``).
 
         Returns:
             TokensAndMasks containing the predicted tokens and their masks
@@ -3756,8 +3243,8 @@ class Predictor(PredictorBase):
             timestamps,
             patch_size,
             input_res,
-            registers=registers,
-            register_positions=register_positions,
+            location_tokens=location_tokens,
+            location_query_positions=location_query_positions,
             query_pixel_shift=query_pixel_shift,
         )
         # TODO: Factor this out into a more readable function
@@ -3782,138 +3269,6 @@ class Predictor(PredictorBase):
                 per_modality_output_tokens.append(output_data)
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
-        return TokensAndMasks(**output_dict)
-
-    def forward_pooled(
-        self,
-        x: TokensAndMasks,
-        timestamps: Tensor,
-        patch_size: int,
-        pooled: dict[str, Any],
-        input_res: int = BASE_GSD,
-        registers: Tensor | None = None,
-        register_positions: Tensor | None = None,
-    ) -> TokensAndMasks:
-        """Decode a flat list of pixel queries (the ``pooled`` pixel-target draw).
-
-        ``pooled`` maps each modality to a ``PooledPixelQueries``: ``Q`` slots per
-        sample, each naming a decoded token ``(i, j, t)`` and a pixel inside its
-        footprint. A slot's query is that token's decoder input exactly as
-        :meth:`forward` builds it (mask token + composite encodings), with its 2D
-        RoPE coordinate moved to the pixel's center; slots of one sample attend only
-        to that sample's latents, never to each other, so several slots of one token
-        are independent queries. Returns ``[B, Q, 1, 1, 1, D]`` per modality, masked
-        ``DECODER`` on valid slots and ``ONLINE_ENCODER`` elsewhere.
-        """
-        if registers is None:
-            raise ValueError("forward_pooled decodes against the Perceiver latents")
-        if self.register_to_decoder_embed is None:
-            raise ValueError(
-                "forward_pooled requires a decoder built with use_perceiver"
-            )
-        if PositionEncoding.is_3d_rope(self.position_encoding) or not (
-            PositionEncoding.is_rope(self.position_encoding)
-        ):
-            raise NotImplementedError("forward_pooled supports 2D RoPE decoders only")
-
-        decoder_embedded = x.as_dict()
-        for modality in get_modalities_to_process(
-            x.modalities, self.supported_modality_names
-        ):
-            decoder_embedded[modality] = self.encoder_to_decoder_embed(
-                self.input_norm(getattr(x, modality))
-            )
-        decoder_embedded.update(self.add_masks(decoder_embedded))
-        tokens_only, _, _ = self.split_tokens_masks_and_dims(decoder_embedded)
-        tokens = self.composite_encodings(
-            tokens_only, timestamps, patch_size, input_res
-        )
-        gsd_ratio = (
-            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
-            * self.rope_coordinate_scale
-        )
-
-        names = list(pooled)
-        queries, query_positions, query_valid = [], [], []
-        for name in names:
-            slots = pooled[name]
-            if self.tokenization_config.get_num_bandsets(name) != 1:
-                raise ValueError(f"forward_pooled needs one band set; {name} has more")
-            batch_index = torch.arange(
-                slots.valid.shape[0], device=slots.valid.device
-            ).view(-1, 1)
-            i, j, t = slots.token_index.unbind(-1)
-            positions = self._build_2d_rope_positions_for_modality(
-                modality_name=name,
-                modality=Modality.get(name),
-                tokens=tokens_only[name],
-                gsd_ratio=gsd_ratio,
-            )
-            shift = (slots.pixel.to(torch.float32) + slots.size / 2) / patch_size - 0.5
-            queries.append(tokens[name][batch_index, i, j, t, 0])  # [B, Q, D]
-            query_positions.append(
-                positions[batch_index, i, j, t, 0]
-                + shift.to(positions.dtype) * gsd_ratio
-            )
-            query_valid.append(slots.valid)
-        q = torch.cat(queries, dim=1)
-        q_pos = torch.cat(query_positions, dim=1)
-        q_valid = torch.cat(query_valid, dim=1)
-
-        context = self.register_to_decoder_embed(
-            rearrange(registers, "b h w d -> b (h w) d")
-        )
-        context_positions = register_positions
-        batch_size, num_registers = context.shape[0], context.shape[1]
-        if self.use_flash_attn:
-            og_shape = q.shape
-            q = self.pack_tokens(q, q_valid)
-            q_pos = self.pack_tokens(q_pos, q_valid)
-            seqlens_q = q_valid.sum(dim=1).to(torch.int32)
-            cu_seqlens_q = get_cumulative_sequence_lengths(seqlens_q)
-            max_seqlen_q = int(seqlens_q.max().item()) if seqlens_q.numel() else 0
-            context = torch.flatten(context, end_dim=1)
-            if context_positions is not None:
-                context_positions = torch.flatten(context_positions, end_dim=1)
-            cu_seqlens_k = get_cumulative_sequence_lengths(
-                torch.full(
-                    (batch_size,), num_registers, dtype=torch.int32, device=q.device
-                )
-            )
-        else:
-            cu_seqlens_q = cu_seqlens_k = None
-            max_seqlen_q = q.shape[1]
-        for blk in self.blocks:
-            q = blk(
-                x=q,
-                y=context,
-                attn_mask=None,
-                cu_seqlens_q=cu_seqlens_q,
-                cu_seqlens_k=cu_seqlens_k,
-                max_seqlen_q=max_seqlen_q,
-                max_seqlen_k=num_registers,
-                rope_positions=q_pos,
-                rope_positions_y=context_positions,
-            )
-        if self.use_flash_attn:
-            q = self.unpack_tokens(q, q_valid, og_shape)
-        out = self.to_output_embed(self.norm(q))
-
-        output_dict: dict[str, Tensor] = {}
-        start = 0
-        for name, valid in zip(names, query_valid):
-            num_slots = valid.shape[1]
-            output_dict[name] = out[:, start : start + num_slots].reshape(
-                batch_size, num_slots, 1, 1, 1, -1
-            )
-            output_dict[MaskedOlmoEarthSample.get_masked_modality_name(name)] = (
-                torch.where(
-                    valid,
-                    MaskValue.DECODER.value,
-                    MaskValue.ONLINE_ENCODER.value,
-                ).reshape(batch_size, num_slots, 1, 1, 1)
-            )
-            start += num_slots
         return TokensAndMasks(**output_dict)
 
 
@@ -3960,24 +3315,18 @@ class EncoderConfig(Config):
     # so old checkpoint configs deserialized via Config.from_dict still carry it
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
-    # Perceiver-style spatial Perceiver; None -> plain encoder.
-    perceiver_config: PerceiverConfig | JointLatentConfig | None = None
+    # Dense spatial attention pooler (see AttentionPoolerConfig); None -> plain encoder.
+    attention_pooler_config: AttentionPoolerConfig | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
-        if isinstance(self.perceiver_config, dict):
-            class_name = str(self.perceiver_config.get(Config.CLASS_NAME_FIELD, ""))
-            register_cls: type[PerceiverConfig] | type[JointLatentConfig] = (
-                JointLatentConfig
-                if class_name.endswith("JointLatentConfig")
-                else PerceiverConfig
-            )
-            self.perceiver_config = register_cls(
+        if isinstance(self.attention_pooler_config, dict):
+            self.attention_pooler_config = AttentionPoolerConfig(
                 **{
                     k: v
-                    for k, v in self.perceiver_config.items()
+                    for k, v in self.attention_pooler_config.items()
                     if k != Config.CLASS_NAME_FIELD
                 }
             )
@@ -4016,8 +3365,8 @@ class EncoderConfig(Config):
             raise ValueError(
                 f"rope_coordinate_scale must be positive, got {self.rope_coordinate_scale}"
             )
-        if self.perceiver_config is not None:
-            self.perceiver_config.validate(
+        if self.attention_pooler_config is not None:
+            self.attention_pooler_config.validate(
                 encoder_num_heads=self.num_heads,
                 position_encoding=self.position_encoding,
             )
@@ -4090,10 +3439,10 @@ class PredictorConfig(Config):
     # so old checkpoint configs deserialized via Config.from_dict still carry it
     # through to __post_init__ for reconciliation.
     spatial_pos_encoding: str | None = None
-    # Perceiver-style Perceiver: when True the decoder cross-attends to the
-    # encoder register grid (of width register_dim) instead of the visible patch tokens.
-    use_perceiver: bool = False
-    register_dim: int | None = None
+    # AttentionPooler: when True the decoder cross-attends to the
+    # encoder location-token grid (of width pooler_dim) instead of the visible patch tokens.
+    use_attention_pooler: bool = False
+    pooler_dim: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""
@@ -4112,8 +3461,8 @@ class PredictorConfig(Config):
             for modality in self.supported_modalities:
                 if modality not in Modality.values():
                     raise ValueError(f"Modality {modality} is not supported")
-        if self.use_perceiver and self.register_dim is None:
-            raise ValueError("register_dim must be set when use_perceiver is True")
+        if self.use_attention_pooler and self.pooler_dim is None:
+            raise ValueError("pooler_dim must be set when use_attention_pooler is True")
         if self.tokenization_config is not None:
             self.tokenization_config.validate()
         if self.position_encoding not in PositionEncoding.values():

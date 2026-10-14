@@ -152,8 +152,9 @@ def patch_legacy_encoder_config(config_dict: dict) -> dict:
     key. Without this patch they would incorrectly default to True (Linear) and fail
     to load. Call this on the raw config dict before passing to Config.from_dict.
 
-    Checkpoints trained on the ``gabi/perceiver`` branch are NOT patched here: convert
-    them once with ``scripts/official/v1_3/convert_legacy_checkpoint.py``.
+    Checkpoints trained on the ``gabi/perceiver`` branch, or saved before the
+    Perceiver -> AttentionPooler rename, are NOT patched here: convert them once
+    with ``scripts/official/v1_3/convert_legacy_checkpoint.py``.
     """
     enc = config_dict.get("model", {}).get("encoder_config", {})
     if isinstance(enc, dict) and "use_linear_patch_embed" not in enc:
