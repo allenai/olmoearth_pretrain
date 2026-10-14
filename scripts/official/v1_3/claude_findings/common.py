@@ -56,6 +56,7 @@ from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
+from olmoearth_pretrain.data.transform import TransformConfig  # noqa: E402
 from olmoearth_pretrain.internal.all_evals import (  # noqa: E402
     AEF_SUPPLEMENTAL_YEAR_ALIGNED,
     EMBEDDING_EVAL_TASKS,
@@ -105,6 +106,19 @@ TASK_TYPE_WEIGHTS = {
     SupervisionTaskType.REGRESSION: 1.0,
 }
 WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
+# The class values above assume code / 100, but WorldCover reaches the head normalized
+# with the computed stats, (code - (mean - 2 std)) / (4 std) = (code + 14.42) / 96.93:
+# codes 10-80 land two slots off (a harmless relabel), 90 / 95 / 100 collapse into one
+# class, and nodata (0) is learned as a class. The fixed values match the normalized
+# codes; the tolerance (half the smallest code gap, 95 -> 100) drops nodata.
+_WORLDCOVER_MEAN = 34.04615796218091
+_WORLDCOVER_STD = 24.232421963981864
+_WORLDCOVER_CODES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
+WORLDCOVER_CLASS_VALUES_FIXED = [
+    (code - (_WORLDCOVER_MEAN - 2 * _WORLDCOVER_STD)) / (4 * _WORLDCOVER_STD)
+    for code in _WORLDCOVER_CODES
+]
+WORLDCOVER_CLASS_MATCH_TOLERANCE = 2.5 / (4 * _WORLDCOVER_STD)
 _CDL_CODES = [
     *range(1, 7),
     *range(10, 15),
@@ -171,8 +185,13 @@ WANDB_PROJECT = "20260921_perceiver_shapes"
 
 def build_supervision_head_config(
     base_weight: float = SUPERVISION_BASE_WEIGHT,
+    worldcover_fix: bool = False,
 ) -> SupervisionHeadConfig:
-    """Location-token supervision heads over the decode-only map modalities."""
+    """Location-token supervision heads over the decode-only map modalities.
+
+    ``worldcover_fix`` uses class values that match WorldCover's normalization and
+    ignores its nodata pixels (see ``WORLDCOVER_CLASS_VALUES_FIXED``).
+    """
 
     def _weight(task_type: SupervisionTaskType) -> float:
         return base_weight * TASK_TYPE_WEIGHTS[task_type]
@@ -182,7 +201,14 @@ def build_supervision_head_config(
             task_type=SupervisionTaskType.CLASSIFICATION,
             num_output_channels=len(WORLDCOVER_CLASS_VALUES),
             weight=_weight(SupervisionTaskType.CLASSIFICATION),
-            class_values=WORLDCOVER_CLASS_VALUES,
+            class_values=(
+                WORLDCOVER_CLASS_VALUES_FIXED
+                if worldcover_fix
+                else WORLDCOVER_CLASS_VALUES
+            ),
+            class_match_tolerance=(
+                WORLDCOVER_CLASS_MATCH_TOLERANCE if worldcover_fix else None
+            ),
         ),
         "srtm": SupervisionModalityConfig(
             task_type=SupervisionTaskType.REGRESSION,
@@ -218,8 +244,17 @@ def build_supervision_head_config(
     return SupervisionHeadConfig(modality_configs=modality_configs)
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """rc_ld1_pix512's model: v1.2 base + 1-layer AttentionPooler + [128, 64] student."""
+def build_model_config(
+    common: CommonComponents,
+    *,
+    worldcover_fix: bool = False,
+    projection_only_target: bool = True,
+) -> LatentMIMConfig:
+    """rc_ld1_pix512's model: v1.2 base + 1-layer AttentionPooler + [128, 64] student.
+
+    ``projection_only_target=False`` keeps a full encoder copy as the target (for
+    EMA / JEPA targets).
+    """
     config = _v1_2_build_size_model_config(
         common, ENCODER_SIZE_NAME, PATCH_EMBED_HIDDEN_SIZES
     )
@@ -236,8 +271,10 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     decoder_config.use_attention_pooler = True
     decoder_config.pooler_dim = POOLER_DIM
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
-    config.projection_only_target = True
-    config.supervision_head_config = build_supervision_head_config()
+    config.projection_only_target = projection_only_target
+    config.supervision_head_config = build_supervision_head_config(
+        worldcover_fix=worldcover_fix
+    )
     config.location_token_distillation_head_config = (
         LocationTokenDistillationHeadConfig(
             back_projection_hidden=BACK_PROJECTION_HIDDEN
@@ -251,9 +288,18 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 # =========================================================================================
 
 
-def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """v1.2 dataloader, single masked view, decorrelated shape sampler, 512-query budget."""
+def build_dataloader_config(
+    common: CommonComponents, *, augment: bool = False
+) -> OlmoEarthDataLoaderConfig:
+    """v1.2 dataloader, single masked view, decorrelated shape sampler, 512-query budget.
+
+    ``augment`` applies the flip/rotate transform in the collator. The train module's
+    ``transform_config`` (which the v1.2/v1.3 recipes set) is never applied, so the
+    original runs trained without augmentation.
+    """
     config = _v1_2_build_dataloader_config(common)
+    if augment:
+        config.transform_config = TransformConfig(transform_type="flip_and_rotate")
     config.num_masked_views = 1
     config.token_budget = TOKEN_BUDGET
     config.min_tokens_per_instance = MIN_TOKENS_PER_INSTANCE
@@ -265,9 +311,16 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 
 
 def build_train_module_config(
-    common: CommonComponents, *, pixel_targets: bool = False
+    common: CommonComponents,
+    *,
+    pixel_targets: bool = False,
+    center_targets: bool = False,
 ) -> LatentMIMTrainModuleConfig:
-    """v1_3/base.py's single-forward-pass train module (+ optional pixel MIM targets)."""
+    """v1_3/base.py's single-forward-pass train module (+ optional pixel MIM targets).
+
+    ``center_targets`` centers each sample's latent-MIM targets before the patch
+    discrimination loss (see ``ModalityPatchDiscriminationMaskedNegativesVec``).
+    """
     base = _v1_2_build_train_module_config(common)
     config = LatentMIMTrainModuleConfig(
         optim_config=base.optim_config,
@@ -294,6 +347,13 @@ def build_train_module_config(
     config.autocast_precision = DType.bfloat16
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     config.pixel_targets = pixel_targets
+    if center_targets:
+        loss_kwargs = dict(config.loss_config.loss_config)
+        assert (
+            loss_kwargs["type"] == "modality_patch_discrimination_masked_negatives_vec"
+        )
+        loss_kwargs["center_targets"] = True
+        config.loss_config = replace(config.loss_config, loss_config=loss_kwargs)
     return config
 
 
@@ -327,6 +387,7 @@ def build_trainer_config(
     *,
     ps4_student_evals: bool = True,
     ps2_student_evals: bool = True,
+    wandb_project: str = WANDB_PROJECT,
 ):
     """rc_ld1_pix512's in-loop evals, run as Beaker jobs that re-import ``module_path``.
 
@@ -380,7 +441,7 @@ def build_trainer_config(
     evaluator.run_as_beaker_job = True
     evaluator.beaker_eval_module_path = module_path
     evaluator.beaker_eval_clusters = list(LOOP_EVAL_CLUSTERS)
-    trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    trainer_config.callbacks["wandb"].project = wandb_project
     # Keep every permanent checkpoint, as the original runs did (138 kept): olmo-core
     # 2.6 defaults to the last 3, which deletes a checkpoint before its in-loop eval
     # job may have read it.

@@ -48,6 +48,10 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
             cell instead of on the whole patch (see
             ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
             queries; requires the projection-only target.
+        target_encoder_eval_mode: Run the target encoder in eval mode during
+            training (no drop-path, no band dropout). ``train_batch`` puts the whole
+            model in train mode, which otherwise also puts a full EMA target-encoder
+            copy in train mode. No effect for the projection-only target.
     """
 
     loss_config: LossConfig = field(
@@ -63,6 +67,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
+    target_encoder_eval_mode: bool = False
 
     def build(
         self,
@@ -132,6 +137,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
+        target_encoder_eval_mode: bool = False,
     ):
         """Initialize the training module.
 
@@ -161,6 +167,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 its cell (decoder query at that pixel's center, target = the frozen
                 projection of that pixel). Requires the projection-only target: a
                 full target encoder would need a per-pixel forward.
+            target_encoder_eval_mode: Keep the target encoder in eval mode while
+                training (see :class:`LatentMIMTrainModuleConfig`).
         """
         super().__init__(
             model=model,
@@ -204,6 +212,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         if self.model.location_token_distillation_head is not None:
             self.total_loss_name = f"{self.total_loss_name}+student"
         self.pixel_targets = pixel_targets
+        self.target_encoder_eval_mode = target_encoder_eval_mode
         if pixel_targets and not isinstance(
             self.model.target_encoder, FrozenTargetProjection
         ):
@@ -240,6 +249,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.update_target_encoder()
         # Set the model to train mode
         self.model.train()
+        if self.target_encoder_eval_mode:
+            self.model.target_encoder.eval()
         total_batch_loss = torch.zeros([], device=self.device)
         total_batch_reg = torch.zeros([], device=self.device)
         # Count of microbatches with a non-finite loss, kept on device (a Python check

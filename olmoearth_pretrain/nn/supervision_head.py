@@ -61,6 +61,13 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
+        class_match_tolerance: For classification only. If set, a pixel whose
+            normalized value is farther than this from every entry of
+            ``class_values`` is treated as invalid (excluded from the loss) instead
+            of being assigned the nearest class. Use it so a nodata code that is not
+            in ``class_values`` (e.g. WorldCover 0) is ignored rather than learned
+            as a real class. None (default) keeps nearest-value matching for every
+            pixel.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -70,6 +77,7 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    class_match_tolerance: float | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -279,7 +287,13 @@ def _compute_per_modality_losses(
 
         if cfg.task_type == SupervisionTaskType.CLASSIFICATION:
             class_values = supervision_head.get_class_values(name)
-            loss = _classification_loss(pred, raw_target, valid_mask, class_values)
+            loss = _classification_loss(
+                pred,
+                raw_target,
+                valid_mask,
+                class_values,
+                class_match_tolerance=cfg.class_match_tolerance,
+            )
         elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
             loss = _binary_classification_loss(
                 pred, raw_target, valid_mask, pos_weight=cfg.pos_weight
@@ -354,17 +368,22 @@ def _classification_loss(
     raw_target: Tensor,
     valid_mask: Tensor,
     class_values: Tensor,
+    class_match_tolerance: float | None = None,
 ) -> Tensor:
     """Cross-entropy loss for single-band categorical modalities.
 
     Converts normalized float targets to integer class indices using
-    class_values as the lookup table (nearest-value matching).
+    class_values as the lookup table (nearest-value matching). With
+    ``class_match_tolerance``, pixels farther than that from every class value
+    are dropped from the loss.
     """
     class_values = class_values.to(dtype=raw_target.dtype)
     # raw_target: [B, H, W, 1] -> [B, H, W]
     target_vals = raw_target[..., 0]
     distances = (target_vals.unsqueeze(-1) - class_values).abs()
-    target_indices = distances.argmin(dim=-1)  # [B, H, W]
+    min_distances, target_indices = distances.min(dim=-1)  # [B, H, W]
+    if class_match_tolerance is not None:
+        valid_mask = valid_mask & (min_distances <= class_match_tolerance)
 
     num_classes = pred.shape[-1]
     per_pixel = F.cross_entropy(

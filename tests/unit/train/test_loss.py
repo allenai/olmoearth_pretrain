@@ -1355,3 +1355,58 @@ def test_masked_neg_vec_large_batch() -> None:
     assert torch.isclose(loss_seq, loss_vec, rtol=RTOL, atol=ATOL), (
         f"large batch: seq={loss_seq.item()}, vec={loss_vec.item()}"
     )
+
+
+def _collinear_tokens(
+    b: int, n: int, d: int, residual_scale: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Targets = one shared direction + a small per-token residual; preds = residual."""
+    torch.manual_seed(0)
+    shared = torch.randn(1, 1, 1, 1, d) * 10.0
+    residual = torch.randn(b, n, 1, 1, d)
+    targets = shared + residual_scale * residual
+    return residual.clone(), targets
+
+
+def _decoder_only(x: torch.Tensor) -> torch.Tensor:
+    return torch.full(x.shape[:-1], MaskValue.DECODER.value, dtype=torch.long)
+
+
+def test_vec_center_targets_recovers_collinear_targets() -> None:
+    """Centering removes a shared target direction that masking would otherwise skip."""
+    preds_x, targets_x = _collinear_tokens(b=4, n=8, d=16, residual_scale=1e-2)
+    mask = _decoder_only(preds_x)
+    preds = TokensAndMasks(sentinel2_l2a=preds_x, sentinel2_l2a_mask=mask)
+    targets = TokensAndMasks(sentinel2_l2a=targets_x, sentinel2_l2a_mask=mask)
+    masked = ["sentinel2_l2a"]
+    # Every target pair has cosine > 0.999, so every sample is skipped.
+    plain = ModalityPatchDiscriminationMaskedNegativesVec(
+        mask_negatives_for_modalities=masked
+    ).compute(preds, targets)
+    assert plain.item() == 0.0
+    centered = ModalityPatchDiscriminationMaskedNegativesVec(
+        mask_negatives_for_modalities=masked, center_targets=True
+    ).compute(preds, targets)
+    # Predictions equal the residuals, so after centering each token is easy to pick
+    # out: the loss is well below chance (2 * tau * log(8) = 0.42).
+    assert 0.0 < centered.item() < 0.2
+
+
+def test_vec_center_targets_skips_constant_samples() -> None:
+    """A sample whose targets are all identical (a constant map) contributes nothing."""
+    b, n, d = 3, 6, 8
+    torch.manual_seed(1)
+    preds_x = torch.randn(b, n, 1, 1, d, requires_grad=True)
+    targets_x = torch.randn(b, n, 1, 1, d)
+    targets_x[0] = torch.randn(1, 1, 1, d)  # sample 0: one target repeated
+    mask = _decoder_only(targets_x)
+    loss_fn = ModalityPatchDiscriminationMaskedNegativesVec(center_targets=True)
+    loss = loss_fn.compute(
+        TokensAndMasks(sentinel2_l2a=preds_x, sentinel2_l2a_mask=mask),
+        TokensAndMasks(sentinel2_l2a=targets_x, sentinel2_l2a_mask=mask),
+    )
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert preds_x.grad is not None and torch.isfinite(preds_x.grad).all()
+    assert preds_x.grad[0].abs().sum().item() == 0.0
+    assert preds_x.grad[1:].abs().sum().item() > 0.0

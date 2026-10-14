@@ -528,14 +528,38 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         modality_weights: dict[str, float] | None = None,
         same_target_threshold: float = 0.999,
         mask_negatives_for_modalities: list[str] | None = None,
+        center_targets: bool = False,
+        center_targets_eps: float = 1e-4,
     ) -> None:
-        """Initialize with same params as ModalityPatchDiscriminationMaskedNegatives."""
+        """Initialize with same params as ModalityPatchDiscriminationMaskedNegatives.
+
+        Args:
+            tau: Softmax temperature.
+            pred2unit: Standardize predictions over the batch's decoder tokens.
+            weight: Overall loss weight.
+            modality_weights: Optional per-modality loss weights.
+            same_target_threshold: Target cosine above which two tokens are treated
+                as the same target (not a valid negative).
+            mask_negatives_for_modalities: Modalities to apply that masking to
+                (None = all).
+            center_targets: Subtract each sample's mean target (per modality, over
+                its decoder tokens) before L2 normalization. Frozen random-projection
+                targets share one dominant direction (within-sample cosine ~0.97-1.0),
+                so without centering only a small residual separates tokens and the
+                same-target masking drops most map samples entirely.
+            center_targets_eps: With ``center_targets``, a sample whose largest
+                centered target norm is at most this fraction of its mean target's
+                norm (e.g. a map that is constant over the crop) has no signal and is
+                skipped.
+        """
         self.tau = tau
         self.pred2unit = pred2unit
         self.weight = weight
         self.modality_weights = modality_weights
         self.same_target_threshold = same_target_threshold
         self.mask_negatives_for_modalities = mask_negatives_for_modalities
+        self.center_targets = center_targets
+        self.center_targets_eps = center_targets_eps
 
     def _compute_modality_loss_parallel(
         self,
@@ -569,6 +593,21 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
                 total_decoder - 1
             ).clamp(min=1)
             sorted_preds = (sorted_preds - pred_mu) / (pred_var.sqrt() + 1e-4)
+
+        # Samples with no usable target signal after centering (see center_targets).
+        degenerate = torch.zeros(batch_size, dtype=torch.bool, device=count.device)
+        if self.center_targets:
+            mask_float = valid_mask.unsqueeze(-1).float()
+            target_mu = (sorted_targets * mask_float).sum(
+                dim=1, keepdim=True
+            ) / count.clamp(min=1).view(-1, 1, 1).float()
+            sorted_targets = sorted_targets - target_mu
+            max_residual = (sorted_targets.norm(dim=-1) * valid_mask.float()).amax(
+                dim=1
+            )
+            degenerate = max_residual <= self.center_targets_eps * target_mu.squeeze(
+                1
+            ).norm(dim=-1)
 
         sorted_preds = F.normalize(sorted_preds, p=2, dim=-1)
         sorted_targets = F.normalize(sorted_targets, p=2, dim=-1)
@@ -631,7 +670,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         loss_per_pos = loss_per_pos.reshape(batch_size, num_tokens)
 
         # Zero out invalid positions and skipped samples
-        sample_contributes = (count > 0) & ~sample_skip
+        sample_contributes = (count > 0) & ~sample_skip & ~degenerate
         effective_valid = valid_mask.float() * sample_contributes.unsqueeze(1).float()
         effective_count = count.float() * sample_contributes.float()
         num_contributing = sample_contributes.sum()

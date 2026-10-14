@@ -11,6 +11,7 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionModalityConfig,
     SupervisionTaskType,
     _build_valid_mask,
+    _classification_loss,
     compute_supervision_loss,
 )
 
@@ -341,3 +342,21 @@ class TestSupervisionHeadConfig:
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
             )
+
+
+def test_classification_loss_class_match_tolerance_drops_unmatched_pixels() -> None:
+    """Pixels farther than the tolerance from every class value are not scored."""
+    class_values = torch.tensor([0.25, 0.35, 0.45])
+    pred = torch.randn(1, 2, 2, 3)
+    # Two pixels on a class value, two (e.g. nodata) far from all of them.
+    raw_target = torch.tensor([[[[0.25], [0.15]], [[0.45], [0.15]]]])
+    valid_mask = torch.ones(1, 2, 2, dtype=torch.bool)
+    loss_all = _classification_loss(pred, raw_target, valid_mask, class_values)
+    loss_tol = _classification_loss(
+        pred, raw_target, valid_mask, class_values, class_match_tolerance=0.02
+    )
+    ce = torch.nn.functional.cross_entropy(
+        pred.reshape(-1, 3), torch.tensor([0, 0, 2, 0]), reduction="none"
+    )
+    assert torch.isclose(loss_all, ce.mean())
+    assert torch.isclose(loss_tol, ce[[0, 2]].mean())
