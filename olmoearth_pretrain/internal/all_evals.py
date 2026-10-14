@@ -1833,6 +1833,77 @@ FT_EVAL_TASKS = {
     ),
 }
 
+# Fine-tuning on the Strata target suite (favyen, 2026-10-14; allenai/olmoearth_strata).
+# AEF year-aligned + PASTIS follow the open-set FT recipe (favyen/20260712-open-set
+# scripts/official/v1_3/open_set_aef_clean/ft_eval_tasks.py): S1 + S2 + Landsat
+# year-aligned imagery, patch size 4, one location query per pixel, AEF tasks
+# center-cropped to 16 px and scored at the labeled pixel. LFMC and MapBiomas mirror
+# their EVAL_TASKS probes with the encoder fine-tuned.
+_STRATA_FT_MODALITIES = [
+    Modality.SENTINEL1.name,
+    Modality.SENTINEL2_L2A.name,
+    Modality.LANDSAT.name,
+]
+STRATA_FT_NUM_WORKERS = 24
+
+
+def _strata_aef_ft_task(dataset: str) -> DownstreamTaskConfig:
+    """One AEF supplemental year-aligned dataset as center-pixel fine-tuned classification."""
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        ft_batch_size=32,
+        num_workers=STRATA_FT_NUM_WORKERS,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        norm_method=NormMethod.NORM_NO_CLIP_2_STD,
+        input_modalities=_STRATA_FT_MODALITIES,
+        epochs=50,
+        eval_mode=EvalMode.FINETUNE,
+        primary_metric=EvalMetric.BALANCED_ACCURACY,
+        window_size=16,
+        patch_size=4,
+        location_query_patch_size=1,
+        use_center_token=True,
+        label_at_center_pixel=True,
+    )
+
+
+FT_EVAL_TASKS.update(
+    {
+        **{
+            f"{name}_ft": _strata_aef_ft_task(name)
+            for name in AEF_SUPPLEMENTAL_YEAR_ALIGNED
+        },
+        "pastis_year_aligned_ft": DownstreamTaskConfig(
+            dataset="pastis_year_aligned",
+            ft_batch_size=16,
+            num_workers=STRATA_FT_NUM_WORKERS,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            input_modalities=_STRATA_FT_MODALITIES,
+            epochs=50,
+            eval_mode=EvalMode.FINETUNE,
+            primary_metric=EvalMetric.MIOU,
+            window_size=32,
+            tile_samples=True,
+            patch_size=4,
+            location_query_patch_size=1,
+        ),
+        "lfmc_woody_3k_s1_s2_ft": replace(
+            EVAL_TASKS["lfmc_woody_3k_s1_s2"],
+            eval_mode=EvalMode.FINETUNE,
+            ft_batch_size=8,
+            location_query_patch_size=1,
+        ),
+        "mapbiomas_3k_dense_ft": replace(
+            EVAL_TASKS["mapbiomas_3k_dense"],
+            eval_mode=EvalMode.FINETUNE,
+            ft_batch_size=8,
+            location_query_patch_size=1,
+        ),
+    }
+)
+
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
