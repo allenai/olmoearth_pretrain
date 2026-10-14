@@ -119,17 +119,20 @@ class DownstreamTaskConfig:
     eval_mode: EvalMode | None = None
     probe_type: ProbeType = ProbeType.LINEAR
     use_pooled_tokens: bool = False
-    # If the model has a Perceiver, probe the pooled encoder patch tokens
-    # instead of the register latents. No effect without a Perceiver.
+    # If the model has an AttentionPooler, probe the pooled encoder patch tokens
+    # instead of the location-token grid. No effect without an AttentionPooler.
     eval_on_encoder_tokens: bool = False
-    # If the model has a detached register projection (register_student_dims),
-    # probe the low-dim student_registers instead of the register grid -- the same
+    # If the model has a detached student projection (attention_pooler_config.student_dims),
+    # probe the low-dim student_location_tokens instead of the location-token grid -- the same
     # checkpoint can then be evaluated at both widths by registering the task twice.
     # Mutually exclusive with eval_on_encoder_tokens.
-    eval_on_student_registers: bool = False
-    # With eval_on_student_registers: probe only the first N dims of the student (a
+    eval_on_student_location_tokens: bool = False
+    # With eval_on_student_location_tokens: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_student_dim: int | None = None
+    # For an AttentionPooler model: pixels per location query along each side at eval (must divide
+    # patch_size; 1 = per-pixel location queries). None = one location query per token.
+    location_query_patch_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
@@ -312,8 +315,9 @@ class DownstreamEvaluator:
         self.norm_method = task.norm_method
         self.use_pooled_tokens = task.use_pooled_tokens
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
-        self.eval_on_student_registers = task.eval_on_student_registers
+        self.eval_on_student_location_tokens = task.eval_on_student_location_tokens
         self.eval_student_dim = task.eval_student_dim
+        self.location_query_patch_size = task.location_query_patch_size
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -542,9 +546,10 @@ class DownstreamEvaluator:
             "concat_features": (self.probe_type == "attn_pool"),
             "use_pooled_tokens": self.use_pooled_tokens,
             "eval_on_encoder_tokens": self.eval_on_encoder_tokens,
-            "eval_on_student_registers": self.eval_on_student_registers,
+            "eval_on_student_location_tokens": self.eval_on_student_location_tokens,
             "eval_student_dim": self.eval_student_dim,
             "use_center_token": self.use_center_token,
+            "location_query_patch_size": self.location_query_patch_size,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
@@ -827,6 +832,7 @@ class DownstreamEvaluator:
             pooling_type=self.pooling_type,
             use_pooled_tokens=self.use_pooled_tokens,
             eval_on_encoder_tokens=self.eval_on_encoder_tokens,
+            location_query_patch_size=self.location_query_patch_size,
             train_loader=train_loader,
             val_loader=val_loader,
             test_loader=test_loader,
