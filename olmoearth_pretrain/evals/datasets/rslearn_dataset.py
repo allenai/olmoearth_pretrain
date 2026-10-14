@@ -21,6 +21,7 @@ from einops import rearrange
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset, IterableDataset, Subset
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
     EMBEDDING_PRODUCT_MODALITIES,
@@ -44,7 +45,6 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import (
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
     log_eval_dataset_provenance_to_wandb,
-    sha256_of_file,
     verify_config_json_hash,
 )
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -1169,8 +1169,8 @@ def from_registry_entry(
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
     Uses jsonargparse to build ModelDataset directly from model.yaml. The
-    model.yaml is read from the git checkout when the entry records a
-    config_repo_dir (pinned by the commit being run), otherwise from the copy
+    model.yaml is read from the packaged dataset configs when the entry records
+    a packaged_config (pinned by the commit being run), otherwise from the copy
     at entry.weka_path/model.yaml written during ingestion. The dataset
     folder's config.json is verified against the sha256 recorded in the
     registry before building.
@@ -1226,8 +1226,8 @@ def from_registry_entry(
             "model.yaml must be at weka_path/model.yaml. Run migrate_model_yaml or re-ingest."
         )
 
-    # Resolves to the git-tracked config when the entry records a
-    # config_repo_dir; otherwise the copy in the Weka dataset folder.
+    # Resolves to the packaged config when the entry records a
+    # packaged_config; otherwise the copy in the Weka dataset folder.
     model_yaml_path = entry.model_yaml_path
 
     # config.json must live in the dataset folder (rslearn reads it from the
@@ -1240,9 +1240,11 @@ def from_registry_entry(
         entry.name,
         {
             "model_yaml_path": model_yaml_path,
-            "model_yaml_sha256": sha256_of_file(model_yaml_path),
+            "model_yaml_sha256": hashlib.sha256(
+                UPath(model_yaml_path).read_bytes()
+            ).hexdigest(),
             "config_json_sha256": config_json_sha256,
-            "config_repo_dir": entry.config_repo_dir,
+            "packaged_config": entry.packaged_config,
             "weka_path": entry.weka_path,
         },
     )

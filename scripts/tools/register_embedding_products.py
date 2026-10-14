@@ -38,6 +38,7 @@ uncovered windows would shrink every model's test set. A product below
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 from typing import Any
@@ -50,7 +51,6 @@ from olmoearth_pretrain.evals.embedding_materializer.materialize import (
     CONFIG_BACKUP_NAME,
     PRODUCTS,
 )
-from olmoearth_pretrain.evals.studio_ingest.provenance import sha256_of_file
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     EmbeddingProductRecord,
@@ -273,7 +273,9 @@ def register_product(entry: EvalDatasetEntry, product: str, dry_run: bool) -> No
 
 def restamp_config_json(entry: EvalDatasetEntry, dry_run: bool) -> None:
     """Set config_json_sha256 to the dataset folder's current config.json (step 3)."""
-    sha = sha256_of_file(UPath(entry.weka_path) / "config.json")
+    sha = hashlib.sha256(
+        (UPath(entry.weka_path) / "config.json").read_bytes()
+    ).hexdigest()
     if entry.config_json_sha256 == sha:
         return
     logger.info("  config_json_sha256: %s %s", "would set" if dry_run else "set", sha)
@@ -365,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
         logger.info("Not registered: %s", "; ".join(not_live))
         logger.info("Re-run this script for those once their bake finishes.")
     logger.info(
-        "Commit registry.json and any model.yaml under data/rslearn_dataset_configs/."
+        "Commit registry.json and any model.yaml under "
+        "olmoearth_pretrain/evals/studio_ingest/dataset_configs/."
     )
     return 0
 
