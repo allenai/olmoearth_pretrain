@@ -445,8 +445,13 @@ def build_commands(
                 lr=lr,
                 seed_args=seed_args,
                 torchrun_master_port=torchrun_master_port,
-                is_external_model=_preset_for_check is not None
-                and _preset_for_check.launch_script_key is not None,
+                # A module evaluated without a checkpoint builds (and loads) its own
+                # model, so like a preset baseline it has no train module to configure.
+                is_external_model=(
+                    _preset_for_check is not None
+                    and _preset_for_check.launch_script_key is not None
+                )
+                or args.checkpoint_path is None,
             )
         )
 
