@@ -34,7 +34,11 @@ import uuid
 from logging import getLogger
 
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
-from olmoearth_pretrain.evals.embedding_transforms import EmbeddingNormalization
+from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalization,
+    QuantizationScheme,
+)
 from olmoearth_pretrain.evals.models import BaselineModelName, get_launch_script_path
 from olmoearth_pretrain.internal.all_evals import EMBEDDING_EVAL_TASKS
 from olmoearth_pretrain.internal.constants import EVAL_LAUNCH_PATH, EVAL_WANDB_PROJECT
@@ -184,7 +188,7 @@ def _model_args(
                     _task_arg(
                         task_name,
                         "quantization_scheme",
-                        "QuantizationScheme.TESSERA_PER_VECTOR",
+                        QuantizationScheme.TESSERA_PER_VECTOR.value,
                     )
                 )
         return " ".join(args)
@@ -193,7 +197,7 @@ def _model_args(
     args = [" --trainer.no_checkpoints=True"]
     for task_name in task_names:
         args.append(_task_arg(task_name, "norm_stats_from_pretrained", "False"))
-        args.append(_task_arg(task_name, "norm_method", "NormMethod.NO_NORM"))
+        args.append(_task_arg(task_name, "norm_method", NormMethod.NO_NORM.value))
         args.append(_task_arg(task_name, "input_modalities", f"[{modality}]"))
         args.append(_task_arg(task_name, "quantize_embeddings", str(quantize)))
         if quantize:
@@ -201,9 +205,9 @@ def _model_args(
                 _task_arg(
                     task_name,
                     "quantization_scheme",
-                    # StrEnum interpolates to its VALUE ("tessera_per_vector"),
-                    # which OmegaConf rejects -- it parses enums by member NAME.
-                    f"QuantizationScheme.{QUANTIZE_SCHEME_BY_MODALITY[modality].name}",
+                    # olmo-core's config coercion builds enums from their VALUE
+                    # ("tessera_per_vector"); "QuantizationScheme.<NAME>" is rejected.
+                    QUANTIZE_SCHEME_BY_MODALITY[modality].value,
                 )
             )
     return " ".join(args)
@@ -227,7 +231,7 @@ def _normalization_args(args: argparse.Namespace, task_names: list[str]) -> str:
         _task_arg(
             name,
             "embedding_normalization",
-            f"EmbeddingNormalization.{normalization.upper()}",
+            EmbeddingNormalization[normalization.upper()].value,
         )
         for name in task_names
     )
