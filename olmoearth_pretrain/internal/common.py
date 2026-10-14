@@ -206,6 +206,10 @@ def build_launch_config(
                 name="LOAD_ARCH_FROM_CHECKPOINT", value=load_arch_from_checkpoint
             )
         )
+    # Propagate the embedding-evals flag to the experiment if set
+    embedding_evals = os.environ.get("EMBEDDING_EVALS")
+    if embedding_evals is not None:
+        env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
     # Propagate the CUDA allocator config if set (e.g. expandable_segments:True to
     # reduce fragmentation OOMs at large token budgets).
     cuda_alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
