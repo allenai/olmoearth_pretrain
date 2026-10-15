@@ -43,7 +43,7 @@ from olmoearth_pretrain.evals.finetune.model import (
     snapshot_state_dict,
     to_device,
 )
-from olmoearth_pretrain.evals.linear_probe import weighted_dice_loss
+from olmoearth_pretrain.evals.linear_probe import MaskedMSELoss, weighted_dice_loss
 from olmoearth_pretrain.evals.metrics import (
     EvalMetric,
     EvalResult,
@@ -267,7 +267,8 @@ def run_finetune_eval(
             else nn.CrossEntropyLoss()
         )
     elif task_config.task_type == TaskType.PER_PIXEL_REGRESSION:
-        loss_fn = nn.MSELoss()
+        # Sparse labels (e.g. LFMC: NaN except at the labeled pixel), as in the probe.
+        loss_fn = MaskedMSELoss()
     elif use_dice_loss:
         num_classes = task_config.num_classes
         loss_fn = functools.partial(weighted_dice_loss, num_classes=num_classes)
