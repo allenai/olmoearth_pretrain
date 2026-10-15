@@ -13,10 +13,16 @@ Slots start at chunk means: the cell's tokens in (modality, time) order are spli
 proportion to their visible counts, and then move freely over ``iters`` rounds
 (GRU + MLP update). A slot's RoPE position is the cell's row/col and the
 attention-weighted mean time of the tokens it absorbed (a point position).
+
+The merge also returns an *unmerge*: given the merged sequence after later blocks, each
+original token gets the mix of its cell's slot outputs weighted by its own final
+assignment (its softmax over slots, summing to 1), and bypassed tokens get their own
+output. That gives per-token features after the merge, in the pre-merge layout.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import torch
@@ -117,7 +123,7 @@ class SlotMerge(nn.Module):
         valid: Tensor,
         cell_ids: Tensor,
         modality_ids: Tensor,
-    ) -> tuple[Tensor, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor, Callable[[Tensor], Tensor]]:
         """Merge ``x`` ``[B, L, D]`` (padded) into ``[B, L', D]``.
 
         Args:
@@ -129,7 +135,9 @@ class SlotMerge(nn.Module):
             modality_ids: ``[B, L]`` modality index (orders the chunk init).
 
         Returns:
-            ``(tokens, positions, valid)`` of the merged, padded sequence.
+            ``(tokens, positions, valid, unmerge)``: the merged, padded sequence, and a
+            function mapping a ``[B, L', D]`` sequence in that layout back to
+            ``[B, L, D]`` in the input layout (zeros at padding).
         """
         B, L, D = x.shape
         device = x.device
@@ -147,7 +155,7 @@ class SlotMerge(nn.Module):
         keep = ~merges
 
         if not bool(merges.any()):
-            return x + self._zero_touch(), positions, valid
+            return x + self._zero_touch(), positions, valid, lambda y: y
 
         # ---- merging cells, padded to [G, P, D] (tokens) and [G, S, D] (slots)
         m_b, m_l, m_group = b_idx[merges], l_idx[merges], group[merges]
@@ -234,4 +242,22 @@ class SlotMerge(nn.Module):
         new_pos[out_b, slot_in_sample] = out_pos
         new_valid = torch.zeros(B, L_new, dtype=torch.bool, device=device)
         new_valid[out_b, slot_in_sample] = True
-        return new_x, new_pos, new_valid
+
+        # Where each kept token / slot landed, in concatenation order.
+        dst_i = torch.empty_like(slot_in_sample)
+        dst_i[out_order] = slot_in_sample
+        n_keep = int(keep.sum().item())
+        keep_b, keep_l = b_idx[keep], l_idx[keep]
+        slot_b, slot_i = g_b[s_g], dst_i[n_keep:]
+        assign = attn  # last round: each token's softmax over its cell's slots
+
+        def unmerge(y: Tensor) -> Tensor:
+            out = y.new_zeros(B, L, y.shape[-1])
+            out[keep_b, keep_l] = y[keep_b, dst_i[:n_keep]]
+            slot_out = y.new_zeros(G, S, y.shape[-1])
+            slot_out[s_g, s_j] = y[slot_b, slot_i]
+            mixed = torch.einsum("gps,gsd->gpd", assign.to(y.dtype), slot_out)
+            out[m_b, m_l] = mixed[g_local, rank]
+            return out
+
+        return new_x, new_pos, new_valid, unmerge

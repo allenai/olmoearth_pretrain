@@ -51,7 +51,7 @@ def test_slot_counts_and_bypass() -> None:
     merge = _merge()
     counts = [[12, 3, 4, 7], [1, 12, 0, 5]]
     x, pos, valid, cell, mod = _cells(counts)
-    out, out_pos, out_valid = merge(x, pos, valid, cell, mod)
+    out, out_pos, out_valid, _ = merge(x, pos, valid, cell, mod)
     for b, per_cell in enumerate(counts):
         expected = sum(max(math.ceil(n / 3), min(n, 4)) for n in per_cell)
         assert int(out_valid[b].sum()) == expected
@@ -67,7 +67,7 @@ def test_slot_positions_sit_in_their_cell_and_time_range() -> None:
     """A slot keeps its cell's row/col and a time inside the cell's time span."""
     merge = _merge()
     x, pos, valid, cell, mod = _cells([[12, 9]])
-    out, out_pos, out_valid = merge(x, pos, valid, cell, mod)
+    out, out_pos, out_valid, _ = merge(x, pos, valid, cell, mod)
     for c in (0, 1):
         slot_rows = out_pos[0][out_valid[0] & (out_pos[0, :, 1] == c)]
         times = pos[0][valid[0] & (cell[0] == c), 0]
@@ -79,13 +79,40 @@ def test_slot_positions_sit_in_their_cell_and_time_range() -> None:
         assert torch.all(slot_rows[:, 0] <= times.max() + 1e-4)
 
 
+def test_unmerge_returns_to_the_input_layout() -> None:
+    """Bypassed tokens get their own output; merged ones a convex mix of their slots."""
+    merge = _merge()
+    counts = [[12, 3, 7], [2, 12, 0]]
+    x, pos, valid, cell, mod = _cells(counts)
+    out, out_pos, out_valid, unmerge = merge(x, pos, valid, cell, mod)
+    back = unmerge(out)
+    assert back.shape == x.shape
+    assert torch.all(back[~valid] == 0)
+    for b, per_cell in enumerate(counts):
+        for c, n in enumerate(per_cell):
+            sel = valid[b] & (cell[b] == c)
+            if 0 < n <= 4:  # bypass: identity
+                torch.testing.assert_close(back[b][sel], x[b][sel])
+    # every slot output = the same vector -> every merged token gets exactly it
+    const = torch.randn(D)
+    y = torch.where(out_valid[..., None], const.expand_as(out), torch.zeros_like(out))
+    back = unmerge(y)
+    for b, per_cell in enumerate(counts):
+        for c, n in enumerate(per_cell):
+            if n > 4:
+                sel = valid[b] & (cell[b] == c)
+                torch.testing.assert_close(
+                    back[b][sel], const.expand(int(sel.sum()), D), atol=1e-5, rtol=1e-5
+                )
+
+
 def test_every_parameter_gets_a_gradient_even_without_merging() -> None:
     """DDP needs grads for all parameters; a batch with only small cells must not drop them."""
     for counts in ([[12, 2]], [[2, 3]]):
         merge = _merge()
         x, pos, valid, cell, mod = _cells(counts)
         x.requires_grad_(True)
-        out, _, out_valid = merge(x, pos, valid, cell, mod)
+        out, _, out_valid, _ = merge(x, pos, valid, cell, mod)
         out[out_valid].sum().backward()
         for name, p in merge.named_parameters():
             assert p.grad is not None, (counts, name)

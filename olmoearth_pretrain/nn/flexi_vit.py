@@ -3,6 +3,7 @@
 import logging
 import math
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -2850,13 +2851,13 @@ class Encoder(FlexiVitBase):
         mask: Tensor,
         cell_ids: Tensor | None,
         modality_ids: Tensor | None,
-    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor, Tensor]:
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor, Callable[[Tensor], Tensor]]:
         """Run the slot merge on the (compact, padded) sequence after its block.
 
         Returns the merged tokens and positions, the key mask for the remaining blocks
         (None when nothing is padding -- in eval too, unlike ``_maybe_get_attn_mask``,
         since merged lengths differ per sample), the merged validity mask, and the
-        pre-merge tokens (for the per-token outputs).
+        unmerge back to the pre-merge layout (for the per-token outputs).
         """
         assert self.slot_merge is not None
         assert cell_ids is not None and modality_ids is not None
@@ -2868,11 +2869,11 @@ class Encoder(FlexiVitBase):
             if new_mask is not None
             else (mask == MaskValue.ONLINE_ENCODER.value)
         )
-        merged, merged_positions, merged_valid = self.slot_merge(
+        merged, merged_positions, merged_valid, unmerge = self.slot_merge(
             tokens, positions, valid, cell_ids[..., 0], modality_ids[..., 0]
         )
         attn_mask = None if bool(merged_valid.all()) else merged_valid
-        return merged, merged_positions, attn_mask, merged_valid, tokens
+        return merged, merged_positions, attn_mask, merged_valid, unmerge
 
     def _maybe_get_attn_mask(
         self,
@@ -3124,7 +3125,7 @@ class Encoder(FlexiVitBase):
                     positions,
                     attn_mask,
                     merged_valid,
-                    pre_merge_tokens,
+                    slot_unmerge,
                 ) = self._apply_slot_merge(
                     tokens, positions, new_mask, mask, cell_ids, modality_ids
                 )
@@ -3158,11 +3159,11 @@ class Encoder(FlexiVitBase):
         tokens = self.norm(tokens)
         perceiver_mask = new_mask
         if self.slot_merge is not None:
-            # The Perceiver reads the merged sequence; the per-token outputs (only
-            # their masks are used downstream: the decoder reads the registers) are
-            # the pre-merge tokens, normed.
+            # The Perceiver reads the merged sequence. The per-token outputs are
+            # unmerged back to the input layout: each token gets its assignment-weighted
+            # mix of its cell's (final, normed) slots; bypassed tokens their own output.
             perceiver_tokens, perceiver_mask = tokens, merged_valid
-            tokens = self.norm(pre_merge_tokens)
+            tokens = slot_unmerge(tokens)
 
         # Both register modules run on the COMPACT sequence -- the visible tokens only,
         # padded to the batch's longest sample -- BEFORE the removed tokens are added
