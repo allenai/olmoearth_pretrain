@@ -70,12 +70,20 @@ def parse_model_config(model_config_path: str) -> dict[str, Any]:
     return yaml.safe_load(substituted_content)
 
 
+# Transforms the OlmoEarth eval pipeline applies itself: Normalize (pretrained or
+# per-dataset stats) and Sentinel1ToDecibels (the loader always runs convert_to_db on
+# Sentinel-1), so keeping rslearn's copies would apply them twice.
+_STRIPPED_TRANSFORMS = ("Normalize", "Sentinel1ToDecibels")
+
+
 def _strip_normalize_transforms(data_config: dict[str, Any]) -> None:
-    """Remove Normalize transforms from all split configs in-place.
+    """Remove Normalize and Sentinel1ToDecibels transforms from all split configs in-place.
 
     Normalization is handled by OlmoEarth's eval pipeline (either pretrained
     stats or per-dataset stats), not by rslearn's transforms. If we left
-    rslearn's Normalize in, the data would be double-normalized.
+    rslearn's Normalize in, the data would be double-normalized. Likewise the loader
+    converts Sentinel-1 to dB itself; lfmc_woody_3k's model.yaml also listed
+    Sentinel1ToDecibels, which left almost every S1 pixel at the -100 dB floor.
     """
     init_args = data_config.get("init_args", {})
     for config_key in [
@@ -90,12 +98,16 @@ def _strip_normalize_transforms(data_config: dict[str, Any]) -> None:
             continue
         original_count = len(cfg["transforms"])
         cfg["transforms"] = [
-            t for t in cfg["transforms"] if "Normalize" not in t.get("class_path", "")
+            t
+            for t in cfg["transforms"]
+            if not any(name in t.get("class_path", "") for name in _STRIPPED_TRANSFORMS)
         ]
         removed = original_count - len(cfg["transforms"])
         if removed:
             logger.info(
-                "Stripped %d Normalize transform(s) from %s", removed, config_key
+                "Stripped %d Normalize/Sentinel1ToDecibels transform(s) from %s",
+                removed,
+                config_key,
             )
 
 
