@@ -257,7 +257,7 @@ class SlotMerge(nn.Module):
             slot_out = y.new_zeros(G, S, y.shape[-1])
             slot_out[s_g, s_j] = y[slot_b, slot_i]
             mixed = torch.einsum("gps,gsd->gpd", assign.to(y.dtype), slot_out)
-            out[m_b, m_l] = mixed[g_local, rank]
+            out[m_b, m_l] = mixed[g_local, rank].to(out.dtype)  # einsum may autocast
             return out
 
         return new_x, new_pos, new_valid, unmerge

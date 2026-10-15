@@ -192,6 +192,15 @@ def test_encoder_with_slot_merge_trains_and_infers() -> None:
     torch.testing.assert_close(a["registers"], b["registers"], atol=1e-5, rtol=1e-5)
 
 
+def test_encoder_with_slot_merge_runs_under_bf16_autocast() -> None:
+    """Training runs under bf16 autocast: merge, unmerge and backward must all work."""
+    enc = _encoder(slot_merge=True).train()
+    with torch.autocast("cpu", dtype=torch.bfloat16):
+        out = enc(_sample(), patch_size=PS)
+    out["registers"].float().pow(2).mean().backward()
+    assert torch.isfinite(out["tokens_and_masks"].sentinel2_l2a.float()).all()
+
+
 def test_config_dict_is_coerced() -> None:
     """A checkpoint config stores the merge as a dict; EncoderConfig rebuilds it."""
     cfg = SlotMergeConfig(merge_after=2, ratio=6, min_slots=3, iters=1)
