@@ -17,6 +17,7 @@ from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
+from olmoearth_pretrain.nn.latent_phase import latent_phase_stats
 from olmoearth_pretrain.nn.pixel_targets import (
     PooledPixelQueries,
     gather_pixels,
@@ -71,6 +72,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
     pixel_target_draw: str = "shared"
+    latent_phase_penalty: float = 0.0
 
     def build(
         self,
@@ -141,6 +143,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
         pixel_target_draw: str = "shared",
+        latent_phase_penalty: float = 0.0,
     ):
         """Initialize the training module.
 
@@ -177,6 +180,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 ``"pooled"``: per (sample, modality), as many targets as masked
                 tokens, drawn without replacement from every masked pixel, so a
                 footprint can get zero or several; needs one band set per modality.
+            latent_phase_penalty: Weight on the register grid's sub-token phase ratio
+                (:func:`latent_phase_stats`), applied whenever the latents are finer
+                than the tokens. The ratios are logged at any weight, 0 included.
         """
         super().__init__(
             model=model,
@@ -230,6 +236,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
+        self.latent_phase_penalty = latent_phase_penalty
+        if latent_phase_penalty > 0:
+            self.total_loss_name = f"{self.total_loss_name}+phase"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -463,5 +472,29 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics.update(distill_metrics)
+
+                if student_outputs is not None:
+                    token_grid = spatial_token_grid(batch, patch_size)
+                    phase_stats = latent_phase_stats(
+                        student_outputs["registers"], token_grid
+                    )
+                    student_phase_stats = (
+                        latent_phase_stats(
+                            student_outputs["student_registers"].detach(), token_grid
+                        )
+                        if student_outputs["student_registers"] is not None
+                        else None
+                    )
+                    if phase_stats is not None:
+                        if self.latent_phase_penalty > 0:
+                            loss = (
+                                loss + self.latent_phase_penalty * phase_stats["phase"]
+                            )
+                        if extra_metrics is None:
+                            extra_metrics = {}
+                        for name, value in phase_stats.items():
+                            extra_metrics[f"latent_phase/{name}"] = value.detach()
+                        for name, value in (student_phase_stats or {}).items():
+                            extra_metrics[f"latent_phase/student_{name}"] = value
 
             return loss, latent, decoded, target_output, extra_metrics

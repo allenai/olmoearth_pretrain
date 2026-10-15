@@ -583,3 +583,53 @@ def test_train_module_pooled_draw_forward(patch_size: int) -> None:
     loss.backward()
     grads = [p.grad for p in model.decoder.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+def test_train_module_latent_phase_penalty() -> None:
+    """Per-pixel latents under ps2 tokens: the phase ratio is logged and penalised."""
+    torch.manual_seed(0)
+    model: LatentMIM = _model_config().build()
+    assert model.encoder.perceiver is not None
+    # Stride 1 every forward, so the latents are always finer than the tokens.
+    model.encoder.perceiver.random_latent_stride = False
+    model.train()
+
+    def forward(penalty: float) -> tuple[torch.Tensor, dict]:
+        """model_forward at ps2 under this penalty weight."""
+        config = LatentMIMTrainModuleConfig(
+            optim_config=AdamWConfig(lr=1e-4),
+            rank_microbatch_size=B,
+            loss_config=LossConfig(
+                loss_config={
+                    "type": "modality_patch_discrimination_masked_negatives_vec",
+                    "tau": 0.1,
+                    "same_target_threshold": 0.999,
+                }
+            ),
+            masking_config=MaskingConfig(strategy_config={"type": "random"}),
+            token_exit_cfg={modality: 0 for modality in Modality.names()},
+            ema_decay=(1.0, 1.0),
+            transform_config=TransformConfig(transform_type="no_transform"),
+            pixel_targets=True,
+            latent_phase_penalty=penalty,
+        )
+        with patch(
+            "olmoearth_pretrain.train.train_module.train_module.build_world_mesh"
+        ):
+            train_module = config.build(model, device=torch.device("cpu"))
+        torch.manual_seed(1)
+        loss, _, _, _, metrics = train_module.model_forward(
+            _make_sample(), 2, train_module.token_exit_cfg
+        )
+        assert metrics is not None
+        return loss, metrics
+
+    loss0, metrics0 = forward(0.0)
+    loss1, metrics1 = forward(1.0)
+    for key in ("phase", "col", "row", "control"):
+        assert f"latent_phase/{key}" in metrics0
+    phase = metrics1["latent_phase/phase"]
+    assert torch.allclose(metrics0["latent_phase/phase"], phase)
+    assert torch.allclose(loss1, loss0 + phase, atol=1e-5)
+    loss1.backward()
+    assert model.encoder.perceiver.register.grad is not None
