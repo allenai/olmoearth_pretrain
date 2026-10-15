@@ -40,6 +40,9 @@ PROFILE_TARGETS = {
     # Latent budget memory check for the random-stride point arm: 512 (as trained) vs 1024.
     "prof_rstride512": "pure_perceiver_joint_latentread_rstride",
     "prof_rstride1024": "pure_perceiver_joint_latentread_rstride",
+    # Slot merge vs the released v1.3 (step-time stalls seen on 8 GPUs, 2026-10-15).
+    "prof_v13ld1": "rc_ld1_pixtgt_pix512",
+    "prof_slot4r3": "rc_ld1_pixtgt_slot4r3_pix512",
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -51,7 +54,12 @@ PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
     "prof_rstride1024": {"max_latents": 1024},
 }
 # Longer runs for memory checks: more batches drawn at the per-sample latent ceiling.
-PROFILE_MAX_STEPS: dict[str, int] = {"prof_rstride512": 1000, "prof_rstride1024": 1000}
+PROFILE_MAX_STEPS: dict[str, int] = {
+    "prof_rstride512": 1000,
+    "prof_rstride1024": 1000,
+    "prof_v13ld1": 1000,
+    "prof_slot4r3": 1000,
+}
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.
 GLOBAL_BATCH_SIZE = 64
 PROFILE_SKIP = 300
