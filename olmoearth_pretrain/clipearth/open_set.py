@@ -1,10 +1,13 @@
 """Read open-set segmentation windows as OlmoEarth inputs plus class masks.
 
 The windows are the ones Molmo's ``open_set_seg`` training set was built from: rslearn
-windows of 128x128 px at 10 m covering one year, with every band group's 12 monthly
-periods stacked band-major in one GeoTIFF (``(bands * 12, H, W)``, all months of the
-first band, then all months of the next). Lower-resolution band groups are upsampled
-to 10 m by repeating pixels.
+windows of 128x128 px at 10 m, with every band group's monthly periods stacked
+band-major in one GeoTIFF (``(bands * periods, H, W)``, all months of the first band,
+then all months of the next). Most windows cover 12 months. Change datasets (burn
+scars, floods, damage, ...) were later split into ``<name>_pre`` and ``<name>_post``
+windows of 6 months each; the labels live on ``_post``, which is read in their place.
+Windows with fewer than 12 periods are padded with missing months. Lower-resolution band
+groups are upsampled to 10 m by repeating pixels.
 
 Class names and masks come from the Molmo copy of the set
 (``rs_datasets/open_set_seg_train``): ``manifest_{train,val}.json`` lists each window's
@@ -109,19 +112,20 @@ def _read_modality(
             return None
         with rasterio.open(path) as src:
             raw = src.read().astype(np.float32)
-        if raw.shape[0] != len(bands) * NUM_PERIODS:
+        periods, remainder = divmod(raw.shape[0], len(bands))
+        if remainder or not 0 < periods <= NUM_PERIODS:
             return None
         scale = WINDOW_SIZE // raw.shape[1]
         if scale > 1:
             raw = raw.repeat(scale, axis=1).repeat(scale, axis=2)
         # band-major: (bands, periods, H, W) -> (H, W, periods, bands)
-        raw = raw.reshape(len(bands), NUM_PERIODS, WINDOW_SIZE, WINDOW_SIZE)
+        raw = raw.reshape(len(bands), periods, WINDOW_SIZE, WINDOW_SIZE)
         raw = raw.transpose(2, 3, 1, 0)
         absent = (raw == nodata) | ~np.isfinite(raw)
         for i, band in enumerate(bands):
             c = spec.band_order.index(band)
-            data[..., c] = raw[..., i]
-            missing[..., c] = absent[..., i]
+            data[:, :, :periods, c] = raw[..., i]
+            missing[:, :, :periods, c] = absent[..., i]
     if modality == Modality.SENTINEL1.name:
         data = np.where(missing, data, convert_to_db(np.where(missing, 1, data)))
     return data, missing
@@ -194,6 +198,8 @@ class OpenSetWindows(Dataset):
         """Return one window, or None if it cannot be read."""
         record = self.records[index]
         window_dir = os.path.join(self.windows_dir, record.name)
+        if not os.path.isdir(window_dir):
+            window_dir += "_post"
         try:
             metadata = json.load(open(os.path.join(window_dir, "metadata.json")))
             item: dict = {}

@@ -15,6 +15,9 @@ Output is one ``.npz`` per part of ``--part_size`` windows under ``--out_dir``; 
 that already exist are skipped, so a preempted job resumes where it stopped. Work is
 split across Beaker replicas by ``BEAKER_REPLICA_RANK`` / ``BEAKER_REPLICA_COUNT``.
 
+``--fill`` embeds only the windows missing from the ``r*_p*`` parts already in
+``--out_dir`` (e.g. windows a previous run could not read), into ``fill_r*_p*`` parts.
+
 Run:
   python -m olmoearth_pretrain.clipearth.embed --checkpoint <dir> --out_dir <dir>
 """
@@ -22,6 +25,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import glob
 import logging
 import os
 import time
@@ -256,6 +260,7 @@ def main() -> None:
     parser.add_argument("--min_pixels", type=int, default=16)
     parser.add_argument("--num_workers", type=int, default=8)
     parser.add_argument("--limit", type=int, default=None, help="windows, for tests")
+    parser.add_argument("--fill", action="store_true")
     parser.add_argument(
         "--rank", type=int, default=int(os.environ.get("BEAKER_REPLICA_RANK", 0))
     )
@@ -272,6 +277,17 @@ def main() -> None:
     )
 
     records = sorted(load_records(), key=lambda r: r.name)[: args.limit]
+    prefix = ""
+    if args.fill:
+        # Only the main parts count as done, so the fill list is the same on every
+        # restart and its own finished parts are skipped by name.
+        done = {
+            str(window)
+            for path in glob.glob(os.path.join(args.out_dir, "r*_p*.npz"))
+            for window in np.load(path)["window"]
+        }
+        records = [r for r in records if r.name not in done]
+        prefix = "fill_"
     records = records[args.rank :: args.world]
     os.makedirs(args.out_dir, exist_ok=True)
     parts = [
@@ -281,7 +297,7 @@ def main() -> None:
         f"replica {args.rank}/{args.world}: {len(records)} windows in {len(parts)} parts"
     )
     for p, part_records in enumerate(parts):
-        path = os.path.join(args.out_dir, f"r{args.rank:03d}_p{p:04d}.npz")
+        path = os.path.join(args.out_dir, f"{prefix}r{args.rank:03d}_p{p:04d}.npz")
         if os.path.exists(path):
             continue
         start = time.time()
