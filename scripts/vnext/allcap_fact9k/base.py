@@ -126,11 +126,12 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.token_budget = TOKEN_BUDGET
     config.time_range_days_choices = list(TIME_RANGE_DAYS)
     config.tokenization_config = common.tokenization_config
-    # Each dataloader item is a whole rank batch (128 samples on 4 GPUs), up to
-    # ~6 GiB on the dense union timeline. With v1.2's 16 workers x prefetch 2 up to
-    # 32 of them sat in /dev/shm per rank and runs died with worker SIGBUS. 4
-    # workers x prefetch 1 still produce rank batches ~2x faster than they are
-    # consumed (CPU benchmark), and uint8 masks shrink each item ~30%.
+    # Each dataloader item is a whole rank batch (128 samples on 4 GPUs, 64 on 8),
+    # up to ~6 GiB on the original dense union timeline (the compact per-modality
+    # layout roughly halves that). With v1.2's 16 workers x prefetch 2 up to 32 of
+    # them sat in /dev/shm per rank and runs died with worker SIGBUS. 4 workers x
+    # prefetch 1 still produce rank batches ~2x faster than they are consumed (CPU
+    # benchmark), and uint8 masks shrink each item ~30%.
     config.num_workers = 4
     config.prefetch_factor = 1
     config.uint8_masks = True
