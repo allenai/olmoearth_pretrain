@@ -47,6 +47,7 @@ from olmoearth_pretrain.nn.joint_latent import (
     token_mix_attention_kwargs,
 )
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
+from olmoearth_pretrain.nn.slot_merge import SlotMergeConfig
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -1225,6 +1226,26 @@ class FlexiVitBase(nn.Module):
         ids_dict.update(original_masks_dict)
         cell_ids, _ = self.collapse_and_combine_hwtc(ids_dict)
         return cell_ids
+
+    def build_modality_ids(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Modality index per token, ``[B, N, 1]`` long, in collapsed order."""
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        ids_dict: dict[str, Tensor] = {}
+        for i, modality_name in enumerate(modalities_to_process):
+            tokens = tokens_only_dict[modality_name]
+            ids_dict[modality_name] = torch.full(
+                (*tokens.shape[:-1], 1), i, dtype=torch.long, device=tokens.device
+            )
+        ids_dict.update(original_masks_dict)
+        modality_ids, _ = self.collapse_and_combine_hwtc(ids_dict)
+        return modality_ids
 
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
@@ -2467,6 +2488,7 @@ class Encoder(FlexiVitBase):
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
         perceiver_config: PerceiverConfig | JointLatentConfig | None = None,
+        slot_merge_config: SlotMergeConfig | None = None,
     ):
         """Initialize the encoder.
 
@@ -2530,6 +2552,9 @@ class Encoder(FlexiVitBase):
                 :class:`PerceiverConfig`. Requires a RoPE position encoding. A
                 :class:`JointLatentConfig` instead produces the register grid by joint
                 token-latent attention (no ViT blocks, no reads; use ``depth=0``).
+            slot_merge_config: If set, merge each patch cell's tokens into slots after
+                ``merge_after`` blocks (``nn/slot_merge.py``); later blocks and the
+                Perceiver run over the merged sequence. Requires a Perceiver.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2599,6 +2624,21 @@ class Encoder(FlexiVitBase):
         else:
             final_embedding_size = self.embedding_size
         self.norm = nn.LayerNorm(self.embedding_size)
+
+        self.slot_merge_after: int | None = None
+        self.slot_merge = None
+        if slot_merge_config is not None:
+            slot_merge_config.validate(depth)
+            if perceiver_config is None or not isinstance(
+                perceiver_config, PerceiverConfig
+            ):
+                raise ValueError("slot_merge_config requires a PerceiverConfig")
+            if self.use_flash_attn or num_register_tokens > 0:
+                raise ValueError(
+                    "slot merge needs the padded (non-flash) path without registers"
+                )
+            self.slot_merge_after = slot_merge_config.merge_after
+            self.slot_merge = slot_merge_config.build(embedding_size)
 
         self.perceiver_config = perceiver_config
         self.use_perceiver = perceiver_config is not None
@@ -2802,6 +2842,38 @@ class Encoder(FlexiVitBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def _apply_slot_merge(
+        self,
+        tokens: Tensor,
+        positions: Tensor,
+        new_mask: Tensor | None,
+        mask: Tensor,
+        cell_ids: Tensor | None,
+        modality_ids: Tensor | None,
+    ) -> tuple[Tensor, Tensor, Tensor | None, Tensor, Tensor]:
+        """Run the slot merge on the (compact, padded) sequence after its block.
+
+        Returns the merged tokens and positions, the key mask for the remaining blocks
+        (None when nothing is padding -- in eval too, unlike ``_maybe_get_attn_mask``,
+        since merged lengths differ per sample), the merged validity mask, and the
+        pre-merge tokens (for the per-token outputs).
+        """
+        assert self.slot_merge is not None
+        assert cell_ids is not None and modality_ids is not None
+        if positions is None or positions.shape[-1] != 3:
+            raise ValueError("slot merge needs 3D RoPE positions (t, row, col)")
+        # Under fast_pass nothing was removed, so validity comes from the full mask.
+        valid = (
+            new_mask.bool()
+            if new_mask is not None
+            else (mask == MaskValue.ONLINE_ENCODER.value)
+        )
+        merged, merged_positions, merged_valid = self.slot_merge(
+            tokens, positions, valid, cell_ids[..., 0], modality_ids[..., 0]
+        )
+        attn_mask = None if bool(merged_valid.all()) else merged_valid
+        return merged, merged_positions, attn_mask, merged_valid, tokens
+
     def _maybe_get_attn_mask(
         self,
         new_mask: Tensor,
@@ -2961,6 +3033,12 @@ class Encoder(FlexiVitBase):
             and self.perceiver.token_mix_layout is not None
         ):
             cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
+        modality_ids: Tensor | None = None
+        if self.slot_merge is not None:
+            cell_ids = self.build_cell_ids(tokens_only_dict, original_masks_dict)
+            modality_ids = self.build_modality_ids(
+                tokens_only_dict, original_masks_dict
+            )
         # Full (pre-masking) positions in collapsed order, kept for the register
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
@@ -2980,6 +3058,10 @@ class Encoder(FlexiVitBase):
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
         if cell_ids is not None and bool_mask is not None:
             cell_ids, _, _, _, _ = self.remove_masked_tokens(cell_ids, bool_mask)
+        if modality_ids is not None and bool_mask is not None:
+            modality_ids, _, _, _, _ = self.remove_masked_tokens(
+                modality_ids, bool_mask
+            )
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -3036,6 +3118,16 @@ class Encoder(FlexiVitBase):
                 attn_mask=attn_mask,
                 rope_positions=positions,
             )
+            if self.slot_merge is not None and i_blk + 1 == self.slot_merge_after:
+                (
+                    tokens,
+                    positions,
+                    attn_mask,
+                    merged_valid,
+                    pre_merge_tokens,
+                ) = self._apply_slot_merge(
+                    tokens, positions, new_mask, mask, cell_ids, modality_ids
+                )
 
         if self.has_register_tokens:
             tokens, register_tokens = self.pop_register_tokens(tokens)
@@ -3064,6 +3156,13 @@ class Encoder(FlexiVitBase):
         # we apply the norm before we add the removed tokens,
         # so that the norm is only computed against "real" tokens
         tokens = self.norm(tokens)
+        perceiver_mask = new_mask
+        if self.slot_merge is not None:
+            # The Perceiver reads the merged sequence; the per-token outputs (only
+            # their masks are used downstream: the decoder reads the registers) are
+            # the pre-merge tokens, normed.
+            perceiver_tokens, perceiver_mask = tokens, merged_valid
+            tokens = self.norm(pre_merge_tokens)
 
         # Both register modules run on the COMPACT sequence -- the visible tokens only,
         # padded to the batch's longest sample -- BEFORE the removed tokens are added
@@ -3093,12 +3192,16 @@ class Encoder(FlexiVitBase):
                 )
             else:
                 registers, register_positions = self.perceiver(
-                    patch_tokens=tokens,
+                    patch_tokens=perceiver_tokens
+                    if self.slot_merge is not None
+                    else tokens,
                     patch_positions=positions,
-                    visible_mask=new_mask,
+                    visible_mask=perceiver_mask,
                     spatial_grid=spatial_grid,
                     grid_extent_positions=register_kv_positions,
-                    cell_ids=cell_ids[..., 0] if cell_ids is not None else None,
+                    cell_ids=cell_ids[..., 0]
+                    if cell_ids is not None and self.slot_merge is None
+                    else None,
                     patch_size=patch_size,
                     patch_spacing=CompositeEncodings.calculate_gsd_ratio(
                         input_res, patch_size
@@ -3927,11 +4030,21 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str | None = None
     # Perceiver-style spatial Perceiver; None -> plain encoder.
     perceiver_config: PerceiverConfig | JointLatentConfig | None = None
+    # Per-cell slot merge partway through the ViT; None -> no merge.
+    slot_merge_config: SlotMergeConfig | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
         if isinstance(self.tokenization_config, dict):
             self.tokenization_config = TokenizationConfig(**self.tokenization_config)
+        if isinstance(self.slot_merge_config, dict):
+            self.slot_merge_config = SlotMergeConfig(
+                **{
+                    k: v
+                    for k, v in self.slot_merge_config.items()
+                    if k != Config.CLASS_NAME_FIELD
+                }
+            )
         if isinstance(self.perceiver_config, dict):
             class_name = str(self.perceiver_config.get(Config.CLASS_NAME_FIELD, ""))
             register_cls: type[PerceiverConfig] | type[JointLatentConfig] = (
@@ -3986,6 +4099,8 @@ class EncoderConfig(Config):
                 encoder_num_heads=self.num_heads,
                 position_encoding=self.position_encoding,
             )
+        if self.slot_merge_config is not None:
+            self.slot_merge_config.validate(self.depth)
         if self.rope_mixed_base <= 0:
             raise ValueError(
                 f"rope_mixed_base must be positive, got {self.rope_mixed_base}"
