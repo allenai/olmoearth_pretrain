@@ -29,7 +29,6 @@ from torch.utils.data import Dataset
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
 from olmoearth_pretrain.data.utils import convert_to_db
-from olmoearth_pretrain.evals.datasets.rslearn_dataset import get_timestamps
 
 WINDOWS_DIR = (
     "/weka/dfive-default/olmoearth_pretrain/dataset_creation/open_set_dataset/"
@@ -128,6 +127,18 @@ def _read_modality(
     return data, missing
 
 
+def monthly_timestamps(start: str, num_periods: int = NUM_PERIODS) -> torch.Tensor:
+    """``[T, 3]`` (day, month 0-indexed, year) for each month from ``start``.
+
+    Same convention as ``evals.datasets.rslearn_dataset.get_timestamps`` (the first of
+    each month), which is not imported because ``evals.datasets`` pulls in every eval
+    dataset and their dependencies.
+    """
+    first = datetime.fromisoformat(start)
+    months = [first.year * 12 + first.month - 1 + k for k in range(num_periods)]
+    return torch.tensor([[1, m % 12, m // 12] for m in months], dtype=torch.long)
+
+
 def tile_centers(metadata: dict, tile_size: int) -> np.ndarray:
     """Lat/lon of each ``tile_size`` px tile's centre, ``[H/tile, W/tile, 2]``."""
     projection = metadata["projection"]
@@ -198,14 +209,7 @@ class OpenSetWindows(Dataset):
                 item[f"{modality}_missing"] = torch.from_numpy(any_missing)
             if Modality.SENTINEL2_L2A.name not in item:
                 return None
-            start, end = metadata["time_range"]
-            item["timestamps"] = torch.stack(
-                get_timestamps(
-                    datetime.fromisoformat(start).strftime("%Y-%m-%d"),
-                    datetime.fromisoformat(end).strftime("%Y-%m-%d"),
-                    NUM_PERIODS,
-                )
-            )
+            item["timestamps"] = monthly_timestamps(metadata["time_range"][0])
             mask_path = os.path.join(self.molmo_dir, "masks", f"{record.name}.png")
             item["mask"] = torch.from_numpy(np.array(Image.open(mask_path)))
             item["tile_lat_lon"] = tile_centers(metadata, self.tile_size)
