@@ -24,7 +24,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from base import build_dataloader_config as _v1_3_build_dataloader_config  # noqa: E402
 from base import build_visualize_config  # noqa: E402
 from e5_allcap_common import (  # noqa: E402
     ALLCAP_H5PY_DIR,
@@ -33,12 +32,13 @@ from e5_allcap_common import (  # noqa: E402
     ARM_B_CLOUD_TAU,
     build_common_components,
     build_model_config,
+    build_trainer_config,
 )
-from e5_allcap_common import (
-    build_trainer_config as _e5_build_trainer_config,
+from e5_allcap_common import (  # noqa: E402
+    build_dataloader_config as _e5_build_dataloader_config,
 )
-from rc_pixtgt_pix512 import (  # noqa: E402
-    build_train_module_config as _rc_build_train_module_config,
+from e5_allcap_common import (  # noqa: E402
+    build_train_module_config as _e5_build_train_module_config,
 )
 from v1_2.base import (  # noqa: E402
     build_train_module_config as _v1_2_build_train_module_config,
@@ -65,8 +65,8 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """The v1.3 dataloader with two masked views (the two date-draws)."""
-    config = _v1_3_build_dataloader_config(common)
+    """Arms A/B's E5 dataloader (same masking choice) with two masked views (the two date-draws)."""
+    config = _e5_build_dataloader_config(common)
     config.num_masked_views = 2
     return config
 
@@ -74,8 +74,11 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 def build_train_module_config(
     common: CommonComponents,
 ) -> TwoViewLatentMIMTrainModuleConfig:
-    """The RC's pixel-target train module, run per view, + v1.2's contrastive loss."""
-    rc = _rc_build_train_module_config(common)
+    """Arms A/B's E5 train module, run per view, plus v1.2's contrastive loss.
+
+    Inherits the RC pixel targets and E5's warmup and masking choice from e5_allcap_common.
+    """
+    rc = _e5_build_train_module_config(common)
     config = TwoViewLatentMIMTrainModuleConfig(
         **{f.name: getattr(rc, f.name) for f in fields(rc)}
     )
@@ -87,21 +90,9 @@ def build_train_module_config(
     return config
 
 
-# Arm C does ~2x arm B's per-step compute (two forward/backward passes), so keep a
-# permanent checkpoint every 10k (not 20k): C@30k is the compute-matched point for B@60k.
-ARM_C_PERMANENT_SAVE_INTERVAL = 10_000
-# Filler job (preemptible): keep a resumable "latest" every 1k steps (~30 min), not 3k.
-ARM_C_EPHEMERAL_SAVE_INTERVAL = 1_000
-
-
-def build_trainer_config(common: CommonComponents):
-    """E5 trainer (60k steps, no in-loop evals); permanent saves every 10k, latest every 1k."""
-    config = _e5_build_trainer_config(common)
-    config.callbacks["checkpointer"].save_interval = ARM_C_PERMANENT_SAVE_INTERVAL
-    config.callbacks[
-        "checkpointer"
-    ].ephemeral_save_interval = ARM_C_EPHEMERAL_SAVE_INTERVAL
-    return config
+# Trainer: arms A/B's E5 trainer unchanged (same steps; permanent checkpoints every 10k,
+# latest every 1k). Arm C does ~2x B's per-step compute; the headline comparison is C vs B at
+# matched steps (Ilse's review), with the 10k/20k checkpoints as checks.
 
 
 if __name__ == "__main__":
