@@ -175,4 +175,6 @@ def get_eval_dataset(
             window_size=kwargs.get("window_size"),
             label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
             tile_samples=kwargs.get("tile_samples", False),
+            every_capture=kwargs.get("every_capture", False),
+            twin_landsat_l2=kwargs.get("twin_landsat_l2", False),
         )

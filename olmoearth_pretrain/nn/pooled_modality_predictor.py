@@ -502,8 +502,11 @@ class EncodeEarlyAttnPool(Encoder):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        modality_timestamps: dict[str, Tensor] | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks."""
+        if modality_timestamps is not None:
+            raise NotImplementedError("per-modality time axes are not supported here")
         tokens_only_dict, original_masks_dict, pre_pooled_modality_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )

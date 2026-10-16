@@ -161,6 +161,14 @@ class DownstreamTaskConfig:
     # windows (the pastis convention above) instead of center-cropping one
     # window per sample. Mutually exclusive with label_at_center_pixel.
     tile_samples: bool = False
+    # For registry (rslearn) datasets with an every-capture twin group (the AEF
+    # year-aligned sets and PASTIS, see evals/datasets/every_capture.py): replace
+    # the monthly S1/S2 inputs with every S1/S2 capture of the window's year.
+    every_capture: bool = False
+    # For registry datasets with an every-capture twin: add ``landsat_l2`` (list it
+    # in input_modalities) as monthly per-pixel medians of the twin's every Landsat
+    # C2 L2 capture, on the sample's monthly S1/S2 slots.
+    twin_landsat_l2: bool = False
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -279,6 +287,13 @@ class DownstreamEvaluator:
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
         self.tile_samples = task.tile_samples
+        self.every_capture = task.every_capture
+        self.twin_landsat_l2 = task.twin_landsat_l2
+        if self.every_capture and not self._is_registry_dataset:
+            raise ValueError(
+                f"every_capture is only supported for registry datasets, "
+                f"got dataset '{task.dataset}'"
+            )
         if self.tile_samples:
             if not self._is_registry_dataset:
                 raise ValueError(
@@ -538,6 +553,10 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
+            if self.every_capture:
+                extra_kwargs["every_capture"] = True
+            if self.twin_landsat_l2:
+                extra_kwargs["twin_landsat_l2"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

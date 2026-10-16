@@ -32,6 +32,16 @@ from olmoearth_pretrain.evals.constants import (
     RSLEARN_TO_OLMOEARTH,
     resolve_rslearn_layer_name,
 )
+from olmoearth_pretrain.evals.datasets.every_capture import (
+    S2_ABSENT_BANDS,
+    EveryCaptureReader,
+    EveryCaptureSource,
+    every_capture_source,
+    read_every_capture,
+    read_landsat_l2,
+    slot_medians,
+    union_timeline_sample,
+)
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
 from olmoearth_pretrain.evals.datasets.rslearn_builder import (
     build_model_dataset,
@@ -154,6 +164,9 @@ class RslearnToOlmoEarthDataset(Dataset):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
+        # Every Landsat C2 L2 capture from the every-capture twin, composited
+        # monthly on load (twin_landsat_l2; not a model.yaml input).
+        Modality.LANDSAT_L2.name,
         # Precomputed embedding products, baked in as layers by the embedding
         # materializer (olmoearth_pretrain/evals/embedding_materializer) or a
         # dataset export/inference script (tessera_v2).
@@ -179,6 +192,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         tile_samples: bool = False,
         sample_size: int | None = None,
         declared_bands: dict[str, list[str]] | None = None,
+        every_capture: EveryCaptureSource | None = None,
+        twin_landsat_l2: EveryCaptureSource | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -225,6 +240,12 @@ class RslearnToOlmoEarthDataset(Dataset):
                 modality stores fewer than its canonical bands, read channels are
                 scattered to their canonical positions and the rest zeroed after
                 normalization (see _init_band_scatter). None assumes full bands.
+            every_capture: If set, S1/S2 come from the window's every-capture twin
+                (every capture of its year on one day timeline) instead of the
+                monthly layers; labels, crop and normalization are unchanged.
+            twin_landsat_l2: If set, add ``landsat_l2`` (in ``input_modalities``)
+                as per-pixel monthly medians of the twin's every Landsat C2 L2
+                capture, on the sample's monthly slots (the S1/S2 monthlies).
         """
         if (
             not norm_stats_from_pretrained
@@ -302,8 +323,31 @@ class RslearnToOlmoEarthDataset(Dataset):
         # DataLoader worker holds its own copy post-fork. Reuse is safe because
         # _transform_sample doesn't mutate its inputs.
         self._cached_base: tuple[int, Any] | None = None
+        # Last every-capture read (window, crop) -> series; tiles reuse one read.
+        self._every_capture_cache: tuple[Any, Any] | None = None
 
         self._init_band_scatter(declared_bands)
+        self.twin_landsat_l2_reader = (
+            EveryCaptureReader(twin_landsat_l2) if twin_landsat_l2 is not None else None
+        )
+        if (Modality.LANDSAT_L2.name in input_modalities) != (
+            twin_landsat_l2 is not None
+        ):
+            raise ValueError("landsat_l2 inputs come only from twin_landsat_l2")
+        # The model.yaml path reads every other modality; landsat_l2 is added after.
+        self._yaml_modalities = [
+            m for m in input_modalities if m != Modality.LANDSAT_L2.name
+        ]
+        self.every_capture_reader = (
+            EveryCaptureReader(every_capture) if every_capture is not None else None
+        )
+        if every_capture is not None and not set(self._yaml_modalities) <= {
+            Modality.SENTINEL2_L2A.name,
+            Modality.SENTINEL1.name,
+        }:
+            raise ValueError(
+                f"every_capture supports S1/S2 inputs only, got {input_modalities}"
+            )
 
         if self.norm_stats_from_pretrained:
             self.normalizer_computed = Normalizer(Strategy.COMPUTED)
@@ -337,6 +381,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         sample_size: int | None = None,
+        every_capture: EveryCaptureSource | None = None,
+        twin_landsat_l2: EveryCaptureSource | None = None,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -372,6 +418,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 windows instead of center-cropping (see
                 RslearnToOlmoEarthDataset).
             sample_size: Stored sample height/width, required with tile_samples.
+            every_capture: Every-capture twin source for S1/S2 (see
+                RslearnToOlmoEarthDataset).
+            twin_landsat_l2: Twin source for monthly Landsat-L2 medians (see
+                RslearnToOlmoEarthDataset).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -431,6 +481,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             model_dataset=model_dataset,
             input_modalities=input_modalities,
             declared_bands=declared_bands,
+            twin_landsat_l2=twin_landsat_l2,
             target_task_name=task_info["task_name"],
             target_task_type=task_info["task_type"],
             norm_stats_from_pretrained=norm_stats_from_pretrained,
@@ -444,6 +495,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             label_at_center_pixel=label_at_center_pixel,
             tile_samples=tile_samples,
             sample_size=sample_size,
+            every_capture=every_capture,
         )
 
     @staticmethod
@@ -602,12 +654,19 @@ class RslearnToOlmoEarthDataset(Dataset):
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
 
+        if self.every_capture_reader is not None:
+            if window_key is None:
+                raise ValueError("every_capture needs the sample's window name")
+            return self._every_capture_sample(
+                window_key.split("/")[-1], crop_rows, crop_cols, label
+            )
+
         # First pass: read every present modality (crop, dB-convert), keeping
         # the raw arrays so ragged imagery can be aligned onto a shared
         # temporal axis before normalization.
         raw: dict[str, np.ndarray] = {}
         absent: list[str] = []
-        for modality in self.input_modalities:
+        for modality in self._yaml_modalities:
             x = input_dict.get(modality)
             if x is None:
                 # Optional imagery (landsat) is simply absent on windows with
@@ -678,7 +737,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             ragged_missing[modality] = missing
 
-        for modality in self.input_modalities:
+        for modality in self._yaml_modalities:
             x = raw[modality]
             if modality in EMBEDDING_PRODUCT_MODALITIES:
                 # Precomputed embedding products are consumed exactly as
@@ -725,7 +784,139 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             mask[:, :, slots, :] = MaskValue.MISSING.value
 
+        if self.twin_landsat_l2_reader is not None:
+            if window_key is None:
+                raise ValueError("twin_landsat_l2 needs the sample's window name")
+            masked_sample = self._add_twin_landsat_l2(
+                masked_sample, window_key.split("/")[-1], crop_rows, crop_cols
+            )
         return masked_sample, label
+
+    def _add_twin_landsat_l2(
+        self,
+        sample: MaskedOlmoEarthSample,
+        window_name: str,
+        rows: slice | None,
+        cols: slice | None,
+    ) -> MaskedOlmoEarthSample:
+        """Attach ``landsat_l2`` monthly medians on the sample's monthly slots."""
+        assert self.twin_landsat_l2_reader is not None
+        timestamps = sample.timestamps
+        assert timestamps is not None
+        slot_starts = [
+            datetime(int(y), int(m) + 1, int(d)) for d, m, y in timestamps.tolist()
+        ]
+        ref = getattr(sample, self._yaml_modalities[0])
+        height, width = int(ref.shape[0]), int(ref.shape[1])
+        n_bands = len(Modality.LANDSAT_L2.band_order)
+        series = read_landsat_l2(self.twin_landsat_l2_reader, window_name, rows, cols)
+        if series is None:
+            values = np.zeros((height, width, len(slot_starts), n_bands), np.float32)
+            valid = np.zeros((height, width, len(slot_starts)), dtype=bool)
+        else:
+            values, valid = slot_medians(*series, slot_starts)
+        if self.norm_stats_from_pretrained:
+            x = self.normalizer_computed.normalize(Modality.LANDSAT_L2, values)
+        else:
+            stats = self.dataset_norm_stats[Modality.LANDSAT_L2.name]
+            x = normalize_bands(
+                image=values,
+                means=stats["means"],
+                stds=stats["stds"],
+                mins=stats["mins"],
+                maxs=stats["maxs"],
+                method=self.norm_method,
+            )
+        x = np.where(valid[..., None], x, 0.0)
+        mask = torch.full(
+            (height, width, len(slot_starts), 1),
+            MaskValue.ONLINE_ENCODER.value,
+            dtype=ref.dtype if not ref.is_floating_point() else torch.long,
+        )
+        mask[torch.as_tensor(~valid)] = MaskValue.MISSING.value
+        ref_mask = getattr(
+            sample,
+            MaskedOlmoEarthSample.get_masked_modality_name(self._yaml_modalities[0]),
+        )
+        return sample._replace(
+            landsat_l2=torch.as_tensor(x, dtype=torch.float32),
+            landsat_l2_mask=mask.to(ref_mask.dtype),
+        )
+
+    def _every_capture_sample(
+        self,
+        window_name: str,
+        rows: slice | None,
+        cols: slice | None,
+        label: torch.Tensor,
+    ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
+        """S1/S2 from the window's every-capture twin, on one day timeline."""
+        assert self.every_capture_reader is not None
+        # Tiled datasets (PASTIS) read a window once and crop each tile from it.
+        tiled = self._tiles_per_side > 1
+        key: Any = (
+            window_name
+            if tiled
+            else (
+                window_name,
+                None if rows is None else (rows.start, rows.stop),
+                None if cols is None else (cols.start, cols.stop),
+            )
+        )
+        if self._every_capture_cache is None or self._every_capture_cache[0] != key:
+            series = read_every_capture(
+                self.every_capture_reader,
+                window_name,
+                None if tiled else rows,
+                None if tiled else cols,
+            )
+            self._every_capture_cache = (key, series)
+        series = self._every_capture_cache[1]
+        if tiled and rows is not None and cols is not None:
+            series = {
+                m: (v[rows, cols], ok[rows, cols], days)
+                for m, (v, ok, days) in series.items()
+            }
+        if rows is not None and cols is not None:
+            height, width = rows.stop - rows.start, cols.stop - cols.start
+        else:
+            height, width = next(v[0].shape[:2] for v in series.values())
+        values, valid, days = union_timeline_sample(
+            series, self.input_modalities, int(height), int(width)
+        )
+        sample_dict: dict[str, Any] = {}
+        for modality in self.input_modalities:
+            x = values[modality]
+            if modality == Modality.SENTINEL1.name:
+                x = convert_to_db(np.where(valid[modality][..., None], x, 1.0))
+            if self.norm_stats_from_pretrained:
+                x = self.normalizer_computed.normalize(Modality.get(modality), x)
+            else:
+                stats = self.dataset_norm_stats[modality]
+                x = normalize_bands(
+                    image=x,
+                    means=stats["means"],
+                    stds=stats["stds"],
+                    mins=stats["mins"],
+                    maxs=stats["maxs"],
+                    method=self.norm_method,
+                )
+            if modality == Modality.SENTINEL2_L2A.name:
+                x[..., S2_ABSENT_BANDS] = 0.0
+            x = np.where(valid[modality][..., None], x, 0.0)
+            sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
+        sample_dict["timestamps"] = torch.tensor(
+            [[d.day, d.month - 1, d.year] for d in days], dtype=torch.long
+        )
+        masked = MaskedOlmoEarthSample.from_olmoearthsample(
+            OlmoEarthSample(**sample_dict)
+        )
+        for modality in self.input_modalities:
+            mask = getattr(
+                masked, MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            )
+            mask[torch.as_tensor(~valid[modality])] = MaskValue.MISSING.value
+        return masked, label
 
     def _warn_ragged_once(self, reason: str) -> None:
         """Warn about ragged/absent optional imagery once per dataset instance."""
@@ -1034,6 +1225,8 @@ def from_registry_entry(
     window_size: int | None = None,
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
+    every_capture: bool = False,
+    twin_landsat_l2: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1068,6 +1261,11 @@ def from_registry_entry(
         tile_samples: Tile every sample into window_size x window_size windows
             instead of center-cropping; the stored sample size is taken from
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
+        every_capture: Replace the monthly S1/S2 inputs with every S1/S2 capture,
+            read from the dataset's Tessera v2 fetch group (see
+            ``evals/datasets/every_capture.py``).
+        twin_landsat_l2: Add ``landsat_l2`` as monthly medians of the twin's every
+            Landsat C2 L2 capture (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1182,4 +1380,14 @@ def from_registry_entry(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=entry.window_size if tile_samples else None,
+        every_capture=(
+            every_capture_source(entry.name, entry.source_path)
+            if every_capture
+            else None
+        ),
+        twin_landsat_l2=(
+            every_capture_source(entry.name, entry.source_path)
+            if twin_landsat_l2
+            else None
+        ),
     )
