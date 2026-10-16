@@ -6,6 +6,7 @@ import hashlib
 import logging
 import shutil
 import time
+import warnings
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, NamedTuple
@@ -70,6 +71,48 @@ def s2_cloud_flags(
         if i is not None:
             flags[..., j] = cloud[..., i]
     return flags
+
+
+def composite_captures(
+    values: np.ndarray,
+    ordinals: np.ndarray,
+    bin_index: np.ndarray,
+    clear: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-pixel median composites of a modality's captures, one per occupied bin.
+
+    Args:
+        values: ``[H, W, T, C]`` captures (raw values, before normalization).
+        ordinals: ``[T]`` capture dates as proleptic ordinals.
+        bin_index: ``[T]`` composite bin of each capture.
+        clear: Optional ``[H, W, T]`` bool, True where a capture's pixel is usable
+            (S2: not SCL-cloudy). A pixel with no clear capture in a bin falls
+            back to the median over all of that bin's captures.
+
+    Returns:
+        ``(composites [H, W, n_bins, C], bins [n_bins], no_clear [H, W, n_bins])``
+        for the occupied bins in ascending order; ``no_clear`` flags pixels that
+        used the fallback (always False without ``clear``).
+    """
+    bins = np.unique(bin_index)
+    out = np.empty((*values.shape[:2], len(bins), values.shape[3]), dtype=np.float32)
+    no_clear = np.zeros((*values.shape[:2], len(bins)), dtype=bool)
+    for j, b in enumerate(bins):
+        members = np.flatnonzero(bin_index == b)
+        chunk = values[:, :, members].astype(np.float32)
+        everything = np.median(chunk, axis=2)
+        if clear is None:
+            out[:, :, j] = everything
+            continue
+        ok = clear[:, :, members]
+        masked = np.where(ok[..., None], chunk, np.nan)
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            clear_median = np.nanmedian(masked, axis=2)
+        none_clear = ~ok.any(axis=2)
+        out[:, :, j] = np.where(none_clear[..., None], everything, clear_median)
+        no_clear[:, :, j] = none_clear
+    return out, bins, no_clear
 
 
 # =============================================================================
@@ -472,6 +515,10 @@ class GetItemArgs(NamedTuple):
     # Per-modality-timestamps datasets only: length of the random time range
     # (days) to take every capture from. None = the sample's whole span.
     time_range_days: float | None = None
+    # Per-modality-timestamps datasets only: composite the kept captures into
+    # bins of this many days (per-pixel median; S2 over SCL-clear pixels).
+    # None or 0 = every capture.
+    composite_days: float | None = None
 
 
 # TODO should training modalities be str or modality_spec
@@ -1060,6 +1107,63 @@ class OlmoEarthDataset(Dataset):
                 return kept
         return everything
 
+    @staticmethod
+    def _composite(
+        data: dict[str, np.ndarray],
+        timestamps: dict[str, np.ndarray],
+        ordinals: dict[str, np.ndarray],
+        kept: dict[str, np.ndarray],
+        composite_days: float,
+        scl: np.ndarray | None,
+        scl_timestamps: np.ndarray | None,
+    ) -> tuple[
+        dict[str, np.ndarray],
+        dict[str, np.ndarray],
+        dict[str, np.ndarray],
+        np.ndarray | None,
+    ]:
+        """Replace each multitemporal modality's kept captures by bin composites.
+
+        Bins of ``composite_days`` start at the first kept capture over all
+        modalities, so a bin covers the same days for every modality. A composite
+        is the per-pixel median of the bin's captures (S2: over SCL-clear pixels,
+        falling back to all captures; S1 and Landsat: all captures). Its date is
+        the bin centre. Returns updated ``(data, timestamps, kept, s2_no_clear)``;
+        ``s2_no_clear`` is ``[H, W, n_s2_bins]`` (pixels with no clear S2 capture),
+        or None without S2.
+        """
+        non_empty = [ordinals[m][k] for m, k in kept.items() if len(k) > 0]
+        if not non_empty:
+            return data, timestamps, kept, None
+        origin = min(int(o.min()) for o in non_empty)
+        data, timestamps, kept = dict(data), dict(timestamps), dict(kept)
+        s2_no_clear = None
+        for modality, captures in list(kept.items()):
+            if len(captures) == 0:
+                continue
+            capture_ordinals = ordinals[modality][captures]
+            bin_index = ((capture_ordinals - origin) // composite_days).astype(np.int64)
+            clear = None
+            is_s2 = modality == Modality.SENTINEL2_L2A.name
+            if is_s2 and scl is not None and scl_timestamps is not None:
+                cloudy = s2_cloud_flags(scl, scl_timestamps, timestamps[modality])
+                clear = cloudy[:, :, captures] == 0
+            values, bins, no_clear = composite_captures(
+                data[modality][:, :, captures], capture_ordinals, bin_index, clear
+            )
+            centres = origin + (bins * composite_days + composite_days / 2).astype(
+                np.int64
+            )
+            days = [date.fromordinal(int(o)) for o in centres]
+            data[modality] = values
+            timestamps[modality] = np.array(
+                [[d.day, d.month - 1, d.year] for d in days], dtype=np.int64
+            )
+            kept[modality] = np.arange(len(bins))
+            if is_s2:
+                s2_no_clear = no_clear
+        return data, timestamps, kept, s2_no_clear
+
     def _getitem_per_modality_timestamps(
         self, index: int, args: GetItemArgs
     ) -> dict[str, Any]:
@@ -1101,9 +1205,29 @@ class OlmoEarthDataset(Dataset):
         )
         start_h = np.random.choice(tile_h - sampled_hw + 1)
         start_w = np.random.choice(tile_w - sampled_hw + 1)
+        # Crop once, up front (spatial modalities and SCL), so compositing below
+        # only touches the sampled pixels.
+        crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
+        data = {
+            m: (v[crop] if Modality.get(m).is_spatial else v) for m, v in data.items()
+        }
+        if scl is not None:
+            scl = scl[crop]
 
         ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
         kept = self._select_time_range(ordinals, args.time_range_days)
+        if args.composite_days:
+            data, timestamps, kept, s2_no_clear = self._composite(
+                data,
+                timestamps,
+                ordinals,
+                kept,
+                float(args.composite_days),
+                scl,
+                scl_timestamps,
+            )
+        else:
+            s2_no_clear = None
         union_ts, step_index = build_union_timeline(
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
@@ -1136,7 +1260,6 @@ class OlmoEarthDataset(Dataset):
         sample_dict: dict[str, Any] = {
             "timestamps": union_ts[first_step : last_step + 1]
         }
-        crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
         for modality in self.training_modalities:
             spec = Modality.get(modality)
             if spec.image_tile_size_factor != 1:
@@ -1157,19 +1280,22 @@ class OlmoEarthDataset(Dataset):
                 if in_run.any():
                     captures = kept[modality][in_run]
                     sample_dict[modality] = prepare(
-                        modality, data[modality][crop][:, :, captures]
+                        modality, data[modality][:, :, captures]
                     )
                     sample_dict[time_index_field(modality)] = steps[in_run] - first_step
                     if s2_cloud:
-                        sample_dict[S2_CLOUD_FIELD] = (
-                            s2_cloud_flags(
-                                scl[crop], scl_timestamps, timestamps[modality]
+                        if s2_no_clear is not None:
+                            # A composite pixel is cloudy only if no capture was clear.
+                            flags = s2_no_clear.astype(np.uint8)[:, :, captures]
+                        elif scl is not None:
+                            flags = s2_cloud_flags(
+                                scl, scl_timestamps, timestamps[modality]
                             )[:, :, captures]
-                            if scl is not None
-                            else np.zeros(
+                        else:
+                            flags = np.zeros(
                                 (sampled_hw, sampled_hw, len(captures)), dtype=np.uint8
                             )
-                        )
+                        sample_dict[S2_CLOUD_FIELD] = flags
                 else:
                     sample_dict[modality] = np.full(
                         (sampled_hw, sampled_hw, 1, spec.num_bands),
@@ -1185,7 +1311,7 @@ class OlmoEarthDataset(Dataset):
                         )
             elif spec.is_space_only_varying:
                 if modality in data:
-                    sample_dict[modality] = prepare(modality, data[modality][crop])
+                    sample_dict[modality] = prepare(modality, data[modality])
                 else:
                     sample_dict[modality] = np.full(
                         (sampled_hw, sampled_hw, 1, spec.num_bands),

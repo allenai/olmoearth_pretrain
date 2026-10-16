@@ -611,3 +611,121 @@ def test_compact_layout_is_equivalent_to_union_layout(
                 rtol=1e-4,
                 atol=1e-5,
             )
+
+
+def _raw(h5py_dir: UPath, idx: int) -> dict[str, np.ndarray]:
+    import h5py
+
+    with h5py.File(h5py_dir / f"sample_{idx}.h5", "r") as f:
+        return {k: f[k][()] for k in f.keys()}
+
+
+def _expected_composites(
+    values: np.ndarray,
+    ordinals: np.ndarray,
+    origin: int,
+    days: float,
+    clear: np.ndarray | None = None,
+) -> tuple[np.ndarray, list[int]]:
+    """Per-pixel median per occupied bin, written out with plain loops."""
+    bins = sorted({int((o - origin) // days) for o in ordinals})
+    out = np.zeros((*values.shape[:2], len(bins), values.shape[3]), dtype=np.float32)
+    for j, b in enumerate(bins):
+        members = [i for i, o in enumerate(ordinals) if int((o - origin) // days) == b]
+        for r in range(values.shape[0]):
+            for c in range(values.shape[1]):
+                use = members
+                if clear is not None:
+                    ok = [i for i in members if clear[r, c, i]]
+                    use = ok or members
+                out[r, c, j] = np.median(values[r, c, use].astype(np.float32), axis=0)
+    return out, bins
+
+
+def test_composites_are_per_bin_medians(allcap_h5py_dir: UPath) -> None:
+    """Composites are per-bin medians, one slot per occupied bin.
+
+    S2 = median over SCL-clear captures (falling back to all captures), S1 and
+    Landsat = median of all captures; slots are dated at the bin centre and bins
+    are shared across modalities.
+    """
+    from olmoearth_pretrain.data.dataset import CLOUD_SCL_CLASSES
+
+    dataset = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    raw = _raw(allcap_h5py_dir, 0)
+    ords = {
+        m: timestamps_to_ordinals(raw[f"timestamps_{m}"])
+        for m in ("sentinel2_l2a", "sentinel1", "landsat_l2")
+    }
+    origin = min(int(o.min()) for o in ords.values())
+    for days in (30.0, 14.0):
+        _, sample = dataset[
+            GetItemArgs(idx=0, patch_size=1, sampled_hw_p=16, composite_days=days)
+        ]
+        union = _field(sample, "timestamps")
+        clear = ~np.isin(raw["sentinel2_scl"][..., 0], CLOUD_SCL_CLASSES)
+        for m in ("sentinel2_l2a", "sentinel1", "landsat_l2"):
+            expected, bins = _expected_composites(
+                raw[m],
+                ords[m],
+                origin,
+                days,
+                clear if m == "sentinel2_l2a" else None,
+            )
+            np.testing.assert_allclose(_field(sample, m), expected, rtol=1e-6)
+            index = _field(sample, f"{m}_time_index")
+            centres = [origin + int(b * days + days / 2) for b in bins]
+            np.testing.assert_array_equal(
+                timestamps_to_ordinals(union[index]), np.array(centres)
+            )
+        # A composite pixel is flagged cloudy only when no capture in its bin is clear.
+        expected_flag = np.zeros(_field(sample, "sentinel2_l2a").shape[:3], np.uint8)
+        _, s2_bins = _expected_composites(
+            raw["sentinel2_l2a"][:1, :1], ords["sentinel2_l2a"], origin, days
+        )
+        for j, b in enumerate(s2_bins):
+            members = [
+                i
+                for i, o in enumerate(ords["sentinel2_l2a"])
+                if int((o - origin) // days) == b
+            ]
+            expected_flag[:, :, j] = ~clear[:, :, members].any(axis=2)
+        np.testing.assert_array_equal(
+            _field(sample, "sentinel2_l2a_cloud"), expected_flag
+        )
+
+
+def test_composites_shrink_the_time_axis(allcap_h5py_dir: UPath) -> None:
+    """Every capture > biweekly > monthly in S2 slots; 0 days = every capture."""
+    dataset = _dataset(allcap_h5py_dir)
+    lengths = {}
+    for days in (None, 0.0, 14.0, 30.0):
+        np.random.seed(0)
+        _, sample = dataset[
+            GetItemArgs(idx=0, patch_size=1, sampled_hw_p=16, composite_days=days)
+        ]
+        lengths[days] = _field(sample, "sentinel2_l2a").shape[2]
+        if days == 0.0:
+            np.random.seed(0)
+            _, plain = dataset[GetItemArgs(idx=0, patch_size=1, sampled_hw_p=16)]
+            for name, value in plain.as_dict().items():
+                np.testing.assert_array_equal(getattr(sample, name), value)
+    assert lengths[None] == lengths[0.0] > lengths[14.0] > lengths[30.0] >= 12
+
+
+def test_composites_respect_the_token_budget(allcap_h5py_dir: UPath) -> None:
+    """The real-token budget is applied to the composites, not the raw captures."""
+    dataset = _dataset(allcap_h5py_dir)
+    for seed in range(3):
+        np.random.seed(seed)
+        args = GetItemArgs(
+            idx=0,
+            patch_size=2,
+            sampled_hw_p=3,
+            token_budget=300,
+            tokenization_config=S2_SINGLE,
+            composite_days=30.0,
+            budget_exclude_modalities=frozenset({"srtm"}),
+        )
+        _, sample = dataset[args]
+        assert _real_tokens(sample, 3, {"srtm"}) <= 300

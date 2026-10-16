@@ -82,6 +82,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_timesteps: int = 12,
         tile_size: int = 128,
         time_range_days_choices: list[float] | None = None,
+        composite_days_choices: list[float] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -151,6 +152,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 length (days) of the time range a sample takes every capture from is
                 drawn uniformly from this list once per microbatch. None = each
                 sample's whole span.
+            composite_days_choices: Per-modality-timestamps datasets only: the
+                composite bin length (days) drawn uniformly from this list once per
+                rank batch, with 0 = every capture (no compositing); e.g.
+                ``[0, 14, 30]`` mixes every-capture, biweekly and monthly batches.
+                None = always every capture.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -194,6 +200,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.max_timesteps = max_timesteps
         self.tile_size = tile_size
         self.time_range_days_choices = time_range_days_choices
+        self.composite_days_choices = composite_days_choices
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -405,6 +412,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         sampled_hw_p: int,
         target_t: int | None = None,
         time_range_days: float | None = None,
+        composite_days: float | None = None,
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
         args = GetItemArgs(
@@ -416,6 +424,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             target_t=target_t,
             budget_exclude_modalities=self.budget_exclude_modalities,
             time_range_days=time_range_days,
+            composite_days=composite_days,
         )
         item = self.dataset[args]
         return item
@@ -670,8 +679,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
-    ) -> Iterator[tuple[int, int, int, int, float | None]]:
-        """Yield ``(idx, patch_size, sampled_hw_p, target_t, time_range_days)`` per instance.
+    ) -> Iterator[tuple[int, int, int, int, float | None, float | None]]:
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t, time_range_days, composite_days)`` per instance.
 
         See the OlmoEarthDataLoader.__init__ docstring for a description
         of the subsetting behaviour.
@@ -791,12 +800,18 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     if dl.time_range_days_choices
                     else None
                 )
+                composite_days = (
+                    float(rng.choice(dl.composite_days_choices))
+                    if dl.composite_days_choices
+                    else None
+                )
             yield (
                 idx,
                 int(patch_size),
                 int(sampled_hw_p),
                 int(target_t),
                 time_range_days,
+                composite_days,
             )
             instances_processed += 1
 
@@ -825,9 +840,21 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         # Create iterator that fetches samples from the dataset
         instance_iterator = (
             self.data_loader._get_dataset_item(
-                int(idx), patch_size, sampled_hw_p, target_t, time_range_days
+                int(idx),
+                patch_size,
+                sampled_hw_p,
+                target_t,
+                time_range_days,
+                composite_days,
             )
-            for idx, patch_size, sampled_hw_p, target_t, time_range_days in (
+            for (
+                idx,
+                patch_size,
+                sampled_hw_p,
+                target_t,
+                time_range_days,
+                composite_days,
+            ) in (
                 self._get_batch_item_params_iterator(
                     indices,
                     self.data_loader.patch_sizes,
@@ -864,6 +891,7 @@ class OlmoEarthDataLoaderConfig(Config):
     max_timesteps: int = 12
     tile_size: int = 128
     time_range_days_choices: list[float] | None = None
+    composite_days_choices: list[float] | None = None
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -964,6 +992,7 @@ class OlmoEarthDataLoaderConfig(Config):
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
             time_range_days_choices=self.time_range_days_choices,
+            composite_days_choices=self.composite_days_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
