@@ -23,6 +23,7 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.allcap import ALLCAP_SELECTIONS, read_allcap_sample
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -404,6 +405,8 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        allcap_selection: str | None = None,
+        allcap_cloud_tau: float = 1.0,
     ):
         """Initialize the dataset.
 
@@ -429,6 +432,11 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            allcap_selection: If set, ``h5py_dir`` is an every-capture (allcap) corpus
+                and each read converts it to the standard 12-slot sample with this rule
+                (see ``olmoearth_pretrain.data.allcap``): ``least_cloudy_slot`` or
+                ``random_clear``.
+            allcap_cloud_tau: S2 cloud-fraction ceiling for ``random_clear``.
 
         Returns:
             None
@@ -461,6 +469,12 @@ class OlmoEarthDataset(Dataset):
         self.latlon_distribution: np.ndarray | None = None
         self.apply_cutmix = apply_cutmix
         self.filter_idx_file = filter_idx_file
+        if allcap_selection is not None and allcap_selection not in ALLCAP_SELECTIONS:
+            raise ValueError(
+                f"allcap_selection must be one of {ALLCAP_SELECTIONS}, got {allcap_selection!r}"
+            )
+        self.allcap_selection = allcap_selection
+        self.allcap_cloud_tau = allcap_cloud_tau
         if filter_idx_file is not None:
             self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
             assert isinstance(self.indices_to_filter, np.ndarray), (
@@ -836,6 +850,15 @@ class OlmoEarthDataset(Dataset):
                 logger.debug(
                     f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
                 )
+                if self.allcap_selection is not None:
+                    # Every-capture corpus: select <=12 slots and return the same
+                    # (compact sample, missing-timestep masks) pair a v1.3 H5 gives.
+                    return read_allcap_sample(
+                        h5file,
+                        self.training_modalities,
+                        self.allcap_selection,
+                        self.allcap_cloud_tau,
+                    )
                 # timestamps should not be a floating string
                 sample_dict = {
                     k: v[()]
@@ -994,6 +1017,9 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    # Every-capture (allcap) corpus selection rule; None reads a standard 12-slot H5.
+    allcap_selection: str | None = None
+    allcap_cloud_tau: float = 1.0
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
