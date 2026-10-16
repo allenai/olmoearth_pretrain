@@ -75,6 +75,10 @@ TIME_RANGE_DAYS = [7.0, 30.0, 90.0, 180.0, 365.0, 730.0, 1825.0]
 # Composite bin length per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly.
 COMPOSITE_DAYS = [0.0, 14.0, 30.0]
 RANK_MICROBATCH_SIZE = 32
+# Decoder targets per sample are capped near v1.3's 90th percentile (simulated v1.3
+# sampler + masking: mean ~1.1k, median ~0.9k, p90 ~2.1k incl. maps), so the decoder
+# costs what it does in v1.3 while the encoder sees every capture.
+MAX_DECODE_TOKENS = 2048
 
 SLOT_RATIO = 3
 SLOT_MIN = 4
@@ -145,6 +149,8 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.num_workers = 4
     config.prefetch_factor = 1
     config.pin_memory = False
+    config.uint8_masks = True
+    config.max_decode_tokens = MAX_DECODE_TOKENS
     return config
 
 

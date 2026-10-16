@@ -729,3 +729,56 @@ def test_composites_respect_the_token_budget(allcap_h5py_dir: UPath) -> None:
         )
         _, sample = dataset[args]
         assert _real_tokens(sample, 3, {"srtm"}) <= 300
+
+
+def test_decoder_token_cap() -> None:
+    """At most max_decode_tokens DECODER tokens per sample survive the cap.
+
+    The rest become TARGET_ENCODER_ONLY; encoder tokens and patch-uniformity are
+    untouched.
+    """
+    import torch
+
+    from olmoearth_pretrain.data.collate import _cap_decoder_tokens
+    from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
+
+    torch.manual_seed(0)
+    p, b = 2, 3
+    masks = {}
+    for name, t in (("sentinel2_l2a", 5), ("sentinel1", 4)):
+        tok = torch.randint(0, 2, (b, 4, 4, t, 1))  # 0 encoder, 1 -> decoder
+        tok = torch.where(
+            tok == 1, MaskValue.DECODER.value, MaskValue.ONLINE_ENCODER.value
+        )
+        masks[f"{name}_mask"] = tok.repeat_interleave(p, 1).repeat_interleave(p, 2)
+    sample = MaskedOlmoEarthSample(
+        timestamps=torch.zeros(b, 5, 3, dtype=torch.long),
+        sentinel2_l2a=torch.zeros(b, 8, 8, 5, 12),
+        sentinel1=torch.zeros(b, 8, 8, 4, 2),
+        **masks,
+    )
+    capped = _cap_decoder_tokens(sample, p, 20)
+    for name in ("sentinel2_l2a_mask", "sentinel1_mask"):
+        before, after = getattr(sample, name), getattr(capped, name)
+        enc = before == MaskValue.ONLINE_ENCODER.value
+        assert torch.equal(after[enc], before[enc])
+        changed = before != after
+        assert (after[changed] == MaskValue.TARGET_ENCODER_ONLY.value).all()
+        # still uniform within each p x p patch
+        assert torch.equal(
+            after, after[:, ::p, ::p].repeat_interleave(p, 1).repeat_interleave(p, 2)
+        )
+    counts = sum(
+        (getattr(capped, n)[:, ::p, ::p] == MaskValue.DECODER.value)
+        .reshape(b, -1)
+        .sum(1)
+        for n in ("sentinel2_l2a_mask", "sentinel1_mask")
+    )
+    before_counts = sum(
+        (getattr(sample, n)[:, ::p, ::p] == MaskValue.DECODER.value)
+        .reshape(b, -1)
+        .sum(1)
+        for n in ("sentinel2_l2a_mask", "sentinel1_mask")
+    )
+    assert torch.equal(counts, torch.clamp(before_counts, max=20))
+    assert _cap_decoder_tokens(sample, p, None) is sample

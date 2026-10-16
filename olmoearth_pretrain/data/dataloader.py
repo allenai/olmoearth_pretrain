@@ -901,6 +901,9 @@ class OlmoEarthDataLoaderConfig(Config):
     # Send masks to the main process as uint8 instead of int64 (8x smaller; the
     # masks are pixel-resolution). Restored to int64 on device.
     uint8_masks: bool = False
+    # Optional cap on DECODER tokens per sample (single masked view); the rest become
+    # TARGET_ENCODER_ONLY. See collate._cap_decoder_tokens.
+    max_decode_tokens: int | None = None
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -957,8 +960,11 @@ class OlmoEarthDataLoaderConfig(Config):
                 transform=transform,
                 masking_strategy=masking_strategy,
                 uint8_masks=self.uint8_masks,
+                max_decode_tokens=self.max_decode_tokens,
             )
         else:  # num_masked_views == 2
+            if self.max_decode_tokens is not None:
+                raise NotImplementedError("max_decode_tokens supports one masked view")
             collator = functools.partial(
                 collate_double_masked_batched,
                 transform=transform,

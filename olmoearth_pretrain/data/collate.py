@@ -60,6 +60,55 @@ def _drop_cloudy_s2_targets(
     )
 
 
+def _cap_decoder_tokens(
+    masked: MaskedOlmoEarthSample, patch_size: int, max_decode_tokens: int | None
+) -> MaskedOlmoEarthSample:
+    """Keep at most ``max_decode_tokens`` DECODER tokens per sample, chosen at random.
+
+    The rest become TARGET_ENCODER_ONLY (neither encoded nor decoded), which is what
+    the masking already does with leftover tokens. The pick is uniform over a
+    sample's decoder tokens across all modalities, so the modality mix of the targets
+    is kept. Long every-capture samples otherwise carry several times v1.3's decode
+    targets, and the decoder's memory and cost scale with them.
+    """
+    if max_decode_tokens is None:
+        return masked
+    names, token_masks = [], []
+    for name in masked.modalities:
+        mask = getattr(masked, MaskedOlmoEarthSample.get_masked_modality_name(name))
+        if mask is None or mask.ndim < 4:  # non-spatial modalities are left alone
+            continue
+        names.append(name)
+        token_masks.append(mask[:, ::patch_size, ::patch_size])
+    if not names:
+        return masked
+    b = token_masks[0].shape[0]
+    flat = torch.cat([m.reshape(b, -1) for m in token_masks], dim=1)
+    is_decoder = flat == MaskValue.DECODER.value
+    if int(is_decoder.sum(dim=1).max()) <= max_decode_tokens:
+        return masked
+    scores = torch.rand(flat.shape, device=flat.device)
+    scores = scores.masked_fill(~is_decoder, float("inf"))
+    k = min(max_decode_tokens, flat.shape[1])
+    keep = torch.zeros_like(is_decoder)
+    keep.scatter_(1, scores.topk(k, dim=1, largest=False).indices, True)
+    demote = is_decoder & ~keep
+    updates = {}
+    start = 0
+    for name, token_mask in zip(names, token_masks):
+        n = token_mask[0].numel()
+        drop = demote[:, start : start + n].reshape(token_mask.shape)
+        start += n
+        drop = drop.repeat_interleave(patch_size, dim=1).repeat_interleave(
+            patch_size, dim=2
+        )
+        field = MaskedOlmoEarthSample.get_masked_modality_name(name)
+        full = getattr(masked, field)
+        drop = drop[:, : full.shape[1], : full.shape[2]]
+        updates[field] = full.masked_fill(drop, MaskValue.TARGET_ENCODER_ONLY.value)
+    return masked._replace(**updates)
+
+
 def collate_olmoearth_pretrain(
     batch: list[tuple[int, OlmoEarthSample]],
 ) -> tuple[int, OlmoEarthSample]:
@@ -107,6 +156,7 @@ def collate_single_masked_batched(
     transform: Transform | None,
     masking_strategy: MaskingStrategy,
     uint8_masks: bool = False,
+    max_decode_tokens: int | None = None,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -119,6 +169,8 @@ def collate_single_masked_batched(
         transform: Optional transform to apply to the batch.
         masking_strategy: Masking strategy to apply to the batch.
         uint8_masks: Send masks as uint8 (restored to int64 by ``to_device``).
+        max_decode_tokens: Optional cap on decoder tokens per sample (see
+            ``_cap_decoder_tokens``).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample).
@@ -135,6 +187,7 @@ def collate_single_masked_batched(
         masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
     )
     masked_sample = _drop_cloudy_s2_targets(masked_sample, stacked_sample, patch_size)
+    masked_sample = _cap_decoder_tokens(masked_sample, patch_size, max_decode_tokens)
     if uint8_masks:
         masked_sample = masked_sample.with_uint8_masks()
 
