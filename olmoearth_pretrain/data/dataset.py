@@ -173,6 +173,24 @@ def get_valid_start_ts(
     return sorted(valid_start_ts)
 
 
+def _choose_start_t(valid_start_ts: list[int], start_t_hint: list | None) -> int:
+    """Pick the temporal window start.
+
+    Without a hint this is ``np.random.choice(valid_start_ts)`` (the historical
+    behaviour, same RNG calls). With a one-element list ``start_t_hint`` shared by the
+    views of one sample (E5 arm C), the first view draws as usual and stores its start;
+    later views reuse it, or the nearest valid start if it is not valid for them, so all
+    views cover the same part of their (chronologically sorted) slot timelines.
+    """
+    if start_t_hint is None or start_t_hint[0] is None:
+        start_t = int(np.random.choice(valid_start_ts))
+        if start_t_hint is not None:
+            start_t_hint[0] = start_t
+        return start_t
+    want = start_t_hint[0]
+    return int(min(valid_start_ts, key=lambda s: (abs(s - want), s)))
+
+
 def subset_sample_default(
     sample: OlmoEarthSample,
     patch_size: int,
@@ -184,6 +202,7 @@ def subset_sample_default(
     target_t: int | None = None,
     budget_exclude_modalities: frozenset[str] = frozenset(),
     start_hw: tuple[int, int] | None = None,
+    start_t_hint: list | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -206,6 +225,8 @@ def subset_sample_default(
         start_hw: Optional pre-drawn ``(start_h, start_w)`` of the crop (see
             :func:`draw_spatial_crop`), so several views of one sample can share it.
             If None the crop is drawn here (the historical behaviour).
+        start_t_hint: Optional one-element list shared by several views of one sample
+            (see :func:`_choose_start_t`) so they share the temporal window start.
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -225,7 +246,7 @@ def subset_sample_default(
     if target_t is not None:
         max_t = min(max_t, target_t)
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
-    start_t = np.random.choice(valid_start_ts)
+    start_t = _choose_start_t(valid_start_ts, start_t_hint)
     new_data_dict: dict[str, ArrayTensor] = {}
 
     sampled_hw = sampled_hw_p * patch_size
@@ -278,6 +299,7 @@ def subset_sample_cutmix(
     target_t: int | None = None,
     budget_exclude_modalities: frozenset[str] = frozenset(),
     hw_p_indices: tuple[np.ndarray, np.ndarray] | None = None,
+    start_t_hint: list | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -299,6 +321,8 @@ def subset_sample_cutmix(
         hw_p_indices: Optional pre-drawn ``(h_p_indices, w_p_indices)`` (see
             :func:`draw_spatial_crop`), so several views of one sample can share
             them. If None they are drawn here (the historical behaviour).
+        start_t_hint: Optional one-element list shared by several views of one sample
+            (see :func:`_choose_start_t`) so they share the temporal window start.
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -318,7 +342,7 @@ def subset_sample_cutmix(
     if target_t is not None:
         max_t = min(max_t, target_t)
     valid_start_ts = get_valid_start_ts(missing_timesteps_masks, max_t, current_length)
-    start_t = np.random.choice(valid_start_ts)
+    start_t = _choose_start_t(valid_start_ts, start_t_hint)
     new_data_dict: dict[str, ArrayTensor] = {}
 
     if hw_p_indices is None:
@@ -1027,6 +1051,7 @@ class OlmoEarthDataset(Dataset):
         current_length: int,
         missing_timesteps_masks: dict[str, Any],
         spatial_crop: tuple[Any, Any] | None = None,
+        start_t_hint: list | None = None,
     ) -> OlmoEarthSample:
         """Subset to the sampled shape; ``spatial_crop`` from :func:`draw_spatial_crop`."""
         if self.apply_cutmix:
@@ -1041,6 +1066,7 @@ class OlmoEarthDataset(Dataset):
                 target_t=args.target_t,
                 budget_exclude_modalities=args.budget_exclude_modalities,
                 hw_p_indices=spatial_crop,
+                start_t_hint=start_t_hint,
             )
         return subset_sample_default(
             sample,
@@ -1053,6 +1079,7 @@ class OlmoEarthDataset(Dataset):
             target_t=args.target_t,
             budget_exclude_modalities=args.budget_exclude_modalities,
             start_hw=spatial_crop,
+            start_t_hint=start_t_hint,
         )
 
     def _finalize_view(
@@ -1102,8 +1129,9 @@ class OlmoEarthDataset(Dataset):
         Shared: the H5 read, ``(patch_size, sampled_hw_p, target_t)`` from the shape
         sampler, the spatial crop, and hence the static/decode-only maps. The number of
         timesteps ``t`` is the same for both views (it depends only on the shape, the
-        modality list and the padded length); each view picks its own start among its
-        own valid slots, since the two timelines differ.
+        modality list and the padded length). The window start is shared: view a draws it
+        and view b reuses it (or its nearest valid start), so both views cover the same
+        part of their chronologically sorted slots.
         """
         prepared = [
             self._prepare_view(sample_dict, masks)
@@ -1124,9 +1152,17 @@ class OlmoEarthDataset(Dataset):
                 self.apply_cutmix,
             )
         views = []
+        # Shared temporal window start (nearest valid start for view b), so both views
+        # cover the same part of the season when t < 12 (Gandalf review, 2026-10-16).
+        start_t_hint: list = [None]
         for sample, missing_modalities, current_length, masks in prepared:
             subset = self._subset_view(
-                sample, args, current_length, masks, spatial_crop=spatial_crop
+                sample,
+                args,
+                current_length,
+                masks,
+                spatial_crop=spatial_crop,
+                start_t_hint=start_t_hint,
             )
             views.append(self._finalize_view(subset, missing_modalities))
         assert views[0].timestamps.shape == views[1].timestamps.shape

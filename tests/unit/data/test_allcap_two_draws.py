@@ -405,3 +405,57 @@ def test_two_view_train_module_forward_backward(
     grads = [p.grad for p in model.encoder.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
     assert any(g.abs().sum() > 0 for g in grads)
+
+
+def test_choose_start_t_hint_shared_and_nearest() -> None:
+    """_choose_start_t: historical draw without a hint, shared start with one.
+
+    Without a hint it is one np.random.choice (historical). With a shared hint view a
+    stores its start; view b reuses it, or the nearest valid start if it is invalid.
+    """
+    from olmoearth_pretrain.data.dataset import _choose_start_t
+
+    np.random.seed(0)
+    ref = int(np.random.choice([0, 1, 2, 3]))
+    np.random.seed(0)
+    assert _choose_start_t([0, 1, 2, 3], None) == ref
+    hint: list = [None]
+    np.random.seed(1)
+    a = _choose_start_t([0, 1, 2, 3, 4], hint)
+    assert hint[0] == a
+    assert _choose_start_t([0, 1, 2, 3, 4], hint) == a
+    hint = [3]
+    assert _choose_start_t([0, 1, 5], hint) == 1  # |1-3| = 2 ties |5-3|; lower wins
+    assert _choose_start_t([4, 7], hint) == 4
+
+
+def test_two_draws_share_window_start(
+    allcap_dir: tuple[UPath, dict], monkeypatch: Any
+) -> None:
+    """With t < 12 view b starts its window at view a's slot index whenever valid."""
+    import olmoearth_pretrain.data.dataset as dsmod
+
+    calls: list[tuple[list[int], int]] = []
+    orig = dsmod._choose_start_t
+
+    def spy(valid: list[int], hint: list | None) -> int:
+        out = orig(valid, hint)
+        calls.append((list(valid), out))
+        return out
+
+    monkeypatch.setattr(dsmod, "_choose_start_t", spy)
+    d, _ = allcap_dir
+    ds = _dataset(d, two_draws=True)
+    n_checked = 0
+    for seed in range(20):
+        calls.clear()
+        np.random.seed(seed)
+        _, (a, b) = ds[_args(target_t=5)]
+        assert len(calls) == 2
+        (_, start_a), (valid_b, start_b) = calls
+        if start_a in valid_b:
+            assert start_b == start_a
+            n_checked += 1
+        else:
+            assert start_b == min(valid_b, key=lambda s: (abs(s - start_a), s))
+    assert n_checked >= 1
