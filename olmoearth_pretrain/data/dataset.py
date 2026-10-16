@@ -23,7 +23,12 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.data.allcap import ALLCAP_SELECTIONS, read_allcap_sample
+from olmoearth_pretrain.data.allcap import (
+    ALLCAP_RANDOM_CLEAR,
+    ALLCAP_SELECTIONS,
+    read_allcap_sample,
+    read_allcap_sample_two_draws,
+)
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -178,6 +183,7 @@ def subset_sample_default(
     tokenization_config: TokenizationConfig | None = None,
     target_t: int | None = None,
     budget_exclude_modalities: frozenset[str] = frozenset(),
+    start_hw: tuple[int, int] | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using default rectangular cropping.
 
@@ -197,6 +203,9 @@ def subset_sample_default(
             (the historical behaviour).
         budget_exclude_modalities: Modalities not counted against the token budget
             (e.g. decode-only maps that are never encoded).
+        start_hw: Optional pre-drawn ``(start_h, start_w)`` of the crop (see
+            :func:`draw_spatial_crop`), so several views of one sample can share it.
+            If None the crop is drawn here (the historical behaviour).
 
     Returns:
         A subsetted OlmoEarthSample with rectangular cropping applied.
@@ -220,8 +229,11 @@ def subset_sample_default(
     new_data_dict: dict[str, ArrayTensor] = {}
 
     sampled_hw = sampled_hw_p * patch_size
-    start_h = np.random.choice(sample.height - sampled_hw + 1)
-    start_w = np.random.choice(sample.width - sampled_hw + 1)
+    if start_hw is None:
+        start_h = np.random.choice(sample.height - sampled_hw + 1)
+        start_w = np.random.choice(sample.width - sampled_hw + 1)
+    else:
+        start_h, start_w = start_hw
 
     for attribute, modality in sample.as_dict().items():
         assert modality is not None
@@ -265,6 +277,7 @@ def subset_sample_cutmix(
     tokenization_config: TokenizationConfig | None = None,
     target_t: int | None = None,
     budget_exclude_modalities: frozenset[str] = frozenset(),
+    hw_p_indices: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> OlmoEarthSample:
     """Subset a OlmoEarthSample using CutMix patch sampling.
 
@@ -283,6 +296,9 @@ def subset_sample_cutmix(
             None, the budget max is used (the historical behaviour).
         budget_exclude_modalities: Modalities not counted against the token budget
             (e.g. decode-only maps that are never encoded).
+        hw_p_indices: Optional pre-drawn ``(h_p_indices, w_p_indices)`` (see
+            :func:`draw_spatial_crop`), so several views of one sample can share
+            them. If None they are drawn here (the historical behaviour).
 
     Returns:
         A subsetted OlmoEarthSample with CutMix patch sampling applied.
@@ -305,9 +321,12 @@ def subset_sample_cutmix(
     start_t = np.random.choice(valid_start_ts)
     new_data_dict: dict[str, ArrayTensor] = {}
 
-    height_p, width_p = sample.height // patch_size, sample.width // patch_size
-    h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
-    w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+    if hw_p_indices is None:
+        height_p, width_p = sample.height // patch_size, sample.width // patch_size
+        h_p_indices = np.random.choice(height_p, size=sampled_hw_p, replace=False)
+        w_p_indices = np.random.choice(width_p, size=sampled_hw_p, replace=False)
+    else:
+        h_p_indices, w_p_indices = hw_p_indices
     h_indices = [
         i
         for h_p in h_p_indices
@@ -346,6 +365,29 @@ def subset_sample_cutmix(
             new_data_dict[attribute] = modality
 
     return OlmoEarthSample(**new_data_dict)
+
+
+def draw_spatial_crop(
+    height: int, width: int, patch_size: int, sampled_hw_p: int, cutmix: bool
+) -> tuple[Any, Any]:
+    """Draw the spatial part of a subset once, to share it between views.
+
+    Returns ``(start_h, start_w)`` for :func:`subset_sample_default` (``start_hw``) or
+    ``(h_p_indices, w_p_indices)`` for :func:`subset_sample_cutmix` (``hw_p_indices``),
+    with the same distribution as the draws inside those functions.
+    """
+    if cutmix:
+        h_p_indices = np.random.choice(
+            height // patch_size, size=sampled_hw_p, replace=False
+        )
+        w_p_indices = np.random.choice(
+            width // patch_size, size=sampled_hw_p, replace=False
+        )
+        return h_p_indices, w_p_indices
+    sampled_hw = sampled_hw_p * patch_size
+    start_h = np.random.choice(height - sampled_hw + 1)
+    start_w = np.random.choice(width - sampled_hw + 1)
+    return start_h, start_w
 
 
 def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
@@ -407,6 +449,7 @@ class OlmoEarthDataset(Dataset):
         filter_idx_file: str | None = None,
         allcap_selection: str | None = None,
         allcap_cloud_tau: float = 1.0,
+        allcap_two_draws: bool = False,
     ):
         """Initialize the dataset.
 
@@ -437,6 +480,10 @@ class OlmoEarthDataset(Dataset):
                 (see ``olmoearth_pretrain.data.allcap``): ``least_cloudy_slot`` or
                 ``random_clear``.
             allcap_cloud_tau: S2 cloud-fraction ceiling for ``random_clear``.
+            allcap_two_draws: E5 arm C. Each item is TWO views of one sample: one H5
+                read, two independent ``allcap_selection`` draws, one shared spatial
+                crop and timestep count; ``__getitem__`` then returns
+                ``(patch_size, (sample_a, sample_b))``. Needs ``allcap_selection``.
 
         Returns:
             None
@@ -475,6 +522,14 @@ class OlmoEarthDataset(Dataset):
             )
         self.allcap_selection = allcap_selection
         self.allcap_cloud_tau = allcap_cloud_tau
+        if allcap_two_draws and allcap_selection is None:
+            raise ValueError("allcap_two_draws requires allcap_selection")
+        if allcap_two_draws and allcap_selection != ALLCAP_RANDOM_CLEAR:
+            logger.warning(
+                f"allcap_two_draws with deterministic {allcap_selection!r}: both views "
+                "get the same captures"
+            )
+        self.allcap_two_draws = allcap_two_draws
         if filter_idx_file is not None:
             self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
             assert isinstance(self.indices_to_filter, np.ndarray), (
@@ -824,10 +879,8 @@ class OlmoEarthDataset(Dataset):
             return
         time.sleep(time_to_sleep)
 
-    def read_h5_file(
-        self, h5_file_path: UPath
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Read the h5 file."""
+    def _local_h5_path(self, h5_file_path: UPath) -> UPath:
+        """Apply the cache (copy-once) or the read throttling; return the path to open."""
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
             logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
@@ -843,6 +896,35 @@ class OlmoEarthDataset(Dataset):
 
         else:
             self._apply_throttling()
+        return h5_file_path
+
+    def read_allcap_two_draws(
+        self, h5_file_path: UPath
+    ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+        """One read of an allcap H5, two independent selections (E5 arm C).
+
+        The two generators are spawned from a seed drawn from the global numpy RNG, so
+        they are seeded per process exactly like the single-draw (arm B) path.
+        """
+        h5_file_path = self._local_h5_path(h5_file_path)
+        assert self.allcap_selection is not None
+        seed = np.random.randint(0, np.iinfo(np.int64).max, dtype=np.int64)
+        rng_a, rng_b = np.random.default_rng(int(seed)).spawn(2)
+        with h5_file_path.open("rb") as f:
+            with h5py.File(f, "r") as h5file:
+                return read_allcap_sample_two_draws(
+                    h5file,
+                    self.training_modalities,
+                    self.allcap_selection,
+                    self.allcap_cloud_tau,
+                    (rng_a, rng_b),
+                )
+
+    def read_h5_file(
+        self, h5_file_path: UPath
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read the h5 file."""
+        h5_file_path = self._local_h5_path(h5_file_path)
 
         sample_dict = {}
         with h5_file_path.open("rb") as f:
@@ -923,15 +1005,10 @@ class OlmoEarthDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
-    def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
-        """Get the sample at the given index."""
-        if hasattr(self, "sample_indices") and self.sample_indices is not None:
-            index = self.sample_indices[args.idx]
-        else:
-            index = args.idx
-        h5_file_path = self._get_h5_file_path(index)
-
-        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+    def _prepare_view(
+        self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
+    ) -> tuple[OlmoEarthSample, list[str], int, dict[str, Any]]:
+        """Crop/pad the timeline and fill missing values (before subsetting)."""
         timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
             sample_dict["timestamps"], missing_timesteps_masks
         )
@@ -941,9 +1018,19 @@ class OlmoEarthDataset(Dataset):
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
         )
+        return sample, missing_modalities, current_length, missing_timesteps_masks
 
+    def _subset_view(
+        self,
+        sample: OlmoEarthSample,
+        args: GetItemArgs,
+        current_length: int,
+        missing_timesteps_masks: dict[str, Any],
+        spatial_crop: tuple[Any, Any] | None = None,
+    ) -> OlmoEarthSample:
+        """Subset to the sampled shape; ``spatial_crop`` from :func:`draw_spatial_crop`."""
         if self.apply_cutmix:
-            subset_sample = subset_sample_cutmix(
+            return subset_sample_cutmix(
                 sample,
                 patch_size=args.patch_size,
                 max_tokens_per_instance=args.token_budget,
@@ -953,20 +1040,25 @@ class OlmoEarthDataset(Dataset):
                 tokenization_config=args.tokenization_config,
                 target_t=args.target_t,
                 budget_exclude_modalities=args.budget_exclude_modalities,
+                hw_p_indices=spatial_crop,
             )
-        else:
-            subset_sample = subset_sample_default(
-                sample,
-                patch_size=args.patch_size,
-                max_tokens_per_instance=args.token_budget,
-                sampled_hw_p=args.sampled_hw_p,
-                current_length=current_length,
-                missing_timesteps_masks=missing_timesteps_masks,
-                tokenization_config=args.tokenization_config,
-                target_t=args.target_t,
-                budget_exclude_modalities=args.budget_exclude_modalities,
-            )
+        return subset_sample_default(
+            sample,
+            patch_size=args.patch_size,
+            max_tokens_per_instance=args.token_budget,
+            sampled_hw_p=args.sampled_hw_p,
+            current_length=current_length,
+            missing_timesteps_masks=missing_timesteps_masks,
+            tokenization_config=args.tokenization_config,
+            target_t=args.target_t,
+            budget_exclude_modalities=args.budget_exclude_modalities,
+            start_hw=spatial_crop,
+        )
 
+    def _finalize_view(
+        self, subset_sample: OlmoEarthSample, missing_modalities: list[str]
+    ) -> OlmoEarthSample:
+        """NDVI (if requested) and normalization of a subset sample."""
         sample_dict = subset_sample.as_dict()
 
         # Compute NDVI from raw (un-normalized) S2 L2A bands if requested
@@ -1000,7 +1092,69 @@ class OlmoEarthDataset(Dataset):
                     missing_mask, modality_data, normalized_data
                 ).astype(self.dtype)
 
-        return args.patch_size, OlmoEarthSample(**sample_dict)
+        return OlmoEarthSample(**sample_dict)
+
+    def _get_two_draws(
+        self, h5_file_path: UPath, args: GetItemArgs
+    ) -> tuple[int, tuple[OlmoEarthSample, OlmoEarthSample]]:
+        """E5 arm C: two date-draws of one sample sharing every non-date decision.
+
+        Shared: the H5 read, ``(patch_size, sampled_hw_p, target_t)`` from the shape
+        sampler, the spatial crop, and hence the static/decode-only maps. The number of
+        timesteps ``t`` is the same for both views (it depends only on the shape, the
+        modality list and the padded length); each view picks its own start among its
+        own valid slots, since the two timelines differ.
+        """
+        prepared = [
+            self._prepare_view(sample_dict, masks)
+            for sample_dict, masks in self.read_allcap_two_draws(h5_file_path)
+        ]
+        sample_a = prepared[0][0]
+        assert (sample_a.height, sample_a.width) == (
+            prepared[1][0].height,
+            prepared[1][0].width,
+        )
+        spatial_crop = None
+        if args.token_budget is not None:
+            spatial_crop = draw_spatial_crop(
+                sample_a.height,
+                sample_a.width,
+                args.patch_size,
+                args.sampled_hw_p,
+                self.apply_cutmix,
+            )
+        views = []
+        for sample, missing_modalities, current_length, masks in prepared:
+            subset = self._subset_view(
+                sample, args, current_length, masks, spatial_crop=spatial_crop
+            )
+            views.append(self._finalize_view(subset, missing_modalities))
+        assert views[0].timestamps.shape == views[1].timestamps.shape
+        return args.patch_size, (views[0], views[1])
+
+    def __getitem__(
+        self, args: GetItemArgs
+    ) -> tuple[int, OlmoEarthSample | tuple[OlmoEarthSample, OlmoEarthSample]]:
+        """Get the sample at the given index.
+
+        With ``allcap_two_draws`` the item is ``(patch_size, (sample_a, sample_b))``.
+        """
+        if hasattr(self, "sample_indices") and self.sample_indices is not None:
+            index = self.sample_indices[args.idx]
+        else:
+            index = args.idx
+        h5_file_path = self._get_h5_file_path(index)
+        if self.allcap_two_draws:
+            return self._get_two_draws(h5_file_path, args)
+
+        sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        sample, missing_modalities, current_length, missing_timesteps_masks = (
+            self._prepare_view(sample_dict, missing_timesteps_masks)
+        )
+        subset_sample = self._subset_view(
+            sample, args, current_length, missing_timesteps_masks
+        )
+        return args.patch_size, self._finalize_view(subset_sample, missing_modalities)
 
 
 @dataclass
@@ -1020,6 +1174,8 @@ class OlmoEarthDatasetConfig(Config):
     # Every-capture (allcap) corpus selection rule; None reads a standard 12-slot H5.
     allcap_selection: str | None = None
     allcap_cloud_tau: float = 1.0
+    # E5 arm C: two independent date-draws per sample (pairs; see OlmoEarthDataset).
+    allcap_two_draws: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

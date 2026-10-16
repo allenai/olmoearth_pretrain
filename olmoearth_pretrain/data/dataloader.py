@@ -30,6 +30,7 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.collate import (
     collate_double_masked_batched,
     collate_single_masked_batched,
+    collate_two_draw_masked_batched,
 )
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDataset
 from olmoearth_pretrain.data.constants import Modality
@@ -888,7 +889,18 @@ class OlmoEarthDataLoaderConfig(Config):
         # Use batched collators that apply transform + masking to the entire batch
         # at once for better vectorization
         collator: Callable
-        if self.num_masked_views == 1:
+        # E5 arm C: the dataset yields (view a, view b) pairs of date-draws.
+        two_draws = bool(getattr(dataset, "allcap_two_draws", False))
+        if two_draws and self.num_masked_views != 2:
+            raise ValueError("allcap_two_draws datasets need num_masked_views=2")
+        if two_draws:
+            collator = functools.partial(
+                collate_two_draw_masked_batched,
+                transform=transform,
+                masking_strategy=masking_strategy,
+                masking_strategy_b=masking_strategy_b,
+            )
+        elif self.num_masked_views == 1:
             collator = functools.partial(
                 collate_single_masked_batched,
                 transform=transform,

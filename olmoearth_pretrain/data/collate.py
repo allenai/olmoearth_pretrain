@@ -105,3 +105,52 @@ def collate_double_masked_batched(
     masked_sample_b = strategy_b.apply_mask(stacked_sample, patch_size)
 
     return patch_size, masked_sample_a, masked_sample_b
+
+
+def collate_two_draw_masked_batched(
+    batch: list[tuple[int, tuple[OlmoEarthSample, OlmoEarthSample] | OlmoEarthSample]],
+    transform: Transform | None,
+    masking_strategy: MaskingStrategy,
+    masking_strategy_b: MaskingStrategy | None,
+) -> tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample]:
+    """Collate (view a, view b) pairs into two independently masked batches (E5 arm C).
+
+    Each item is ``(patch_size, (sample_a, sample_b))`` from a dataset with
+    ``allcap_two_draws=True``: two date-draws of the same sample that share the spatial
+    crop and the number of timesteps, so the a-batch and the b-batch have identical
+    shapes. The a-views and b-views are stacked separately, the transform (if any) is
+    applied to each batch, and each is masked with its strategy (``masking_strategy_b``
+    or, if None, ``masking_strategy``). Row ``i`` of both outputs is the same sample.
+
+    A plain ``(patch_size, sample)`` item is used as both views (e.g. mock batches).
+
+    Note: a random transform is drawn independently per call, so with e.g.
+    ``flip_and_rotate`` the two views would also differ by a flip/rotation. The E5
+    recipe uses no dataloader transform.
+
+    Returns:
+        A tuple of (patch_size, MaskedOlmoEarthSample_a, MaskedOlmoEarthSample_b), the
+        format :class:`ContrastiveLatentMIMTrainModule`-style ``train_batch`` takes.
+    """
+    batch_a: list[tuple[int, OlmoEarthSample]] = []
+    batch_b: list[tuple[int, OlmoEarthSample]] = []
+    for patch_size, item in batch:
+        if isinstance(item, OlmoEarthSample):
+            sample_a = sample_b = item
+        else:
+            sample_a, sample_b = item
+        batch_a.append((patch_size, sample_a))
+        batch_b.append((patch_size, sample_b))
+
+    patch_size, stacked_a = collate_olmoearth_pretrain(batch_a)
+    _, stacked_b = collate_olmoearth_pretrain(batch_b)
+    if transform is not None:
+        stacked_a = transform.apply(stacked_a)
+        stacked_b = transform.apply(stacked_b)
+
+    masked_sample_a = masking_strategy.apply_mask(stacked_a, patch_size)
+    strategy_b = (
+        masking_strategy_b if masking_strategy_b is not None else masking_strategy
+    )
+    masked_sample_b = strategy_b.apply_mask(stacked_b, patch_size)
+    return patch_size, masked_sample_a, masked_sample_b

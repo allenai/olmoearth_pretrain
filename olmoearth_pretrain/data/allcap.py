@@ -28,6 +28,10 @@ Two selection rules (experiment E5, "which 12 captures and which dates"):
     free slots get randomly drawn unused S1 captures with their own real dates (S2
     missing there), and the rest of the 12 slots are missing, as in v1.3. Slots are
     sorted by date. Random on every read, i.e. per sample per epoch.
+
+Arm C (``read_allcap_sample_two_draws``) reads the H5 once and applies the arm B rule
+twice with two independent generators, giving two "views" of the same pixel-year that
+differ only in which captures (and dates) were drawn.
 """
 
 from __future__ import annotations
@@ -284,6 +288,66 @@ def selection_to_sample(
     return sample, masks
 
 
+def _read_selection_inputs(
+    h5file: Any, training_modalities: list[str]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Per-sensor timestamps, aligned S2 cloud fractions and span start of one H5.
+
+    S1 timestamps always enter the span start (so arm A's slot grid does not depend on
+    whether S1 is trained), but if ``sentinel1`` is not a training modality the
+    selectors get no S1 captures (Ilse's S2-only rule, c83250ae7).
+    """
+    ts = {
+        key: h5file[f"timestamps_{key}"][()]
+        for key in _TIME_SERIES_KEYS_FOR_SPAN
+        if f"timestamps_{key}" in h5file
+    }
+    empty_ts = np.zeros((0, 3), dtype=np.int32)
+    s2_ts = ts.get(S2, empty_ts)
+    s1_ts = ts.get(S1, empty_ts)
+    s2_cloud = align_cloud_fraction(
+        s2_ts,
+        h5file[SCL_TIMESTAMPS_KEY][()] if SCL_TIMESTAMPS_KEY in h5file else None,
+        h5file[CLOUD_FRACTION_KEY][()] if CLOUD_FRACTION_KEY in h5file else None,
+    )
+    span_start = span_start_day(ts)
+    if S1 not in training_modalities:
+        s1_ts = empty_ts
+    return s2_ts, s2_cloud, s1_ts, span_start
+
+
+def _read_series(
+    h5file: Any, training_modalities: list[str], sels: list[SlotSelection]
+) -> dict[str, np.ndarray]:
+    """The S2/S1 stacks that at least one of ``sels`` uses."""
+    series = {}
+    for name, attr in ((S2, "s2_idx"), (S1, "s1_idx")):
+        if (
+            name in training_modalities
+            and name in h5file
+            and any((getattr(sel, attr) >= 0).any() for sel in sels)
+        ):
+            # One chunk spans all T, so reading the whole stack costs the same
+            # decompression as a subset and avoids h5py's per-index hyperslab path.
+            series[name] = h5file[name][()]
+    return series
+
+
+def _read_static(h5file: Any, training_modalities: list[str]) -> dict[str, Any]:
+    """The non-time-series training modalities (maps), as stored."""
+    out = {}
+    for name in training_modalities:
+        if name in (S2, S1) or name not in h5file:
+            continue
+        spec = Modality.get(name)
+        if spec.is_spacetime_varying or spec.is_time_only_varying:
+            raise ValueError(
+                f"allcap loader only builds S2/S1 time series; got multitemporal {name}"
+            )
+        out[name] = h5file[name][()]
+    return out
+
+
 def read_allcap_sample(
     h5file: Any,
     training_modalities: list[str],
@@ -304,39 +368,42 @@ def read_allcap_sample(
     The S1 *timestamps* (a few hundred bytes) still enter the span start, so arm A's
     slot grid is identical to the S1+S2 variant.
     """
-    ts = {
-        key: h5file[f"timestamps_{key}"][()]
-        for key in _TIME_SERIES_KEYS_FOR_SPAN
-        if f"timestamps_{key}" in h5file
-    }
-    empty_ts = np.zeros((0, 3), dtype=np.int32)
-    s2_ts = ts.get(S2, empty_ts)
-    s1_ts = ts.get(S1, empty_ts)
-    s2_cloud = align_cloud_fraction(
-        s2_ts,
-        h5file[SCL_TIMESTAMPS_KEY][()] if SCL_TIMESTAMPS_KEY in h5file else None,
-        h5file[CLOUD_FRACTION_KEY][()] if CLOUD_FRACTION_KEY in h5file else None,
+    s2_ts, s2_cloud, s1_ts, span_start = _read_selection_inputs(
+        h5file, training_modalities
     )
-    span_start = span_start_day(ts)
-    if S1 not in training_modalities:
-        s1_ts = empty_ts
     sel = select_slots(selection, s2_ts, s2_cloud, s1_ts, span_start, tau, rng)
-
-    series = {}
-    for name, idx in ((S2, sel.s2_idx), (S1, sel.s1_idx)):
-        if name in training_modalities and name in h5file and (idx >= 0).any():
-            # One chunk spans all T, so reading the whole stack costs the same
-            # decompression as a subset and avoids h5py's per-index hyperslab path.
-            series[name] = h5file[name][()]
+    series = _read_series(h5file, training_modalities, [sel])
     sample, masks = selection_to_sample(sel, series)
-
-    for name in training_modalities:
-        if name in (S2, S1) or name not in h5file:
-            continue
-        spec = Modality.get(name)
-        if spec.is_spacetime_varying or spec.is_time_only_varying:
-            raise ValueError(
-                f"allcap loader only builds S2/S1 time series; got multitemporal {name}"
-            )
-        sample[name] = h5file[name][()]
+    sample.update(_read_static(h5file, training_modalities))
     return sample, masks
+
+
+def read_allcap_sample_two_draws(
+    h5file: Any,
+    training_modalities: list[str],
+    selection: str,
+    tau: float,
+    rngs: tuple[np.random.Generator, np.random.Generator],
+) -> list[tuple[dict[str, Any], dict[str, np.ndarray]]]:
+    """Arm C: ONE read of an allcap H5, two independent slot selections ("views").
+
+    Each view is what :func:`read_allcap_sample` returns, with its own selection drawn
+    from its own generator. The S2/S1 stacks and the static maps are read (and
+    decompressed) once and shared; only the chosen captures, their dates and the
+    missing-timestep masks differ between the views.
+    """
+    s2_ts, s2_cloud, s1_ts, span_start = _read_selection_inputs(
+        h5file, training_modalities
+    )
+    sels = [
+        select_slots(selection, s2_ts, s2_cloud, s1_ts, span_start, tau, rng)
+        for rng in rngs
+    ]
+    series = _read_series(h5file, training_modalities, sels)
+    static = _read_static(h5file, training_modalities)
+    views = []
+    for sel in sels:
+        sample, masks = selection_to_sample(sel, series)
+        sample.update(static)
+        views.append((sample, masks))
+    return views
