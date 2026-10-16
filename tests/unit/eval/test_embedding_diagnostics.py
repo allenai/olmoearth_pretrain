@@ -1,14 +1,17 @@
 """Unit tests for embedding diagnostics."""
 
+import numpy as np
 import pytest
 import torch
 
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
     compute_spatial_embedding_diagnostics,
+    compute_tiling_artifact_metrics,
     effective_rank,
     embedding_norm_stats,
     pairwise_cosine_stats,
+    pca_rgb_image,
     uniformity,
 )
 
@@ -171,3 +174,98 @@ class TestSpatialEmbeddingDiagnostics:
         """2D input raises ValueError."""
         with pytest.raises(ValueError, match="3\\+ dim"):
             compute_spatial_embedding_diagnostics(torch.randn(10, 64))
+
+
+class TestTilingArtifactMetrics:
+    """Tests for tiling artifact detection metrics."""
+
+    def test_returns_all_keys(self) -> None:
+        """All 3 key metrics are present for 4D input."""
+        embeddings = torch.randn(8, 8, 8, 32)
+        metrics = compute_tiling_artifact_metrics(embeddings)
+        expected_keys = {
+            "row_col_var_ratio",
+            "fft_axis_energy_frac",
+            "fft_dominant_period_px",
+        }
+        assert expected_keys == set(metrics.keys())
+
+    def test_isotropic_random_embeddings(self) -> None:
+        """Random embeddings should have var ratio near 1."""
+        embeddings = torch.randn(16, 16, 16, 64)
+        metrics = compute_tiling_artifact_metrics(embeddings)
+        assert 0.5 < metrics["row_col_var_ratio"] < 2.0
+
+    def test_horizontal_stripes_detected(self) -> None:
+        """Embeddings with horizontal stripes have high row_col_var_ratio."""
+        h, w, d = 16, 16, 32
+        row_pattern = torch.randn(1, h, 1, d).expand(8, h, w, d)
+        # Add different base per sample
+        embeddings = row_pattern + torch.randn(8, 1, 1, d) * 0.1
+        metrics = compute_tiling_artifact_metrics(embeddings)
+        assert metrics["row_col_var_ratio"] > 5.0
+
+    def test_vertical_stripes_detected(self) -> None:
+        """Embeddings with vertical stripes have low row_col_var_ratio."""
+        h, w, d = 16, 16, 32
+        col_pattern = torch.randn(1, 1, w, d).expand(8, h, w, d)
+        embeddings = col_pattern + torch.randn(8, 1, 1, d) * 0.1
+        metrics = compute_tiling_artifact_metrics(embeddings)
+        assert metrics["row_col_var_ratio"] < 0.2
+
+    def test_rejects_non_4d(self) -> None:
+        """Non-4D input returns empty dict."""
+        metrics = compute_tiling_artifact_metrics(torch.randn(10, 16, 32))
+        assert metrics == {}
+
+    def test_small_spatial_skips_fft(self) -> None:
+        """Spatial dims < 4 skip FFT metrics."""
+        embeddings = torch.randn(8, 3, 3, 32)
+        metrics = compute_tiling_artifact_metrics(embeddings)
+        assert "fft_axis_energy_frac" not in metrics
+        assert "row_col_var_ratio" in metrics
+
+    def test_periodic_stripes_fft(self) -> None:
+        """Periodic vertical stripes produce high FFT axis energy."""
+        h, w, d = 16, 16, 4
+        patch_size = 4
+        base = torch.randn(8, h, w, d) * 0.01
+        # Add periodic vertical pattern (period=4 patches = 16px)
+        for col in range(w):
+            base[:, :, col, 0] += 10.0 * torch.sin(
+                torch.tensor(2.0 * torch.pi * col / 4.0)
+            )
+        metrics = compute_tiling_artifact_metrics(base, patch_size=patch_size)
+        assert metrics["fft_axis_energy_frac"] > 0.1
+        # Dominant period should be 4 patches * 4 px = 16 px
+        assert abs(metrics["fft_dominant_period_px"] - 16.0) < 1.0
+
+
+class TestPcaRgbImage:
+    """Tests for PCA RGB visualization."""
+
+    def test_output_shape_3d(self) -> None:
+        """3D input [H, W, D] returns [H, W, 3] uint8."""
+        emb = torch.randn(8, 8, 32)
+        rgb = pca_rgb_image(emb)
+        assert rgb.shape == (8, 8, 3)
+        assert rgb.dtype == np.uint8
+
+    def test_output_shape_4d(self) -> None:
+        """4D input [N, H, W, D] uses first sample, returns [H, W, 3]."""
+        emb = torch.randn(4, 8, 8, 32)
+        rgb = pca_rgb_image(emb)
+        assert rgb.shape == (8, 8, 3)
+        assert rgb.dtype == np.uint8
+
+    def test_values_in_range(self) -> None:
+        """Output values are in [0, 255]."""
+        emb = torch.randn(12, 12, 64)
+        rgb = pca_rgb_image(emb)
+        assert rgb.min() >= 0
+        assert rgb.max() <= 255
+
+    def test_rejects_2d(self) -> None:
+        """2D input raises ValueError."""
+        with pytest.raises(ValueError, match="Expected"):
+            pca_rgb_image(torch.randn(100, 32))

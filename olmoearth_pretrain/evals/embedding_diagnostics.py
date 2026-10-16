@@ -1,7 +1,10 @@
-"""Embedding quality diagnostics for detecting representation collapse.
+"""Embedding quality diagnostics for detecting representation collapse and tiling artifacts.
 
 Computes geometry metrics on embedding matrices to diagnose failure modes
 in self-supervised pretraining (dimensional collapse, crowding, etc.).
+
+Also detects spatial tiling/striping artifacts (see GitHub issue #499) by measuring
+row/column variance anisotropy and periodic energy in the Fourier domain.
 
 Supports two embedding shapes:
 - [N, D]: image-level (classification). One embedding per sample.
@@ -16,7 +19,9 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import torch
+from sklearn.decomposition import PCA
 from torch import Tensor
 
 logger = logging.getLogger(__name__)
@@ -201,3 +206,165 @@ def compute_spatial_embedding_diagnostics(embeddings: Tensor) -> dict[str, float
             metrics[f"intra_{k}"] = v
 
     return metrics
+
+
+# ---------------------------------------------------------------------------
+# Tiling / striping artifact detection (GitHub issue #499)
+# ---------------------------------------------------------------------------
+
+MAX_TILING_SAMPLES = 64
+
+
+def _row_col_variance_ratio(embeddings: Tensor) -> float:
+    """Detect striping via variance of row-means vs column-means.
+
+    Horizontal stripes → high row-mean variance relative to column-mean variance.
+    Vertical stripes → high column-mean variance relative to row-mean variance.
+
+    Args:
+        embeddings: [N, H, W, D] spatial embeddings.
+
+    Returns:
+        Ratio of row-variance to col-variance (1.0 = isotropic).
+    """
+    emb = embeddings.float()
+    row_means = emb.mean(dim=2)  # [N, H, D]
+    col_means = emb.mean(dim=1)  # [N, W, D]
+
+    row_var = row_means.var(dim=1).mean().item()
+    col_var = col_means.var(dim=1).mean().item()
+
+    return row_var / (col_var + 1e-12)
+
+
+def _fourier_grid_energy(embeddings: Tensor, patch_size: int) -> dict[str, float]:
+    """Detect periodic tiling artifacts via 2D FFT on the first PCA component.
+
+    Computes the fraction of spectral energy concentrated on the
+    horizontal and vertical axes of the frequency domain (excluding DC).
+    Also identifies the dominant frequency and its period in pixels.
+
+    Args:
+        embeddings: [N, H, W, D] spatial embeddings (H, W are in patch space).
+        patch_size: pixel size of each patch, used to convert period to pixels.
+
+    Returns:
+        fft_axis_energy_frac: fraction of energy on grid axes (~0.12 healthy, >0.25 artifacts).
+        fft_dominant_period_px: period of the strongest axis frequency in pixels.
+    """
+    emb = embeddings.float()
+    n, h, w, d = emb.shape
+    flat = emb.reshape(-1, d)
+    pca = PCA(n_components=1)
+    pc1 = pca.fit_transform(flat.cpu().numpy())  # [N*H*W, 1]
+    pc1_map = torch.from_numpy(pc1.reshape(n, h, w))  # [N, H, W]
+
+    fft_2d = torch.fft.fft2(pc1_map, norm="ortho")
+    mag = fft_2d.abs().mean(dim=0)  # [H, W]
+
+    mag[0, 0] = 0.0
+
+    total_energy = mag.sum().item() + 1e-12
+    h_axis_energy = mag[:, 0].sum().item()
+    w_axis_energy = mag[0, :].sum().item()
+    axis_energy = h_axis_energy + w_axis_energy
+
+    # Find dominant axis-aligned frequency, skipping k=1 (just the overall
+    # spatial gradient) to find actual periodic artifacts.
+    min_k = 2
+    axis_mags = []
+    for k in range(min_k, h):
+        axis_mags.append((mag[k, 0].item(), h / k))
+    for k in range(min_k, w):
+        axis_mags.append((mag[0, k].item(), w / k))
+
+    dominant_period_patches = 0.0
+    if axis_mags:
+        _, dominant_period_patches = max(axis_mags, key=lambda x: x[0])
+
+    return {
+        "fft_axis_energy_frac": axis_energy / total_energy,
+        "fft_dominant_period_px": dominant_period_patches * patch_size,
+    }
+
+
+def compute_tiling_artifact_metrics(
+    embeddings: Tensor, patch_size: int = 4
+) -> dict[str, float]:
+    """Compute metrics that detect spatial tiling/striping artifacts.
+
+    Returns 3 metrics:
+      - row_col_var_ratio: 1.0 = isotropic, far from 1.0 = directional stripes
+      - fft_axis_energy_frac: ~0.12 = healthy, >0.25 = periodic grid artifacts
+      - fft_dominant_period_px: period of strongest artifact in pixels
+
+    Args:
+        embeddings: [N, H, W, D] spatial embeddings (H, W in patch space).
+        patch_size: pixel size of each patch for converting periods.
+
+    Returns empty dict if input doesn't have spatial dimensions (H, W >= 2).
+    """
+    if embeddings.ndim != 4:
+        logger.warning(
+            "Tiling artifact metrics require [N, H, W, D] embeddings, "
+            f"got shape {embeddings.shape}"
+        )
+        return {}
+
+    n, h, w, _d = embeddings.shape
+    if h < 2 or w < 2:
+        logger.warning(f"Spatial dims too small for tiling metrics: H={h}, W={w}")
+        return {}
+
+    if n > MAX_TILING_SAMPLES:
+        idx = torch.randperm(n, device=embeddings.device)[:MAX_TILING_SAMPLES]
+        embeddings = embeddings[idx]
+
+    metrics: dict[str, float] = {}
+
+    metrics["row_col_var_ratio"] = _row_col_variance_ratio(embeddings)
+
+    if h >= 4 and w >= 4:
+        fft_stats = _fourier_grid_energy(embeddings, patch_size)
+        metrics["fft_axis_energy_frac"] = fft_stats["fft_axis_energy_frac"]
+        metrics["fft_dominant_period_px"] = fft_stats["fft_dominant_period_px"]
+
+    return metrics
+
+
+def pca_rgb_image(embeddings: Tensor) -> np.ndarray:
+    """Render the first 3 PCA components of spatial embeddings as an RGB image.
+
+    Takes a single image's spatial embeddings [H, W, D] and returns
+    an [H, W, 3] uint8 array suitable for wandb.Image / matplotlib.
+
+    If called with [N, H, W, D], uses the first sample.
+    """
+    if embeddings.ndim == 4:
+        embeddings = embeddings[0]
+    if embeddings.ndim != 3:
+        raise ValueError(f"Expected [H, W, D] or [N, H, W, D], got {embeddings.shape}")
+
+    h, w, d = embeddings.shape
+    flat = embeddings.reshape(-1, d).float().cpu().numpy()
+
+    n_components = min(3, d)
+    pca = PCA(n_components=n_components)
+    components = pca.fit_transform(flat)  # [H*W, 3]
+
+    # Normalize each component to [0, 1]
+    for i in range(n_components):
+        c = components[:, i]
+        cmin, cmax = c.min(), c.max()
+        if cmax - cmin > 1e-8:
+            components[:, i] = (c - cmin) / (cmax - cmin)
+        else:
+            components[:, i] = 0.5
+
+    # Pad to 3 channels if fewer
+    if n_components < 3:
+        pad = np.zeros((components.shape[0], 3 - n_components), dtype=np.float32)
+        components = np.concatenate([components, pad], axis=1)
+
+    rgb = (components.reshape(h, w, 3) * 255).astype(np.uint8)
+    return rgb
