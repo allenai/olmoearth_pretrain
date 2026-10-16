@@ -1675,7 +1675,11 @@ class DownstreamEvaluatorCallbackConfig(CallbackConfig):
             raise ValueError(
                 f"input_modalities must contain unique modalities, got {task.input_modalities}"
             )
-        if not set(task.input_modalities).issubset(set(config.supported_modalities)):
+        supported = set(config.supported_modalities)
+        if task.twin_landsat_l2:
+            # Read from the every-capture twin, not the dataset's own layers.
+            supported.add(Modality.LANDSAT_L2.name)
+        if not set(task.input_modalities).issubset(supported):
             raise ValueError(
                 f"input_modalities must be a subset of supported_modalities, got {task.input_modalities} and {config.supported_modalities}"
             )
