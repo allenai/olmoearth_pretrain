@@ -76,7 +76,11 @@ def norm_key(text: str) -> str:
 
 def load_regions(emb_dir: str, key: str) -> dict[str, np.ndarray]:
     """Concatenate every part written by ``clipearth.embed``."""
-    paths = sorted(glob.glob(os.path.join(emb_dir, "*.npz")))
+    paths = sorted(
+        p
+        for p in glob.glob(os.path.join(emb_dir, "*.npz"))
+        if not p.endswith(".tmp.npz")
+    )
     if not paths:
         raise FileNotFoundError(f"no embedding parts in {emb_dir}")
     window_split: dict[str, str] = {}
