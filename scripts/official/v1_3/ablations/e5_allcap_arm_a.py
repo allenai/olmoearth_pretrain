@@ -1,6 +1,6 @@
-"""E5 arm A: allcap, S2-only, least-cloudy S2 capture per 30-day slot, stamped at slot start.
+"""E5 arm A: allcap: least-cloudy S2 + midpoint S1 per 30-day slot, stamped at slot start.
 
-See ``e5_allcap_common.py`` (set ``E5_MIM``). Run name ``agent-ilse-e5s2-armA-20261016``.
+See ``e5_allcap_common.py`` (fallback env vars ``E5_S2_ONLY`` / ``E5_MIM``). Run name ``agent-ilse-e5-armA-30k-20261016``.
 """
 
 import sys

@@ -4,31 +4,34 @@ E5 asks *which 12 captures, with which dates* at a fixed 12-slot token shape: bo
 read the SAME allcap H5 files (``osm_allcaptures``, eval-clean keep-list) through
 ``olmoearth_pretrain.data.allcap``, with 12 slots of 30 days.
 
-Redesign 2026-10-16 (Hollis 12:25Z): **S2-only** ("which S2 captures and which dates").
-Sentinel-1 and Landsat are dropped in both arms (the S1 stack is never read, cutting
-~40% of the bytes per sample); the six decode-only maps stay.
+Decision 2026-10-16 13:55Z (Hollis): **S1 + S2 with the unmodified v1.3 objective** (Landsat
+dropped in both arms: allcap has only Level-2 and v1.3 uses Level-1), 30k steps, 4k warmup.
 
-* arm A (``e5_allcap_arm_a.py``): per slot the least-cloudy S2 capture, stamped at slot
-  start (v1.3's mosaic rule on single captures);
+* arm A (``e5_allcap_arm_a.py``): per slot the least-cloudy S2 capture and the S1
+  capture nearest the slot midpoint, stamped at slot start (v1.3's mosaic rule on
+  single captures);
 * arm B (``e5_allcap_arm_b.py``): per read, up to 12 random S2 captures with cloud
   fraction <= ``ARM_B_CLOUD_TAU`` with their real dates (tau matched so the mean input
-  cloud fraction equals arm A's); fewer than 12 clear captures leave missing slots.
+  cloud fraction equals arm A's), S1 paired within +/-15 d, S1-only slots if fewer than
+  12 clear S2.
 
-**MIM objective with one sensor (``E5_MIM`` env var, required).** v1.3's
-``random_time_with_decode`` splits the *sensor bandsets* of a sample into encode-only
-and decode-only. With S2 as the only (single-bandset) sensor, S2 is always encode-only
-and only the six maps are decoded: no sensor latent target at all. ``E5_MIM`` picks:
+**Fallback switches (env vars; both unset = the decision above).**
 
-* ``maps_only``: the literal v1.3 code (S2 in, maps out; time masking only drops input
-  timesteps);
-* ``within_s2``: ``single_sensor_split=True``: S2's own tokens are split 50/50 into
-  encoder inputs and latent targets (random tokens, or encode vs decode timesteps).
+* ``E5_S2_ONLY=1``: drop Sentinel-1 too (the S1 stack is never read: ~39% fewer bytes per
+  sample). With S2 as the only (single-bandset) sensor, v1.3's ``random_time_with_decode``
+  makes S2 encode-only and decodes only the maps, i.e. no sensor latent target.
+* ``E5_MIM``: unset / ``v1_3`` (= ``maps_only``, the same code) is v1.3's masking exactly;
+  ``within_s2`` sets ``single_sensor_split=True`` (a lone sensor's tokens are split 50/50
+  into encoder inputs and latent targets: random tokens, or encode vs decode timesteps).
+  ``within_s2`` requires ``E5_S2_ONLY=1``: with S1 + S2 it would change only the
+  samples that happen to have a single sensor, which is not a meaningful variant.
+  Hollis's canary fallback is ``E5_S2_ONLY=1 E5_MIM=within_s2``.
 
 Everything else is ``rc_ld1_pixtgt_pix512.py`` (``v1_3_rc_ld1_pixtgt_pix512``): model
 (1-layer register Perceiver, 512-latent budget, d768 supervision, [128, 64] student),
 pixel MIM targets, the decorrelated shape sampler with TOKEN_BUDGET=3072, batch 512,
 seed 3622, lr 1e-4 cosine (alpha_f 0.1). Differences from the RC, all shared by both
-arms: 30k steps with a 4k warmup (cosine anneals at 30k), S2 + maps only, ~387k samples
+arms: 30k steps with a 4k warmup (cosine anneals at 30k), no Landsat, ~387k samples
 instead of 1.14M, and no in-loop evals (those run as Beaker jobs that clone the pushed git
 ref; this branch is local, so checkpoints are scored offline at 10k/20k/30k).
 """
@@ -54,7 +57,6 @@ from rc_ld1_pix512 import build_model_config as _rc_ld1_build_model_config  # no
 from rc_pixtgt_pix512 import (  # noqa: E402
     build_train_module_config as _rc_pixtgt_build_train_module_config,
 )
-from v1_2.base import ONLY_DECODE_MODALITIES  # noqa: E402
 from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.data.allcap import (  # noqa: E402
@@ -94,18 +96,26 @@ PERMANENT_SAVE_INTERVAL = 10_000
 EPHEMERAL_SAVE_INTERVAL = 1_000
 WANDB_PROJECT = "20261016_e5_allcap_ab"
 
-# Encoder modalities kept (decode-only maps are kept separately).
-SENSORS_KEPT = (Modality.SENTINEL2_L2A.name,)
-MIM_MODES = ("maps_only", "within_s2")
+MIM_MODES = ("v1_3", "maps_only", "within_s2")
+
+
+def s2_only() -> bool:
+    """``E5_S2_ONLY=1`` drops Sentinel-1 (fallback; default S1 + S2)."""
+    v = os.environ.get("E5_S2_ONLY", "")
+    if v not in ("", "0", "1"):
+        raise ValueError(f"E5_S2_ONLY must be unset, 0 or 1 (got {v!r})")
+    return v == "1"
 
 
 def mim_mode() -> str:
-    """The single-sensor MIM choice from ``E5_MIM`` (no default: it changes the objective)."""
-    mode = os.environ.get("E5_MIM", "")
+    """``E5_MIM``: unset / v1_3 / maps_only (all v1.3's masking) or within_s2."""
+    mode = os.environ.get("E5_MIM", "") or "v1_3"
     if mode not in MIM_MODES:
         raise ValueError(
-            f"set E5_MIM to one of {MIM_MODES} (got {mode!r}); see e5_allcap_common.py"
+            f"E5_MIM must be unset or one of {MIM_MODES} (got {mode!r}); see e5_allcap_common.py"
         )
+    if mode == "within_s2" and not s2_only():
+        raise ValueError("E5_MIM=within_s2 requires E5_S2_ONLY=1")
     return mode
 
 
@@ -117,13 +127,15 @@ def _apply_mim_mode(masking_config) -> None:  # noqa: ANN001
 def build_common_components(
     script: str, cmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    """v1.3 modalities minus Landsat and Sentinel-1 (S2 + the six decode-only maps)."""
+    """v1.3 modalities minus Landsat (S2 + S1 + the six maps); minus S1 too if E5_S2_ONLY=1."""
     config = _v1_3_build_common_components(script, cmd, run_name, cluster, overrides)
+    dropped = {Modality.LANDSAT.name}
+    if s2_only():
+        dropped.add(Modality.SENTINEL1.name)
     config.training_modalities = [
-        m
-        for m in config.training_modalities
-        if m in SENSORS_KEPT or m in ONLY_DECODE_MODALITIES
+        m for m in config.training_modalities if m not in dropped
     ]
+    mim_mode()  # validate the env vars early
     return config
 
 
