@@ -107,12 +107,15 @@ def _parts() -> None:
         profile = cProfile.Profile()
         times = []
         for idx in indices:
+            patch_size = int(
+                rng.integers(config.min_patch_size, config.max_patch_size + 1)
+            )
+            # Grids that fit the 128-pixel tile at this patch size (as the sampler).
+            grids = [g for g in config.sampled_hw_p_list if g * patch_size <= 128]
             args = GetItemArgs(
                 idx=int(idx),
-                patch_size=int(
-                    rng.integers(config.min_patch_size, config.max_patch_size + 1)
-                ),
-                sampled_hw_p=int(rng.choice(config.sampled_hw_p_list)),
+                patch_size=patch_size,
+                sampled_hw_p=int(rng.choice(grids)),
                 token_budget=config.token_budget,
                 tokenization_config=config.tokenization_config,
                 time_range_days=float(rng.choice(config.time_range_days_choices)),
