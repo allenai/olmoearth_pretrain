@@ -48,6 +48,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 | `ablations/pure_perceiver_joint_latentread_rstride_srange_tmlp1.py` | `pure_perceiver_joint_latentread_rstride_srange.py` with a light token MLP (ratio 1; latents keep ratio 4), CoLT5-style |
 | `ablations/pure_perceiver_joint_latentread_rstride_range_srange_tmlp1.py` | `pure_perceiver_joint_latentread_rstride_range_srange.py` with a light token MLP (ratio 1; latents keep ratio 4), CoLT5-style |
 | `ablations/rc_ld1_pixtgt_slot4r3_pix512.py` | `rc_ld1_pixtgt_pix512` with a per-cell slot merge after block 4 (`nn/slot_merge.py`; ~ceil(n/3) slots per cell, cells with <= 4 tokens bypass); trained as `v1_3_rc_ld1_pixtgt_slot4r3_pix512` |
+| `ablations/allcap_slot_n4d192.py` / `allcap_slot_n2d256.py` | v1.3 on joer's AllCaptures corpus (every capture + biweekly/monthly composites) with a narrow within-cell stage (4 x d192 / 2 x d256) and <=24 slots per cell before the 12 encoder blocks; shared builders in `allcap_narrow.py`; trained as `v1_3_allcap_slot_n4d192` / `v1_3_allcap_slot_n2d256` |
 
 ## Conventions
 

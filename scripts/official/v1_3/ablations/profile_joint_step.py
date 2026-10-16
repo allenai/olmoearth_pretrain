@@ -43,6 +43,9 @@ PROFILE_TARGETS = {
     # Slot merge vs the released v1.3 (step-time stalls seen on 8 GPUs, 2026-10-15).
     "prof_v13ld1": "rc_ld1_pixtgt_pix512",
     "prof_slot4r3": "rc_ld1_pixtgt_slot4r3_pix512",
+    # AllCaptures + narrow stage arms (config D / E): memory + step time on 1 GPU.
+    "prof_allcapD": "allcap_slot_n4d192",
+    "prof_allcapE": "allcap_slot_n2d256",
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -59,6 +62,8 @@ PROFILE_MAX_STEPS: dict[str, int] = {
     "prof_rstride1024": 1000,
     "prof_v13ld1": 1000,
     "prof_slot4r3": 1000,
+    "prof_allcapD": 600,
+    "prof_allcapE": 600,
 }
 # One GPU at the real per-rank batch: v1.3's 512 global batch over 8 GPUs = 64.
 GLOBAL_BATCH_SIZE = 64
