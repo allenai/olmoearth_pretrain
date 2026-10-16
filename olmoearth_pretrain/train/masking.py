@@ -1788,6 +1788,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        single_sensor_split: bool = False,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,10 +1797,18 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        single_sensor_split: if True, an instance with exactly ONE encode-decode bandset
+            (e.g. an S2-only run with single-bandset S2) splits that bandset's tokens into
+            encode and decode (random: ``encode_ratio`` / ``decode_ratio`` of its tokens;
+            time: the encode timesteps are encoded and the decode timesteps decoded)
+            instead of making it encode-only. Default False keeps the original rule, under
+            which a lone sensor bandset is never a decode target whenever any
+            only_decode modality (map) is present.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
+        self.single_sensor_split = single_sensor_split
         self.random_ratio = random_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
@@ -1936,8 +1945,41 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
 
-            if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
-                # this branch should barely ever trigger
+            if (
+                self.single_sensor_split
+                and len(encode_decode_bandsets) == 1
+                and not use_random_masking
+                and Modality.get(encode_decode_bandsets[0][0]).is_spacetime_varying
+            ):
+                # Lone sensor, time masking: encode timesteps -> encoder, decode
+                # timesteps -> decoder, within the same bandset.
+                modality_name, bandset_idx = encode_decode_bandsets[0]
+                masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                bandset_mask = output_dict[masked_modality_name][
+                    i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                ]
+                bandset_mask = self.time_masking_with_missing(
+                    bandset_mask, encode_timestamps, MaskValue.ONLINE_ENCODER.value
+                )
+                decode_t = torch.zeros(
+                    bandset_mask.shape[3], dtype=torch.bool, device=bandset_mask.device
+                )
+                decode_t[decode_timestamps] = True
+                to_decode = decode_t.view(1, 1, 1, -1, 1) & (
+                    bandset_mask != MaskValue.MISSING.value
+                )
+                bandset_mask[to_decode] = MaskValue.DECODER.value
+                output_dict[masked_modality_name][
+                    i : i + 1, ..., bandset_idx : bandset_idx + 1  # type: ignore
+                ] = bandset_mask
+            elif len(encode_decode_bandsets) == 1 and (
+                not has_decode_only_modalities or self.single_sensor_split
+            ):
+                # Original v1.3: this branch should barely ever trigger (lone bandset
+                # and no maps). With single_sensor_split it is also the lone-sensor
+                # random-masking path.
                 modality_name, bandset_idx = encode_decode_bandsets[0]
                 masked_modality_name = MaskedOlmoEarthSample.get_masked_modality_name(
                     modality_name

@@ -10,11 +10,11 @@ from upath import UPath
 
 from olmoearth_pretrain.data.allcap import (
     ALLCAP_LEAST_CLOUDY_SLOT,
-    align_cloud_fraction,
     ALLCAP_RANDOM_CLEAR,
     NUM_SLOTS,
     S1_MATCH_TOLERANCE_DAYS,
     SLOT_DAYS,
+    align_cloud_fraction,
     epoch_days_to_timestamps,
     read_allcap_sample,
     select_least_cloudy_per_slot,
@@ -156,9 +156,7 @@ class TestArmB:
         s1_only = sel.s2_idx == -1
         assert s1_only.sum() == NUM_SLOTS - len(clear)
         assert (sel.s1_idx[s1_only] >= 0).all()
-        np.testing.assert_array_equal(
-            sel.days[s1_only], s1_days[sel.s1_idx[s1_only]]
-        )
+        np.testing.assert_array_equal(sel.days[s1_only], s1_days[sel.s1_idx[s1_only]])
         used = sel.s1_idx[sel.s1_idx >= 0]
         assert len(set(used.tolist())) == len(used)
         assert (np.diff(sel.days) >= 0).all()
@@ -269,9 +267,7 @@ def test_read_allcap_sample_arm_a(allcap_dir: tuple[UPath, dict]) -> None:
 
 
 @pytest.mark.parametrize("selection", [ALLCAP_LEAST_CLOUDY_SLOT, ALLCAP_RANDOM_CLEAR])
-def test_dataset_getitem_allcap(
-    allcap_dir: tuple[UPath, dict], selection: str
-) -> None:
+def test_dataset_getitem_allcap(allcap_dir: tuple[UPath, dict], selection: str) -> None:
     """End to end through OlmoEarthDataset: a standard 12-slot sample with missing slots."""
     d, arrays = allcap_dir
     ds = OlmoEarthDataset(
@@ -316,3 +312,99 @@ def test_dataset_rejects_unknown_selection(allcap_dir: tuple[UPath, dict]) -> No
             dtype=np.float32,
             allcap_selection="least_cloudy",
         )
+
+
+# --- S2-only (E5 redesign 2026-10-16: sentinel1 dropped from the training modalities) ---
+
+S2_ONLY_MODS = ["sentinel2_l2a", "worldcover", "srtm"]
+
+
+class _RecordingH5:
+    """Wraps an open h5py.File and records every dataset key that is read."""
+
+    def __init__(self, f: h5py.File) -> None:
+        self._f = f
+        self.read: list[str] = []
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._f
+
+    def __getitem__(self, key: str):  # noqa: ANN204
+        self.read.append(key)
+        return self._f[key]
+
+    def keys(self):  # noqa: ANN201
+        return self._f.keys()
+
+
+@pytest.mark.parametrize("selection", [ALLCAP_LEAST_CLOUDY_SLOT, ALLCAP_RANDOM_CLEAR])
+def test_s2_only_never_reads_s1_stack(
+    allcap_dir: tuple[UPath, dict], selection: str
+) -> None:
+    """Without sentinel1 in the modalities, the S1 image stack is never touched."""
+    d, _ = allcap_dir
+    with h5py.File(d / "sample_0.h5", "r") as f:
+        rec = _RecordingH5(f)
+        sample, masks = read_allcap_sample(
+            rec, S2_ONLY_MODS, selection, 0.3, np.random.default_rng(0)
+        )
+    assert "sentinel1" not in rec.read
+    assert "landsat_l2" not in rec.read and "sentinel2_scl" not in rec.read
+    assert "sentinel1" not in sample and "sentinel1" not in masks
+    assert set(sample) == {"timestamps", *S2_ONLY_MODS}
+    assert sample["sentinel2_l2a"].shape[2] == masks["sentinel2_l2a"].sum()
+
+
+def test_s2_only_arm_a_s2_choice_and_grid_unchanged(
+    allcap_dir: tuple[UPath, dict],
+) -> None:
+    """Arm A: dropping S1 changes neither the slot grid nor the per-slot S2 capture."""
+    d, _ = allcap_dir
+    with h5py.File(d / "sample_0.h5", "r") as f:
+        both, both_masks = read_allcap_sample(f, MODS, ALLCAP_LEAST_CLOUDY_SLOT, 1.0)
+        s2o, s2o_masks = read_allcap_sample(
+            f, S2_ONLY_MODS, ALLCAP_LEAST_CLOUDY_SLOT, 1.0
+        )
+    np.testing.assert_array_equal(both["timestamps"], s2o["timestamps"])
+    np.testing.assert_array_equal(
+        both_masks["sentinel2_l2a"], s2o_masks["sentinel2_l2a"]
+    )
+    np.testing.assert_array_equal(both["sentinel2_l2a"], s2o["sentinel2_l2a"])
+
+
+def test_s2_only_arm_b_has_no_s1_only_slots(allcap_dir: tuple[UPath, dict]) -> None:
+    """Arm B with < 12 clear S2: every emitted slot is a clear S2 capture at its real date."""
+    d, arrays = allcap_dir
+    cloud = arrays["sentinel2_scl_cloud_fraction"]
+    tau = float(np.sort(cloud)[4])  # exactly 5 clear captures
+    s2_days = timestamps_to_epoch_days(arrays["timestamps_sentinel2_l2a"])
+    with h5py.File(d / "sample_0.h5", "r") as f:
+        sample, masks = read_allcap_sample(
+            f, S2_ONLY_MODS, ALLCAP_RANDOM_CLEAR, tau, np.random.default_rng(1)
+        )
+    assert len(sample["timestamps"]) == 5
+    assert masks["sentinel2_l2a"].all()
+    for day in timestamps_to_epoch_days(sample["timestamps"]):
+        j = np.flatnonzero(s2_days == day)
+        assert len(j) == 1 and cloud[j[0]] <= tau
+
+
+@pytest.mark.parametrize("selection", [ALLCAP_LEAST_CLOUDY_SLOT, ALLCAP_RANDOM_CLEAR])
+def test_dataset_getitem_s2_only(
+    allcap_dir: tuple[UPath, dict], selection: str
+) -> None:
+    """End to end: the 12-slot sample has S2 + maps and no sentinel1."""
+    d, _ = allcap_dir
+    ds = OlmoEarthDataset(
+        h5py_dir=d,
+        training_modalities=S2_ONLY_MODS,
+        dtype=np.float32,
+        normalize=False,
+        allcap_selection=selection,
+        allcap_cloud_tau=0.3,
+    )
+    ds.prepare()
+    np.random.seed(0)
+    _, sample = ds[GetItemArgs(idx=0, patch_size=1, sampled_hw_p=4, token_budget=10000)]
+    assert sample.sentinel1 is None
+    assert sample.sentinel2_l2a.shape[2] == NUM_SLOTS

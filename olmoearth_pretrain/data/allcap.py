@@ -297,6 +297,12 @@ def read_allcap_sample(
     cloud fractions, the S2/S1 stacks if they are training modalities, and the
     non-time-series training modalities (maps) as stored. Landsat and SCL imagery are
     never decompressed.
+
+    S2-only (``sentinel1`` not in ``training_modalities``): the S1 stack is never
+    opened, and the selectors see no S1 captures, so no slot exists only for S1 (arm
+    B fills at most 12 clear S2 captures; arm A's per-slot S2 choice is unchanged).
+    The S1 *timestamps* (a few hundred bytes) still enter the span start, so arm A's
+    slot grid is identical to the S1+S2 variant.
     """
     ts = {
         key: h5file[f"timestamps_{key}"][()]
@@ -311,9 +317,10 @@ def read_allcap_sample(
         h5file[SCL_TIMESTAMPS_KEY][()] if SCL_TIMESTAMPS_KEY in h5file else None,
         h5file[CLOUD_FRACTION_KEY][()] if CLOUD_FRACTION_KEY in h5file else None,
     )
-    sel = select_slots(
-        selection, s2_ts, s2_cloud, s1_ts, span_start_day(ts), tau, rng
-    )
+    span_start = span_start_day(ts)
+    if S1 not in training_modalities:
+        s1_ts = empty_ts
+    sel = select_slots(selection, s2_ts, s2_cloud, s1_ts, span_start, tau, rng)
 
     series = {}
     for name, idx in ((S2, sel.s2_idx), (S1, sel.s1_idx)):

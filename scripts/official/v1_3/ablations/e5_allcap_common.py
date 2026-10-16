@@ -2,27 +2,39 @@
 
 E5 asks *which 12 captures, with which dates* at a fixed 12-slot token shape: both arms
 read the SAME allcap H5 files (``osm_allcaptures``, eval-clean keep-list) through
-``olmoearth_pretrain.data.allcap``, S2 + S1 only (Landsat dropped in both, since allcap
-has only Level-2 and v1.3 uses Level-1), with 12 slots of 30 days:
+``olmoearth_pretrain.data.allcap``, with 12 slots of 30 days.
 
-* arm A (``e5_allcap_arm_a.py``): per slot the least-cloudy S2 capture and the S1
-  capture nearest the slot midpoint, stamped at slot start (v1.3's mosaic rule on
-  single captures);
+Redesign 2026-10-16 (Hollis 12:25Z): **S2-only** ("which S2 captures and which dates").
+Sentinel-1 and Landsat are dropped in both arms (the S1 stack is never read, cutting
+~40% of the bytes per sample); the six decode-only maps stay.
+
+* arm A (``e5_allcap_arm_a.py``): per slot the least-cloudy S2 capture, stamped at slot
+  start (v1.3's mosaic rule on single captures);
 * arm B (``e5_allcap_arm_b.py``): per read, up to 12 random S2 captures with cloud
   fraction <= ``ARM_B_CLOUD_TAU`` with their real dates (tau matched so the mean input
-  cloud fraction equals arm A's), S1 paired within +/-15 d, S1-only slots if fewer than
-  12 clear S2.
+  cloud fraction equals arm A's); fewer than 12 clear captures leave missing slots.
+
+**MIM objective with one sensor (``E5_MIM`` env var, required).** v1.3's
+``random_time_with_decode`` splits the *sensor bandsets* of a sample into encode-only
+and decode-only. With S2 as the only (single-bandset) sensor, S2 is always encode-only
+and only the six maps are decoded: no sensor latent target at all. ``E5_MIM`` picks:
+
+* ``maps_only``: the literal v1.3 code (S2 in, maps out; time masking only drops input
+  timesteps);
+* ``within_s2``: ``single_sensor_split=True``: S2's own tokens are split 50/50 into
+  encoder inputs and latent targets (random tokens, or encode vs decode timesteps).
 
 Everything else is ``rc_ld1_pixtgt_pix512.py`` (``v1_3_rc_ld1_pixtgt_pix512``): model
 (1-layer register Perceiver, 512-latent budget, d768 supervision, [128, 64] student),
 pixel MIM targets, the decorrelated shape sampler with TOKEN_BUDGET=3072, batch 512,
-seed 3622, lr 1e-4 + 8k warmup cosine. Differences from the RC, all shared by both arms:
-60k steps (cosine anneals at 60k), no Landsat, ~387k samples instead of 1.14M, and no
-in-loop evals (those run as Beaker jobs that clone the pushed git ref; this branch is
-local, so checkpoints are scored offline at 20k/40k/60k).
+seed 3622, lr 1e-4 cosine (alpha_f 0.1). Differences from the RC, all shared by both
+arms: 30k steps with a 4k warmup (cosine anneals at 30k), S2 + maps only, ~387k samples
+instead of 1.14M, and no in-loop evals (those run as Beaker jobs that clone the pushed git
+ref; this branch is local, so checkpoints are scored offline at 10k/20k/30k).
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -33,13 +45,16 @@ from base import (  # noqa: E402
     build_common_components as _v1_3_build_common_components,
 )
 from base import (  # noqa: E402
-    build_dataloader_config,
-    build_visualize_config,
+    build_dataloader_config as _v1_3_build_dataloader_config,
 )
+from base import build_visualize_config  # noqa: E402
 from olmo_core.train.callbacks import CheckpointerCallback  # noqa: E402
 from olmo_core.train.common import Duration  # noqa: E402
 from rc_ld1_pix512 import build_model_config as _rc_ld1_build_model_config  # noqa: E402
-from rc_pixtgt_pix512 import build_train_module_config  # noqa: E402
+from rc_pixtgt_pix512 import (  # noqa: E402
+    build_train_module_config as _rc_pixtgt_build_train_module_config,
+)
+from v1_2.base import ONLY_DECODE_MODALITIES  # noqa: E402
 from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.data.allcap import (  # noqa: E402
@@ -69,21 +84,61 @@ ARM_B_CLOUD_TAU = 0.52
 # arm B at 0.52 0.0742 (median 0.003); S2 slots/sample 11.91 vs 11.94; S1 slots
 # 11.24 vs 11.03; mean |S1 date - slot stamp| 14.6 d vs 2.0 d.
 
-MAX_STEPS = 60_000
-PERMANENT_SAVE_INTERVAL = 20_000
-# ~26 min at the RC's 0.52 s/step.
-EPHEMERAL_SAVE_INTERVAL = 3_000
+MAX_STEPS = 30_000
+# The RC's 8k warmup was set for a ~667k-step run (1.2%). The approved 60k-step E5 kept
+# 8k (13%); 4k keeps that fraction at 30k, so the 10k checkpoint is past warmup by 6k
+# steps instead of 2k. 4k x 512 = 2M samples is ample for AdamW at lr 1e-4.
+WARMUP_STEPS = 4_000
+PERMANENT_SAVE_INTERVAL = 10_000
+# ~30-60 min at the expected 2-4 s/step of a loader-bound 4-GPU arm.
+EPHEMERAL_SAVE_INTERVAL = 1_000
 WANDB_PROJECT = "20261016_e5_allcap_ab"
+
+# Encoder modalities kept (decode-only maps are kept separately).
+SENSORS_KEPT = (Modality.SENTINEL2_L2A.name,)
+MIM_MODES = ("maps_only", "within_s2")
+
+
+def mim_mode() -> str:
+    """The single-sensor MIM choice from ``E5_MIM`` (no default: it changes the objective)."""
+    mode = os.environ.get("E5_MIM", "")
+    if mode not in MIM_MODES:
+        raise ValueError(
+            f"set E5_MIM to one of {MIM_MODES} (got {mode!r}); see e5_allcap_common.py"
+        )
+    return mode
+
+
+def _apply_mim_mode(masking_config) -> None:  # noqa: ANN001
+    if mim_mode() == "within_s2":
+        masking_config.strategy_config["single_sensor_split"] = True
 
 
 def build_common_components(
     script: str, cmd, run_name: str, cluster: str, overrides: list[str]
 ) -> CommonComponents:
-    """v1.3 modalities minus Landsat (S2 + S1 + the six decode-only maps)."""
+    """v1.3 modalities minus Landsat and Sentinel-1 (S2 + the six decode-only maps)."""
     config = _v1_3_build_common_components(script, cmd, run_name, cluster, overrides)
     config.training_modalities = [
-        m for m in config.training_modalities if m != Modality.LANDSAT.name
+        m
+        for m in config.training_modalities
+        if m in SENSORS_KEPT or m in ONLY_DECODE_MODALITIES
     ]
+    return config
+
+
+def build_train_module_config(common: CommonComponents):
+    """``rc_pixtgt_pix512``'s train module; 4k warmup; the E5_MIM masking choice."""
+    config = _rc_pixtgt_build_train_module_config(common)
+    config.scheduler.warmup = WARMUP_STEPS
+    _apply_mim_mode(config.masking_config)
+    return config
+
+
+def build_dataloader_config(common: CommonComponents):
+    """v1.3 dataloader (masking runs here) with the E5_MIM masking choice."""
+    config = _v1_3_build_dataloader_config(common)
+    _apply_mim_mode(config.masking_config)
     return config
 
 
@@ -113,7 +168,7 @@ def build_dataset_config_for(selection: str, tau: float = 1.0):
 
 
 def build_trainer_config(common: CommonComponents):
-    """v1.2 trainer: 60k steps, saves every 20k + latest every 3k, no in-loop evals."""
+    """v1.2 trainer: 30k steps, saves every 10k + latest every 1k, no in-loop evals."""
     config = _v1_2_build_trainer_config(common)
     config.max_duration = Duration.steps(MAX_STEPS)
     config.callbacks.pop("downstream_evaluator")
@@ -121,7 +176,7 @@ def build_trainer_config(common: CommonComponents):
     config.callbacks["checkpointer"] = CheckpointerCallback(
         save_interval=PERMANENT_SAVE_INTERVAL,
         ephemeral_save_interval=EPHEMERAL_SAVE_INTERVAL,
-        # Keep every permanent (20k/40k/60k) checkpoint, as the RC launch did.
+        # Keep every permanent (10k/20k/30k) checkpoint, as the RC launch did.
         max_checkpoints=None,
     )
     return config
