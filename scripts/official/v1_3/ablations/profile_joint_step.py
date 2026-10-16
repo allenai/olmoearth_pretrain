@@ -20,7 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from base import build_common_components, build_visualize_config  # noqa: E402
+from base import build_common_components as _base_common_components  # noqa: E402
+from base import build_visualize_config  # noqa: E402
 from olmo_core.train.callbacks import ProfilerCallback  # noqa: E402
 from olmo_core.train.common import Duration  # noqa: E402
 
@@ -81,6 +82,21 @@ def _prefix(common: CommonComponents) -> str:
     raise ValueError(
         f"run name {common.run_name!r} must start with one of {list(PROFILE_TARGETS)}"
     )
+
+
+def build_common_components(script, cmd, run_name, cluster, overrides):  # noqa: ANN001, ANN201
+    """The target arm's common components if it defines them, else v1.3's.
+
+    AllCaptures arms swap Landsat L1 for L2, so v1.3's modality list would not match
+    their corpus.
+    """
+    prefixes = sorted(PROFILE_TARGETS, key=len, reverse=True)
+    prefix = next((p for p in prefixes if run_name.startswith(p)), None)
+    builder = _base_common_components
+    if prefix is not None:
+        module = importlib.import_module(PROFILE_TARGETS[prefix])
+        builder = getattr(module, "build_common_components", builder)
+    return builder(script, cmd, run_name, cluster, overrides)
 
 
 def _target(common: CommonComponents):
