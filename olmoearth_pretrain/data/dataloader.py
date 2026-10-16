@@ -81,6 +81,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         min_tokens_per_instance: int = 0,
         max_timesteps: int = 12,
         tile_size: int = 128,
+        time_range_days_choices: list[float] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -93,6 +94,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         drop_last: bool = True,
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
+        pin_memory: bool = True,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
@@ -145,6 +147,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
             max_timesteps: Maximum number of timesteps a sample can contribute.
             tile_size: Spatial extent (in base-resolution pixels) of a training tile.
                 Used to bound the sampled grid so ``sampled_hw_p * patch_size`` fits.
+            time_range_days_choices: Per-modality-timestamps datasets only: the
+                length (days) of the time range a sample takes every capture from is
+                drawn uniformly from this list once per microbatch. None = each
+                sample's whole span.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -157,6 +163,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             drop_last: Whether to drop the last incomplete batch.
             persistent_workers: Whether to keep workers alive between epochs.
             multiprocessing_context: Multiprocessing context ("spawn" or "forkserver").
+            pin_memory: Pin batches in host memory (CUDA, workers > 0). Turn off when
+                batch shapes vary a lot: every new shape is a fresh ``cudaHostAlloc``
+                (tens of ms, contends with kernel launches on the driver).
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
             masking_strategy: Masking strategy to apply in the dataloader workers.
@@ -184,6 +193,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.min_tokens_per_instance = min_tokens_per_instance
         self.max_timesteps = max_timesteps
         self.tile_size = tile_size
+        self.time_range_days_choices = time_range_days_choices
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -194,6 +204,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self._global_indices: np.ndarray | None = None
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
+        self.pin_memory = pin_memory
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
 
         # Dataloader-side masking configuration
@@ -351,7 +362,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             _IterableDatasetWrapper(self),
             batch_size=None,
             num_workers=self.num_workers,
-            pin_memory=self.target_device_type == "cuda" and self.num_workers > 0,
+            pin_memory=self.pin_memory
+            and self.target_device_type == "cuda"
+            and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
             persistent_workers=(
                 self.persistent_workers if self.num_workers > 0 else False
@@ -386,7 +399,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
         return indices
 
     def _get_dataset_item(
-        self, idx: int, patch_size: int, sampled_hw_p: int, target_t: int | None = None
+        self,
+        idx: int,
+        patch_size: int,
+        sampled_hw_p: int,
+        target_t: int | None = None,
+        time_range_days: float | None = None,
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
         args = GetItemArgs(
@@ -397,6 +415,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             tokenization_config=self.tokenization_config,
             target_t=target_t,
             budget_exclude_modalities=self.budget_exclude_modalities,
+            time_range_days=time_range_days,
         )
         item = self.dataset[args]
         return item
@@ -651,8 +670,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
-    ) -> Iterator[tuple[int, int, int, int]]:
-        """Yield ``(idx, patch_size, sampled_hw_p, target_t)`` per instance.
+    ) -> Iterator[tuple[int, int, int, int, float | None]]:
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t, time_range_days)`` per instance.
 
         See the OlmoEarthDataLoader.__init__ docstring for a description
         of the subsetting behaviour.
@@ -767,7 +786,18 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     sampled_hw_p = int(rng.choice(candidates))
                     lo, hi = windows[sampled_hw_p]
                     target_t = sample_t(lo, hi)
-            yield idx, int(patch_size), int(sampled_hw_p), int(target_t)
+                time_range_days = (
+                    float(rng.choice(dl.time_range_days_choices))
+                    if dl.time_range_days_choices
+                    else None
+                )
+            yield (
+                idx,
+                int(patch_size),
+                int(sampled_hw_p),
+                int(target_t),
+                time_range_days,
+            )
             instances_processed += 1
 
     @property
@@ -795,9 +825,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         # Create iterator that fetches samples from the dataset
         instance_iterator = (
             self.data_loader._get_dataset_item(
-                int(idx), patch_size, sampled_hw_p, target_t
+                int(idx), patch_size, sampled_hw_p, target_t, time_range_days
             )
-            for idx, patch_size, sampled_hw_p, target_t in (
+            for idx, patch_size, sampled_hw_p, target_t, time_range_days in (
                 self._get_batch_item_params_iterator(
                     indices,
                     self.data_loader.patch_sizes,
@@ -833,11 +863,16 @@ class OlmoEarthDataLoaderConfig(Config):
     min_tokens_per_instance: int = 0
     max_timesteps: int = 12
     tile_size: int = 128
+    time_range_days_choices: list[float] | None = None
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
     target_device_type: str | None = None
     drop_last: bool = True
+    pin_memory: bool = True
+    # Send masks to the main process as uint8 instead of int64 (8x smaller; the
+    # masks are pixel-resolution). Restored to int64 on device.
+    uint8_masks: bool = False
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -893,6 +928,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 collate_single_masked_batched,
                 transform=transform,
                 masking_strategy=masking_strategy,
+                uint8_masks=self.uint8_masks,
             )
         else:  # num_masked_views == 2
             collator = functools.partial(
@@ -900,6 +936,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 transform=transform,
                 masking_strategy=masking_strategy,
                 masking_strategy_b=masking_strategy_b,
+                uint8_masks=self.uint8_masks,
             )
 
         return OlmoEarthDataLoader(
@@ -916,6 +953,7 @@ class OlmoEarthDataLoaderConfig(Config):
             target_device_type=self.target_device_type or get_default_device().type,
             collator=collator,
             drop_last=self.drop_last,
+            pin_memory=self.pin_memory,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
@@ -925,6 +963,7 @@ class OlmoEarthDataLoaderConfig(Config):
             min_tokens_per_instance=self.min_tokens_per_instance,
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
+            time_range_days_choices=self.time_range_days_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

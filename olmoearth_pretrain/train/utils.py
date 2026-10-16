@@ -5,7 +5,11 @@ import os
 
 import psutil
 
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import (
+    TIME_INDEXED_MODALITIES,
+    MaskedOlmoEarthSample,
+    time_index_field,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +32,7 @@ def split_masked_batch(
     batch_size = batch.batch_size
 
     if batch_size <= microbatch_size:
-        return [batch]
+        return [_trim_time_padding(batch)]
 
     num_microbatches = (batch_size + microbatch_size - 1) // microbatch_size
 
@@ -44,9 +48,32 @@ def split_masked_batch(
 
     # Build microbatches
     return [
-        MaskedOlmoEarthSample(**{f: chunks[i] for f, chunks in splits.items()})
+        _trim_time_padding(
+            MaskedOlmoEarthSample(**{f: chunks[i] for f, chunks in splits.items()})
+        )
         for i in range(num_microbatches)
     ]
+
+
+def _trim_time_padding(batch: MaskedOlmoEarthSample) -> MaskedOlmoEarthSample:
+    """Drop the time slots that are padding in every sample of ``batch``.
+
+    A modality on its own time axis holds each sample's captures in its leading
+    slots, padded (time index -1, MISSING) to the longest in the collated batch.
+    """
+    updates = {}
+    for modality in TIME_INDEXED_MODALITIES:
+        index = getattr(batch, time_index_field(modality))
+        if index is None:
+            continue
+        num_slots = max(int((index >= 0).sum(dim=1).max()), 1)
+        if num_slots == index.shape[1]:
+            continue
+        mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+        updates[time_index_field(modality)] = index[:, :num_slots]
+        updates[modality] = getattr(batch, modality)[:, :, :, :num_slots]
+        updates[mask_name] = getattr(batch, mask_name)[:, :, :, :num_slots]
+    return batch._replace(**updates) if updates else batch
 
 
 def log_memory_usage_for_process(process: psutil.Process) -> tuple[int, int, int, int]:
