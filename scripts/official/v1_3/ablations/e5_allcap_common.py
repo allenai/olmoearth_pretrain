@@ -38,7 +38,7 @@ from base import (  # noqa: E402
 )
 from olmo_core.train.callbacks import CheckpointerCallback  # noqa: E402
 from olmo_core.train.common import Duration  # noqa: E402
-from rc_ld1_pix512 import build_model_config  # noqa: E402
+from rc_ld1_pix512 import build_model_config as _rc_ld1_build_model_config  # noqa: E402
 from rc_pixtgt_pix512 import build_train_module_config  # noqa: E402
 from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
@@ -83,6 +83,16 @@ def build_common_components(
     config = _v1_3_build_common_components(script, cmd, run_name, cluster, overrides)
     config.training_modalities = [
         m for m in config.training_modalities if m != Modality.LANDSAT.name
+    ]
+    return config
+
+
+def build_model_config(common: CommonComponents):
+    """``rc_ld1_pixtgt_pix512``'s model; band dropout only on modalities that exist."""
+    config = _rc_ld1_build_model_config(common)
+    enc = config.encoder_config
+    enc.band_dropout_modalities = [
+        m for m in enc.band_dropout_modalities if m in common.training_modalities
     ]
     return config
 
