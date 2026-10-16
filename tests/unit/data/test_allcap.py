@@ -10,6 +10,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.allcap import (
     ALLCAP_LEAST_CLOUDY_SLOT,
+    align_cloud_fraction,
     ALLCAP_RANDOM_CLEAR,
     NUM_SLOTS,
     S1_MATCH_TOLERANCE_DAYS,
@@ -33,6 +34,18 @@ def test_timestamp_roundtrip() -> None:
     assert days[1] - days[0] == 59  # Jan 1 -> Feb 29 2020
     np.testing.assert_array_equal(epoch_days_to_timestamps(days), ts)
     assert epoch_days_to_timestamps(days).dtype == np.int32
+
+
+def test_align_cloud_fraction() -> None:
+    """SCL with an extra capture is matched by date; a missing SCL gives all-NaN."""
+    s2 = epoch_days_to_timestamps(START + np.array([0, 5, 10]))
+    scl = epoch_days_to_timestamps(START + np.array([0, 3, 5, 10]))
+    cf = np.array([0.1, 0.9, 0.5, 0.2])
+    np.testing.assert_allclose(align_cloud_fraction(s2, scl, cf), [0.1, 0.5, 0.2])
+    np.testing.assert_allclose(align_cloud_fraction(s2, s2, cf[:3]), cf[:3])
+    assert np.isnan(align_cloud_fraction(s2, None, None)).all()
+    out = align_cloud_fraction(s2, scl[:2], cf[:2])
+    assert out[0] == 0.1 and np.isnan(out[1:]).all()
 
 
 class TestArmA:

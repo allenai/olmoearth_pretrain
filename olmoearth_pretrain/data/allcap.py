@@ -51,6 +51,7 @@ S1_MATCH_TOLERANCE_DAYS = 15
 S2 = Modality.SENTINEL2_L2A.name
 S1 = Modality.SENTINEL1.name
 CLOUD_FRACTION_KEY = "sentinel2_scl_cloud_fraction"
+SCL_TIMESTAMPS_KEY = "timestamps_sentinel2_scl"
 # Every-capture modalities in the allcap H5 that this module never emits.
 _TIME_SERIES_KEYS_FOR_SPAN = ("sentinel2_l2a", "sentinel1", "landsat_l2")
 
@@ -196,6 +197,38 @@ def select_random_clear(
     )
 
 
+def align_cloud_fraction(
+    s2_ts: np.ndarray, scl_ts: np.ndarray | None, cloud: np.ndarray | None
+) -> np.ndarray:
+    """Cloud fraction per S2 capture, matched through the SCL timestamps.
+
+    ``sentinel2_scl_cloud_fraction`` follows ``timestamps_sentinel2_scl``, which in
+    ~0.3% of samples has one capture more than ``timestamps_sentinel2_l2a`` (and in
+    rare samples is absent). Captures are matched by date in order; an S2 capture
+    without an SCL match gets NaN (treated as fully cloudy by the selectors).
+    """
+    s2_ts = np.asarray(s2_ts).reshape(-1, 3)
+    out = np.full(len(s2_ts), np.nan, dtype=np.float64)
+    if scl_ts is None or cloud is None:
+        return out
+    scl_ts = np.asarray(scl_ts).reshape(-1, 3)
+    cloud = np.asarray(cloud, dtype=np.float64).reshape(-1)
+    if len(scl_ts) != len(cloud):
+        return out
+    if len(scl_ts) == len(s2_ts) and np.array_equal(scl_ts, s2_ts):
+        return cloud
+    s2_days = timestamps_to_epoch_days(s2_ts)
+    scl_days = timestamps_to_epoch_days(scl_ts)
+    j = 0
+    for i, d in enumerate(s2_days):
+        while j < len(scl_days) and scl_days[j] < d:
+            j += 1
+        if j < len(scl_days) and scl_days[j] == d:
+            out[i] = cloud[j]
+            j += 1
+    return out
+
+
 def span_start_day(timestamps_by_modality: dict[str, np.ndarray]) -> int:
     """Earliest capture date over the given per-modality timestamp arrays."""
     firsts = [
@@ -273,10 +306,10 @@ def read_allcap_sample(
     empty_ts = np.zeros((0, 3), dtype=np.int32)
     s2_ts = ts.get(S2, empty_ts)
     s1_ts = ts.get(S1, empty_ts)
-    s2_cloud = (
-        h5file[CLOUD_FRACTION_KEY][()]
-        if CLOUD_FRACTION_KEY in h5file
-        else np.ones(len(s2_ts), dtype=np.float32)
+    s2_cloud = align_cloud_fraction(
+        s2_ts,
+        h5file[SCL_TIMESTAMPS_KEY][()] if SCL_TIMESTAMPS_KEY in h5file else None,
+        h5file[CLOUD_FRACTION_KEY][()] if CLOUD_FRACTION_KEY in h5file else None,
     )
     sel = select_slots(
         selection, s2_ts, s2_cloud, s1_ts, span_start_day(ts), tau, rng
