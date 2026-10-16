@@ -160,7 +160,7 @@ To cite the OlmoEarth software itself (this repository) rather than a particular
 }
 ```
 
-Please set `version` and `year` to the release you used. To cite a specific model, cite its report: the [original OlmoEarth report](https://arxiv.org/abs/2511.13655) or the [OlmoEarth v1.1 tech report](https://arxiv.org/abs/2605.20804v1).
+Please set `version` and `year` to the release you used. To cite a specific model, cite its report (all models and their reports are listed in the [model summary](https://github.com/allenai/olmoearth_pretrain#model-summary)).
 
 ## License
 
