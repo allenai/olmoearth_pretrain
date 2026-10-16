@@ -9,7 +9,7 @@ encoder-width blocks and the 1-layer Perceiver. Built so every-capture inputs
 (100-300 tokens per cell) cost about what v1.3 costs on monthly ones.
 
 Data: joer's AllCaptures corpus (every S2 / S1 / Landsat C2 L2 capture over 360 days,
-per-modality timestamps, 9000 real-token budget, random time-range lengths), and per
+per-modality timestamps, a 4500 real-token budget, random time-range lengths), and per
 rank batch a composite mode drawn from ``COMPOSITE_DAYS``: every capture, biweekly
 or monthly per-pixel medians (S2 over SCL-clear pixels).
 
@@ -68,9 +68,12 @@ ALLCAP_H5PY_DIR = (
     "cdl_landsat_l2_openstreetmap_raster_sentinel1_sentinel2_l2a_sentinel2_scl_"
     "srtm_worldcereal_worldcover_wri_canopy_height_map/395660"
 )
-# joer's real-token budget and time-range menu (the corpus spans 360 days, so the
-# last three entries take the whole span).
-TOKEN_BUDGET = 9000
+# Real-token budget per sample. joer's runs use 9000; at microbatch 32 that OOMed
+# (the patch embedding, composite encodings and frozen target run over every input
+# token at width 768). 4500 x 32 ~= v1.3's 64 x ~2000 input tokens per microbatch,
+# so a step costs about what v1.3's does (Gabi, 2026-10-16). Time-range menu is
+# joer's (the corpus spans 360 days, so the last three entries take the whole span).
+TOKEN_BUDGET = 4500
 TIME_RANGE_DAYS = [7.0, 30.0, 90.0, 180.0, 365.0, 730.0, 1825.0]
 # Composite bin length per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly.
 COMPOSITE_DAYS = [0.0, 14.0, 30.0]
