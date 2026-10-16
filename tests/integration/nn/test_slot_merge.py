@@ -51,7 +51,7 @@ def test_slot_counts_and_bypass() -> None:
     merge = _merge()
     counts = [[12, 3, 4, 7], [1, 12, 0, 5]]
     x, pos, valid, cell, mod = _cells(counts)
-    out, out_pos, out_valid, _ = merge(x, pos, valid, cell, mod)
+    out, out_pos, out_valid, _, _ = merge(x, pos, valid, cell, mod)
     for b, per_cell in enumerate(counts):
         expected = sum(max(math.ceil(n / 3), min(n, 4)) for n in per_cell)
         assert int(out_valid[b].sum()) == expected
@@ -67,7 +67,7 @@ def test_slot_positions_sit_in_their_cell_and_time_range() -> None:
     """A slot keeps its cell's row/col and a time inside the cell's time span."""
     merge = _merge()
     x, pos, valid, cell, mod = _cells([[12, 9]])
-    out, out_pos, out_valid, _ = merge(x, pos, valid, cell, mod)
+    out, out_pos, out_valid, _, _ = merge(x, pos, valid, cell, mod)
     for c in (0, 1):
         slot_rows = out_pos[0][out_valid[0] & (out_pos[0, :, 1] == c)]
         times = pos[0][valid[0] & (cell[0] == c), 0]
@@ -84,7 +84,7 @@ def test_unmerge_returns_to_the_input_layout() -> None:
     merge = _merge()
     counts = [[12, 3, 7], [2, 12, 0]]
     x, pos, valid, cell, mod = _cells(counts)
-    out, out_pos, out_valid, unmerge = merge(x, pos, valid, cell, mod)
+    out, out_pos, out_valid, unmerge, _ = merge(x, pos, valid, cell, mod)
     back = unmerge(out)
     assert back.shape == x.shape
     assert torch.all(back[~valid] == 0)
@@ -112,7 +112,7 @@ def test_every_parameter_gets_a_gradient_even_without_merging() -> None:
         merge = _merge()
         x, pos, valid, cell, mod = _cells(counts)
         x.requires_grad_(True)
-        out, _, out_valid, _ = merge(x, pos, valid, cell, mod)
+        out, _, out_valid, _, _ = merge(x, pos, valid, cell, mod)
         out[out_valid].sum().backward()
         for name, p in merge.named_parameters():
             assert p.grad is not None, (counts, name)
@@ -215,3 +215,87 @@ def test_config_dict_is_coerced() -> None:
     )
     assert enc_cfg.slot_merge_config == cfg
     assert enc_cfg.build().slot_merge is not None
+
+
+def test_slot_cap_limits_large_cells() -> None:
+    """max_slots_per_cell caps big cells; small cells still bypass."""
+    torch.manual_seed(0)
+    merge = SlotMergeConfig(ratio=3, min_slots=4, max_slots_per_cell=6).build(D)
+    counts = [[36, 12, 3]]
+    x, pos, valid, cell, mod = _cells(counts)
+    _, out_pos, out_valid, _, _ = merge(x, pos, valid, cell, mod)
+    per_cell = [int((out_valid[0] & (out_pos[0, :, 1] == c)).sum()) for c in range(3)]
+    assert per_cell == [6, 4, 3]
+
+
+def test_narrow_stage_attends_within_each_cell() -> None:
+    """Changing one cell's tokens leaves every other cell's narrow output unchanged."""
+    from olmoearth_pretrain.nn.slot_merge import NarrowStage
+
+    torch.manual_seed(0)
+    stage = NarrowStage(
+        D, 64, 2, position_encoding="rope_3d_mixed", qkv_bias=True
+    ).eval()
+    x, pos, valid, cell, _ = _cells([[5, 7, 3], [4, 0, 6]])
+    with torch.no_grad():
+        a = stage(x, pos, valid, cell)
+        x2 = x.clone()
+        x2[cell == 1] += 5.0
+        b = stage(x2, pos, valid, cell)
+    other = valid & (cell != 1)
+    torch.testing.assert_close(a[other], b[other])
+    assert not torch.allclose(a[valid & (cell == 1)], b[valid & (cell == 1)])
+
+
+def _narrow_encoder() -> Encoder:
+    torch.manual_seed(0)
+    return EncoderConfig(
+        supported_modality_names=MODALITIES,
+        embedding_size=D,
+        num_heads=2,
+        depth=2,
+        mlp_ratio=2.0,
+        max_patch_size=4,
+        min_patch_size=1,
+        max_sequence_length=12,
+        drop_path=0.0,
+        position_encoding="rope_3d_mixed",
+        tokenization_config=S2_ONE_BANDSET,
+        perceiver_config=PerceiverConfig(
+            register_dim=16,
+            latent_depth=1,
+            pixel_latents=True,
+            random_latent_stride=True,
+            max_latents=64,
+            eval_latent_stride=1,
+            student_dims=[8],
+            student_output_norm=True,
+        ),
+        slot_merge_config=SlotMergeConfig(
+            merge_after=0, narrow_depth=1, narrow_dim=64, max_slots_per_cell=4
+        ),
+    ).build()
+
+
+def test_narrow_encoder_trains_and_infers() -> None:
+    """Narrow stage + capped merge trains and infers.
+
+    Train fwd/bwd reaches every new parameter; eval and fast_pass agree; per-token
+    outputs keep the input layout.
+    """
+    enc = _narrow_encoder().train()
+    assert enc.narrow_stage is not None and enc.narrow_up is not None
+    out = enc(_sample(), patch_size=PS)
+    out["registers"].float().pow(2).mean().backward()
+    for module in (enc.narrow_stage, enc.narrow_up, enc.slot_merge):
+        for name, p in module.named_parameters():
+            assert p.grad is not None and torch.isfinite(p.grad).all(), name
+    enc.eval()
+    full = _sample(encode_frac=1.1)
+    with torch.no_grad():
+        a = enc(full, patch_size=PS)
+        b = enc(full, patch_size=PS, fast_pass=True)
+    torch.testing.assert_close(a["registers"], b["registers"], atol=1e-5, rtol=1e-5)
+    s2_out = a["tokens_and_masks"].sentinel2_l2a
+    assert s2_out is not None and full.sentinel2_l2a is not None
+    assert s2_out.shape[:4] == (full.sentinel2_l2a.shape[0], PX // PS, PX // PS, T)

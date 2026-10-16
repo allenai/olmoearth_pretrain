@@ -48,7 +48,7 @@ from olmoearth_pretrain.nn.joint_latent import (
     token_mix_attention_kwargs,
 )
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
-from olmoearth_pretrain.nn.slot_merge import SlotMergeConfig
+from olmoearth_pretrain.nn.slot_merge import NarrowStage, SlotMergeConfig
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
 
@@ -2639,6 +2639,8 @@ class Encoder(FlexiVitBase):
 
         self.slot_merge_after: int | None = None
         self.slot_merge = None
+        self.narrow_stage: NarrowStage | None = None
+        self.narrow_up: nn.Linear | None = None
         if slot_merge_config is not None:
             slot_merge_config.validate(depth)
             if perceiver_config is None or not isinstance(
@@ -2650,7 +2652,28 @@ class Encoder(FlexiVitBase):
                     "slot merge needs the padded (non-flash) path without registers"
                 )
             self.slot_merge_after = slot_merge_config.merge_after
-            self.slot_merge = slot_merge_config.build(embedding_size)
+            narrow_dim = slot_merge_config.narrow_dim
+            if slot_merge_config.narrow_depth > 0:
+                assert narrow_dim is not None
+                self.narrow_stage = NarrowStage(
+                    embedding_size,
+                    narrow_dim,
+                    slot_merge_config.narrow_depth,
+                    mlp_ratio=mlp_ratio,
+                    qkv_bias=True,
+                    qk_norm=qk_norm,
+                    norm_layer=nn.LayerNorm,
+                    drop_path=drop_path,
+                    position_encoding=self.position_encoding,
+                    rope_base=self.rope_base,
+                    rope_mixed_base=self.rope_mixed_base,
+                    temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                    rope_temporal_base=self.rope_temporal_base,
+                )
+                self.narrow_up = nn.Linear(narrow_dim, embedding_size)
+                self.slot_merge = slot_merge_config.build(narrow_dim)
+            else:
+                self.slot_merge = slot_merge_config.build(embedding_size)
 
         self.perceiver_config = perceiver_config
         self.use_perceiver = perceiver_config is not None
@@ -2880,9 +2903,25 @@ class Encoder(FlexiVitBase):
             if new_mask is not None
             else (mask == MaskValue.ONLINE_ENCODER.value)
         )
-        merged, merged_positions, merged_valid, unmerge = self.slot_merge(
-            tokens, positions, valid, cell_ids[..., 0], modality_ids[..., 0]
-        )
+        if self.narrow_stage is not None:
+            # Narrow within-cell stage, merge at the narrow width, back up to the
+            # encoder width plus the slot-pooled encoder-width input (a skip).
+            assert self.narrow_up is not None
+            narrow = self.narrow_stage(tokens, positions, valid, cell_ids[..., 0])
+            merged, merged_positions, merged_valid, unmerge, skip = self.slot_merge(
+                narrow,
+                positions,
+                valid,
+                cell_ids[..., 0],
+                modality_ids[..., 0],
+                extra=tokens,
+            )
+            assert skip is not None
+            merged = self.narrow_up(merged).to(skip.dtype) + skip
+        else:
+            merged, merged_positions, merged_valid, unmerge, _ = self.slot_merge(
+                tokens, positions, valid, cell_ids[..., 0], modality_ids[..., 0]
+            )
         attn_mask = None if bool(merged_valid.all()) else merged_valid
         return merged, merged_positions, attn_mask, merged_valid, unmerge
 
@@ -3112,6 +3151,17 @@ class Encoder(FlexiVitBase):
             if positions is not None:
                 positions = self.add_register_positions(positions)
 
+        if self.narrow_stage is not None:
+            # merge_after == 0: narrow stage + merge before the encoder-width blocks.
+            (
+                tokens,
+                positions,
+                attn_mask,
+                merged_valid,
+                slot_unmerge,
+            ) = self._apply_slot_merge(
+                tokens, positions, new_mask, mask, cell_ids, modality_ids
+            )
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
             # Skip the zeroth block because we want to use the exited tokens that don't have encodings as this allows trivial solution of predicting the shared encodings
