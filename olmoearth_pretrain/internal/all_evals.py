@@ -591,7 +591,14 @@ EVAL_TASKS = {
     ),
     # AEF-style single-labeled-center-pixel S2 timeseries datasets, cropped to
     # 32x32 and ingested via the registry. Modeled as segmentation over
-    # label_raster (nodata=255 elsewhere) -> linear probe, overall accuracy.
+    # label_raster (nodata=255 elsewhere) -> linear probe.
+    # Primary metric (v1.3 eval sweep v2, 2026-10-16): the probe trains on a small,
+    # roughly class-capped split and is tested at natural class frequencies, so
+    # overall accuracy rewards leaning on the majority class -- on descals, africa
+    # and ethiopia an always-majority predictor beats every checkpoint (favyen's
+    # eval report card). Prior-invariant metrics instead: macro one-vs-rest AUROC
+    # where test is dominated by one class (descals, africa, ethiopia), balanced
+    # accuracy (macro_acc) on the many-class sets.
     "africa_crop_mask": DownstreamTaskConfig(
         dataset="africa_crop_mask",
         embedding_batch_size=32,
@@ -605,7 +612,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.AUROC,
     ),
     "canada_crops_coarse": DownstreamTaskConfig(
         dataset="canada_crops_coarse",
@@ -620,7 +627,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.MACRO_ACC,
     ),
     "canada_crops_fine": DownstreamTaskConfig(
         dataset="canada_crops_fine",
@@ -635,7 +642,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.MACRO_ACC,
     ),
     "descals": DownstreamTaskConfig(
         dataset="descals",
@@ -650,7 +657,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.AUROC,
     ),
     "ethiopia_crops": DownstreamTaskConfig(
         dataset="ethiopia_crops",
@@ -665,7 +672,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.AUROC,
     ),
     "glance": DownstreamTaskConfig(
         dataset="glance",
@@ -680,7 +687,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.MACRO_ACC,
     ),
     "lcmap_lu": DownstreamTaskConfig(
         dataset="lcmap_lu",
@@ -695,7 +702,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.MACRO_ACC,
     ),
     "us_trees": DownstreamTaskConfig(
         dataset="us_trees",
@@ -710,7 +717,7 @@ EVAL_TASKS = {
         input_modalities=[Modality.SENTINEL2_L2A.name],
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
-        primary_metric=EvalMetric.OVERALL_ACC,
+        primary_metric=EvalMetric.MACRO_ACC,
     ),
     "surface_fuels": DownstreamTaskConfig(
         dataset="surface_fuels",
@@ -784,7 +791,11 @@ EVAL_TASKS = {
         probe_batch_size=8,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
+        # The stored S1 is GRD amplitude DN (VV ~43 over open water), not
+        # calibrated sigma0: after the loader's dB conversion it sits ~30 dB
+        # above the pretraining S1 distribution, so normalize with the
+        # dataset's own stats (v1.3 eval sweep v2, 2026-10-16).
+        norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),
@@ -799,7 +810,11 @@ EVAL_TASKS = {
         probe_batch_size=8,
         num_workers=8,
         pooling_type=PoolingType.MEAN,
-        norm_stats_from_pretrained=True,
+        # The stored S1 is GRD amplitude DN (VV ~43 over open water), not
+        # calibrated sigma0: after the loader's dB conversion it sits ~30 dB
+        # above the pretraining S1 distribution, so normalize with the
+        # dataset's own stats (v1.3 eval sweep v2, 2026-10-16).
+        norm_stats_from_pretrained=False,
         norm_method=NormMethod.NORM_NO_CLIP_2_STD,
         probe_lr=0.01,
         eval_interval=Duration.epochs(10),

@@ -74,6 +74,7 @@ from olmoearth_pretrain.train.callbacks import (
 )
 from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     CHECKPOINT_STEP_METRIC,
+    DownstreamEvaluator,
     DownstreamEvaluatorCallback,
     define_checkpoint_step_metrics,
     eval_result_log_dict,
@@ -117,6 +118,36 @@ def load_checkpoint_weights(step_path: str, model: torch.nn.Module) -> None:
     converter = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(converter)
     converter._load_weights(Path(step_path), model)
+
+
+def dump_probe_inputs(evaluator: DownstreamEvaluator, path: str) -> Any:
+    """Make ``evaluator`` save its probe inputs to ``path`` before probing.
+
+    Wraps ``evaluator.eval_function`` so the embeddings (float16) and labels of
+    every split are written to ``path`` (a ``torch.save`` dict) exactly as the
+    probe receives them. Diagnostics only: the probe itself is unchanged. Returns
+    the original function so the caller can restore it.
+    """
+    inner = evaluator.eval_function
+
+    def dumping(**kwargs: Any) -> Any:
+        if get_rank() == 0:
+            payload = {}
+            for key, value in kwargs.items():
+                if not key.endswith(("_embeddings", "_labels")) or value is None:
+                    continue
+                value = value.detach().cpu()
+                if key.endswith("_embeddings") and value.is_floating_point():
+                    value = value.half()
+                payload[key] = value
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            torch.save(payload, path + ".tmp")
+            os.replace(path + ".tmp", path)
+            logger.info(f"  Dumped probe inputs to {path}")
+        return inner(**kwargs)
+
+    evaluator.eval_function = dumping
+    return inner
 
 
 def evaluate_checkpoints(
@@ -176,6 +207,10 @@ def evaluate_checkpoints(
     # {dir}/step{N}/{task}.json, and tasks that already have one are skipped, so a
     # preempted or relaunched job only redoes the task it was on.
     results_dir = os.environ.get("SWEEP_RESULTS_DIR")
+    # Diagnostics: with SWEEP_DUMP_DIR set, the probe inputs (embeddings + labels)
+    # of the tasks in SWEEP_DUMP_TASKS are saved to {dir}/step{N}/{task}.pt.
+    dump_dir = os.environ.get("SWEEP_DUMP_DIR")
+    dump_tasks = set(filter(None, os.environ.get("SWEEP_DUMP_TASKS", "").split(",")))
 
     for step_num, step_path in checkpoints:
         logger.info(f"=== Evaluating checkpoint step {step_num}: {step_path} ===")
@@ -205,8 +240,20 @@ def evaluate_checkpoints(
                     )
                     continue
 
+            restore = None
+            if dump_dir is not None and evaluator.evaluation_name in dump_tasks:
+                restore = dump_probe_inputs(
+                    evaluator,
+                    os.path.join(
+                        dump_dir, f"step{step_num}", f"{evaluator.evaluation_name}.pt"
+                    ),
+                )
             start_time = time.monotonic()
-            result = evaluator.val()
+            try:
+                result = evaluator.val()
+            finally:
+                if restore is not None:
+                    evaluator.eval_function = restore
             eval_time = time.monotonic() - start_time
 
             val_result = result.val_result
