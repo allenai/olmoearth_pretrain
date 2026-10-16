@@ -1,8 +1,8 @@
 """E5 arm C: arm B plus a second date-draw per sample and an instance-contrastive term.
 
 Arm B (``e5_allcap_arm_b.py``: ``random_clear`` with tau = ``ARM_B_CLOUD_TAU``, real
-capture dates, 12 slots, S2 + S1, no Landsat, the ``rc_ld1_pixtgt_pix512`` recipe, 60k
-steps; see ``e5_allcap_common.py``) with ONE change: every sample yields TWO
+capture dates, 12 slots, S2 + S1, no Landsat, the ``rc_ld1_pixtgt_pix512`` recipe, the E5
+schedule (30k steps, 4k warmup); everything inherited from ``e5_allcap_common.py``) with ONE change: every sample yields TWO
 independent draws of its captures (views a and b) from one H5 read, sharing the shape
 (patch size, grid, number of timesteps), the spatial crop and the static/decode-only
 maps. Each view gets the RC's own pixel-target latent-MIM loss (plus supervision heads
@@ -12,7 +12,8 @@ embeddings (``TwoViewLatentMIMTrainModule``). The question: does TESSERA-style
 invariance across date subsets of the same pixel-year help?
 
 Cost: two forward/backward passes per sample, so ~2x arm B's per-step compute and
-activation memory at the same batch size (512) and step count (60k).
+activation memory at the same batch size (512) and step count. Each sample is still read
+and decoded only once, so the loader cost (the bottleneck) is the same as arm B's.
 
 Run name ``agent-gandalf-e5-armC-20261016`` (W&B ``eai-ai2/20261016_e5_allcap_ab``).
 """
