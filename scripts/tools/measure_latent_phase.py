@@ -150,7 +150,7 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--num_samples", type=int, default=400)
     parser.add_argument("--hw_p", type=int, default=24)
-    parser.add_argument("--token_budget", type=int, default=20000)
+    parser.add_argument("--token_budget", type=int, default=60000)
     parser.add_argument("--patch_size", type=int, default=2)
     args = parser.parse_args()
     device = torch.device("cuda")
@@ -176,7 +176,7 @@ def main() -> None:
                 token_budget=args.token_budget,
             )
         ]
-        samples.append(sample.as_dict(ignore_nones=True))
+        samples.append(sample.as_dict())
     logger.info("Loaded %d crops of %d px", len(samples), args.hw_p * args.patch_size)
 
     results: dict = {}
