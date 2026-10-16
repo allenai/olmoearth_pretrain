@@ -15,7 +15,6 @@ from olmo_core.train.common import ReduceType
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
 from olmoearth_pretrain.nn.pixel_targets import (
     PooledPixelQueries,
@@ -345,14 +344,14 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
-    ) -> tuple[
-        torch.Tensor,
-        TokensAndMasks,
-        TokensAndMasks,
-        TokensAndMasks,
-        dict[str, Any] | None,
-    ]:
-        """Run a forward pass."""
+        return_pooled: bool = False,
+    ) -> tuple[Any, ...]:
+        """Run a forward pass.
+
+        Returns ``(loss, latent, decoded, target_output, extra_metrics)``, plus the
+        model's ``latent_projected_and_pooled`` (the instance embedding a contrastive
+        loss reads) as a sixth element when ``return_pooled``.
+        """
         # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
         # the pixel, so the standard path is already pixel-resolution.
         pixel_offsets: torch.Tensor | dict[str, torch.Tensor] | None = None
@@ -385,7 +384,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             (
                 latent,
                 decoded,
-                _,
+                latent_projected_and_pooled,
                 reconstructed,
                 extra_metrics,
                 supervision_preds,
@@ -464,4 +463,13 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         extra_metrics = {}
                     extra_metrics.update(distill_metrics)
 
+            if return_pooled:
+                return (
+                    loss,
+                    latent,
+                    decoded,
+                    target_output,
+                    extra_metrics,
+                    latent_projected_and_pooled,
+                )
             return loss, latent, decoded, target_output, extra_metrics
