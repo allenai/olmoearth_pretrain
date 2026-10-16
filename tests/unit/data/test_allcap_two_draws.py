@@ -459,3 +459,34 @@ def test_two_draws_share_window_start(
         else:
             assert start_b == min(valid_b, key=lambda s: (abs(s - start_a), s))
     assert n_checked >= 1
+
+
+def test_collator_masks_differ_between_views(allcap_dir: tuple[UPath, dict]) -> None:
+    """The two views are masked independently (as in v1.2), not with one shared mask."""
+    d, _ = allcap_dir
+    np.random.seed(0)
+    torch.manual_seed(0)
+    _, a, b = _pair_batch(d)
+    ma, mb = a.sentinel2_l2a_mask, b.sentinel2_l2a_mask
+    assert ma.shape == mb.shape
+    assert not torch.equal(ma, mb)
+
+
+def test_contrastive_diagnostics_values() -> None:
+    """Diagnostics: identical views give pos_cos 1 and top1 1; raw loss is unweighted."""
+    from types import SimpleNamespace
+
+    from olmoearth_pretrain.train.train_module.two_view_latent_mim import (
+        TwoViewLatentMIMTrainModule,
+    )
+
+    stub = SimpleNamespace(device="cpu", contrastive_loss=SimpleNamespace(tau=0.1))
+    torch.manual_seed(0)
+    z = torch.randn(8, 16)
+    out = TwoViewLatentMIMTrainModule._contrastive_diagnostics(stub, z, z.clone())
+    assert torch.isclose(out["pos_cos"], torch.tensor(1.0), atol=1e-5)
+    assert out["top1"] == 1.0
+    assert out["neg_cos"] < 0.5
+    za = torch.nn.functional.normalize(z, dim=-1)
+    ref = torch.nn.functional.cross_entropy(za @ za.T / 0.1, torch.arange(8))
+    assert torch.isclose(out["raw"], ref, atol=1e-5)

@@ -90,12 +90,17 @@ def build_train_module_config(
 # Arm C does ~2x arm B's per-step compute (two forward/backward passes), so keep a
 # permanent checkpoint every 10k (not 20k): C@30k is the compute-matched point for B@60k.
 ARM_C_PERMANENT_SAVE_INTERVAL = 10_000
+# Filler job (preemptible): keep a resumable "latest" every 1k steps (~30 min), not 3k.
+ARM_C_EPHEMERAL_SAVE_INTERVAL = 1_000
 
 
 def build_trainer_config(common: CommonComponents):
-    """E5 trainer (60k steps, no in-loop evals) with permanent saves every 10k."""
+    """E5 trainer (60k steps, no in-loop evals); permanent saves every 10k, latest every 1k."""
     config = _e5_build_trainer_config(common)
     config.callbacks["checkpointer"].save_interval = ARM_C_PERMANENT_SAVE_INTERVAL
+    config.callbacks[
+        "checkpointer"
+    ].ephemeral_save_interval = ARM_C_EPHEMERAL_SAVE_INTERVAL
     return config
 
 

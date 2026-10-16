@@ -17,6 +17,7 @@ from logging import getLogger
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from olmo_core.distributed.utils import get_local_tensor
 from olmo_core.train.common import ReduceType
 
@@ -69,6 +70,26 @@ class TwoViewLatentMIMTrainModule(LatentMIMTrainModule):
             contrastive_config.build() if contrastive_config is not None else None
         )
 
+    @torch.no_grad()
+    def _contrastive_diagnostics(
+        self, pooled_a: torch.Tensor, pooled_b: torch.Tensor
+    ) -> dict[str, torch.Tensor]:
+        """Raw InfoNCE, mean positive/negative cosine and top-1 retrieval (fp32)."""
+        with torch.autocast(torch.device(self.device).type, enabled=False):
+            za = F.normalize(pooled_a.detach().float(), dim=-1)
+            zb = F.normalize(pooled_b.detach().float(), dim=-1)
+            sim = za @ zb.T
+            n = sim.shape[0]
+            eye = torch.eye(n, dtype=torch.bool, device=sim.device)
+            tau = float(getattr(self.contrastive_loss, "tau", 0.1))
+            labels = torch.arange(n, device=sim.device)
+            return {
+                "raw": F.cross_entropy(sim / tau, labels),
+                "pos_cos": sim[eye].mean(),
+                "neg_cos": sim[~eye].mean() if n > 1 else sim.new_zeros(()),
+                "top1": (sim.argmax(dim=1) == labels).float().mean(),
+            }
+
     def train_batch(
         self,
         batch: tuple[int, MaskedOlmoEarthSample, MaskedOlmoEarthSample],
@@ -88,6 +109,13 @@ class TwoViewLatentMIMTrainModule(LatentMIMTrainModule):
         total_batch_con = torch.zeros([], device=self.device)
         total_batch_loss = torch.zeros([], device=self.device)
         total_nonfinite = torch.zeros([], device=self.device)
+        # Diagnostics (no grad) so "learned invariance" can be told from "solved by
+        # easy negatives": raw (unweighted) InfoNCE, mean positive / negative cosine,
+        # and top-1 view-a -> view-b retrieval accuracy within the microbatch.
+        diag = {
+            k: torch.zeros([], device=self.device)
+            for k in ("raw", "pos_cos", "neg_cos", "top1")
+        }
         accumulated_extra_metrics: dict[str, Any] = {}
         extra_metric_counts: dict[str, int] = {}
 
@@ -148,6 +176,10 @@ class TwoViewLatentMIMTrainModule(LatentMIMTrainModule):
                     total_batch_con += (
                         get_local_tensor(contrastive.detach()) / num_microbatches
                     )
+                    for k, v in self._contrastive_diagnostics(
+                        pooled[0], pooled[1]
+                    ).items():
+                        diag[k] += get_local_tensor(v) / num_microbatches
 
                 loss = loss / num_microbatches
                 total_batch_loss += get_local_tensor(loss.detach())
@@ -165,6 +197,8 @@ class TwoViewLatentMIMTrainModule(LatentMIMTrainModule):
             self.trainer.record_metric(
                 "train/contrastive", total_batch_con, ReduceType.mean
             )
+            for k, v in diag.items():
+                self.trainer.record_metric(f"train/contrastive_{k}", v, ReduceType.mean)
         self.trainer.record_metric(
             "train/nonfinite_loss_microbatches", total_nonfinite, ReduceType.sum
         )
