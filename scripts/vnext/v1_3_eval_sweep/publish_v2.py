@@ -10,7 +10,8 @@ Canonical result for (task, step):
 The canonical files are written to ``RESULTS_DIR_V2/canonical/step{N}/{task}.json``
 (metrics only) with ``canonical/MANIFEST.json`` recording each file's source, then
 logged to the single W&B run ``v13_eval_sweep_v2`` (x-axis ``checkpoint_step``),
-which supersedes v1's run hviuiw30. This script is the run's only writer.
+which supersedes v1's run hviuiw30. This script is the run's only writer; re-run it as
+results come in (only results not in ``_publish/published.txt`` are logged).
 
     python scripts/vnext/v1_3_eval_sweep/publish_v2.py [--no-wandb]
 """
@@ -60,6 +61,18 @@ PRIMARY_V2 = {
 }
 
 
+# Tasks whose v2 fix changes their inputs or probe: only v2 re-runs count (a v1 result
+# at a checkpoint not yet re-run is pre-fix data, so it is left out, not merged).
+V2_ONLY = {
+    "oil_spill_detection",
+    "lfmc_woody_3k_s1_s2",
+    "small_sentinel1_vessel_length",
+    "small_sentinel1_vessel_type",
+    "lfmc_woody_3k",
+    "canada_wildfire_sat_eval_split",
+}
+
+
 def relabel(task: str, record: dict) -> dict:
     """Re-select the primary metric of a v1 record per PRIMARY_V2."""
     old, new = PRIMARY_V2[task]
@@ -81,6 +94,8 @@ def canonical_records() -> tuple[dict, dict]:
         for path in sorted(root.glob("step*/*.json")):
             step = int(path.parent.name[len("step") :])
             task = path.name[: -len(".json")]
+            if tag == "v1" and task in V2_ONLY:
+                continue
             record = json.loads(path.read_text())
             source = tag
             if tag == "v1" and task in PRIMARY_V2:
@@ -98,6 +113,9 @@ def main() -> None:
 
     records, sources = canonical_records()
     out = Path(RESULTS_DIR_V2) / "canonical"
+    for stale in out.glob("step*/*.json"):  # e.g. a v1 result superseded by V2_ONLY
+        if (int(stale.parent.name[len("step") :]), stale.stem) not in records:
+            stale.unlink()
     for (step, task), record in records.items():
         path = out / f"step{step}" / f"{task}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,44 +134,46 @@ def main() -> None:
 
     state = Path(RESULTS_DIR_V2) / "_publish"
     state.mkdir(exist_ok=True)
+    ledger = state / "published.txt"
+    published = set(ledger.read_text().split()) if ledger.exists() else set()
+    todo = {
+        k: rec for k, rec in records.items() if f"step{k[0]}/{k[1]}" not in published
+    }
+    if not todo:
+        print("nothing new to publish")
+        return
     id_file = state / "wandb_run_id.txt"
-    if id_file.exists():
-        raise SystemExit(
-            f"{id_file} exists: the v2 run was already published; delete the run "
-            "and this file to republish from scratch"
-        )
-    run_id = wandb.util.generate_id()
+    run_id = (
+        id_file.read_text().strip() if id_file.exists() else wandb.util.generate_id()
+    )
     id_file.write_text(run_id + "\n")
     run = wandb.init(
         entity=ENTITY,
         project=PROJECT,
         name=RUN_NAME,
         id=run_id,
+        resume="allow",
         notes=(
             "v1.3 eval sweep v2: all 98 evals x the v1 checkpoint grid, with the v2 "
             "fixes (branch joer/v1_3-eval-sweep-v2). Supersedes hviuiw30. "
             "Canonical files: " + str(out)
         ),
-        config={
-            "sources": dict(counts),
-            "results_v1": RESULTS_DIR,
-            "results_v2": RESULTS_DIR_V2,
-        },
+        config={"results_v1": RESULTS_DIR, "results_v2": RESULTS_DIR_V2},
     )
     wandb.define_metric(CHECKPOINT_STEP_METRIC)
     for prefix in EVAL_METRIC_PREFIXES:
         wandb.define_metric(prefix, step_metric=CHECKPOINT_STEP_METRIC)
     by_step = collections.defaultdict(dict)
-    for (step, _), record in records.items():
+    for (step, _), record in todo.items():
         by_step[step].update(record)
     for step in sorted(by_step):
         wandb.log(by_step[step])
+    run.summary["sources"] = dict(counts)
     url = run.url
-    run.finish()
-    (state / "published.txt").write_text(
-        "\n".join(sorted(f"step{s}/{t}" for s, t in records)) + "\n"
-    )
-    print(f"published {len(records)} results over {len(by_step)} checkpoints to {url}")
+    run.finish()  # flushes the upload; only then are the results marked published
+    with ledger.open("a") as f:
+        f.writelines(f"step{s_}/{t}\n" for s_, t in sorted(todo))
+    print(f"published {len(todo)} results over {len(by_step)} checkpoints to {url}")
 
 
 if __name__ == "__main__":

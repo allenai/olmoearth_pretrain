@@ -190,6 +190,31 @@ for _catalog in _CATALOGS:
     )
 
 
+# v2 probe fixes, diagnosed by re-running the harness probe over seeds x LRs on the
+# probe inputs dumped at steps 0/20k/120k/667200 (SWEEP_DUMP_DIR; analysis in
+# /root/repos/v13_eval_audit/diag/). Set here, not in all_evals.py, because the right
+# LR depends on the embedding read.
+PROBE_FIXES = {
+    # The catalog LR (5e-5) starves the per-pixel regression probe on the 128-d
+    # student: test R2 0.18 at 667k, the same as random init. With 1e-3 (best on val
+    # at 3 of 4 checkpoints): 0.24 random init, 0.39 at 20k, 0.28 at 667k. On the
+    # 768-d v1.2 embedding 5e-5..1e-4 is best (favyen, 2026-10-15), so keep main's.
+    "lfmc_woody_3k": {"probe_lr": 1e-3},
+    "lfmc_woody_3k_s1_s2": {"probe_lr": 1e-3},
+    # Class-1 F1 on 35 val / 36 test windows is noisy, and v1's step-0 draw was high
+    # (0.33 vs 0.22 +- 0.03 over 5 seeds). mIoU with probe_lr 0.03 has 5-seed sd
+    # <= 0.003 and separates random init (0.48) from trained (0.51-0.57); this is
+    # also what the 2026-06 noise study recommended (memory project_eval_noise_tuning).
+    "canada_wildfire_sat_eval_split": {
+        "probe_lr": 0.03,
+        "primary_metric": EvalMetric.MIOU,
+        "primary_metric_class": None,
+    },
+}
+for _name, _fix in PROBE_FIXES.items():
+    SWEEP_TASKS[_name] = replace(SWEEP_TASKS[_name], **_fix)
+
+
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Carry SWEEP_TASKS for checkpoint_sweep_evals.py to read; nothing else is used."""
     return TrainerConfig(save_folder=common.save_folder).with_callback(

@@ -45,7 +45,8 @@ RERUN = {
     # Stored S1 is GRD amplitude DN, not sigma0: dataset-stats normalization.
     "small_sentinel1_vessel_length": (LIGHT, 120),
     "small_sentinel1_vessel_type": (LIGHT, 120),
-    # Probe configs fixed after the v2 diagnostics (sweep.py).
+    # Probe configs fixed after the v2 diagnostics (sweep.py PROBE_FIXES); the LFMC
+    # S1+S2 task above gets both its dB fix and the LR fix.
     "lfmc_woody_3k": (LIGHT, 400),
     "canada_wildfire_sat_eval_split": (LIGHT, 120),
 }
@@ -56,7 +57,7 @@ TASK_GROUPS = {
         "small_sentinel1_vessel_length",
         "small_sentinel1_vessel_type",
     ],
-    "probe": ["lfmc_woody_3k", "canada_wildfire_sat_eval_split"],
+    "probe": ["lfmc_woody_3k", "lfmc_woody_3k_s1_s2", "canada_wildfire_sat_eval_split"],
 }
 RUN_PREFIX = "agent-joer-v13evals2"
 # Diagnostics runs (results outside RESULTS_DIR_V2) may use any sweep task.
