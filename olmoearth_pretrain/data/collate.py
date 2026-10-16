@@ -157,6 +157,7 @@ def collate_single_masked_batched(
     masking_strategy: MaskingStrategy,
     uint8_masks: bool = False,
     max_decode_tokens: int | None = None,
+    drop_cloudy_s2_targets: bool = True,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -171,6 +172,8 @@ def collate_single_masked_batched(
         uint8_masks: Send masks as uint8 (restored to int64 by ``to_device``).
         max_decode_tokens: Optional cap on decoder tokens per sample (see
             ``_cap_decoder_tokens``).
+        drop_cloudy_s2_targets: With S2 cloud flags present, make cloudy S2
+            decoder targets MISSING (``_drop_cloudy_s2_targets``).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample).
@@ -186,7 +189,10 @@ def collate_single_masked_batched(
     masked_sample = _with_time_indices(
         masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
     )
-    masked_sample = _drop_cloudy_s2_targets(masked_sample, stacked_sample, patch_size)
+    if drop_cloudy_s2_targets:
+        masked_sample = _drop_cloudy_s2_targets(
+            masked_sample, stacked_sample, patch_size
+        )
     masked_sample = _cap_decoder_tokens(masked_sample, patch_size, max_decode_tokens)
     if uint8_masks:
         masked_sample = masked_sample.with_uint8_masks()

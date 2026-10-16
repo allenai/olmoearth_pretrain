@@ -151,6 +151,10 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.pin_memory = False
     config.uint8_masks = True
     config.max_decode_tokens = MAX_DECODE_TOKENS
+    # SCL is loaded for the cloud-masked composites only. Dropping cloudy S2 decode
+    # targets was a measured null on v1.3-era runs (2026-08-21) and would be a
+    # second difference from v1.3, so it stays off.
+    config.drop_cloudy_s2_targets = False
     return config
 
 
