@@ -211,10 +211,10 @@ def build_launch_config(
     if sweep_results_dir is not None:
         env_vars.append(BeakerEnvVar(name="SWEEP_RESULTS_DIR", value=sweep_results_dir))
     # ... and its diagnostics dump of probe inputs (checkpoint_sweep_evals.py).
-    for name in ("SWEEP_DUMP_DIR", "SWEEP_DUMP_TASKS"):
-        value = os.environ.get(name)
-        if value is not None:
-            env_vars.append(BeakerEnvVar(name=name, value=value))
+    for dump_var in ("SWEEP_DUMP_DIR", "SWEEP_DUMP_TASKS"):
+        dump_value = os.environ.get(dump_var)
+        if dump_value is not None:
+            env_vars.append(BeakerEnvVar(name=dump_var, value=dump_value))
     # Propagate the embedding-evals flag to the experiment if set
     embedding_evals = os.environ.get("EMBEDDING_EVALS")
     if embedding_evals is not None:
