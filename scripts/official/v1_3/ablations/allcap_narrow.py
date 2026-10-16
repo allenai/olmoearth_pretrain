@@ -9,7 +9,7 @@ encoder-width blocks and the 1-layer Perceiver. Built so every-capture inputs
 (100-300 tokens per cell) cost about what v1.3 costs on monthly ones.
 
 Data: joer's AllCaptures corpus (every S2 / S1 / Landsat C2 L2 capture over 360 days,
-per-modality timestamps, a 4500 real-token budget, random time-range lengths), and per
+per-modality timestamps, v1.3's 3072 real-token budget, random time-range lengths), and per
 rank batch a composite mode drawn from ``COMPOSITE_DAYS``: every capture, biweekly
 or monthly per-pixel medians (S2 over SCL-clear pixels).
 
@@ -68,12 +68,16 @@ ALLCAP_H5PY_DIR = (
     "cdl_landsat_l2_openstreetmap_raster_sentinel1_sentinel2_l2a_sentinel2_scl_"
     "srtm_worldcereal_worldcover_wri_canopy_height_map/395660"
 )
-# Real-token budget per sample. joer's runs use 9000; at microbatch 32 that OOMed
-# (the patch embedding, composite encodings and frozen target run over every input
-# token at width 768). 4500 x 32 ~= v1.3's 64 x ~2000 input tokens per microbatch,
-# so a step costs about what v1.3's does (Gabi, 2026-10-16). Time-range menu is
-# joer's (the corpus spans 360 days, so the last three entries take the whole span).
-TOKEN_BUDGET = 4500
+# Real-token budget per sample = v1.3's (3072). joer's runs use 9000; at microbatch 32
+# that OOMed (the patch embedding, composite encodings and frozen target run over every
+# input token at width 768), and 4500 OOMed on one rank of eight at step 33 (Gabi,
+# 2026-10-16). Time-range menu is joer's (the corpus spans 360 days, so the last three
+# entries take the whole span).
+TOKEN_BUDGET = 3072
+# v1.3's training length in steps: 300 epochs of v1.3's corpus. AllCaptures is ~35% the
+# size, so v1.2's Duration.epochs(300) would stop at 231,600 steps; pinning the steps
+# keeps the samples seen (and the cosine schedule) the same as v1.3.
+MAX_STEPS = 667_200
 TIME_RANGE_DAYS = [7.0, 30.0, 90.0, 180.0, 365.0, 730.0, 1825.0]
 # Composite bin length per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly.
 COMPOSITE_DAYS = [0.0, 14.0, 30.0]
@@ -212,6 +216,7 @@ def allcap_eval_tasks(catalog: dict) -> dict:
 def build_allcap_trainer_config(common: CommonComponents, module_path: str):
     """v1.2 trainer, this eval set routed through Beaker, own W&B project."""
     trainer_config = _v1_2_build_trainer_config(common)
+    trainer_config.max_duration = Duration.steps(MAX_STEPS)
     catalog = trainer_config.callbacks["downstream_evaluator"].tasks
     trainer_config = route_loop_evals_through_beaker(
         trainer_config, module_path, allcap_eval_tasks(catalog)
