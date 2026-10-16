@@ -43,6 +43,7 @@ from rc_ld1_pix512 import build_model_config as _rc_ld1_model_config  # noqa: E4
 from rc_pixtgt_pix512 import (  # noqa: E402
     build_train_module_config as _pixtgt_train_module_config,
 )
+from v1_2.base import S2_SINGLE_BANDSET  # noqa: E402
 from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
@@ -55,6 +56,7 @@ from olmoearth_pretrain.internal.experiment import (  # noqa: E402
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 from olmoearth_pretrain.nn.slot_merge import SlotMergeConfig  # noqa: E402
+from olmoearth_pretrain.nn.tokenization import TokenizationConfig  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +94,10 @@ def build_common_components(
         Modality.LANDSAT_L2.name if m == Modality.LANDSAT.name else m
         for m in config.training_modalities
     ]
+    # landsat_l2 is one band set already; only S2 needs the single-band-set override.
+    config.tokenization_config = TokenizationConfig(
+        overrides={Modality.SENTINEL2_L2A.name: S2_SINGLE_BANDSET}
+    )
     return config
 
 
@@ -100,6 +106,11 @@ def build_narrow_model_config(
 ) -> LatentMIMConfig:
     """rc_ld1_pixtgt_pix512's model with the narrow stage + capped slot merge."""
     config = _rc_ld1_model_config(common)
+    # v1.2's band-dropout list names Landsat L1; the corpus carries L2.
+    config.encoder_config.band_dropout_modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.LANDSAT_L2.name,
+    ]
     config.encoder_config.slot_merge_config = SlotMergeConfig(
         merge_after=0,
         ratio=SLOT_RATIO,
