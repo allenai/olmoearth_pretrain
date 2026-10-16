@@ -352,6 +352,73 @@ def test_s2_cloud_flags_follow_s2_captures(allcap_h5py_dir: UPath) -> None:
         assert "sentinel2_l2a_cloud" not in sample.modalities
 
 
+def test_sliced_read_matches_the_file(allcap_h5py_dir: UPath) -> None:
+    """A sliced read returns the file's values at the crop and kept captures.
+
+    Crop + time range + budget read only part of the file; values, dates and cloud
+    flags must match the file at that crop and those captures.
+    """
+    from olmoearth_pretrain.data.dataset import CLOUD_SCL_CLASSES
+
+    dataset = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    np.random.seed(1)
+    for trial in range(12):
+        idx = trial % 2
+        _, sample = dataset[
+            GetItemArgs(
+                idx=idx,
+                patch_size=2,
+                sampled_hw_p=3,
+                token_budget=200,
+                time_range_days=90.0,
+                tokenization_config=S2_SINGLE,
+                budget_exclude_modalities=frozenset({"srtm"}),
+            )
+        ]
+        union = _field(sample, "timestamps")
+        with h5py.File(allcap_h5py_dir / f"sample_{idx}.h5", "r") as f:
+            s2 = _field(sample, "sentinel2_l2a")
+            # Locate the crop from the first S2 capture.
+            file_s2 = f["sentinel2_l2a"][()].astype(np.float32)
+            offsets = [
+                (h, w)
+                for h in range(16 - 6 + 1)
+                for w in range(16 - 6 + 1)
+                if any(
+                    (file_s2[h : h + 6, w : w + 6, t] == s2[:, :, 0]).all()
+                    for t in range(file_s2.shape[2])
+                )
+            ]
+            assert len(offsets) == 1
+            h, w = offsets[0]
+            for name in TEMPORAL:
+                if name not in f:
+                    continue
+                data = _field(sample, name)
+                index = _field(sample, f"{name}_time_index")
+                file_data = f[name][()].astype(np.float32)[h : h + 6, w : w + 6]
+                file_ts = f[f"timestamps_{name}"][()]
+                for slot, step in enumerate(index):
+                    if step < 0:  # no capture in the run: one MISSING slot
+                        assert (data[:, :, slot] == MISSING_VALUE).all()
+                        continue
+                    rows = np.flatnonzero((file_ts == union[step]).all(axis=1))
+                    assert any(
+                        (file_data[:, :, r] == data[:, :, slot]).all() for r in rows
+                    )
+            scl = f["sentinel2_scl"][()][h : h + 6, w : w + 6, :, 0]
+            scl_ts = f["timestamps_sentinel2_scl"][()]
+            s2_index = _field(sample, "sentinel2_l2a_time_index")
+            if (s2_index < 0).any():
+                continue
+            s2_dates = union[s2_index]
+            rows = [np.flatnonzero((scl_ts == d).all(axis=1))[0] for d in s2_dates]
+            expected = np.isin(scl[:, :, rows], CLOUD_SCL_CLASSES).astype(np.uint8)
+            np.testing.assert_array_equal(
+                _field(sample, "sentinel2_l2a_cloud"), expected
+            )
+
+
 def test_s2_cloud_flags_leave_sampling_unchanged(allcap_h5py_dir: UPath) -> None:
     """Loading cloud flags draws the same crops, ranges and captures (same batches)."""
     plain = _dataset(allcap_h5py_dir)

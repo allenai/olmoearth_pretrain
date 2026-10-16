@@ -1053,32 +1053,6 @@ class OlmoEarthDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
-    def read_h5_file_per_modality_timestamps(
-        self, h5_file_path: UPath
-    ) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
-        """Read the training modalities and each multitemporal one's own timestamps.
-
-        Returns ``(data, timestamps)``: modality -> raw array as stored, and
-        multitemporal modality -> ``(T_m, 3)`` timestamps. Modalities absent from
-        the file are absent from both dicts. With ``load_s2_cloud_mask`` both also
-        hold ``S2_SCL_LAYER`` when the file has it.
-        """
-        h5_file_path = self._local_h5_path(h5_file_path)
-        data: dict[str, np.ndarray] = {}
-        timestamps: dict[str, np.ndarray] = {}
-        with h5_file_path.open("rb") as f:
-            with h5py.File(f, "r") as h5file:
-                for modality in self.training_modalities:
-                    if modality not in h5file:
-                        continue
-                    data[modality] = h5file[modality][()]
-                    if Modality.get(modality).is_multitemporal:
-                        timestamps[modality] = h5file[f"timestamps_{modality}"][()]
-                if self.load_s2_cloud_mask and S2_SCL_LAYER in h5file:
-                    data[S2_SCL_LAYER] = h5file[S2_SCL_LAYER][()]
-                    timestamps[S2_SCL_LAYER] = h5file[f"timestamps_{S2_SCL_LAYER}"][()]
-        return data, timestamps
-
     @staticmethod
     def _select_time_range(
         ordinals: dict[str, np.ndarray], time_range_days: float | None
@@ -1192,30 +1166,109 @@ class OlmoEarthDataset(Dataset):
                 self.dtype
             )
 
-        data, timestamps = self.read_h5_file_per_modality_timestamps(
-            self._get_h5_file_path(index)
-        )
-        # The scene classification is not a modality: keep it out of the
-        # timeline and the token budget.
-        scl = data.pop(S2_SCL_LAYER, None)
-        scl_timestamps = timestamps.pop(S2_SCL_LAYER, None)
         sampled_hw = args.sampled_hw_p * args.patch_size
-        tile_h, tile_w = next(
-            v.shape[:2] for m, v in data.items() if Modality.get(m).is_spatial
-        )
-        start_h = np.random.choice(tile_h - sampled_hw + 1)
-        start_w = np.random.choice(tile_w - sampled_hw + 1)
-        # Crop once, up front (spatial modalities and SCL), so compositing below
-        # only touches the sampled pixels.
-        crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
-        data = {
-            m: (v[crop] if Modality.get(m).is_spatial else v) for m, v in data.items()
-        }
-        if scl is not None:
-            scl = scl[crop]
 
-        ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
-        kept = self._select_time_range(ordinals, args.time_range_days)
+        def num_bandsets(modality: str) -> int:
+            if args.tokenization_config is not None:
+                return args.tokenization_config.get_num_bandsets(modality)
+            return Modality.get(modality).num_band_sets
+
+        def budget_run(
+            modalities: list[str], n_steps: int, step_index: dict[str, np.ndarray]
+        ) -> tuple[int, int]:
+            # Real tokens per union step; the run starts at a random step and extends
+            # forward while it fits the budget (always at least one step).
+            hw_p_sq = args.sampled_hw_p**2
+            step_tokens = np.zeros(n_steps, dtype=np.int64)
+            fixed_tokens = 0
+            for modality in modalities:
+                if modality in args.budget_exclude_modalities:
+                    continue
+                if modality in step_index:
+                    step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(
+                        modality
+                    )
+                else:
+                    fixed_tokens += hw_p_sq * num_bandsets(modality)
+            first, last = 0, n_steps - 1
+            if args.token_budget is not None and n_steps > 0:
+                first = last = int(np.random.randint(n_steps))
+                total = fixed_tokens + step_tokens[first]
+                while (
+                    last + 1 < n_steps
+                    and total + step_tokens[last + 1] <= args.token_budget
+                ):
+                    last += 1
+                    total += step_tokens[last]
+            return first, last
+
+        # Choose the crop, time range and (without composites) the budget run from
+        # the timestamps and shapes alone, then read only those pixels and captures:
+        # a whole every-capture tile is 30-60 MB, the sample a few MB.
+        h5_file_path = self._local_h5_path(self._get_h5_file_path(index))
+        with h5_file_path.open("rb") as f, h5py.File(f, "r") as h5file:
+            present = [m for m in self.training_modalities if m in h5file]
+            timestamps = {
+                m: h5file[f"timestamps_{m}"][()]
+                for m in present
+                if Modality.get(m).is_multitemporal
+            }
+            has_scl = self.load_s2_cloud_mask and S2_SCL_LAYER in h5file
+            tile_h, tile_w = next(
+                h5file[m].shape[:2] for m in present if Modality.get(m).is_spatial
+            )
+            start_h = np.random.choice(tile_h - sampled_hw + 1)
+            start_w = np.random.choice(tile_w - sampled_hw + 1)
+            crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
+            ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
+            kept = self._select_time_range(ordinals, args.time_range_days)
+            if not args.composite_days:
+                union_ts, step_index = build_union_timeline(
+                    {m: timestamps[m][kept[m]] for m in timestamps}
+                )
+                first_step, last_step = budget_run(present, len(union_ts), step_index)
+                kept = {
+                    m: kept[m][
+                        (step_index[m] >= first_step) & (step_index[m] <= last_step)
+                    ]
+                    if m in step_index
+                    else kept[m]
+                    for m in kept
+                }
+            data: dict[str, np.ndarray] = {}
+            for modality in present:
+                dataset = h5file[modality]
+                spatial = Modality.get(modality).is_spatial
+                if modality not in kept:
+                    data[modality] = dataset[crop] if spatial else dataset[()]
+                    continue
+                # The span from the first to the last kept capture: one hyperslab.
+                captures = kept[modality]
+                lo = int(captures.min()) if len(captures) else 0
+                hi = int(captures.max()) + 1 if len(captures) else 0
+                data[modality] = (
+                    dataset[(*crop, slice(lo, hi))] if spatial else dataset[lo:hi]
+                )
+                timestamps[modality] = timestamps[modality][lo:hi]
+                ordinals[modality] = ordinals[modality][lo:hi]
+                kept[modality] = captures - lo
+            scl = scl_timestamps = None
+            if has_scl:
+                # SCL captures within the read S2 span (dates match S2's).
+                scl_timestamps = h5file[f"timestamps_{S2_SCL_LAYER}"][()]
+                s2_ordinals = ordinals.get(Modality.SENTINEL2_L2A.name)
+                lo = hi = 0
+                if s2_ordinals is not None and len(s2_ordinals):
+                    scl_ordinals = timestamps_to_ordinals(scl_timestamps)
+                    within = np.flatnonzero(
+                        (scl_ordinals >= s2_ordinals.min())
+                        & (scl_ordinals <= s2_ordinals.max())
+                    )
+                    if len(within):
+                        lo, hi = int(within[0]), int(within[-1]) + 1
+                scl = h5file[S2_SCL_LAYER][(*crop, slice(lo, hi))]
+                scl_timestamps = scl_timestamps[lo:hi]
+
         if args.composite_days:
             data, timestamps, kept, s2_no_clear = self._composite(
                 data,
@@ -1231,32 +1284,11 @@ class OlmoEarthDataset(Dataset):
         union_ts, step_index = build_union_timeline(
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
-
-        def num_bandsets(modality: str) -> int:
-            if args.tokenization_config is not None:
-                return args.tokenization_config.get_num_bandsets(modality)
-            return Modality.get(modality).num_band_sets
-
-        hw_p_sq = args.sampled_hw_p**2
-        step_tokens = np.zeros(len(union_ts), dtype=np.int64)
-        fixed_tokens = 0
-        for modality in data:
-            if modality in args.budget_exclude_modalities:
-                continue
-            if modality in step_index:
-                step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(modality)
-            else:
-                fixed_tokens += hw_p_sq * num_bandsets(modality)
-        first_step, last_step = 0, len(union_ts) - 1
-        if args.token_budget is not None and len(union_ts) > 0:
-            first_step = last_step = int(np.random.randint(len(union_ts)))
-            total = fixed_tokens + step_tokens[first_step]
-            while (
-                last_step + 1 < len(union_ts)
-                and total + step_tokens[last_step + 1] <= args.token_budget
-            ):
-                last_step += 1
-                total += step_tokens[last_step]
+        if args.composite_days:
+            first_step, last_step = budget_run(list(data), len(union_ts), step_index)
+        else:
+            # The captures were already cut to the budget run before reading.
+            first_step, last_step = 0, len(union_ts) - 1
         sample_dict: dict[str, Any] = {
             "timestamps": union_ts[first_step : last_step + 1]
         }
