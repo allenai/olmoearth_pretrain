@@ -19,6 +19,9 @@ class PoolingType(StrEnum):
 
     MAX = "max"
     MEAN = "mean"
+    # Use the model's class-latent embedding (models that expose ``cls_token``
+    # in their forward output; instance-level tasks only).
+    CLS = "cls"
 
 
 def pool_spatially_and_concat_modalities(tokens_and_masks: TokensAndMasks) -> Tensor:

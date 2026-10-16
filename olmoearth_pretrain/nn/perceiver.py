@@ -1,0 +1,984 @@
+"""Perceiver-style latent-bottleneck encoder for OlmoEarth.
+
+Architecture (v0, designed against the v1.2 baseline):
+
+1. Tokens are produced exactly as in the v1.2 ``Encoder`` (FlexiViT patch
+   embeddings + composite channel/month encodings). Visible (ONLINE_ENCODER)
+   tokens are used only as cross-attention keys/values — they never
+   self-attend.
+2. A coarse grid of *anchored latents* (stride ``latent_stride_hw`` in space,
+   ``latent_stride_t`` in time) reads from the tokens via cross-attention.
+   Each latent carries a real (t, row, col) coordinate in the same
+   GSD-scaled/rope-scaled frame as the tokens, so RoPE applies to the
+   cross-attention (Q rotated by anchor coords, K by token coords) and to the
+   latent self-attention trunk.
+3. The latent trunk is the standard ``Block`` stack (``depth`` blocks);
+   cross-attention reads are interleaved at ``num_reads`` evenly spaced
+   layers.
+4. A dense read-out queries the latents once per (h, w, t) grid position and
+   produces a fused multi-modal dense map. This is the encoder's output
+   interface: it is broadcast to each modality's token layout so the rest of
+   the pipeline (loss, pooling, evals) is unchanged.
+
+Strict bottleneck: the dense read-out attends only to latents, never to raw
+tokens. Static (T=1) modalities are decoded from the first temporal plane,
+matching ``build_rope_positions``'s convention that a ``[B,H,W,1,bs,D]``
+modality sits at the day of timestep 0.
+
+The matching ``PerceiverPredictor`` is a per-location head: it takes the
+fused dense map (already broadcast per modality by the encoder), adds the
+modality/bandset channel and month encodings, and applies a small MLP stack —
+no attention. All information for decoding a masked token must therefore flow
+through the latent bottleneck into the dense map.
+"""
+
+import logging
+import math
+from dataclasses import dataclass
+from typing import Any
+
+import torch
+import torch.nn as nn
+from einops import repeat
+
+from olmoearth_pretrain.datatypes import TokensAndMasks
+from olmoearth_pretrain.nn.attention import Block, Mlp
+from olmoearth_pretrain.nn.encodings import (
+    PositionEncoding,
+    get_month_encoding_table,
+    timestamps_to_days,
+)
+from olmoearth_pretrain.nn.flexi_vit import (
+    BASE_GSD,
+    CompositeEncodings,
+    Encoder,
+    EncoderConfig,
+    Predictor,
+    PredictorBase,
+    PredictorConfig,
+    get_modalities_to_process,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class PerceiverEncoder(Encoder):
+    """Latent-bottleneck encoder: tokens are K/V only, compute runs on latents.
+
+    Subclasses ``Encoder`` so patch embedding, composite encodings, masking
+    removal, the frozen-target exit-at-0 path, and the ``forward`` contract
+    are all inherited unchanged; only ``apply_attn`` is replaced.
+    """
+
+    # The inherited ``self.blocks`` are the latent self-attention trunk.
+    cross_attn: bool = False
+
+    def __init__(
+        self,
+        *args: Any,
+        latent_stride_hw: int = 2,
+        latent_stride_t: int = 2,
+        num_reads: int = 2,
+        readout_depth: int = 2,
+        readout_skip_tokens: bool = False,
+        readout_spatial_only: bool = False,
+        num_class_latents: int = 0,
+        spawn_layer: int | None = None,
+        spawn_children: int = 8,
+        **kwargs: Any,
+    ) -> None:
+        """Initialize the PerceiverEncoder.
+
+        Args:
+            args: Positional args forwarded to ``Encoder``.
+            latent_stride_hw: Spatial stride of the latent anchor grid, in
+                patch-grid units. One latent per ``stride x stride`` spatial
+                cell.
+            latent_stride_t: Temporal stride of the latent anchor grid, in
+                timestep slots.
+            num_reads: Number of cross-attention reads from tokens into the
+                latents, spread evenly through the latent trunk.
+            readout_depth: Number of cross-attention blocks in the dense
+                read-out (queries -> latents).
+            readout_skip_tokens: If True, dense read-out queries attend to
+                the visible tokens in addition to the latents (a skip path
+                that relaxes the strict bottleneck to help dense
+                prediction). Masked tokens remain excluded, so there is no
+                leakage.
+            readout_spatial_only: If True, the dense read-out emits ONE
+                token per spatial location (h, w) instead of one per
+                (h, w, t): queries carry (t=0, row, col) coordinates (the
+                static-modality convention) and no month embedding, and the
+                resulting [B,H,W,1,D] map is broadcast across each
+                modality's timesteps. Timestep-specific decoding must then
+                come from the decoder's own temporal conditioning.
+            num_class_latents: Number of position-less learned class latents
+                prepended to the anchored latent set (zero RoPE coordinates,
+                the register-token convention). When > 0, the first class
+                latent's final state is exposed as ``cls_token`` and its
+                projection replaces the pooled instance embedding used by
+                the contrastive (InfoNCE) loss. It also stays in the dense
+                read-out's K/V, so the token-level loss keeps training it
+                even after the instance loss saturates.
+            spawn_layer: If set, just before latent block ``spawn_layer``
+                each anchored latent PREDICTS ``spawn_children`` new child
+                queries: a content vector plus a free (t, row, col)
+                coordinate. Child coordinates are ``parent_anchor +
+                tanh(pred) * (sample_extent / 2)`` in the shared RoPE frame,
+                so a child can travel anywhere in the sample — the model
+                decides where to spend fine-grained queries. Children join
+                the latent set for all subsequent reads/blocks and the dense
+                read-out K/V; the anchored parents remain as a coverage
+                floor. Coordinate heads are zero-init with direction-coded
+                biases so children start on a jittered subgrid.
+            spawn_children: Number of child queries predicted per anchored
+                latent when ``spawn_layer`` is set.
+            kwargs: Keyword args forwarded to ``Encoder``.
+        """
+        super().__init__(*args, **kwargs)
+        if not PositionEncoding.is_rope(self.position_encoding):
+            raise ValueError(
+                "PerceiverEncoder requires a RoPE position encoding: latent "
+                "anchors carry coordinates only through RoPE. Got "
+                f"{self.position_encoding!r}."
+            )
+        if self.use_flash_attn:
+            raise NotImplementedError(
+                "PerceiverEncoder currently supports only the SDPA path; "
+                "packed varlen flash-attention is incompatible with the dense "
+                "latent set."
+            )
+        if latent_stride_hw < 1 or latent_stride_t < 1:
+            raise ValueError("latent strides must be >= 1")
+        if num_reads < 1:
+            raise ValueError("num_reads must be >= 1")
+        if readout_depth < 1:
+            raise ValueError("readout_depth must be >= 1")
+
+        self.latent_stride_hw = latent_stride_hw
+        self.latent_stride_t = latent_stride_t
+        self.num_reads = num_reads
+        self.readout_depth = readout_depth
+        self.readout_skip_tokens = readout_skip_tokens
+        self.readout_spatial_only = readout_spatial_only
+        self.num_class_latents = num_class_latents
+        self.spawn_layer = spawn_layer
+        self.spawn_children = spawn_children
+
+        depth = len(self.blocks)
+        if num_reads > depth:
+            raise ValueError(
+                f"num_reads ({num_reads}) cannot exceed encoder depth ({depth})"
+            )
+        if spawn_layer is not None:
+            if not 1 <= spawn_layer < depth:
+                raise ValueError(f"spawn_layer ({spawn_layer}) must be in [1, {depth})")
+            if spawn_children < 1:
+                raise ValueError("spawn_children must be >= 1")
+        # Read i happens just before latent block read_layers[i].
+        self.read_layers = [round(i * depth / num_reads) for i in range(num_reads)]
+
+        block_kwargs = dict(
+            dim=self.embedding_size,
+            num_heads=self.blocks[0].attn.num_heads,
+            mlp_ratio=self.blocks[0].mlp.fc1.out_features / self.embedding_size,
+            qkv_bias=True,
+            qk_norm=not isinstance(self.blocks[0].attn.q_norm, nn.Identity),
+            norm_layer=nn.LayerNorm,
+            cross_attn=True,
+            drop_path=0.0,
+            use_flash_attn=self.use_flash_attn,
+            position_encoding=self.position_encoding,
+            rope_base=self.rope_base,
+            rope_mixed_base=self.rope_mixed_base,
+            temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+            rope_temporal_base=self.rope_temporal_base,
+        )
+        self.read_blocks = nn.ModuleList(
+            [Block(**block_kwargs) for _ in range(num_reads)]
+        )
+        self.readout_blocks = nn.ModuleList(
+            [Block(**block_kwargs) for _ in range(readout_depth)]
+        )
+        # Norm applied to latents before they serve as read-out K/V (the
+        # inherited ``self.norm`` is reserved for the encoder's final output,
+        # i.e. the dense map, matching the baseline's output-norm placement).
+        self.latent_norm = nn.LayerNorm(self.embedding_size)
+
+        # Month embedding for latent/query content, mirroring
+        # CompositeEncodings: a frozen sinusoid table whose output is added
+        # into the third quarter ([2n:3n]) of the embedding.
+        n_quarter = int(self.embedding_size * 0.25)
+        self._month_quarter = n_quarter
+        month_tab = get_month_encoding_table(n_quarter)
+        self.anchor_month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+
+        if spawn_layer is not None:
+            self.spawn_norm = nn.LayerNorm(self.embedding_size)
+            self.spawn_content = nn.Linear(
+                self.embedding_size, spawn_children * self.embedding_size
+            )
+            self.spawn_coord = nn.Linear(self.embedding_size, spawn_children * 3)
+
+        self.latent_token = nn.Parameter(torch.zeros(self.embedding_size))
+        self.readout_query_token = nn.Parameter(torch.zeros(self.embedding_size))
+        if num_class_latents > 0:
+            self.class_latent = nn.Parameter(
+                torch.zeros(num_class_latents, self.embedding_size)
+            )
+            self.cls_projection = nn.Linear(self.embedding_size, self.embedding_size)
+
+        # Re-run the shared linear init over the newly added blocks, then the
+        # perceiver-style trunc-normal init for the learned token seeds.
+        self.read_blocks.apply(self._init_weights)
+        self.readout_blocks.apply(self._init_weights)
+        if spawn_layer is not None:
+            self.spawn_content.apply(self._init_weights)
+            # Zero-init the coordinate head so predicted offsets start at the
+            # bias; direction-coded biases (the 8 sign patterns of (t, row,
+            # col), cycled for K > 8) place children on a jittered subgrid
+            # around their parent at init: tanh(atanh(0.25)) * extent/2 =
+            # extent/8 per axis.
+            nn.init.zeros_(self.spawn_coord.weight)
+            dirs = torch.tensor(
+                [
+                    [1.0 if j >> b & 1 else -1.0 for b in range(3)]
+                    for j in range(spawn_children)
+                ]
+            )
+            with torch.no_grad():
+                self.spawn_coord.bias.copy_((math.atanh(0.25) * dirs).flatten())
+        nn.init.trunc_normal_(self.latent_token, std=0.02, a=-2.0, b=2.0)
+        nn.init.trunc_normal_(self.readout_query_token, std=0.02, a=-2.0, b=2.0)
+        if num_class_latents > 0:
+            self.cls_projection.apply(self._init_weights)
+            nn.init.trunc_normal_(self.class_latent, std=0.02, a=-2.0, b=2.0)
+
+    def _grid_dims(
+        self, modalities_to_dims_dict: dict[str, tuple]
+    ) -> tuple[int, int, int, int]:
+        """Infer (B, H, W, T) of the sample's patch grid from modality dims."""
+        batch_size: int | None = None
+        height: int | None = None
+        width: int | None = None
+        timesteps = 1
+        for modality, dims in modalities_to_dims_dict.items():
+            if len(dims) == 6:
+                b, h, w, t = dims[0], dims[1], dims[2], dims[3]
+            elif len(dims) == 5:
+                b, h, w, t = dims[0], dims[1], dims[2], 1
+            else:
+                raise NotImplementedError(
+                    f"PerceiverEncoder supports spatial modalities only; got "
+                    f"{modality} with dims {dims}"
+                )
+            if height is not None and (h != height or w != width):
+                raise ValueError(
+                    f"Inconsistent spatial grids across modalities: "
+                    f"({height},{width}) vs ({h},{w}) for {modality}"
+                )
+            batch_size, height, width = b, h, w
+            timesteps = max(timesteps, t)
+        if batch_size is None or height is None or width is None:
+            raise ValueError("No spatial modalities found to define the grid")
+        return batch_size, height, width, timesteps
+
+    def _build_query_grid(
+        self,
+        seed_token: nn.Parameter,
+        row_idx: torch.Tensor,
+        col_idx: torch.Tensor,
+        t_slots: torch.Tensor,
+        timestamps: torch.Tensor,
+        gsd_ratio: float,
+        batch_size: int,
+        device: torch.device,
+        spatial_only: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build query/latent content and RoPE coords for a (rows, cols, slots) grid.
+
+        With ``spatial_only=True`` the month embedding is skipped and the
+        temporal coordinate is fixed to 0 (static-modality convention).
+
+        Content = seed token + month embedding of the slot's timestamp, added
+        into the third embedding quarter (mirroring CompositeEncodings).
+        Coordinates use the same scaling as ``build_rope_positions``:
+        row/col in GSD-scaled patch units, t in scaled days (3D modes only).
+
+        Returns:
+            content: [B, n_rows * n_cols * n_slots, D], flattened as (h w t).
+            coords: [B, N, 3] for 3D RoPE modes, [B, N, 2] for 2D modes.
+        """
+        n_rows, n_cols, n_slots = len(row_idx), len(col_idx), len(t_slots)
+
+        months = timestamps[:, t_slots, 1].long().to(device)  # [B, n_slots]
+        month_embed = self.anchor_month_embed(months)  # [B, n_slots, n_quarter]
+        content = repeat(
+            seed_token,
+            "d -> b h w t d",
+            b=batch_size,
+            h=n_rows,
+            w=n_cols,
+            t=n_slots,
+        ).clone()
+        if not spatial_only:
+            n = self._month_quarter
+            content[..., 2 * n : 3 * n] += repeat(
+                month_embed, "b t d -> b h w t d", h=n_rows, w=n_cols
+            ).to(content.dtype)
+        content = content.flatten(1, 3)  # [B, N, D]
+
+        rows = row_idx.to(device=device, dtype=torch.float32) * gsd_ratio
+        cols = col_idx.to(device=device, dtype=torch.float32) * gsd_ratio
+        row_g = repeat(rows, "h -> h w t", w=n_cols, t=n_slots)
+        col_g = repeat(cols, "w -> h w t", h=n_rows, t=n_slots)
+
+        if PositionEncoding.is_3d_rope(self.position_encoding):
+            days = timestamps_to_days(timestamps).to(torch.float32).to(device) * (
+                self.rope_temporal_coordinate_scale
+            )  # [B, T_max]
+            t_vals = days[:, t_slots]  # [B, n_slots]
+            if spatial_only:
+                t_vals = torch.zeros_like(t_vals)
+            coords = torch.zeros(
+                (batch_size, n_rows, n_cols, n_slots, 3),
+                dtype=torch.float32,
+                device=device,
+            )
+            coords[..., 0] = repeat(t_vals, "b t -> b h w t", h=n_rows, w=n_cols)
+            coords[..., 1] = repeat(row_g, "h w t -> b h w t", b=batch_size)
+            coords[..., 2] = repeat(col_g, "h w t -> b h w t", b=batch_size)
+        else:
+            coords = torch.zeros(
+                (batch_size, n_rows, n_cols, n_slots, 2),
+                dtype=torch.float32,
+                device=device,
+            )
+            coords[..., 0] = repeat(row_g, "h w t -> b h w t", b=batch_size)
+            coords[..., 1] = repeat(col_g, "h w t -> b h w t", b=batch_size)
+        coords = coords.flatten(1, 3)  # [B, N, coord_dim]
+        return content, coords
+
+    def _spawn_children(
+        self,
+        latents: torch.Tensor,
+        latent_pos: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Predict child queries (content + free coords) from each latent.
+
+        Child coordinate = parent anchor + tanh(pred) * (sample extent / 2),
+        per axis, in the shared RoPE frame — a child can move anywhere in the
+        sample. Children are appended to the latent set; class latents (if
+        any) do not spawn.
+
+        Returns:
+            (latents, latent_pos, child_pos): the augmented latent set, its
+            coordinates, and the child coordinates alone [B, M, K, 3] for
+            diagnostics.
+        """
+        n_cls = self.num_class_latents
+        parents = latents[:, n_cls:]
+        parent_pos = latent_pos[:, n_cls:]
+        b, m, d = parents.shape
+        k = self.spawn_children
+
+        h = self.spawn_norm(parents)
+        content = self.spawn_content(h).view(b, m, k, d)
+        coord_pred = self.spawn_coord(h).float().view(b, m, k, 3)
+        pos32 = positions.float()
+        travel = (pos32.amax(dim=1) - pos32.amin(dim=1)) / 2.0  # [B, 3]
+        child_pos = (
+            parent_pos.unsqueeze(2).float()
+            + torch.tanh(coord_pred) * travel[:, None, None, :]
+        )
+
+        latents = torch.cat([latents, content.flatten(1, 2)], dim=1)
+        latent_pos = torch.cat(
+            [latent_pos, child_pos.flatten(1, 2).to(latent_pos.dtype)], dim=1
+        )
+        return latents, latent_pos, child_pos
+
+    def apply_attn(
+        self,
+        x: dict[str, torch.Tensor],
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int,
+        token_exit_cfg: dict[str, int] | None = None,
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None]:
+        """Guard: the perceiver path lives in ``_apply_perceiver_attn``."""
+        raise NotImplementedError(
+            "PerceiverEncoder does not use Encoder.apply_attn; its forward "
+            "calls _apply_perceiver_attn (different return signature)."
+        )
+
+    def _apply_perceiver_attn(
+        self,
+        x: dict[str, torch.Tensor],
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int,
+        token_exit_cfg: dict[str, int] | None = None,
+        fast_pass: bool = False,
+    ) -> tuple[dict[str, torch.Tensor], dict[str, Any] | None, dict[str, torch.Tensor]]:
+        """Cross-attend tokens into latents, process, and read out densely."""
+        if token_exit_cfg is not None and any(
+            depth > 0 for depth in token_exit_cfg.values()
+        ):
+            raise NotImplementedError(
+                "PerceiverEncoder does not support token_exit_cfg with "
+                "nonzero exits; the frozen-target path uses all-zero exits "
+                "which never reaches apply_attn."
+            )
+
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        positions = self.build_rope_positions(
+            tokens_only_dict,
+            original_masks_dict,
+            patch_size,
+            input_res,
+            timestamps=timestamps,
+        )
+        tokens_dict.update(original_masks_dict)
+        tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        # K/V = visible (ONLINE_ENCODER) tokens only, same removal as baseline.
+        tokens, _indices, new_mask, _seq_lengths, _max_seqlen, bool_mask = (
+            self._maybe_remove_masked_tokens(tokens, mask, fast_pass)
+        )
+        if positions is not None and bool_mask is not None:
+            positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
+        attn_mask = self._maybe_get_attn_mask(new_mask, fast_pass)
+
+        batch_size, height, width, timesteps = self._grid_dims(modalities_to_dims_dict)
+        device = tokens.device
+        gsd_ratio = (
+            CompositeEncodings.calculate_gsd_ratio(input_res, patch_size)
+            * self.rope_coordinate_scale
+        )
+
+        # Anchored latents on a strided grid, centered in their cells.
+        s_hw, s_t = self.latent_stride_hw, self.latent_stride_t
+        anchor_rows = (
+            torch.arange(math.ceil(height / s_hw), dtype=torch.float32) * s_hw
+            + (s_hw - 1) / 2.0
+        )
+        anchor_cols = (
+            torch.arange(math.ceil(width / s_hw), dtype=torch.float32) * s_hw
+            + (s_hw - 1) / 2.0
+        )
+        anchor_slots = torch.arange(0, timesteps, s_t, dtype=torch.long)
+        latents, latent_pos = self._build_query_grid(
+            self.latent_token,
+            anchor_rows,
+            anchor_cols,
+            anchor_slots,
+            timestamps,
+            gsd_ratio,
+            batch_size,
+            device,
+        )
+
+        if self.num_class_latents > 0:
+            cls_latents = repeat(self.class_latent, "n d -> b n d", b=batch_size)
+            latents = torch.cat([cls_latents, latents], dim=1)
+            latent_pos = torch.cat(
+                [
+                    latent_pos.new_zeros(
+                        batch_size, self.num_class_latents, latent_pos.shape[-1]
+                    ),
+                    latent_pos,
+                ],
+                dim=1,
+            )
+
+        # Latent trunk with interleaved reads (and optional child spawning).
+        read_i = 0
+        spawn_coords: torch.Tensor | None = None
+        for i_blk, blk in enumerate(self.blocks):
+            if self.spawn_layer is not None and i_blk == self.spawn_layer:
+                latents, latent_pos, spawn_coords = self._spawn_children(
+                    latents, latent_pos, positions
+                )
+            while read_i < len(self.read_layers) and self.read_layers[read_i] == i_blk:
+                latents = self.read_blocks[read_i](
+                    x=latents,
+                    y=tokens,
+                    attn_mask=attn_mask,
+                    rope_positions=latent_pos,
+                    rope_positions_y=positions,
+                )
+                read_i += 1
+            latents = blk(x=latents, rope_positions=latent_pos)
+        latents = self.latent_norm(latents)
+        cls_token = latents[:, 0] if self.num_class_latents > 0 else None
+
+        # Dense read-out: one query per (h, w, t); strict bottleneck (K/V =
+        # latents only).
+        readout_slots = (
+            torch.zeros(1, dtype=torch.long)
+            if self.readout_spatial_only
+            else torch.arange(timesteps, dtype=torch.long)
+        )
+        queries, query_pos = self._build_query_grid(
+            self.readout_query_token,
+            torch.arange(height, dtype=torch.float32),
+            torch.arange(width, dtype=torch.float32),
+            readout_slots,
+            timestamps,
+            gsd_ratio,
+            batch_size,
+            device,
+            spatial_only=self.readout_spatial_only,
+        )
+        if self.readout_skip_tokens:
+            # Skip path: dense queries also attend to visible tokens
+            # (legitimate context — masked tokens were removed above), on top
+            # of the latents. Relaxes the strict bottleneck for dense tasks.
+            kv = torch.cat([latents, tokens.to(latents.dtype)], dim=1)
+            kv_pos = torch.cat([latent_pos, positions], dim=1)
+            if attn_mask is not None:
+                kv_mask = torch.cat(
+                    [attn_mask.new_ones(batch_size, latents.shape[1]), attn_mask],
+                    dim=1,
+                )
+            else:
+                kv_mask = None
+        else:
+            kv, kv_pos, kv_mask = latents, latent_pos, None
+        for rblk in self.readout_blocks:
+            queries = rblk(
+                x=queries,
+                y=kv,
+                attn_mask=kv_mask,
+                rope_positions=query_pos,
+                rope_positions_y=kv_pos,
+            )
+        dense_t = 1 if self.readout_spatial_only else timesteps
+        dense = self.norm(queries).view(
+            batch_size, height, width, dense_t, self.embedding_size
+        )
+        aux: dict[str, torch.Tensor] = {
+            "dense_map": dense,
+            "dense_map_positions": query_pos,
+        }
+        if cls_token is not None:
+            aux["cls_token"] = cls_token
+        if spawn_coords is not None:
+            aux["spawn_coords"] = spawn_coords
+
+        # Broadcast the fused dense map to each modality's token layout.
+        # Static (T=1) modalities read the first temporal plane, matching the
+        # coordinate convention of build_rope_positions.
+        output_dict: dict[str, torch.Tensor] = {}
+        for modality, dims in modalities_to_dims_dict.items():
+            if len(dims) == 6:
+                t_m, bandsets = dims[3], dims[4]
+                if dense.shape[3] == 1 and t_m > 1:
+                    src = dense.expand(-1, -1, -1, t_m, -1)
+                else:
+                    src = dense[:, :, :, :t_m]
+                output_dict[modality] = src.unsqueeze(4).expand(
+                    -1, -1, -1, -1, bandsets, -1
+                )
+            elif len(dims) == 5:
+                bandsets = dims[3]
+                output_dict[modality] = (
+                    dense[:, :, :, 0].unsqueeze(3).expand(-1, -1, -1, bandsets, -1)
+                )
+            else:  # pragma: no cover - guarded in _grid_dims
+                raise NotImplementedError
+        output_dict.update(original_masks_dict)
+        return output_dict, None, aux
+
+    def forward(
+        self,
+        x: Any,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        token_exit_cfg: dict | None = None,
+        fast_pass: bool = False,
+    ) -> dict[str, Any]:
+        """Encoder forward; mirrors ``Encoder.forward`` plus class-latent output.
+
+        When ``num_class_latents > 0``: exposes the raw class latent as
+        ``cls_token`` (also under ``fast_pass``, for CLS-pooled evals) and
+        uses its projection as ``project_aggregated`` (the instance
+        embedding consumed by the contrastive loss). The frozen-target
+        exit-at-0 path is unchanged (attention skipped entirely).
+        """
+        if fast_pass and token_exit_cfg is not None:
+            raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
+
+        patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
+        aux: dict[str, torch.Tensor] = {}
+        if token_exit_cfg is None or any(
+            exit_depth > 0 for exit_depth in token_exit_cfg.values()
+        ):
+            patchified_tokens_and_masks, _token_norm_stats, aux = (
+                self._apply_perceiver_attn(
+                    x=patchified_tokens_and_masks,
+                    timestamps=x.timestamps,
+                    patch_size=patch_size,
+                    input_res=input_res,
+                    token_exit_cfg=token_exit_cfg,
+                    fast_pass=fast_pass,
+                )
+            )
+        output = TokensAndMasks(**patchified_tokens_and_masks)
+        if self.embedding_projector is not None:
+            output = self.embedding_projector(output)
+
+        output_dict: dict[str, Any] = {"tokens_and_masks": output}
+        cls_token = aux.get("cls_token")
+        if cls_token is not None:
+            output_dict["cls_token"] = cls_token
+        if "spawn_coords" in aux:
+            output_dict["spawn_coords"] = aux["spawn_coords"]
+        if not fast_pass:
+            # Extras flow to the decoder as kwargs via unpack_encoder_output.
+            for key in ("dense_map", "dense_map_positions"):
+                if key in aux:
+                    output_dict[key] = aux[key]
+            if cls_token is not None:
+                output_dict["project_aggregated"] = self.cls_projection(cls_token)
+            else:
+                output_dict["project_aggregated"] = self.project_and_aggregate(output)
+        return output_dict
+
+    def apply_fsdp(self, **fsdp_kwargs: Any) -> None:
+        """Apply FSDP, sharding read/read-out blocks individually.
+
+        Individual sharding matters beyond memory: FSDP2's
+        ``cast_forward_inputs`` casts each block's inputs (tokens, RoPE
+        coordinates) to the compute dtype at the block boundary, exactly like
+        the baseline's trunk blocks. Under the root shard alone, fp32 tensors
+        built inside ``apply_attn`` would hit bf16 weights and crash.
+        """
+        for block in self.read_blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+        for block in self.readout_blocks:
+            block.apply_fsdp(**fsdp_kwargs)
+        super().apply_fsdp(**fsdp_kwargs)
+
+
+class PerceiverPredictor(PredictorBase):
+    """Per-location modality decoder over the fused dense map.
+
+    The encoder hands over per-modality tensors that all view the same fused
+    dense map. This predictor conditions each location's dense token on the
+    modality/bandset identity (channel embedding) and month (both via the
+    inherited ``composite_encodings``), then applies a small per-token MLP
+    stack — no attention. Output tokens live in the target (encoder
+    embedding) space, matching the frozen-projection targets.
+    """
+
+    cross_attn = True  # inherited blocks are unused; kept for base-class init
+
+    def __init__(self, *args: Any, head_depth: int = 2, **kwargs: Any) -> None:
+        """Initialize the predictor head.
+
+        Args:
+            args: Positional args forwarded to ``PredictorBase``.
+            head_depth: Number of pre-norm residual MLP layers applied per
+                token before the output projection.
+            kwargs: Keyword args forwarded to ``PredictorBase`` (``depth``
+                must be 0 — attention blocks are not used).
+        """
+        super().__init__(*args, **kwargs)
+        if len(self.blocks) > 0:
+            raise ValueError(
+                "PerceiverPredictor is attention-free; configure depth=0 "
+                f"(got depth={len(self.blocks)})"
+            )
+        if head_depth < 1:
+            raise ValueError("head_depth must be >= 1")
+        self.head_depth = head_depth
+        dim = self.embedding_size
+        mlp_ratio = 4.0
+        self.head_norms = nn.ModuleList([nn.LayerNorm(dim) for _ in range(head_depth)])
+        self.head_mlps = nn.ModuleList(
+            [Mlp(dim, int(dim * mlp_ratio)) for _ in range(head_depth)]
+        )
+        self.head_norms.apply(self._init_weights)
+        self.head_mlps.apply(self._init_weights)
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        cls_token: torch.Tensor | None = None,
+        dense_map: torch.Tensor | None = None,
+        dense_map_positions: torch.Tensor | None = None,
+        spawn_coords: torch.Tensor | None = None,
+    ) -> TokensAndMasks:
+        """Decode per-modality predictions from the fused dense map.
+
+        ``cls_token`` and ``spawn_coords`` arrive via encoder-output decoder
+        kwargs; both currently unused here — ``spawn_coords`` is a
+        diagnostic output (child query coordinates).
+        """
+        available_modalities = x.modalities
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        tokens_only_dict: dict[str, torch.Tensor] = {}
+        masks_dict: dict[str, torch.Tensor] = {}
+        for modality in modalities_to_process:
+            x_modality = getattr(x, modality)
+            x_modality = self.encoder_to_decoder_embed(self.input_norm(x_modality))
+            tokens_only_dict[modality] = x_modality
+            masked_name = x.get_masked_modality_name(modality)
+            masks_dict[masked_name] = getattr(x, masked_name)
+
+        # Adds the modality/bandset channel embedding and month embedding
+        # (spatial/temporal quarters are inactive under RoPE modes).
+        tokens_dict = self.composite_encodings.forward(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+
+        output_dict: dict[str, torch.Tensor] = {}
+        for modality in modalities_to_process:
+            # Composite encodings can promote to fp32 (frozen sinusoid
+            # tables); cast back so the head Linears match the FSDP compute
+            # dtype. There is no sharded block downstream to do it for us.
+            tokens = tokens_dict[modality].to(tokens_only_dict[modality].dtype)
+            for norm, mlp in zip(self.head_norms, self.head_mlps):
+                tokens = tokens + mlp(norm(tokens))
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            per_bandset_outputs = []
+            for idx in range(num_band_sets):
+                per_bandset = tokens[..., idx, :]
+                per_bandset_outputs.append(self.to_output_embed(self.norm(per_bandset)))
+            output_dict[modality] = torch.stack(per_bandset_outputs, dim=-2)
+            masked_name = x.get_masked_modality_name(modality)
+            output_dict[masked_name] = masks_dict[masked_name]
+        return TokensAndMasks(**output_dict)
+
+
+class PerceiverCrossPredictor(Predictor):
+    """Baseline-style cross-attention decoder over the fused dense map.
+
+    Queries are exactly the baseline ``Predictor``'s: a learned mask token
+    plus channel/month encodings and RoPE positions at DECODER locations.
+    The only change is the attention context: the encoder's fused dense map
+    at ALL grid positions (one token per (h, w, t), built from visible
+    tokens only — no leakage) instead of per-modality visible tokens. This
+    restores decode-time gathering and modality-specific querying while
+    keeping the latent-bottleneck encoder.
+    """
+
+    cross_attn = True
+
+    def _apply_cross_attn(
+        self,
+        x: dict[str, torch.Tensor],
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int,
+        context: torch.Tensor,
+        context_positions: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        """``Predictor.apply_attn`` with the dense map as attention context."""
+        if self.use_flash_attn:
+            raise NotImplementedError(
+                "PerceiverCrossPredictor supports only the SDPA path"
+            )
+        tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
+            self.split_tokens_masks_and_dims(x)
+        )
+        tokens_dict = self.composite_encodings(
+            tokens_only_dict, timestamps, patch_size, input_res
+        )
+        positions = self.build_rope_positions(
+            tokens_only_dict,
+            original_masks_dict,
+            patch_size,
+            input_res,
+            timestamps=timestamps,
+        )
+        tokens_dict.update(original_masks_dict)
+        all_tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        (
+            tokens_to_decode,
+            unmasked_tokens,
+            tokens_to_decode_mask,
+            unmasked_tokens_mask,
+            indices,
+            _seqlens_decode,
+            _seqlens_unmasked,
+            max_length_of_tokens_to_decode,
+            max_length_of_unmasked_tokens,
+        ) = self.split_x_y(all_tokens, mask)
+        if positions is not None:
+            positions_to_decode, _ = self.split_x_y_positions(
+                positions,
+                indices,
+                max_length_of_tokens_to_decode,
+                max_length_of_unmasked_tokens,
+            )
+        else:
+            positions_to_decode = None
+
+        for blk in self.blocks:
+            tokens_to_decode = blk(
+                x=tokens_to_decode,
+                y=context,
+                attn_mask=None,  # every dense position is valid context
+                rope_positions=positions_to_decode,
+                rope_positions_y=context_positions,
+            )
+
+        combined = self.combine_x_y(
+            tokens_to_decode=tokens_to_decode,
+            unmasked_tokens=unmasked_tokens,
+            tokens_to_decode_mask=tokens_to_decode_mask,
+            unmasked_tokens_mask=unmasked_tokens_mask,
+            indices=indices,
+        )
+        tokens_per_modality_dict = self.split_and_expand_per_modality(
+            combined, modalities_to_dims_dict
+        )
+        tokens_per_modality_dict.update(original_masks_dict)
+        return tokens_per_modality_dict
+
+    def forward(
+        self,
+        x: TokensAndMasks,
+        timestamps: torch.Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        cls_token: torch.Tensor | None = None,
+        dense_map: torch.Tensor | None = None,
+        dense_map_positions: torch.Tensor | None = None,
+        spawn_coords: torch.Tensor | None = None,
+    ) -> TokensAndMasks:
+        """Decode masked-position queries against the fused dense map."""
+        if dense_map is None or dense_map_positions is None:
+            raise ValueError(
+                "PerceiverCrossPredictor requires dense_map and "
+                "dense_map_positions from a PerceiverEncoder"
+            )
+        context = self.encoder_to_decoder_embed(
+            self.input_norm(dense_map.flatten(1, 3))
+        )
+
+        decoder_embedded_dict = x.as_dict()
+        modalities_to_process = get_modalities_to_process(
+            x.modalities, self.supported_modality_names
+        )
+        for modality in modalities_to_process:
+            x_modality = self.encoder_to_decoder_embed(
+                self.input_norm(getattr(x, modality))
+            )
+            masked_name = x.get_masked_modality_name(modality)
+            decoder_embedded_dict[modality] = x_modality
+            decoder_embedded_dict[masked_name] = getattr(x, masked_name)
+        tokens_only_dict = self.add_masks(decoder_embedded_dict)
+        decoder_embedded_dict.update(tokens_only_dict)
+
+        tokens_and_masks = self._apply_cross_attn(
+            decoder_embedded_dict,
+            timestamps,
+            patch_size,
+            input_res,
+            context,
+            dense_map_positions,
+        )
+
+        output_dict: dict[str, torch.Tensor] = {}
+        for modality in modalities_to_process:
+            masked_name = x.get_masked_modality_name(modality)
+            modality_data = tokens_and_masks[modality]
+            num_band_sets = self.tokenization_config.get_num_bandsets(modality)
+            per_bandset_outputs = []
+            for idx in range(num_band_sets):
+                per_bandset = modality_data[..., idx, :]
+                per_bandset_outputs.append(self.to_output_embed(self.norm(per_bandset)))
+            output_dict[modality] = torch.stack(per_bandset_outputs, dim=-2)
+            output_dict[masked_name] = tokens_and_masks[masked_name]
+        return TokensAndMasks(**output_dict)
+
+
+@dataclass
+class PerceiverEncoderConfig(EncoderConfig):
+    """Configuration for the PerceiverEncoder."""
+
+    latent_stride_hw: int = 2
+    latent_stride_t: int = 2
+    num_reads: int = 2
+    readout_depth: int = 2
+    readout_skip_tokens: bool = False
+    readout_spatial_only: bool = False
+    num_class_latents: int = 0
+    spawn_layer: int | None = None
+    spawn_children: int = 8
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        super().validate()
+        if not PositionEncoding.is_rope(self.position_encoding):
+            raise ValueError(
+                "PerceiverEncoderConfig requires a RoPE position_encoding, "
+                f"got {self.position_encoding!r}"
+            )
+
+    def build(self) -> "PerceiverEncoder":
+        """Build the PerceiverEncoder."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"PerceiverEncoder kwargs: {kwargs}")
+        return PerceiverEncoder(**kwargs)
+
+
+@dataclass
+class PerceiverCrossPredictorConfig(PredictorConfig):
+    """Configuration for the PerceiverCrossPredictor (baseline-depth default)."""
+
+    depth: int = 4
+
+    def build(self) -> "PerceiverCrossPredictor":
+        """Build the PerceiverCrossPredictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"PerceiverCrossPredictor kwargs: {kwargs}")
+        return PerceiverCrossPredictor(**kwargs)
+
+
+@dataclass
+class PerceiverPredictorConfig(PredictorConfig):
+    """Configuration for the PerceiverPredictor."""
+
+    depth: int = 0
+    head_depth: int = 2
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        super().validate()
+        if self.depth != 0:
+            raise ValueError(
+                "PerceiverPredictor is attention-free; depth must be 0, got "
+                f"{self.depth}"
+            )
+
+    def build(self) -> "PerceiverPredictor":
+        """Build the PerceiverPredictor."""
+        self.validate()
+        kwargs = self.as_dict(exclude_none=True, recurse=False)
+        kwargs.pop("supported_modality_names")
+        kwargs["supported_modalities"] = self.supported_modalities
+        logger.info(f"PerceiverPredictor kwargs: {kwargs}")
+        return PerceiverPredictor(**kwargs)

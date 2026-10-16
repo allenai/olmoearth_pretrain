@@ -148,9 +148,26 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         """Forward pass through the model produces the embedding specified by initialization."""
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
-            batch_embeddings: TokensAndMasks = self.model(
+            output_dict = self.model(
                 masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
-            )["tokens_and_masks"]  # (bsz, dim)
+            )
+            if self.pooling_type == PoolingType.CLS:
+                if self.use_center_token or self.spatial_pool:
+                    raise ValueError(
+                        "PoolingType.CLS is instance-level only (no spatial "
+                        "pooling / center token)"
+                    )
+                cls_token = output_dict.get("cls_token")
+                if cls_token is None:
+                    raise ValueError(
+                        "PoolingType.CLS requires a model that returns "
+                        "'cls_token' (e.g. PerceiverEncoder with "
+                        "num_class_latents > 0)"
+                    )
+                return cls_token, labels
+            batch_embeddings: TokensAndMasks = output_dict[
+                "tokens_and_masks"
+            ]  # (bsz, dim)
             # Concat features across modalities in space averaged across time
             if self.use_center_token:
                 # Get spatial embeddings (B, H, W, D) then take center patch
