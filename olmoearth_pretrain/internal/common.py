@@ -147,10 +147,12 @@ def build_launch_config(
         # A fresh directory: on 2026-09-28 ~08:00 UTC a `uv sync` wedged the shared
         # cache's builds-v0 directory (even `ls` on it hangs), and every job using the
         # old cache then hung at "Creating virtual environment" or in uv sync.
+        # Again on 2026-10-16 ~18:30 UTC (weka latency incident): retries sat over an
+        # hour at "Acquiring lock for uv install" on the 20260928 cache.
         env_vars.append(
             BeakerEnvVar(
                 name="UV_CACHE_DIR",
-                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache-20260928",
+                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache-20261016",
             )
         )
     nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
