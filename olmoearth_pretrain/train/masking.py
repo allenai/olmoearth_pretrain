@@ -2055,6 +2055,119 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         return mask
 
 
+@MASKING_STRATEGY_REGISTRY.register("modality_dropout")
+class ModalityDropoutMaskingStrategy(MaskingStrategy):
+    """Wrap a base strategy and drop whole input modalities per sample.
+
+    After the base strategy has run, each sample independently drops each modality in
+    ``dropout_modalities`` with probability ``dropout_rate``: every ONLINE_ENCODER token
+    of that modality becomes a DECODER token, i.e. a prediction target. The pretext for
+    a dropped modality is then purely cross-modal (predict S1 from S2, ...), the
+    structured information asymmetry a multi-encoder relies on instead of (or on top of)
+    the base strategy's fine-grained masking. A drop is skipped when it would leave the
+    sample with no ONLINE_ENCODER token at all, and ``max_dropped`` caps how many
+    modalities one sample can lose.
+
+    Args:
+        base_strategy: ``{"type": <registry key>, ...kwargs}`` of the strategy to wrap.
+        dropout_modalities: Modalities eligible for dropping (input modalities only).
+        dropout_rate: Per-sample, per-modality drop probability.
+        max_dropped: Max modalities dropped per sample. None = len(dropout_modalities).
+    """
+
+    def __init__(
+        self,
+        base_strategy: dict[str, Any],
+        dropout_modalities: list[str],
+        dropout_rate: float = 0.3,
+        max_dropped: int | None = None,
+    ):
+        """Initialize the modality dropout wrapper."""
+        if not 0.0 <= dropout_rate <= 1.0:
+            raise ValueError(f"dropout_rate must be in [0, 1], got {dropout_rate}")
+        if len(dropout_modalities) == 0:
+            raise ValueError("dropout_modalities must not be empty")
+        for modality in dropout_modalities:
+            Modality.get(modality)  # raises on unknown names
+        config = dict(base_strategy)
+        base_key = config.pop("type")
+        self.base_strategy = MASKING_STRATEGY_REGISTRY.get_class(base_key)(**config)
+        self.dropout_modalities = list(dropout_modalities)
+        self.dropout_rate = dropout_rate
+        self.max_dropped = max_dropped
+
+    @property
+    def encode_ratio(self) -> float:
+        """Encode ratio of the wrapped strategy."""
+        return self.base_strategy.encode_ratio
+
+    @property
+    def decode_ratio(self) -> float:
+        """Decode ratio of the wrapped strategy."""
+        return self.base_strategy.decode_ratio
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
+        """Run the base strategy, then drop whole modalities per sample."""
+        masked = self.base_strategy.apply_mask(batch, patch_size=patch_size, **kwargs)
+        if self.dropout_rate == 0.0:
+            return masked
+        output_dict = masked.as_dict(include_nones=True)
+        online = MaskValue.ONLINE_ENCODER.value
+        candidates = [
+            m
+            for m in self.dropout_modalities
+            if output_dict.get(MaskedOlmoEarthSample.get_masked_modality_name(m))
+            is not None
+        ]
+        if not candidates:
+            return masked
+        # Per-sample count of ONLINE_ENCODER tokens over ALL modalities, so a drop never
+        # empties the online encoder's input.
+        total_online = torch.zeros(masked.batch_size, dtype=torch.long)
+        online_per_modality: dict[str, torch.Tensor] = {}
+        for modality_name in masked.modalities:
+            mask = output_dict[
+                MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            ]
+            if mask is None:
+                continue
+            count = (torch.as_tensor(mask) == online).flatten(1).sum(1).cpu()
+            online_per_modality[modality_name] = count
+            total_online += count
+        max_dropped = (
+            len(candidates) if self.max_dropped is None else int(self.max_dropped)
+        )
+        cloned: set[str] = set()
+        for i in range(masked.batch_size):
+            order = list(candidates)
+            np.random.shuffle(order)
+            dropped = 0
+            for modality_name in order:
+                if dropped >= max_dropped:
+                    break
+                count = int(online_per_modality[modality_name][i])
+                if count == 0 or np.random.rand() >= self.dropout_rate:
+                    continue
+                if int(total_online[i]) - count <= 0:
+                    continue  # would leave the sample with nothing to encode
+                mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                if mask_name not in cloned:
+                    # masks may be views shared across modalities; never mutate in place
+                    output_dict[mask_name] = torch.as_tensor(
+                        output_dict[mask_name]
+                    ).clone()
+                    cloned.add(mask_name)
+                mask = output_dict[mask_name]
+                mask[i][mask[i] == online] = MaskValue.DECODER.value
+                total_online[i] -= count
+                dropped += 1
+        return MaskedOlmoEarthSample(**output_dict)
+
+
 def propagate_tokenization_config(
     masking_strategy: MaskingStrategy,
     tokenization_config: "TokenizationConfig",

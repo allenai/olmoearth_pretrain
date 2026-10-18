@@ -2377,6 +2377,22 @@ class Encoder(FlexiVitBase):
         token_norm_stats = {**reg_stats, **nonreg_stats}
         return token_norm_stats
 
+    def pre_fusion_tokens(
+        self,
+        tokens: Tensor,
+        mask: Tensor,
+        positions: Tensor | None,
+        modalities_to_dims_dict: dict[str, tuple],
+        fast_pass: bool,
+    ) -> Tensor:
+        """Transform the collapsed token sequence before the shared blocks.
+
+        Identity for the plain Encoder. ``MultiEncoder`` overrides it to run one
+        block stack per modality group. ``tokens``/``mask``/``positions`` are the full
+        (pre-removal) collapsed sequence in the order of ``modalities_to_dims_dict``.
+        """
+        return tokens
+
     def _maybe_remove_masked_tokens(
         self,
         tokens: Tensor,
@@ -2471,6 +2487,12 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+        # Hook for per-modality processing BEFORE the shared blocks (identity here;
+        # see ``nn/multi_encoder.py``). Runs on the full collapsed sequence so the
+        # masked-token removal, packing and searchlight below are unchanged.
+        tokens = self.pre_fusion_tokens(
+            tokens, mask, positions, modalities_to_dims_dict, fast_pass
+        )
 
         if searchlight is not None:
             from olmoearth_pretrain.nn.searchlight import encoder_searchlight
