@@ -2124,18 +2124,19 @@ class ModalityDropoutMaskingStrategy(MaskingStrategy):
         if not candidates:
             return masked
         # Per-sample count of ONLINE_ENCODER tokens over ALL modalities, so a drop never
-        # empties the online encoder's input.
-        total_online = torch.zeros(masked.batch_size, dtype=torch.long)
-        online_per_modality: dict[str, torch.Tensor] = {}
+        # empties the online encoder's input. Plain ints: masks may live on any device
+        # (the trainer sets a CUDA default device for its mock batch).
+        total_online = [0] * masked.batch_size
+        online_per_modality: dict[str, list[int]] = {}
         for modality_name in masked.modalities:
             mask = output_dict[
                 MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
             ]
             if mask is None:
                 continue
-            count = (torch.as_tensor(mask) == online).flatten(1).sum(1).cpu()
+            count = (torch.as_tensor(mask) == online).flatten(1).sum(1).tolist()
             online_per_modality[modality_name] = count
-            total_online += count
+            total_online = [a + b for a, b in zip(total_online, count)]
         max_dropped = (
             len(candidates) if self.max_dropped is None else int(self.max_dropped)
         )
@@ -2147,10 +2148,10 @@ class ModalityDropoutMaskingStrategy(MaskingStrategy):
             for modality_name in order:
                 if dropped >= max_dropped:
                     break
-                count = int(online_per_modality[modality_name][i])
+                count = online_per_modality[modality_name][i]
                 if count == 0 or np.random.rand() >= self.dropout_rate:
                     continue
-                if int(total_online[i]) - count <= 0:
+                if total_online[i] - count <= 0:
                     continue  # would leave the sample with nothing to encode
                 mask_name = MaskedOlmoEarthSample.get_masked_modality_name(
                     modality_name
