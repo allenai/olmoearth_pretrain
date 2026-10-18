@@ -1,5 +1,6 @@
 """Searchlight inference (``nn/searchlight.py``) against the stock encoder forward."""
 
+import logging
 from collections.abc import Callable
 
 import pytest
@@ -121,7 +122,9 @@ def test_one_window_domain_matches_the_stock_forward(
         )
 
 
-def test_without_rope_searchlight_runs_the_stock_forward() -> None:
+def test_without_rope_searchlight_runs_the_stock_forward(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Absolute position encodings (v1, v1.1) give Searchlight no positions to slide over."""
     torch.manual_seed(0)
     encoder = (
@@ -141,17 +144,13 @@ def test_without_rope_searchlight_runs_the_stock_forward() -> None:
         .eval()
     )
     sample = _sample(16)
-    with torch.no_grad():
+    settings = SearchlightSettings(neighborhood_attention_size_px=16)
+    with torch.no_grad(), caplog.at_level(logging.WARNING):
         stock = encoder(sample, patch_size=2, input_res=10)
-        with pytest.warns(
-            UserWarning, match="Searchlight needs a RoPE position encoding"
-        ):
-            fallback = encoder(
-                sample,
-                patch_size=2,
-                input_res=10,
-                searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
-            )
+        fallback = encoder(sample, patch_size=2, input_res=10, searchlight=settings)
+        encoder(sample, patch_size=2, input_res=10, searchlight=settings)
+    # Once per encoder, not once per crop.
+    assert caplog.text.count("Searchlight needs a RoPE position encoding") == 1
     for name in MODALITIES:
         torch.testing.assert_close(
             getattr(fallback["tokens_and_masks"], name),
