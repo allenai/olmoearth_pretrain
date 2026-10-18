@@ -121,6 +121,87 @@ def test_one_window_domain_matches_the_stock_forward(
         )
 
 
+def test_without_rope_searchlight_runs_the_stock_forward() -> None:
+    """Absolute position encodings (v1, v1.1) give Searchlight no positions to slide over."""
+    torch.manual_seed(0)
+    encoder = (
+        EncoderConfig(
+            supported_modality_names=MODALITIES,
+            embedding_size=32,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=2.0,
+            max_patch_size=8,
+            min_patch_size=1,
+            max_sequence_length=12,
+            drop_path=0.0,
+            position_encoding="absolute",
+        )
+        .build()
+        .eval()
+    )
+    sample = _sample(16)
+    with torch.no_grad():
+        stock = encoder(sample, patch_size=2, input_res=10)
+        with pytest.warns(
+            UserWarning, match="Searchlight needs a RoPE position encoding"
+        ):
+            fallback = encoder(
+                sample,
+                patch_size=2,
+                input_res=10,
+                searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
+            )
+    for name in MODALITIES:
+        torch.testing.assert_close(
+            getattr(fallback["tokens_and_masks"], name),
+            getattr(stock["tokens_and_masks"], name),
+        )
+
+
+def test_searchlight_tokens_keep_the_norm_dtype(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Searchlight returns the norm's dtype, as the stock forward does.
+
+    Under CUDA autocast the norm returns float32 for bf16 tokens; a norm returning
+    float64 stands in for that on any device.
+    """
+    torch.manual_seed(0)
+    encoder = (
+        EncoderConfig(
+            supported_modality_names=MODALITIES,
+            embedding_size=32,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=2.0,
+            max_patch_size=8,
+            min_patch_size=1,
+            max_sequence_length=12,
+            drop_path=0.0,
+            position_encoding="rope_3d_mixed",
+        )
+        .build()
+        .eval()
+    )
+    norm_forward = encoder.norm.forward
+    monkeypatch.setattr(encoder.norm, "forward", lambda x: norm_forward(x).double())
+    # The contrastive head's float32 weights can't take float64 tokens; it isn't under test.
+    monkeypatch.setattr(encoder.project_and_aggregate, "forward", lambda x: x)
+    sample = _sample(16)
+    with torch.no_grad():
+        stock = encoder(sample, patch_size=2, input_res=10)
+        searchlight = encoder(
+            sample,
+            patch_size=2,
+            input_res=10,
+            searchlight=SearchlightSettings(neighborhood_attention_size_px=16),
+        )
+    for name in MODALITIES:
+        assert getattr(stock["tokens_and_masks"], name).dtype == torch.float64
+        assert getattr(searchlight["tokens_and_masks"], name).dtype == torch.float64
+
+
 def test_reference_attention_is_the_sliding_box() -> None:
     """A query sees exactly the cells of its box, shifted inward at the edges."""
     h = w = 6

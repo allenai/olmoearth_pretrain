@@ -2472,6 +2472,15 @@ class Encoder(FlexiVitBase):
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
 
+        if searchlight is not None and positions is None:
+            # Searchlight's neighborhoods follow RoPE positions; absolute encodings have none.
+            warnings.warn(
+                f"Searchlight needs a RoPE position encoding, not {self.position_encoding!r}; "
+                "running the standard forward",
+                stacklevel=2,
+            )
+            searchlight = None
+
         if searchlight is not None:
             from olmoearth_pretrain.nn.searchlight import encoder_searchlight
 
