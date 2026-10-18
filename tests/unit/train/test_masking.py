@@ -3,6 +3,7 @@
 import logging
 import random
 
+import numpy as np
 import torch
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
@@ -14,8 +15,10 @@ from olmoearth_pretrain.train.masking import (
     ModalityCrossSpaceMaskingStrategy,
     RandomMaskingStrategy,
     RandomRangeMaskingStrategy,
+    RandomTimeWithDecodeMaskingStrategy,
     RandomWithDecodeMaskingStrategy,
     SpaceMaskingStrategy,
+    TimeFutureWithDecodeMaskingStrategy,
     TimeMaskingStrategy,
 )
 
@@ -1694,3 +1697,97 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def _time_split_batch(
+    b: int = 16, h: int = 4, w: int = 4, t: int = 8, s1_missing_tail: int = 0
+) -> OlmoEarthSample:
+    """S2 + S1 time series (S1 optionally missing at the last timesteps) plus decode-only worldcover."""
+    timestamps = torch.cat(
+        [
+            torch.randint(1, 29, (b, t, 1)),
+            torch.arange(1, t + 1).repeat(b, 1).unsqueeze(-1),
+            torch.full((b, t, 1), 2020),
+        ],
+        dim=-1,
+    )
+    sentinel1 = torch.ones((b, h, w, t, Modality.SENTINEL1.num_bands))
+    if s1_missing_tail:
+        sentinel1[:, :, :, t - s1_missing_tail :] = MISSING_VALUE
+    return OlmoEarthSample(
+        sentinel2_l2a=torch.ones((b, h, w, t, Modality.SENTINEL2_L2A.num_bands)),
+        sentinel1=sentinel1,
+        timestamps=timestamps,
+        worldcover=torch.ones((b, h, w, Modality.WORLDCOVER.num_bands)),
+    )
+
+
+def _encode_decode_timesteps(mask: torch.Tensor) -> tuple[set[int], set[int]]:
+    """Timesteps holding ONLINE_ENCODER / DECODER tokens in one instance's (H, W, T, C) mask."""
+    enc = torch.argwhere((mask == MaskValue.ONLINE_ENCODER.value).any(dim=(0, 1, 3)))
+    dec = torch.argwhere((mask == MaskValue.DECODER.value).any(dim=(0, 1, 3)))
+    return set(enc[:, 0].tolist()), set(dec[:, 0].tolist())
+
+
+def test_time_future_with_decode_encodes_past_decodes_future() -> None:
+    """With time masking forced (random_ratio=0) and no missing data, encoded timesteps all precede decoded ones.
+
+    (A band set with no data at its chosen timesteps falls back to random masking, as in
+    random_time_with_decode, so the ordering only holds when every band set covers every timestep.)
+    """
+    torch.manual_seed(0)
+    np.random.seed(0)
+    batch = _time_split_batch()
+    strategy = TimeFutureWithDecodeMaskingStrategy(
+        encode_ratio=0.5,
+        decode_ratio=0.5,
+        random_ratio=0.0,
+        only_decode_modalities=["worldcover"],
+    )
+    cuts = set()
+    for _ in range(5):
+        masked = strategy.apply_mask(batch, patch_size=1)
+        assert (masked.worldcover_mask == MaskValue.DECODER.value).all()
+        for i in range(batch.batch_size):
+            enc_t: set[int] = set()
+            dec_t: set[int] = set()
+            for m in [masked.sentinel2_l2a_mask, masked.sentinel1_mask]:
+                e, d = _encode_decode_timesteps(m[i])
+                enc_t |= e
+                dec_t |= d
+            if enc_t and dec_t:
+                assert max(enc_t) < min(dec_t)
+                cuts.add(max(enc_t))
+    # the cut point varies across instances (k ~ U{1..n-1})
+    assert len(cuts) > 1
+
+
+def test_random_time_with_decode_split_is_unchanged() -> None:
+    """The refactored random_time_with_decode still encodes ceil(n * encode_ratio) present timesteps."""
+    torch.manual_seed(0)
+    np.random.seed(0)
+    strategy = RandomTimeWithDecodeMaskingStrategy(
+        encode_ratio=0.5, decode_ratio=0.5, random_ratio=0.0
+    )
+    present = torch.arange(8)
+    enc, dec = strategy._split_timestamps(present)
+    assert len(enc) == 4 and len(dec) == 4
+    assert set(enc.tolist()) | set(dec.tolist()) == set(range(8))
+
+
+def test_time_future_with_decode_handles_missing_timesteps() -> None:
+    """Missing S1 timesteps keep MISSING, and every instance still gets encoder and decoder tokens."""
+    torch.manual_seed(0)
+    np.random.seed(0)
+    batch = _time_split_batch(s1_missing_tail=2)
+    strategy = TimeFutureWithDecodeMaskingStrategy(
+        random_ratio=0.0, only_decode_modalities=["worldcover"]
+    )
+    masked = strategy.apply_mask(batch, patch_size=1)
+    assert (masked.sentinel1_mask[:, :, :, -2:] == MaskValue.MISSING.value).all()
+    for i in range(batch.batch_size):
+        tokens = torch.cat(
+            [masked.sentinel2_l2a_mask[i].flatten(), masked.sentinel1_mask[i].flatten()]
+        )
+        assert (tokens == MaskValue.ONLINE_ENCODER.value).any()
+        assert (tokens == MaskValue.DECODER.value).any()

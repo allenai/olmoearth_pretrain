@@ -1928,13 +1928,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     use_random_masking = True
                 else:
                     use_random_masking = False
-                    not_missing_t = torch.argwhere(missing_per_time)[:, 0]
-                    not_missing_t = not_missing_t[
-                        torch.randperm(len(not_missing_t), device=not_missing_t.device)
-                    ]
-                    num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
-                    encode_timestamps = not_missing_t[:num_encode]
-                    decode_timestamps = not_missing_t[num_encode:]
+                    encode_timestamps, decode_timestamps = self._split_timestamps(
+                        torch.argwhere(missing_per_time)[:, 0]
+                    )
 
             if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
                 # this branch should barely ever trigger
@@ -2042,6 +2038,14 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
 
         return MaskedOlmoEarthSample(**output_dict)
 
+    def _split_timestamps(
+        self, present_t: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Split an instance's present timesteps (ascending) into encode and decode sets."""
+        present_t = present_t[torch.randperm(len(present_t), device=present_t.device)]
+        num_encode = math.ceil(len(present_t) * self.encode_ratio)
+        return present_t[:num_encode], present_t[num_encode:]
+
     @staticmethod
     def time_masking_with_missing(
         mask: torch.Tensor, timestamps: torch.Tensor, mask_value: int
@@ -2053,6 +2057,25 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         mask[:, :, :, timestamps] = mask_value
         mask[missing_mask] = MaskValue.MISSING.value
         return mask
+
+
+@MASKING_STRATEGY_REGISTRY.register("time_future_with_decode")
+class TimeFutureWithDecodeMaskingStrategy(RandomTimeWithDecodeMaskingStrategy):
+    """random_time_with_decode, but time-masked instances encode the past and decode the future.
+
+    For a time-masked instance, the present timesteps are kept in chronological order and cut
+    at k drawn uniformly from 1..n-1: the first k are encoded, the rest decoded, so the model
+    must forecast instead of interpolating between neighbours. Band-set roles, random_ratio and
+    only_decode_modalities are unchanged, so this differs from random_time_with_decode only in
+    which timesteps are context. encode_ratio still sets the random-masking and band-set splits.
+    """
+
+    def _split_timestamps(
+        self, present_t: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode the first k present timesteps and decode the rest, k ~ U{1..n-1}."""
+        k = int(np.random.randint(1, len(present_t)))
+        return present_t[:k], present_t[k:]
 
 
 def propagate_tokenization_config(
