@@ -32,8 +32,10 @@ POOLER_DIM = 8
 
 
 def _timestamps(b: int, t: int) -> torch.Tensor:
-    days = torch.randint(1, 28, (b, t, 1), dtype=torch.long)
-    months = torch.randint(1, 13, (b, t, 1), dtype=torch.long)
+    days = torch.randint(0, 28, (b, t, 1), dtype=torch.long)
+    months = torch.randint(
+        0, 12, (b, t, 1), dtype=torch.long
+    )  # month embedding is 0..11
     years = torch.full((b, t, 1), 2022, dtype=torch.long)
     return torch.cat([days, months, years], dim=-1)
 
@@ -225,6 +227,32 @@ def test_fully_dropped_modality_runs() -> None:
     out = enc(x, patch_size=PATCH_SIZE)
     assert torch.isfinite(out["location_tokens"]).all()
     out["location_tokens"].sum().backward()
+
+
+def test_per_sample_empty_tower_in_mixed_batch_is_finite() -> None:
+    """One sample has no visible S1 token while another does: no NaN in outputs or grads.
+
+    This is the normal case under the v1.3 masking, which holds one of the three input
+    bandsets out entirely per instance, so every batch has towers that are empty for
+    some samples and padded against the others.
+    """
+    torch.manual_seed(0)
+    x = _masked_sample(b=3)
+    assert x.sentinel1_mask is not None
+    s1_mask = x.sentinel1_mask.clone()
+    s1_mask[1][s1_mask[1] == MaskValue.ONLINE_ENCODER.value] = MaskValue.DECODER.value
+    x = x._replace(sentinel1_mask=s1_mask)
+    enc = MultiEncoderConfig(**_encoder_kwargs(depth=1, tower_depth=2)).build()
+    enc.train()
+    out = enc(x, patch_size=PATCH_SIZE)
+    assert torch.isfinite(out["location_tokens"]).all()
+    assert torch.isfinite(out["tokens_and_masks"].sentinel1).all()
+    out["location_tokens"].square().sum().backward()
+    for name, p in enc.named_parameters():
+        if p.grad is not None:
+            assert torch.isfinite(p.grad).all(), name
+    # The sample with S1 held out got zero S1 patch tokens back (removed, not attended).
+    assert (out["tokens_and_masks"].sentinel1[1] == 0).all()
 
 
 def test_refuses_nonzero_token_exit() -> None:

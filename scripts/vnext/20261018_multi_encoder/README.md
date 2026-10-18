@@ -38,3 +38,28 @@ python scripts/vnext/20261018_multi_encoder/towers_t4_f8.py launch me_t4f8 ai2/j
 
 Per the v1.3 convention the architecture is baked into each file (`MODULE_PATH`), not passed
 as CLI overrides.
+
+## Compute (MACs, base size, `flops.py`, 2026-10-18)
+
+Training forward = online encoder + pooler + decoder + heads + projection-only target, under the
+v1.3 masking (which encodes 2 of the 3 input bandsets at 50% and holds the third out: 1/3 of the
+S1+S2+L8 tokens are visible, and one tower is empty for every sample). A step is about 3x this.
+
+| shape (patch grid, T, p) | control | towers t4+f8 | towers t4+f0 |
+|---|---|---|---|
+| hw9 T12 p4 (2916 tok) | 172 G | 169 G (98%) | 103 G (60%) |
+| hw16 T4 p4 (3072 tok) | 239 G | 236 G (99%) | 165 G (69%) |
+| hw32 T1 p4 (3072 tok) | 551 G | 547 G (99%) | 476 G (87%) |
+| hw4 T12 p4 (576 tok) | 31 G | 31 G (100%) | 20 G (63%) |
+
+Inference = unmasked encoder on S1+S2+L8 (location tokens + patch tokens):
+
+| shape | control | towers t4+f8 | towers t4+f0 |
+|---|---|---|---|
+| 16x16 T12 p1 / 64x64 T12 p4 (9216 tok) | 2449 G | 2101 G (86%) | 536 G (22%) |
+| 128x128 T1 p4 (3072 tok) | 538 G | 500 G (93%) | 210 G (39%) |
+| 32x32 T1 p4 (192 tok) | 22 G | 22 G (99%) | 10.5 G (48%) |
+
+The control's 2449 G at 16x16/T12/p1 is the number recorded for the v1.3 RC, so the counter is
+anchored. Per block over N visible tokens: linear 12·N·d², attention 2·N²·d; a tower layer costs
+the same linear work as a shared layer and 1/3 of its attention.
