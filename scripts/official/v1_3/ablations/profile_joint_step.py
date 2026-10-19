@@ -47,6 +47,28 @@ PROFILE_TARGETS = {
     # AllCaptures + narrow stage arms (config D / E): memory + step time on 1 GPU.
     "prof_allcapD": "allcap_slot_n4d192",
     "prof_allcapE": "allcap_slot_n2d256",
+    # Same, with per-module profiler regions (REGION_PREFIXES).
+    "prof_regD": "allcap_slot_n4d192",
+    "prof_regv13": "rc_ld1_pixtgt_pix512",
+}
+# Prefixes whose profile also times each named module's FORWARD as a region (backward
+# hooks break on modules returning dicts; backward is ~2x each region's forward).
+REGION_PREFIXES = ("prof_regD", "prof_regv13")
+# Region name -> submodule path(s) on the model (missing ones are skipped; a trailing
+# ".*" means every child, aggregated under one name).
+REGIONS = {
+    "encoder": ["encoder"],
+    "enc.patch_embed": ["encoder.patch_embeddings"],
+    "enc.composite_enc": ["encoder.composite_encodings"],
+    "enc.narrow_stage": ["encoder.narrow_stage"],
+    "enc.narrow_up": ["encoder.narrow_up"],
+    "enc.slot_merge": ["encoder.slot_merge"],
+    "enc.trunk_blocks": ["encoder.blocks.*"],
+    "enc.perceiver": ["encoder.perceiver"],
+    "decoder": ["decoder"],
+    "supervision_head": ["supervision_head"],
+    "distill_head": ["register_distillation_head"],
+    "target_encoder": ["target_encoder"],
 }
 # Perceiver-config overrides per prefix, applied on top of the arm's model.
 PROFILE_PERCEIVER_OVERRIDES: dict[str, dict] = {
@@ -128,6 +150,71 @@ def build_dataloader_config(common: CommonComponents):
     return config
 
 
+class RegionProfilerCallback(ProfilerCallback):
+    """ProfilerCallback that also times named model regions (see ``REGIONS``)."""
+
+    def pre_train(self):  # noqa: D102
+        super().pre_train()
+        if self._profiler is None:
+            return
+        import torch
+        from torch.autograd.profiler import record_function
+
+        model = self.trainer.train_module.model
+        model = getattr(model, "module", model)
+
+        def submodules(path: str) -> list:
+            if path.endswith(".*"):
+                try:
+                    return list(model.get_submodule(path[:-2]).children())
+                except AttributeError:
+                    return []
+            try:
+                return [model.get_submodule(path)]
+            except AttributeError:
+                return []
+
+        for name, paths in REGIONS.items():
+            for path in paths:
+                for module in submodules(path):
+                    stack: dict = {}
+
+                    def fwd_pre(_m, _a, name=name, stack=stack):  # type: ignore[no-untyped-def]
+                        r = record_function(f"region:fwd:{name}")
+                        r.__enter__()
+                        stack.setdefault("fwd", []).append(r)
+
+                    def fwd_post(_m, _a, _o, stack=stack):  # type: ignore[no-untyped-def]
+                        stack["fwd"].pop().__exit__(None, None, None)
+
+                    module.register_forward_pre_hook(fwd_pre)
+                    module.register_forward_hook(fwd_post)
+        logger.info(
+            f"Region profiling on {len(REGIONS)} regions (cuda={torch.cuda.is_available()})"
+        )
+
+    def _on_trace_ready(self, prof):  # noqa: D102
+        averages = self._profiler.key_averages()
+        steps = PROFILE_ACTIVE
+        rows = []
+        for event in averages:
+            if not event.key.startswith("region:"):
+                continue
+            device = getattr(event, "device_time_total", None)
+            if device is None:
+                device = getattr(event, "cuda_time_total", 0.0)
+            rows.append((event.key, event.count / steps, event.cpu_time_total, device))
+        lines = [
+            f"{'region':40s} {'calls/step':>10s} {'CPU ms/step':>12s} {'GPU ms/step':>12s}"
+        ]
+        for key, calls, cpu, device in sorted(rows, key=lambda r: -r[3]):
+            lines.append(
+                f"{key:40s} {calls:10.1f} {cpu / 1e3 / steps:12.1f} {device / 1e3 / steps:12.1f}"
+            )
+        logger.info("Region profile (per step):\n" + "\n".join(lines))
+        super()._on_trace_ready(prof)
+
+
 def build_trainer_config(common: CommonComponents):
     """The arm's trainer, stripped to a short profiled run."""
     trainer_config = _target(common).build_trainer_config(common)
@@ -139,7 +226,12 @@ def build_trainer_config(common: CommonComponents):
     checkpointer = trainer_config.callbacks["checkpointer"]
     checkpointer.save_interval = 10**9
     checkpointer.ephemeral_save_interval = None
-    trainer_config.callbacks["profiler"] = ProfilerCallback(
+    profiler_cls = (
+        RegionProfilerCallback
+        if _prefix(common) in REGION_PREFIXES
+        else ProfilerCallback
+    )
+    trainer_config.callbacks["profiler"] = profiler_cls(
         skip_first=PROFILE_SKIP,
         wait=1,
         warmup=PROFILE_WARMUP,
