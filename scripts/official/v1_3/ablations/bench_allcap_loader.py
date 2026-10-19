@@ -7,13 +7,17 @@ mode, and per modality the collated tensor shape with its count of tokens by mas
 (so padded vs real tokens are visible). Usage: ``python bench_allcap_loader.py [N]
 [num_workers]``; ``python bench_allcap_loader.py parts`` instead times the pieces of
 one sample in one process (h5 layout and read cost, getitem per composite mode with a
-profile, and the batch collate).
+profile, and the batch collate). With ``BENCH_SAMPLE_LOG=<dir>`` every loader worker
+appends one JSON line per sample to ``<dir>/<pid>.jsonl``: wall time, process / thread CPU
+time, and wall / CPU time inside h5py file opens and dataset reads (so waiting on
+storage separates from decompression and compute); ``summarize <dir>`` aggregates them.
 """
 
 import argparse
 import cProfile
 import io
 import json
+import os
 import pstats
 import sys
 import tempfile
@@ -31,6 +35,94 @@ import allcap_narrow as A  # noqa: E402
 import allcap_slot_n4d192 as D  # noqa: E402
 
 from olmoearth_pretrain.internal.experiment import SubCmd  # noqa: E402
+
+
+def _instrument(log_dir: str) -> None:
+    """Log per-sample wall / CPU / h5 time from each process (see module doc)."""
+    import h5py
+
+    from olmoearth_pretrain.data.dataset import OlmoEarthDataset
+
+    os.makedirs(log_dir, exist_ok=True)
+    h5t = {"wall": 0.0, "cpu": 0.0, "opens": 0, "reads": 0, "depth": 0}
+
+    def timed(fn, key):  # type: ignore[no-untyped-def]
+        # Only the outermost h5py call counts: a dataset read builds File wrappers
+        # around the already-open file internally (not real opens).
+        def wrapper(*a, **k):  # type: ignore[no-untyped-def]
+            # File(<FileID>) wraps an open file (group lookups do this); not an open.
+            wraps_open_file = len(a) > 1 and isinstance(a[1], h5py.h5f.FileID)
+            if h5t["depth"] or wraps_open_file:
+                return fn(*a, **k)
+            h5t["depth"] = 1
+            w, c = time.perf_counter(), time.thread_time()
+            try:
+                return fn(*a, **k)
+            finally:
+                h5t["depth"] = 0
+                h5t["wall"] += time.perf_counter() - w
+                h5t["cpu"] += time.thread_time() - c
+                h5t[key] += 1
+
+        return wrapper
+
+    h5py.File.__init__ = timed(h5py.File.__init__, "opens")  # type: ignore[method-assign]
+    h5py.Dataset.__getitem__ = timed(h5py.Dataset.__getitem__, "reads")  # type: ignore[method-assign]
+    getitem = OlmoEarthDataset.__getitem__
+
+    def logged(self, args):  # type: ignore[no-untyped-def]
+        h5t.update(wall=0.0, cpu=0.0, opens=0, reads=0, depth=0)
+        w, c, t = time.perf_counter(), time.process_time(), time.thread_time()
+        out = getitem(self, args)
+        row = {
+            "pid": os.getpid(),
+            "wall": time.perf_counter() - w,
+            "proc_cpu": time.process_time() - c,
+            "thread_cpu": time.thread_time() - t,
+            "h5_wall": h5t["wall"],
+            "h5_cpu": h5t["cpu"],
+            "h5_opens": h5t["opens"],
+            "h5_reads": h5t["reads"],
+            "composite": args.composite_days,
+            "hw_p": args.sampled_hw_p,
+            "ps": args.patch_size,
+            "torch_threads": torch.get_num_threads(),
+        }
+        with open(f"{log_dir}/{os.getpid()}.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+        return out
+
+    OlmoEarthDataset.__getitem__ = logged  # type: ignore[method-assign]
+
+
+def _summarize(log_dir: str) -> None:
+    """Aggregate the per-sample logs of ``_instrument``."""
+    rows = []
+    for name in os.listdir(log_dir):
+        with open(os.path.join(log_dir, name)) as f:
+            rows += [json.loads(line) for line in f]
+    out: dict = {"samples": len(rows), "processes": len({r["pid"] for r in rows})}
+    for key in ("wall", "proc_cpu", "thread_cpu", "h5_wall", "h5_cpu"):
+        v = np.array([r[key] for r in rows])
+        out[key] = {
+            "mean": round(float(v.mean()), 3),
+            "p50": round(float(np.median(v)), 3),
+            "p90": round(float(np.quantile(v, 0.9)), 3),
+        }
+    for mode in sorted({r["composite"] for r in rows}):
+        sub = [r for r in rows if r["composite"] == mode]
+        out[f"composite_{mode}"] = {
+            k: round(float(np.mean([r[k] for r in sub])), 3)
+            for k in ("wall", "proc_cpu", "h5_wall", "h5_cpu")
+        } | {"n": len(sub)}
+    out["torch_threads"] = sorted({r["torch_threads"] for r in rows})
+    out["h5_opens_per_sample"] = round(float(np.mean([r["h5_opens"] for r in rows])), 2)
+    print(json.dumps(out), flush=True)
+
+
+if os.environ.get("BENCH_SAMPLE_LOG"):
+    # Module level so spawned loader workers (which re-import this module) apply it.
+    _instrument(os.environ["BENCH_SAMPLE_LOG"])
 
 
 def _describe(batch: object) -> dict:
@@ -174,6 +266,9 @@ def main() -> None:
     """Run the benchmark."""
     if len(sys.argv) > 1 and sys.argv[1] == "parts":
         _parts()
+        return
+    if len(sys.argv) > 2 and sys.argv[1] == "summarize":
+        _summarize(sys.argv[2])
         return
     parser = argparse.ArgumentParser()
     parser.add_argument("n", type=int, nargs="?", default=60)
