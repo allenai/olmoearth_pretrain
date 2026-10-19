@@ -271,6 +271,13 @@
     "decoder.input_norm.weight": [
       768
     ],
+    "decoder.location_tokens_to_decoder_embed.bias": [
+      768
+    ],
+    "decoder.location_tokens_to_decoder_embed.weight": [
+      768,
+      768
+    ],
     "decoder.mask_token": [
       768
     ],
@@ -280,19 +287,491 @@
     "decoder.norm.weight": [
       768
     ],
-    "decoder.register_to_decoder_embed.bias": [
-      768
-    ],
-    "decoder.register_to_decoder_embed.weight": [
-      768,
-      768
-    ],
     "decoder.to_output_embed.bias": [
       768
     ],
     "decoder.to_output_embed.weight": [
       768,
       768
+    ],
+    "encoder.attention_pooler.input_norms.0.bias": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.0.weight": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.3.bias": [
+      768
+    ],
+    "encoder.attention_pooler.input_norms.3.weight": [
+      768
+    ],
+    "encoder.attention_pooler.learned_query": [
+      1,
+      768
+    ],
+    "encoder.attention_pooler.norm.bias": [
+      768
+    ],
+    "encoder.attention_pooler.norm.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.0.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.0.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.1.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.1.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.2.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.2.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.read_blocks.3.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.read_blocks.3.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.0.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.1.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.2.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.k.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.k.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.proj.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.proj.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.q.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.q.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.v.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.attn.v.weight": [
+      768,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.mlp.fc1.bias": [
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.mlp.fc1.weight": [
+      3072,
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.mlp.fc2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.mlp.fc2.weight": [
+      768,
+      3072
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.norm1.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.norm1.weight": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.norm2.bias": [
+      768
+    ],
+    "encoder.attention_pooler.self_attn_blocks.3.norm2.weight": [
+      768
+    ],
+    "encoder.attention_pooler.student.0.bias": [
+      128
+    ],
+    "encoder.attention_pooler.student.0.weight": [
+      128,
+      768
+    ],
+    "encoder.attention_pooler.student.1.bias": [
+      128
+    ],
+    "encoder.attention_pooler.student.1.weight": [
+      128
     ],
     "encoder.blocks.0.attn.k.bias": [
       768
@@ -1174,472 +1653,6 @@
       768,
       4096
     ],
-    "encoder.perceiver.input_norms.0.bias": [
-      768
-    ],
-    "encoder.perceiver.input_norms.0.weight": [
-      768
-    ],
-    "encoder.perceiver.input_norms.1.bias": [
-      768
-    ],
-    "encoder.perceiver.input_norms.1.weight": [
-      768
-    ],
-    "encoder.perceiver.input_norms.2.bias": [
-      768
-    ],
-    "encoder.perceiver.input_norms.2.weight": [
-      768
-    ],
-    "encoder.perceiver.input_norms.3.bias": [
-      768
-    ],
-    "encoder.perceiver.input_norms.3.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.0.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.0.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.0.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.1.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.1.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.1.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.2.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.2.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.2.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.3.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.latent_blocks.3.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.latent_blocks.3.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.norm.bias": [
-      768
-    ],
-    "encoder.perceiver.norm.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.read_blocks.0.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.read_blocks.0.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.0.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.read_blocks.1.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.read_blocks.1.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.1.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.read_blocks.2.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.read_blocks.2.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.2.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.k.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.k.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.proj.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.proj.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.q.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.q.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.v.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.attn.v.weight": [
-      768,
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.mlp.fc1.bias": [
-      3072
-    ],
-    "encoder.perceiver.read_blocks.3.mlp.fc1.weight": [
-      3072,
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.mlp.fc2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.mlp.fc2.weight": [
-      768,
-      3072
-    ],
-    "encoder.perceiver.read_blocks.3.norm1.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.norm1.weight": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.norm2.bias": [
-      768
-    ],
-    "encoder.perceiver.read_blocks.3.norm2.weight": [
-      768
-    ],
-    "encoder.perceiver.register": [
-      1,
-      768
-    ],
     "encoder.project_and_aggregate.projection.0.bias": [
       768
     ],
@@ -1647,56 +1660,43 @@
       768,
       768
     ],
-    "encoder.register_student.0.bias": [
-      128
-    ],
-    "encoder.register_student.0.weight": [
-      128,
-      768
-    ],
-    "encoder.register_student.1.bias": [
-      128
-    ],
-    "encoder.register_student.1.weight": [
-      128
-    ],
-    "register_distillation_head.back_projections.128.0.bias": [
+    "location_token_distillation_head.back_projections.128.0.bias": [
       256
     ],
-    "register_distillation_head.back_projections.128.0.weight": [
+    "location_token_distillation_head.back_projections.128.0.weight": [
       256,
       128
     ],
-    "register_distillation_head.back_projections.128.1.bias": [
+    "location_token_distillation_head.back_projections.128.1.bias": [
       256
     ],
-    "register_distillation_head.back_projections.128.1.weight": [
+    "location_token_distillation_head.back_projections.128.1.weight": [
       256
     ],
-    "register_distillation_head.back_projections.128.3.bias": [
+    "location_token_distillation_head.back_projections.128.3.bias": [
       768
     ],
-    "register_distillation_head.back_projections.128.3.weight": [
+    "location_token_distillation_head.back_projections.128.3.weight": [
       768,
       256
     ],
-    "register_distillation_head.back_projections.64.0.bias": [
+    "location_token_distillation_head.back_projections.64.0.bias": [
       256
     ],
-    "register_distillation_head.back_projections.64.0.weight": [
+    "location_token_distillation_head.back_projections.64.0.weight": [
       256,
       64
     ],
-    "register_distillation_head.back_projections.64.1.bias": [
+    "location_token_distillation_head.back_projections.64.1.bias": [
       256
     ],
-    "register_distillation_head.back_projections.64.1.weight": [
+    "location_token_distillation_head.back_projections.64.1.weight": [
       256
     ],
-    "register_distillation_head.back_projections.64.3.bias": [
+    "location_token_distillation_head.back_projections.64.3.bias": [
       768
     ],
-    "register_distillation_head.back_projections.64.3.weight": [
+    "location_token_distillation_head.back_projections.64.3.weight": [
       768,
       256
     ],

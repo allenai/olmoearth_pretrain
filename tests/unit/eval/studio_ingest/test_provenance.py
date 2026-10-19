@@ -7,11 +7,9 @@ from typing import Any
 import pytest
 
 from olmoearth_pretrain.evals.studio_ingest.provenance import (
-    REPO_ROOT_ENV_VAR,
-    find_repo_root,
-    repo_relative_config_dir,
-    resolve_repo_config_path,
-    sha256_of_file,
+    DATASET_CONFIGS_DIR,
+    packaged_config_name,
+    packaged_model_yaml_path,
     verify_config_json_hash,
 )
 from olmoearth_pretrain.evals.studio_ingest.schema import EvalDatasetEntry
@@ -30,88 +28,46 @@ def _make_entry(**overrides: Any) -> EvalDatasetEntry:
     return EvalDatasetEntry(**defaults)
 
 
-def test_find_repo_root_locates_checkout() -> None:
-    """find_repo_root walks up from the package to the checkout root."""
-    root = find_repo_root()
-    assert root is not None
-    assert (root / "pyproject.toml").exists()
-    assert (root / "olmoearth_pretrain").is_dir()
-
-
-def test_find_repo_root_env_override(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The env var override wins over walking up from __file__."""
-    monkeypatch.setenv(REPO_ROOT_ENV_VAR, str(tmp_path))
-    assert find_repo_root() == tmp_path
-
-
-def test_find_repo_root_env_override_missing_dir(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A bad env override fails loudly instead of falling back."""
-    monkeypatch.setenv(REPO_ROOT_ENV_VAR, "/nonexistent/nowhere")
-    with pytest.raises(FileNotFoundError):
-        find_repo_root()
-
-
-def test_sha256_of_file(tmp_path: Path) -> None:
-    """sha256_of_file matches hashlib over the raw bytes."""
-    f = tmp_path / "config.json"
-    f.write_bytes(b'{"layers": {}}')
-    assert sha256_of_file(f) == hashlib.sha256(b'{"layers": {}}').hexdigest()
-
-
-def test_repo_relative_config_dir_inside_repo() -> None:
-    """Config dirs inside the checkout become repo-relative paths."""
-    root = find_repo_root()
-    assert root is not None
-    inside = root / "data" / "rslearn_dataset_configs" / "pastis_rslearn"
+def test_packaged_config_name_inside_package() -> None:
+    """Packaged dataset config dirs map to their name."""
     assert (
-        repo_relative_config_dir(str(inside))
-        == "data/rslearn_dataset_configs/pastis_rslearn"
+        packaged_config_name(str(DATASET_CONFIGS_DIR / "pastis_rslearn"))
+        == "pastis_rslearn"
     )
 
 
-def test_repo_relative_config_dir_outside_repo(tmp_path: Path) -> None:
-    """Config dirs outside the checkout return None."""
-    assert repo_relative_config_dir(str(tmp_path)) is None
+def test_packaged_config_name_outside_package(tmp_path: Path) -> None:
+    """Config dirs outside the packaged dataset_configs return None."""
+    assert packaged_config_name(str(tmp_path)) is None
 
 
-def test_resolve_repo_config_path_existing() -> None:
-    """Resolving a committed config returns an existing absolute path."""
-    resolved = resolve_repo_config_path(
-        "data/rslearn_dataset_configs/pastis_rslearn", "model.yaml"
-    )
-    assert Path(resolved).exists()
+def test_packaged_model_yaml_path_existing() -> None:
+    """Resolving a packaged config returns an existing path."""
+    assert Path(packaged_model_yaml_path("pastis_rslearn")).exists()
 
 
-def test_resolve_repo_config_path_missing_file() -> None:
-    """Resolving a missing repo config raises instead of falling back."""
+def test_packaged_model_yaml_path_missing_raises() -> None:
+    """Resolving a missing packaged config raises instead of falling back."""
     with pytest.raises(FileNotFoundError, match="does not exist"):
-        resolve_repo_config_path(
-            "data/rslearn_dataset_configs/does_not_exist", "model.yaml"
-        )
+        packaged_model_yaml_path("does_not_exist")
 
 
 def test_model_yaml_path_falls_back_to_weka_copy() -> None:
-    """Entries without config_repo_dir keep reading the Weka copy."""
+    """Entries without packaged_config keep reading the Weka copy."""
     entry = _make_entry()
     assert entry.model_yaml_path == "/tmp/weka/model.yaml"
 
 
-def test_model_yaml_path_resolves_repo_config() -> None:
-    """Entries with config_repo_dir read the git-tracked model.yaml."""
-    entry = _make_entry(config_repo_dir="data/rslearn_dataset_configs/pastis_rslearn")
-    assert entry.model_yaml_path.endswith(
-        "data/rslearn_dataset_configs/pastis_rslearn/model.yaml"
-    )
+def test_model_yaml_path_resolves_packaged_config() -> None:
+    """Entries with packaged_config read the packaged model.yaml."""
+    entry = _make_entry(packaged_config="pastis_rslearn")
+    assert entry.model_yaml_path.endswith("dataset_configs/pastis_rslearn/model.yaml")
     assert Path(entry.model_yaml_path).exists()
 
 
-def test_model_yaml_path_repo_config_missing_raises() -> None:
-    """A dangling config_repo_dir raises instead of falling back."""
-    entry = _make_entry(config_repo_dir="data/rslearn_dataset_configs/nope")
+def test_model_yaml_path_packaged_config_missing_raises() -> None:
+    """A dangling packaged_config raises instead of falling back."""
+    entry = _make_entry(packaged_config="nope")
     with pytest.raises(FileNotFoundError):
         _ = entry.model_yaml_path
 
@@ -154,10 +110,10 @@ def test_verify_config_json_hash_missing_file_warns_only(
 def test_registry_entry_roundtrips_provenance_fields() -> None:
     """Provenance fields survive a model_dump/model_validate roundtrip."""
     entry = _make_entry(
-        config_repo_dir="data/rslearn_dataset_configs/pastis_rslearn",
+        packaged_config="pastis_rslearn",
         config_json_sha256="a" * 64,
     )
     dumped = entry.model_dump(mode="json")
     reloaded = EvalDatasetEntry.model_validate(dumped)
-    assert reloaded.config_repo_dir == entry.config_repo_dir
+    assert reloaded.packaged_config == entry.packaged_config
     assert reloaded.config_json_sha256 == "a" * 64

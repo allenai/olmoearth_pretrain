@@ -44,9 +44,9 @@ from olmoearth_pretrain.evals.models import (
 )
 from olmoearth_pretrain.evals.models.dinov3.dinov3 import DINOv3, DinoV3Models
 from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
     Encoder,
     EncoderConfig,
-    PerceiverConfig,
 )
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.nn.tokenization import ModalityTokenization, TokenizationConfig
@@ -91,7 +91,7 @@ def build_v1_3_rc_encoder(with_student: bool) -> Encoder:
     Field values mirror ``encoder_config`` in
     regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_config.json.
     ``with_student=True`` includes the shipped d128/d64 linear projection
-    (the distillation student); ``False`` measures the Perceiver alone.
+    (the distillation student); ``False`` measures the AttentionPooler alone.
     """
     config = EncoderConfig(
         supported_modality_names=[
@@ -125,9 +125,9 @@ def build_v1_3_rc_encoder(with_student: bool) -> Encoder:
         rope_mixed_base=10000.0,
         temporal_rope_dim_frac=0.25,
         rope_temporal_coordinate_scale=1.0 / 30.0,
-        perceiver_config=PerceiverConfig(
-            register_dim=768,
-            latent_depth=4,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=768,
+            pooler_depth=4,
             per_depth_read_proj=True,
             attn_dim=768,
             student_dims=[128, 64] if with_student else None,

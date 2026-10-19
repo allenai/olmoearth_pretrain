@@ -22,8 +22,8 @@ MAX_PATCH_SIZE = 8
 H_PIX, W_PIX = P_H * MAX_PATCH_SIZE, P_W * MAX_PATCH_SIZE  # 32, 32
 
 
-def _make_register_grid() -> torch.Tensor:
-    """A register grid [B, n_h, n_w, D] the heads read from."""
+def _make_location_token_grid() -> torch.Tensor:
+    """A location-token grid [B, n_h, n_w, D] the heads read from."""
     return torch.randn(B, P_H, P_W, D, requires_grad=True)
 
 
@@ -54,7 +54,7 @@ def _make_batch_with_srtm() -> MaskedOlmoEarthSample:
 
 
 class TestSupervisionHead:
-    """Test SupervisionHead forward pass on the register grid."""
+    """Test SupervisionHead forward pass on the location-token grid."""
 
     @pytest.fixture
     def worldcover_config(self) -> dict[str, SupervisionModalityConfig]:
@@ -74,7 +74,7 @@ class TestSupervisionHead:
         head = SupervisionHead(
             worldcover_config, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
         )
-        preds = head(_make_register_grid(), _make_batch_with_worldcover())
+        preds = head(_make_location_token_grid(), _make_batch_with_worldcover())
         assert "worldcover" in preds
         assert preds["worldcover"].shape == (B, H_PIX, W_PIX, 1, 11)
 
@@ -99,7 +99,7 @@ class TestSupervisionHead:
                 (B, small_h, small_w, 1, 1), MaskValue.DECODER.value
             ),
         )
-        preds = head(_make_register_grid(), batch)
+        preds = head(_make_location_token_grid(), batch)
         assert preds["worldcover"].shape == (B, small_h, small_w, 1, 11)
 
     def test_missing_target_still_produces_output(
@@ -111,7 +111,7 @@ class TestSupervisionHead:
         )
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         preds = head(
-            _make_register_grid(), MaskedOlmoEarthSample(timestamps=timestamps)
+            _make_location_token_grid(), MaskedOlmoEarthSample(timestamps=timestamps)
         )
         assert "worldcover" in preds
         # No target to resize to: the unfolded grid is returned as is.
@@ -133,12 +133,12 @@ class TestSupervisionHead:
             ),
         }
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
-        preds = head(_make_register_grid(), _make_batch_with_srtm())
+        preds = head(_make_location_token_grid(), _make_batch_with_srtm())
         assert "srtm" in preds
         assert preds["srtm"].shape == (B, H_PIX, W_PIX, 1, 1)
 
     def test_non_spatial_forward(self) -> None:
-        """Non-spatial modality reads the mean-pooled grid and produces [B, C]."""
+        """Non-spatial modality reads the mean-location-token grid and produces [B, C]."""
         cfg = {
             "latlon": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.REGRESSION,
@@ -148,7 +148,7 @@ class TestSupervisionHead:
         head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
         timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
         batch = MaskedOlmoEarthSample(timestamps=timestamps, latlon=torch.rand(B, 2))
-        preds = head(_make_register_grid(), batch)
+        preds = head(_make_location_token_grid(), batch)
         assert "latlon" in preds
         assert preds["latlon"].shape == (B, NON_SPATIAL_CHANNELS)
         assert preds["latlon"].requires_grad

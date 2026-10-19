@@ -16,12 +16,13 @@ Adding a new eval dataset requires two things:
 Optionally, to make the dataset evaluable by precomputed embedding products
 (AlphaEarth/GSE, Tessera): the dataset is eligible if its windows have real
 geometry and a resolvable year. After ingest, run the embedding materializer
-over it, then `scripts/tools/wire_embedding_modalities.py` to declare the
-`gse`/`tessera` layer in its `config.json`, add the matching `model.yaml`
-input, and list the modality in its `modalities` (which is what
-`supported_modalities` reads). Re-stamp `config_json_sha256` afterwards with
-`scripts/tools/backfill_eval_registry_provenance.py`, since eval jobs verify
-the dataset folder's `config.json` against it.
+over it (it declares the layer in the dataset's `config.json`), then
+`scripts/tools/register_embedding_products.py`. That records the product under
+the entry's `embedding_products` (which `supported_modalities` reads) and
+re-stamps `config_json_sha256`. Nothing is added to `model.yaml`: eval jobs add
+the product's input for the precomputed baseline at load time, and for every
+model skip windows whose product layer is not completed on disk, so all models
+are scored on the same windows. Commit `registry.json` afterwards.
 
 ---
 
@@ -31,13 +32,13 @@ the dataset folder's `config.json` against it.
 - An rslearn dataset with a prepared `config.json` and a `model.yaml` training config
 
 > **Commit the config to the repo first.** Put the dataset's `model.yaml` under
-> `data/rslearn_dataset_configs/{name}/` and pass that directory as `CONFIG`.
-> When the config dir is inside the repo checkout, ingest records its
-> repo-relative path on the registry entry and **eval jobs read the
-> git-tracked model.yaml directly** — pinned by the commit being run — instead
-> of the copy in the Weka dataset folder (which can silently go stale between
-> ingests). Configs passed from outside the repo still work but fall back to
-> the Weka copy, and ingest will warn about it.
+> `olmoearth_pretrain/evals/studio_ingest/dataset_configs/{name}/` and pass that
+> directory as `CONFIG`. These configs are installed with the package, so when
+> the config dir is one of them, ingest records `{name}` on the registry entry
+> and **eval jobs read the packaged model.yaml directly** — pinned by the
+> commit being run — instead of the copy in the Weka dataset folder (which can
+> silently go stale between ingests). Configs passed from elsewhere still work
+> but fall back to the Weka copy, and ingest will warn about it.
 
 ---
 
@@ -77,8 +78,8 @@ tail -f "${NAME}_ingest.out"
 
 1. **Copies** the dataset to `/weka/dfive-default/olmoearth/eval_datasets/{name}/`
 2. **Copies** `model.yaml` into the dataset folder as a provenance snapshot, and
-   records config provenance on the registry entry: `config_repo_dir` (when the
-   config dir is inside the repo — eval jobs then read the git-tracked
+   records config provenance on the registry entry: `packaged_config` (when the
+   config dir is a packaged dataset config — eval jobs then read the packaged
    model.yaml instead of the snapshot) and `config_json_sha256` (eval jobs
    verify the dataset folder's `config.json` against this hash and fail loudly
    if it has drifted)
@@ -170,7 +171,7 @@ Once ingested, add a `DownstreamTaskConfig` to the eval tasks dict in your train
 
 A PR adding a new eval dataset should include:
 
-1. **The `model.yaml` committed** under `data/rslearn_dataset_configs/{name}/`
+1. **The `model.yaml` committed** under `olmoearth_pretrain/evals/studio_ingest/dataset_configs/{name}/`
 2. **The ingest has been run** and the dataset is registered (verify with `cli list`)
 3. **Registry update committed** at `olmoearth_pretrain/evals/datasets/studio_ingest/registry.json`
 4. **`DownstreamTaskConfig`** added to the relevant training script(s)
@@ -188,8 +189,8 @@ A PR adding a new eval dataset should include:
     │                        # fields; sha256-pinned in the registry — eval jobs fail
     │                        # loudly if it drifts from what was ingested)
     ├── model.yaml           # snapshot of the model/task config at ingest time; eval
-    │                        # jobs read the git-tracked config instead when the
-    │                        # registry entry has config_repo_dir set
+    │                        # jobs read the packaged config instead when the
+    │                        # registry entry has packaged_config set
     ├── windows/             # rslearn windows with split tags written
     └── .rslearn_dataset_index/   # cached window index
 
@@ -197,7 +198,7 @@ Registry: /weka/dfive-default/olmoearth/eval_datasets/registry/registry.json
 ```
 
 Existing datasets ingested before config provenance was added have neither
-`config_repo_dir` nor `config_json_sha256`; they keep working (with a warning)
+`packaged_config` nor `config_json_sha256`; they keep working (with a warning)
 via the Weka model.yaml copy and unverified config.json. To stamp them, run
 `scripts/tools/backfill_eval_registry_provenance.py` on a Weka-mounted machine
 and commit the registry update.

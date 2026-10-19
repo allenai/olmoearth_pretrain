@@ -50,9 +50,8 @@ After materialize completes (re-run ``plan`` until progress is ~100%):
    registry.json: the registry pins config.json by sha256
    (``verify_config_json_hash``), so every eval on an edited dataset FAILS
    LOUDLY until the new hash is recorded.
-2. Regenerate + re-sync model.yaml (build_year_aligned_eval_configs.py adds
-   the optional ``landsat`` input; the weka copy must match the repo copy for
-   config_repo_dir provenance to hold).
+2. Regenerate the packaged model.yaml (build_year_aligned_eval_configs.py
+   adds the optional ``landsat`` input) and commit it.
 
 Landsat eval tasks are deliberately NOT registered yet: the landsat input is
 ``required: false`` (a required input would shrink the evaluated window set
