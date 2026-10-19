@@ -241,6 +241,51 @@ class RegionProfilerCallback(ProfilerCallback):
                 )
             except AttributeError:
                 pass
+        # Front-end padding: positions in the padded per-modality token grids the patch
+        # embedding produces vs ONLINE_ENCODER (encoded) and MISSING positions.
+        from olmoearth_pretrain.datatypes import MaskValue
+
+        self._embed_stats = {"positions": 0, "online": 0, "missing": 0, "calls": 0}
+
+        def embed_hook(_m, _args, out):  # type: ignore[no-untyped-def]
+            for key, value in out.items():
+                if not key.endswith("_mask"):
+                    continue
+                self._embed_stats["positions"] += value.numel()
+                self._embed_stats["online"] += int(
+                    (value == MaskValue.ONLINE_ENCODER.value).sum()
+                )
+                self._embed_stats["missing"] += int(
+                    (value == MaskValue.MISSING.value).sum()
+                )
+            self._embed_stats["calls"] += 1
+
+        try:
+            model.get_submodule("encoder.patch_embeddings").register_forward_hook(
+                embed_hook
+            )
+        except AttributeError:
+            pass
+        # Tokens per merged cell, as the narrow stage groups them (every step).
+        self._cell_hist = torch.zeros(10, dtype=torch.long)
+        self._cell_edges = [1, 2, 4, 8, 16, 32, 64, 128, 256, 10**9]
+
+        def cell_hook(_m, args, kwargs):  # type: ignore[no-untyped-def]
+            mask = kwargs.get("attn_mask")
+            if mask is None or mask.dim() != 2:
+                return
+            n = mask.sum(dim=1).cpu()
+            edges = torch.tensor(self._cell_edges)
+            self._cell_hist += torch.bincount(
+                torch.bucketize(n, edges, right=False), minlength=10
+            )[:10]
+
+        try:
+            model.get_submodule(
+                "encoder.narrow_stage.blocks.0"
+            ).register_forward_pre_hook(cell_hook, with_kwargs=True)
+        except AttributeError:
+            pass
         logger.info(
             f"Region profiling on {len(REGIONS)} regions (cuda={torch.cuda.is_available()})"
         )
@@ -276,6 +321,32 @@ class RegionProfilerCallback(ProfilerCallback):
                 f"mean L {sum(seq for _, seq, _ in recent) / n:.0f}, "
                 f"max L {max((seq for _, seq, _ in recent), default=0)}, "
                 f"valid fraction {sum(fracs) / max(1, len(fracs)):.3f}"
+            )
+        e = self._embed_stats
+        if e["calls"]:
+            logger.info(
+                f"Patch-embed grid over {e['calls']} calls: positions {e['positions']}, "
+                f"online {e['online'] / max(1, e['positions']):.3f}, "
+                f"missing {e['missing'] / max(1, e['positions']):.3f}"
+            )
+        hist = self._cell_hist.tolist()
+        if sum(hist):
+            labels = [
+                "1",
+                "2",
+                "3-4",
+                "5-8",
+                "9-16",
+                "17-32",
+                "33-64",
+                "65-128",
+                "129-256",
+                ">256",
+            ]
+            total = sum(hist)
+            logger.info(
+                "Tokens per cell at the narrow stage (share of cells): "
+                + ", ".join(f"{lab}: {c / total:.3f}" for lab, c in zip(labels, hist))
             )
         if torch.cuda.is_available():
             logger.info(
