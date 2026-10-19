@@ -64,6 +64,9 @@ ALLCAP_SELECTIONS = (
     ALLCAP_LEAST_CLOUDY_SLOT_REAL_DATES,
     ALLCAP_RANDOM_CLEAR_SLOT,
 )
+# Env var naming a directory with a per-capture-chunked copy of the allcap sample files
+# (same sample_<i>.h5 names); the dataset reads a sample from it when present there.
+ALLCAP_SAMPLE_DIR_ENV = "OE_ALLCAP_SAMPLE_DIR"
 
 NUM_SLOTS = MAX_SEQUENCE_LENGTH
 SLOT_DAYS = 30
@@ -346,7 +349,7 @@ def select_slots(
 
 def selection_to_sample(
     sel: SlotSelection,
-    series: dict[str, np.ndarray],
+    series: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Build the v1.3 ``(sample_dict, missing_timesteps_masks)`` from a selection.
 
@@ -396,20 +399,57 @@ def _read_selection_inputs(
     return s2_ts, s2_cloud, s1_ts, span_start
 
 
+class _TimeSubset:
+    """A ``(H, W, T, C)`` stack of which only the captures ``kept`` (sorted) were read.
+
+    Indexing ``[:, :, idx, :]`` with original capture indices (all in ``kept``) returns
+    exactly what the full stack would, so :func:`selection_to_sample` is unchanged.
+    """
+
+    def __init__(self, data: np.ndarray, kept: np.ndarray) -> None:
+        self.data = data
+        self.kept = kept
+
+    def __getitem__(self, key: tuple) -> np.ndarray:
+        h, w, idx, c = key
+        pos = np.searchsorted(self.kept, idx)
+        assert np.array_equal(self.kept[pos], idx), "capture was not read"
+        return self.data[h, w, pos, c]
+
+
+def _is_per_capture(ds: Any) -> bool:
+    """True if a 4-D ``(H, W, T, C)`` dataset stores one chunk per capture (``_tchunk``)."""
+    return ds.ndim == 4 and ds.chunks is not None and ds.chunks[2] == 1
+
+
 def _read_series(
     h5file: Any, training_modalities: list[str], sels: list[SlotSelection]
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray | _TimeSubset]:
     """The S2/S1 stacks that at least one of ``sels`` uses."""
-    series = {}
+    series: dict[str, np.ndarray | _TimeSubset] = {}
     for name, attr in ((S2, "s2_idx"), (S1, "s1_idx")):
         if (
             name in training_modalities
             and name in h5file
             and any((getattr(sel, attr) >= 0).any() for sel in sels)
         ):
-            # One chunk spans all T, so reading the whole stack costs the same
-            # decompression as a subset and avoids h5py's per-index hyperslab path.
-            series[name] = h5file[name][()]
+            ds = h5file[name]
+            if _is_per_capture(ds):
+                # Per-capture chunks (Marek's _tchunk copy): decompress only the
+                # captures some selection uses (<= 12 per view of ~70).
+                kept = np.unique(
+                    np.concatenate([getattr(sel, attr) for sel in sels])
+                )
+                kept = kept[kept >= 0]
+                # One plain slice per capture: ~10 ms for 12 captures of a 128x128x12
+                # S2 stack, vs ~170 ms for h5py's list-index path and ~110-130 ms for
+                # the whole stack (2026-10-19, analysis/tchunk_reader/profile_read.py).
+                data = np.stack([ds[:, :, int(j), :] for j in kept], axis=2)
+                series[name] = _TimeSubset(data, kept)
+            else:
+                # One chunk spans all T, so reading the whole stack costs the same
+                # decompression as a subset and avoids h5py's per-index hyperslab path.
+                series[name] = ds[()]
     return series
 
 

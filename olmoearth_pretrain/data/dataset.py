@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import shutil
 import time
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from olmoearth_pretrain._compat import (
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.allcap import (
     ALLCAP_RANDOM_CLEAR,
+    ALLCAP_SAMPLE_DIR_ENV,
     ALLCAP_SELECTIONS,
     read_allcap_sample,
     read_allcap_sample_two_draws,
@@ -554,6 +556,13 @@ class OlmoEarthDataset(Dataset):
                 "get the same captures"
             )
         self.allcap_two_draws = allcap_two_draws
+        # Optional per-capture-chunked copy of the allcap sample files (Marek's _tchunk,
+        # exact-verified per file). Read from it when a sample exists there, else from
+        # h5py_dir; metadata and latlon files always come from h5py_dir.
+        sample_dir = os.environ.get(ALLCAP_SAMPLE_DIR_ENV)
+        self.allcap_sample_dir = (
+            UPath(sample_dir) if sample_dir and allcap_selection is not None else None
+        )
         if filter_idx_file is not None:
             self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
             assert isinstance(self.indices_to_filter, np.ndarray), (
@@ -1001,7 +1010,12 @@ class OlmoEarthDataset(Dataset):
 
     def _get_h5_file_path(self, index: int) -> UPath:
         """Get the h5 file path."""
-        return self.h5py_dir / ConvertToH5py.sample_file_pattern.format(index=index)
+        name = ConvertToH5py.sample_file_pattern.format(index=index)
+        if self.allcap_sample_dir is not None:
+            alt = self.allcap_sample_dir / name
+            if alt.exists():
+                return alt
+        return self.h5py_dir / name
 
     @staticmethod
     def _crop_timestamps_and_masks(
