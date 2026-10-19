@@ -145,6 +145,23 @@ uv run --extra dev pytest tests_minimal_deps/
 
 The `tests_minimal_deps/` directory contains tests that verify model loading works both with and without `olmo-core` installed. These run twice in CI to ensure compatibility.
 
+## Cite OlmoEarth
+
+To cite the OlmoEarth software itself (this repository) rather than a particular paper, please use:
+
+```bibtex
+@software{olmoearth_pretrain,
+  author    = {{OlmoEarth Team}},
+  title     = {{OlmoEarth}: A library for developing earth system foundation models},
+  publisher = {Allen Institute for AI},
+  url       = {https://github.com/allenai/olmoearth_pretrain},
+  version   = {0.1.2},
+  year      = {2026}
+}
+```
+
+Please set `version` and `year` to the release you used. To cite a specific model, cite its report (all models and their reports are listed in the [model summary](https://github.com/allenai/olmoearth_pretrain#model-summary)).
+
 ## License
 
 This code is licensed under the [OlmoEarth Artifact License](LICENSE).

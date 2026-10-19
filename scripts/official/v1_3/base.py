@@ -1,4 +1,4 @@
-"""OlmoEarth v1.3: the register-bottleneck teacher with a distilled 128-d student.
+"""OlmoEarth v1.3: the AttentionPooler teacher with a distilled 128-d student.
 
 v1.3 is the v1.2 recipe (``scripts/official/v1_2/base.py``: hidden patch-embed
 projection, mixed 3D RoPE, decode-only map modalities) with two additions and a
@@ -7,24 +7,24 @@ faster training stack. Everything below is what the release run
 (W&B project ``2026_08_26_student_norm``) trained with; the v1.2 config is imported
 rather than copied so the two versions cannot drift apart silently.
 
-**Aggregation -- the spatial register bottleneck** (``regbtl``). A Perceiver-style
-read of the patch tokens into a register grid that is a purely spatial summary:
+**Aggregation -- the AttentionPooler** (``regbtl``). An attention-pooling read of
+the patch tokens into a grid of location tokens that is a purely spatial summary:
 
 * the grid has no temporal axis, so the RoPE is asymmetric: the encoder keeps v1.2's
   3D mixed RoPE over ``(t, row, col)``, the bottleneck reads with 2D ``(row, col)``
-  RoPE, and the decoder cross-attends the register grid with 2D RoPE (mask tokens
+  RoPE, and the decoder cross-attends the location tokens with 2D RoPE (mask tokens
   recover their timestep from the additive slot-index + month encodings);
-* a single learned latent cloned to match the patch grid at forward time, so
+* a single learned query cloned to match the patch grid at forward time, so
   windowing stays arbitrary;
 * interleaved reads with per-depth read projections, ``[read -> self-attn] x 4``;
-* ``register_dim=768`` with attention at ENCODER width (``attn_dim``), so
-  the register width is purely the storage width;
-* register supervision: per-modality heads on the register grid predict the
+* ``pooler_dim=768`` with attention at ENCODER width (``attn_dim``), so
+  the pooler width is purely the storage width;
+* location-token supervision: per-modality heads on the location tokens predict the
   decode-only map modalities (worldcover, srtm, openstreetmap, canopy height, cdl,
   worldcereal) at ``base_weight=1.0``, scaled 0.1x for the classification/BCE heads.
 
 **Compaction -- the distilled student** (``proj128lin``). A detached per-cell
-``Linear(768, 128)`` on the registers, ending in a LayerNorm (``stunorm``), trained
+``Linear(768, 128)`` on the location tokens, ending in a LayerNorm (``stunorm``), trained
 by cosine (through a 2-layer MLP back-projection, hidden 256) and a Gram term at
 each Matryoshka prefix of ``[128, 64]``. Stop-gradient: the teacher trains exactly
 as it would without the student. The student IS the shipped embedding.
@@ -84,10 +84,10 @@ from olmoearth_pretrain.internal.all_evals import (  # noqa: E402
 )
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
 from olmoearth_pretrain.nn.encodings import PositionEncoding  # noqa: E402
-from olmoearth_pretrain.nn.flexi_vit import PerceiverConfig  # noqa: E402
+from olmoearth_pretrain.nn.flexi_vit import AttentionPoolerConfig  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
-from olmoearth_pretrain.nn.register_distillation_head import (  # noqa: E402
-    RegisterDistillationHeadConfig,
+from olmoearth_pretrain.nn.location_token_distillation_head import (  # noqa: E402
+    LocationTokenDistillationHeadConfig,
 )
 from olmoearth_pretrain.nn.supervision_head import (  # noqa: E402
     SupervisionHeadConfig,
@@ -106,11 +106,11 @@ MODULE_PATH = "scripts/official/v1_3/base.py"
 # Encoder/decoder size preset: the v1.2 Base encoder with the shallow decoder.
 ENCODER_SIZE_NAME = "base_shallow_decoder"
 # Teacher (primary bottleneck) width.
-REGISTER_DIM = 768
-# Latent-transformer depth over the register grid; with interleaving this is also the
+POOLER_DIM = 768
+# Self-attention depth over the location tokens; with interleaving this is also the
 # number of cross-attention reads.
-REGISTER_LATENT_DEPTH = 4
-# The decoder cross-attends the spatial register grid, so it runs 2D axial RoPE while
+POOLER_DEPTH = 4
+# The decoder cross-attends the spatial location tokens, so it runs 2D axial RoPE while
 # the encoder keeps 3D.
 DECODER_POSITION_ENCODING = PositionEncoding.AXIAL_2D_ROPE.value
 # Student widths: 128 with its first 64 dims trained as a self-sufficient Matryoshka
@@ -120,7 +120,7 @@ PROJECTION_DIMS = [128, 64]
 # inference). SimReg's (m, 2m, d) rule at m = 128, held fixed across prefixes.
 BACK_PROJECTION_HIDDEN = 256
 
-# --- register supervision ---------------------------------------------------------------
+# --- location-token supervision ---------------------------------------------------------------
 SUPERVISION_BASE_WEIGHT = 1.0
 # Classification/BCE losses run ~10x larger than the L1 regressions, so they are scaled
 # down to contribute comparably.
@@ -205,15 +205,15 @@ AEFTRIAL_LOOP_EVAL_NAMES = tuple(
 # =========================================================================================
 
 
-def build_perceiver_model_config(
+def build_attention_pooler_model_config(
     common: CommonComponents,
     *,
-    register_dim: int,
+    pooler_dim: int,
     size_name: str = ENCODER_SIZE_NAME,
 ) -> LatentMIMConfig:
-    """v1.2 base + the Perceiver, without supervision or a student.
+    """v1.2 base + the AttentionPooler, without supervision or a student.
 
-    ``register_dim`` is the register (storage) width; attention runs at encoder width
+    ``pooler_dim`` is the location-token (storage) width; attention runs at encoder width
     regardless. The projection-only target encoder is set here because it is part of
     the training stack every v1.3 run uses.
     """
@@ -221,19 +221,19 @@ def build_perceiver_model_config(
     encoder_config = config.encoder_config
     decoder_config = config.decoder_config
 
-    encoder_config.perceiver_config = PerceiverConfig(
-        register_dim=register_dim,
-        # [read -> self-attend] x REGISTER_LATENT_DEPTH, each read block with its own
+    encoder_config.attention_pooler_config = AttentionPoolerConfig(
+        pooler_dim=pooler_dim,
+        # [read -> self-attend] x POOLER_DEPTH, each read block with its own
         # input norm + K/V projection.
-        latent_depth=REGISTER_LATENT_DEPTH,
+        pooler_depth=POOLER_DEPTH,
         per_depth_read_proj=True,
-        # Attention at encoder width: register_dim is purely the storage width.
+        # Attention at encoder width: pooler_dim is purely the storage width.
         attn_dim=encoder_config.embedding_size,
     )
-    decoder_config.use_perceiver = True
-    decoder_config.register_dim = register_dim
+    decoder_config.use_attention_pooler = True
+    decoder_config.pooler_dim = pooler_dim
 
-    # The decoder cross-attends the spatial (2D) register grid; the encoder stays 3D.
+    # The decoder cross-attends the spatial (2D) location tokens; the encoder stays 3D.
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
 
     config.projection_only_target = True
@@ -243,7 +243,7 @@ def build_perceiver_model_config(
 def build_supervision_head_config(
     base_weight: float = SUPERVISION_BASE_WEIGHT,
 ) -> SupervisionHeadConfig:
-    """Register-grid supervision heads over the decode-only map modalities."""
+    """Location-token supervision heads over the decode-only map modalities."""
 
     def _weight(task_type: SupervisionTaskType) -> float:
         return base_weight * TASK_TYPE_WEIGHTS[task_type]
@@ -293,18 +293,21 @@ def build_supervision_head_config(
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     """The v1.3 model: d768 supervised teacher + detached linear [128, 64] student."""
-    config = build_perceiver_model_config(common, register_dim=REGISTER_DIM)
+    config = build_attention_pooler_model_config(common, pooler_dim=POOLER_DIM)
     config.supervision_head_config = build_supervision_head_config()
-    # Heads attach to the teacher registers only; the student trains by distillation.
+    # Heads attach to the teacher location tokens only; the student trains by
+    # distillation.
 
-    perceiver_config = config.encoder_config.perceiver_config
-    assert perceiver_config is not None
-    perceiver_config.student_dims = list(PROJECTION_DIMS)
+    pooler_config = config.encoder_config.attention_pooler_config
+    assert pooler_config is not None
+    pooler_config.student_dims = list(PROJECTION_DIMS)
     # LayerNorm on the student output, at the full student width (LN(z)[:64] is what a
     # truncating consumer reads, so that is what is trained).
-    perceiver_config.student_output_norm = True
-    config.register_distillation_head_config = RegisterDistillationHeadConfig(
-        back_projection_hidden=BACK_PROJECTION_HIDDEN
+    pooler_config.student_output_norm = True
+    config.location_token_distillation_head_config = (
+        LocationTokenDistillationHeadConfig(
+            back_projection_hidden=BACK_PROJECTION_HIDDEN
+        )
     )
     return config
 
@@ -411,14 +414,14 @@ def set_student_loop_evals(
 ):
     """AEF trials + PASTIS on the student at every width in ``projection_dims``.
 
-    Every task probes the detached student (``eval_on_student_registers``); the d768
+    Every task probes the detached student (``eval_on_student_location_tokens``); the d768
     teacher is not scored, since these runs are judged on the shipped embedding. Order
     is the priority order: the shipped width first, PASTIS first within each width.
     """
     base_tasks = aeftrial_loop_eval_tasks(interval_steps)
     tasks = {
         f"{name}_proj{dim}": replace(
-            task, eval_on_student_registers=True, eval_student_dim=dim
+            task, eval_on_student_location_tokens=True, eval_student_dim=dim
         )
         for dim in projection_dims
         for name, task in base_tasks.items()

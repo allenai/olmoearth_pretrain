@@ -7,8 +7,9 @@ are a trailing year from the observation date (canada, ethiopia, us_trees) or
 a fixed Sep-Aug agricultural year (pastis). See the eval-window discussion in
 data/rslearn_dataset_configs/README.md.
 
-This script writes, for each dataset, a sibling ``<name>_year_aligned`` config
-directory holding a model.yaml whose imagery inputs are the twelve monthly
+This script writes, for each dataset, a sibling ``<name>_year_aligned`` packaged
+config directory (olmoearth_pretrain/evals/studio_ingest/dataset_configs/)
+holding a model.yaml whose imagery inputs are the twelve monthly
 Sentinel-1 and Sentinel-2 layers used in pretraining
 (``config_sentinel1.json`` / ``config_sentinel2_l2a.json``), in ascending
 order. The matching rslearn ``config.json`` and the re-anchored windows are
@@ -20,13 +21,8 @@ Run from the repo root::
     python scripts/tools/build_year_aligned_eval_configs.py
     python scripts/tools/build_year_aligned_eval_configs.py --check
 
-``--check`` compares bytes, so a file that ``wire_embedding_modalities.py``
-has since edited reads as stale even when nothing semantic differs: that
-script inserts its input block directly under ``inputs:`` with its own list
-indentation, while this one re-dumps the whole mapping. Regenerating is safe
-(PRESERVED_INPUTS keeps those blocks and their ``required`` flags), but it
-reformats, which unlinks ``config_repo_dir`` until the Weka copy is re-synced
--- so check what actually differs before regenerating a wired dataset.
+Precomputed embedding products (AEF, Tessera) are not model.yaml inputs: they
+are registered per dataset with register_embedding_products.py.
 """
 
 import argparse
@@ -37,7 +33,9 @@ from pathlib import Path
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO_ROOT / "data" / "rslearn_dataset_configs"
+CONFIG_ROOT = (
+    REPO_ROOT / "olmoearth_pretrain" / "evals" / "studio_ingest" / "dataset_configs"
+)
 WEKA_ROOT = "/weka/dfive-default/olmoearth/eval_datasets"
 
 SUFFIX = "_year_aligned"
@@ -56,16 +54,6 @@ DATASETS = {
     # moves (Sep 2018 -> Jan 2019), so the inputs block is unchanged.
     "pastis_rslearn": "pastis" + SUFFIX,
 }
-
-# Precomputed-embedding inputs that wire_embedding_modalities.py adds to a
-# dataset's model.yaml once its bake is complete (its PRODUCT_TO_MODALITY, plus
-# gse for aef). Those edits land on the year-aligned file only -- a product can
-# be wired on the year-aligned dataset and not on its parent, as tessera is on
-# us_trees_year_aligned and tessera_v2 is on the two v2 exports -- so
-# regenerating from the parent would silently delete them and drop the
-# baseline. Anything here that the destination already declares is carried
-# through unchanged.
-PRESERVED_INPUTS = ("gse", "tessera_v2")
 
 MONTHLY_LAYERS = {
     "sentinel2_l2a": [f"sentinel2_l2a_mo{i:02d}" for i in range(1, 13)],
@@ -145,45 +133,11 @@ def landsat_input() -> dict:
     }
 
 
-def preserved_inputs(dst_path: Path, source_inputs: dict) -> tuple[dict, dict]:
-    """Embedding inputs to take from the destination rather than the parent.
-
-    wire_embedding_modalities.py owns these blocks: it adds them when a bake
-    completes and flips ``required`` when the product goes live, on the
-    year-aligned file independently of the parent. Regenerating from the
-    parent would undo both.
-
-    Args:
-        dst_path: the generated model.yaml, which may not exist yet.
-        source_inputs: the parent dataset's inputs.
-
-    Returns:
-        (new, overrides) — inputs the destination has and the source does not,
-        and destination versions of inputs the source also declares.
-    """
-    if not dst_path.exists():
-        return {}, {}
-    existing = yaml.safe_load(dst_path.read_text())["data"]["init_args"]["inputs"]
-    embedding = {n: b for n, b in existing.items() if n in PRESERVED_INPUTS}
-    return (
-        {n: b for n, b in embedding.items() if n not in source_inputs},
-        {n: b for n, b in embedding.items() if n in source_inputs},
-    )
-
-
-def convert(
-    model_config: dict,
-    carry_over: dict | None = None,
-    overrides: dict | None = None,
-) -> dict:
+def convert(model_config: dict) -> dict:
     """Return a year-aligned copy of a model.yaml `data` block.
 
     Args:
         model_config: the parsed parent model.yaml.
-        carry_over: destination-only inputs to keep, inserted ahead of the
-            target input (see preserved_inputs).
-        overrides: destination versions of inputs the parent also declares,
-            kept in the parent's position.
 
     Returns:
         the converted config.
@@ -203,15 +157,7 @@ def convert(
         "sentinel1": imagery_input("sentinel1"),
         "landsat": landsat_input(),
     }
-    for name, block in inputs.items():
-        # Keep "targets" last so a carried-over input reads next to the other
-        # embedding inputs rather than after the label.
-        if name == "targets" and carry_over:
-            rebuilt.update(carry_over)
-            carry_over = None
-        rebuilt[name] = (overrides or {}).get(name, block)
-    if carry_over:
-        rebuilt.update(carry_over)
+    rebuilt.update(inputs)
     init_args["inputs"] = rebuilt
 
     # Any Pad transform must cover the newly added modalities too, otherwise
@@ -248,10 +194,7 @@ def main() -> int:
 
         source = yaml.safe_load(src_path.read_text())
         dst_path = CONFIG_ROOT / dst_name / "model.yaml"
-        carry_over, overrides = preserved_inputs(
-            dst_path, source["data"]["init_args"]["inputs"]
-        )
-        config = convert(source, carry_over=carry_over, overrides=overrides)
+        config = convert(source)
         config["data"]["init_args"]["path"] = f"{WEKA_ROOT}/{dst_name}"
 
         rendered = HEADER.format(src=src_name) + yaml.safe_dump(

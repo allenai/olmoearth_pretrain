@@ -43,6 +43,7 @@ Todo:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -63,10 +64,7 @@ from olmoearth_pretrain.evals.datasets.rslearn_builder import parse_model_config
 from olmoearth_pretrain.evals.studio_ingest.band_stats import (
     compute_band_stats_from_model_config,
 )
-from olmoearth_pretrain.evals.studio_ingest.provenance import (
-    repo_relative_config_dir,
-    sha256_of_file,
-)
+from olmoearth_pretrain.evals.studio_ingest.provenance import packaged_config_name
 from olmoearth_pretrain.evals.studio_ingest.schema import (
     EvalDatasetEntry,
     instantiate_from_config,
@@ -1343,29 +1341,30 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
         else:
             logger.warning("No windows found to infer window_size, leaving as None")
 
-    # Config provenance: when the model.yaml source dir lives inside the repo
-    # checkout, record its repo-relative path so eval jobs read the git-tracked
-    # file (pinned by commit) instead of the Weka copy. config.json must stay
+    # Config provenance: when the model.yaml source dir is one of the packaged
+    # dataset_configs, record its name so eval jobs read the packaged file
+    # (pinned by commit) instead of the Weka copy. config.json must stay
     # in the dataset folder (rslearn reads it from the dataset root), so pin
     # it by hash instead — computed after the step-0a patching that may have
     # rewritten it.
-    config_repo_dir = repo_relative_config_dir(config.olmoearth_run_config_path)
-    if config_repo_dir is None:
+    packaged_config = packaged_config_name(config.olmoearth_run_config_path)
+    if packaged_config is None:
         logger.warning(
-            "Config dir %s is outside the repo checkout — eval jobs will read "
-            "the model.yaml copy at the dataset folder, which can go stale. "
-            "Consider committing the config under data/rslearn_dataset_configs/ "
-            "and re-ingesting.",
+            "Config dir %s is not a packaged dataset config — eval jobs will "
+            "read the model.yaml copy at the dataset folder, which can go "
+            "stale. Consider committing the config under "
+            "olmoearth_pretrain/evals/studio_ingest/dataset_configs/ and "
+            "re-ingesting.",
             config.olmoearth_run_config_path,
         )
-    config_json_sha256 = sha256_of_file(config_json_path)
+    config_json_sha256 = hashlib.sha256(config_json_path.read_bytes()).hexdigest()
 
     logger.info("Creating EvalDatasetEntry...")
     entry = EvalDatasetEntry(
         name=config.name,
         source_path=config.source_path,
         weka_path=weka_path,
-        config_repo_dir=config_repo_dir,
+        packaged_config=packaged_config,
         config_json_sha256=config_json_sha256,
         task_type=task_type,
         num_classes=num_classes,

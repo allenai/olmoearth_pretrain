@@ -3,10 +3,10 @@
 OlmoEarth v1.3 is the v1.2 recipe (`../v1_2/base.py`: hidden patch-embed projection,
 mixed 3D RoPE, decode-only map modalities) plus two additions:
 
-- **Aggregation** — a Perceiver-style spatial register bottleneck (`register_dim=768`,
+- **Aggregation** — an AttentionPooler over the patch tokens (`pooler_dim=768`,
   attention at encoder width, `[read -> self-attn] x 4`, 2D RoPE on the reads and the
-  decoder), with per-modality supervision heads on the register grid.
-- **Compaction** — a detached linear `[128, 64]` Matryoshka student on the registers,
+  decoder), with per-modality supervision heads on the location tokens.
+- **Compaction** — a detached linear `[128, 64]` Matryoshka student on the location tokens,
   ending in a LayerNorm, distilled from the teacher with a cosine term (through a
   2-layer MLP back-projection) and a Gram term. The student is the shipped embedding.
 
@@ -16,7 +16,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
 |---|---|
 | `base.py` | the release recipe: model, sampler, train module, in-loop evals |
 | `ablations/no_supervision.py` | `base.py` with `supervision_head_config = None` |
-| `ablations/query_token_compaction.py` | native d128 registers with supervision, no student |
+| `ablations/query_token_compaction.py` | native d128 location tokens with supervision, no student |
 
 ## Conventions
 
@@ -29,7 +29,7 @@ Everything is in `base.py`, which imports the v1.2 config rather than copying it
   wandb run suffixed `_loop_evals`. Eval metrics live there, *not* in the training run.
   The eval set replaces the shared catalog: the AEF balanced-trial datasets (kNN twins,
   which carry the AEF protocol) plus year-aligned PASTIS on S1+S2+Landsat, scored on
-  the student at 128 and 64 dims (`_proj128` / `_proj64`), or on the register grid for
+  the student at 128 and 64 dims (`_proj128` / `_proj64`), or on the location tokens for
   the query-token ablation.
 - **Launch requires a clean tree pushed to the remote** (the Beaker job clones
   `$GIT_REF`). Commit and push before launching.

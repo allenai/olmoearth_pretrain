@@ -1,12 +1,12 @@
-"""No-supervision ablation: v1.3 with the register supervision heads deleted.
+"""No-supervision ablation: v1.3 with the location-token supervision heads deleted.
 
 The direct-supervision ablation for the v1.3 report. The Aggregation section
-claims direct supervision on the register (query) tokens is one of the mechanisms
+claims direct supervision on the location tokens is one of the mechanisms
 ensuring spatial locality; this arm removes it and nothing else.
 
 THE CHANGE, AND ONLY IT: ``supervision_head_config = None``. The teacher then
 trains on the LatentMIM loss alone, and the student on the distillation losses
-alone. Everything else -- d768 registers, the linear+LayerNorm student, MLP
+alone. Everything else -- d768 location tokens, the linear+LayerNorm student, MLP
 back-projections, Gram weight, sampler, data, in-loop evals -- is byte-identical to
 ``base.py``.
 
@@ -41,7 +41,7 @@ MODULE_PATH = "scripts/official/v1_3/ablations/no_supervision.py"
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """The v1.3 model with the register supervision heads removed."""
+    """The v1.3 model with the location-token supervision heads removed."""
     config = _base_build_model_config(common)
     config.supervision_head_config = None
     return config

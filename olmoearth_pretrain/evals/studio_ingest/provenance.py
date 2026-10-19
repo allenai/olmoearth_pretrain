@@ -8,8 +8,9 @@ git-tracked sources between ingests.
 
 This module keeps the two halves honest:
 
-- model.yaml is read from the git checkout when the registry entry records a
-  ``config_repo_dir``, so the config a run uses is pinned by the commit being
+- model.yaml is read from the copy installed with this package (under
+  ``dataset_configs/<name>/``) when the registry entry records a
+  ``packaged_config``, so the config a run uses is pinned by the commit being
   run rather than by whatever a past ingest left on Weka.
 - config.json must stay physically in the dataset folder (rslearn reads it
   from the dataset root), so instead of relocating it we pin its sha256 in
@@ -22,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -30,89 +31,41 @@ from upath import UPath
 
 logger = logging.getLogger(__name__)
 
-# Env var override for the repo root, for run modes where walking up from
-# __file__ does not land in a checkout (e.g. a non-editable install).
-REPO_ROOT_ENV_VAR = "OLMOEARTH_REPO_ROOT"
+# Per-dataset model.yaml configs, installed with the package (see
+# [tool.setuptools.package-data] in pyproject.toml).
+DATASET_CONFIGS_DIR = Path(
+    str(files("olmoearth_pretrain.evals.studio_ingest") / "dataset_configs")
+)
 
-# Directory (repo-relative) where eval dataset configs are expected to live.
-RSLEARN_DATASET_CONFIGS_DIR = "data/rslearn_dataset_configs"
 
+def packaged_config_name(config_dir: str) -> str | None:
+    """Return the packaged config name for *config_dir*, or None if not packaged.
 
-def find_repo_root() -> Path | None:
-    """Locate the repo checkout root.
-
-    Resolution order:
-    1. ``OLMOEARTH_REPO_ROOT`` env var, if set.
-    2. Walk up from this file looking for ``pyproject.toml`` — works for
-       editable installs and for Beaker jobs, which clone the repo and
-       ``uv sync`` it.
-
-    Returns None when no checkout can be found (e.g. wheel install).
+    Used at ingest time: when the config dir is one of the packaged
+    ``dataset_configs/<name>/`` dirs, the registry entry records ``<name>`` so
+    eval jobs read the packaged model.yaml instead of the Weka copy.
     """
-    env_root = os.environ.get(REPO_ROOT_ENV_VAR)
-    if env_root:
-        root = Path(env_root)
-        if not root.is_dir():
-            raise FileNotFoundError(
-                f"{REPO_ROOT_ENV_VAR}={env_root} does not point to a directory"
-            )
-        return root
-
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "pyproject.toml").exists():
-            return parent
-    return None
-
-
-def sha256_of_file(path: str | Path | UPath) -> str:
-    """Compute the sha256 hex digest of a file (works on Weka/GCS via UPath)."""
-    upath = UPath(path)
-    digest = hashlib.sha256()
-    with upath.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def repo_relative_config_dir(config_dir: str) -> str | None:
-    """Return *config_dir* relative to the repo root, or None if outside it.
-
-    Used at ingest time to record where the model.yaml came from: when the
-    config dir lives inside the checkout (``data/rslearn_dataset_configs/...``)
-    the registry entry stores the repo-relative path so eval jobs read the
-    git-tracked file directly instead of the Weka copy.
-    """
-    repo_root = find_repo_root()
-    if repo_root is None:
+    config_path = Path(config_dir).resolve()
+    if config_path.parent != DATASET_CONFIGS_DIR.resolve():
         return None
-    try:
-        return str(Path(config_dir).resolve().relative_to(repo_root.resolve()))
-    except ValueError:
-        return None
+    return config_path.name
 
 
-def resolve_repo_config_path(config_repo_dir: str, filename: str) -> str:
-    """Resolve ``<repo_root>/<config_repo_dir>/<filename>``, failing loudly.
+def packaged_model_yaml_path(packaged_config: str) -> str:
+    """Return the packaged model.yaml for *packaged_config*, failing loudly.
 
     Raises:
-        FileNotFoundError: If no repo checkout can be located or the file is
-            missing from it. We deliberately do not fall back to the Weka copy
-            here — a silent fallback would reintroduce exactly the stale-config
-            drift this path exists to prevent.
+        FileNotFoundError: If the packaged config is missing. We deliberately
+            do not fall back to the Weka copy here — a silent fallback would
+            reintroduce exactly the stale-config drift this path exists to
+            prevent.
     """
-    repo_root = find_repo_root()
-    if repo_root is None:
-        raise FileNotFoundError(
-            f"Cannot resolve repo-tracked config {config_repo_dir}/{filename}: "
-            f"no repo checkout found. Run from a checkout or set "
-            f"{REPO_ROOT_ENV_VAR} to the repo root."
-        )
-    path = repo_root / config_repo_dir / filename
+    path = DATASET_CONFIGS_DIR / packaged_config / "model.yaml"
     if not path.exists():
         raise FileNotFoundError(
-            f"Registry entry points at repo config {config_repo_dir}/{filename}, "
-            f"but it does not exist under {repo_root}. Was the config moved or "
-            f"deleted without updating the registry?"
+            f"Registry entry points at packaged config {packaged_config}, but "
+            f"{path} does not exist. Was the config moved or deleted without "
+            f"updating the registry?"
         )
     return str(path)
 
@@ -139,7 +92,7 @@ def verify_config_json_hash(
         )
         return None
 
-    actual = sha256_of_file(config_json)
+    actual = hashlib.sha256(config_json.read_bytes()).hexdigest()
     if expected_sha256 is None:
         logger.warning(
             "Dataset '%s' has no config_json_sha256 recorded in the registry; "

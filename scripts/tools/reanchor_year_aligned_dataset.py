@@ -55,7 +55,7 @@ Runbook, per dataset::
     python -m olmoearth_pretrain.evals.studio_ingest.cli ingest \
         --name canada_crops_coarse_year_aligned --source "$DST" \
         --olmoearth-run-config-path \
-            data/rslearn_dataset_configs/canada_crops_coarse_year_aligned \
+            olmoearth_pretrain/evals/studio_ingest/dataset_configs/canada_crops_coarse_year_aligned \
         --start-time <YYYY>-01-01 --end-time <YYYY>-12-31 --register
 
 Step 4's start/end are only a fallback for timestamp synthesis, and a single
@@ -65,7 +65,7 @@ loader reads each timestep's real acquisition date off the imagery, so these
 flags no longer matter for datasets whose rasters carry time ranges.
 
 The AEF/Tessera layers live only in the *eval_datasets* copy -- the embedding
-materializer and wire_embedding_modalities.py both run there, not on the
+materializer and register_embedding_products.py both run there, not on the
 rslearn-eai source. That is why step 1 seeds from eval_datasets: `ingest` copies
 with an unfiltered tree tar (studio_ingest/ingest.py:_tar_copy_cmd), so anything
 in the seed rides through to the registered dataset, embedding layers included,
