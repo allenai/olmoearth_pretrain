@@ -153,9 +153,13 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.tokenization_config = common.tokenization_config
     # Rank batches of every-capture samples are large; joer's settings that kept
     # /dev/shm from filling (worker SIGBUS) and avoided per-batch cudaHostAlloc.
-    # 12 workers per rank (joer's current runs): at 4 the first D/E launch spent 95%
-    # of wall time waiting on data.
-    config.num_workers = 12
+    # A worker builds a 64-sample every-capture batch in ~15 s (v1.3: <= ~6.6 s), and
+    # per-batch cost varies 7-19 s with shape / composite mode. In-order delivery with
+    # prefetch 1 left workers blocked behind slow batches (~21-30 s between a worker's
+    # batches, 2026-10-19 bench); out of order + v1.3's 16 workers keeps the loader
+    # ahead of the model.
+    config.num_workers = 16
+    config.in_order = False
     config.prefetch_factor = 1
     config.pin_memory = False
     config.uint8_masks = True

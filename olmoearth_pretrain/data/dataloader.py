@@ -96,6 +96,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         persistent_workers: bool = True,
         multiprocessing_context: str = "spawn",
         pin_memory: bool = True,
+        in_order: bool = True,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
@@ -172,6 +173,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             pin_memory: Pin batches in host memory (CUDA, workers > 0). Turn off when
                 batch shapes vary a lot: every new shape is a fresh ``cudaHostAlloc``
                 (tens of ms, contends with kernel launches on the driver).
+            in_order: Deliver batches in worker order (torch's default). False hands
+                over whichever worker's batch is ready first, so one slow batch does
+                not stall the others; the batch order is then not reproducible.
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
             masking_strategy: Masking strategy to apply in the dataloader workers.
@@ -212,6 +216,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.persistent_workers = persistent_workers
         self.multiprocessing_context = multiprocessing_context
         self.pin_memory = pin_memory
+        self.in_order = in_order
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
 
         # Dataloader-side masking configuration
@@ -373,6 +378,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             and self.target_device_type == "cuda"
             and self.num_workers > 0,
             prefetch_factor=self.prefetch_factor if self.num_workers > 0 else None,
+            in_order=self.in_order,
             persistent_workers=(
                 self.persistent_workers if self.num_workers > 0 else False
             ),
@@ -898,6 +904,9 @@ class OlmoEarthDataLoaderConfig(Config):
     target_device_type: str | None = None
     drop_last: bool = True
     pin_memory: bool = True
+    # False: hand over batches as workers finish them (no head-of-line blocking when
+    # per-batch cost varies); the batch order is then not reproducible.
+    in_order: bool = True
     # Send masks to the main process as uint8 instead of int64 (8x smaller; the
     # masks are pixel-resolution). Restored to int64 on device.
     uint8_masks: bool = False
@@ -992,6 +1001,7 @@ class OlmoEarthDataLoaderConfig(Config):
             collator=collator,
             drop_last=self.drop_last,
             pin_memory=self.pin_memory,
+            in_order=self.in_order,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
