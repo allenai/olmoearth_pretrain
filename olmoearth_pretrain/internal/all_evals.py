@@ -1391,8 +1391,9 @@ def _aef_ps1_task(
 # native PASTIS patch grid; see
 # olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py) rather than the
 # imagery shipped with the PASTIS benchmark. Each 128x128 patch is tiled into
-# 16x16 windows (tile_samples). The gse/tessera layers were converted from the
-# embeddings previously fetched by pastis_processor.py --embedding_products.
+# 16x16 windows (tile_samples). The gse/tessera layers are baked into the
+# windows like any other eval dataset's (embedding materializer /
+# tessera_v2_export.py) and registered under embedding_products.
 
 
 def _pastis_ps1_task(
