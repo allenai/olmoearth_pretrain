@@ -558,7 +558,7 @@ def encoder_searchlight(
     for blk in encoder.blocks:
         x = _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
     x = encoder.norm(x)
-    # The norm's dtype, as apply_attn returns: under autocast it is float32, not the bf16 input.
+    # Keep the norm's dtype, as the standard forward does; under CUDA autocast that's float32, not the tokens' bf16.
     tokens_out = x.new_zeros(tokens.shape)
     tokens_out[:, order] = x
 
