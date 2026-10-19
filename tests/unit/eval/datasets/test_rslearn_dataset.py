@@ -325,6 +325,29 @@ class TestTileSamples:
         with pytest.raises(ValueError, match="window_size and sample_size"):
             build_dataset(tile_samples=True, window_size=16)
 
+    def test_tile_cache_reads_each_stored_sample_once(self) -> None:
+        """With tile_cache_size covering the interleaved samples, none is re-read."""
+        ds = self.build_tiled(n_samples=3, size=32, ws=16)
+        reads: list[int] = []
+        stored = ds.dataset
+
+        class CountingDataset:
+            def __len__(self) -> int:
+                return len(stored)
+
+            def __getitem__(self, i: int) -> Any:
+                reads.append(i)
+                return stored[i]
+
+        ds.dataset = CountingDataset()  # type: ignore[assignment]
+        ds.tile_cache_size = 2
+        for idx in [0, 4, 1, 5, 2, 6, 3, 7]:  # tiles of samples 0 and 1, interleaved
+            ds[idx]
+        assert reads == [0, 1]
+        ds[8]  # sample 2 evicts sample 0
+        ds[0]
+        assert reads == [0, 1, 2, 0]
+
     def test_tile_samples_excludes_center_label(self) -> None:
         """tile_samples and label_at_center_pixel cannot combine."""
         with pytest.raises(ValueError, match="mutually exclusive"):

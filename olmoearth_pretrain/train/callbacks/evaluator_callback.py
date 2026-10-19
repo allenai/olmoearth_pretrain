@@ -42,6 +42,8 @@ from olmoearth_pretrain.evals.datasets.configs import (
     get_eval_mode,
 )
 from olmoearth_pretrain.evals.datasets.normalize import NormMethod
+from olmoearth_pretrain.evals.datasets.rslearn_dataset import RslearnToOlmoEarthDataset
+from olmoearth_pretrain.evals.datasets.tile_sampler import TileGroupSampler
 from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
@@ -71,6 +73,9 @@ from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
 logger = logging.getLogger(__name__)
+
+# Stored samples whose tiles are interleaved in each shuffled finetune batch.
+TILE_SHUFFLE_GROUP_SIZE = 8
 
 # Beaker rejects experiment names longer than this many characters.
 _BEAKER_MAX_NAME_LEN = 128
@@ -717,6 +722,22 @@ class DownstreamEvaluator:
                 :max_samples
             ]
             eval_ds = Subset(eval_ds, sorted(indices.tolist()))
+        sampler = None
+        if (
+            shuffle
+            and isinstance(eval_ds, RslearnToOlmoEarthDataset)
+            and not is_iterable
+            and eval_ds._tiles_per_side > 1
+        ):
+            tiles_per_sample = eval_ds._tiles_per_side**2
+            sampler = TileGroupSampler(
+                num_samples=len(eval_ds) // tiles_per_sample,
+                tiles_per_sample=tiles_per_sample,
+                group_size=TILE_SHUFFLE_GROUP_SIZE,
+                generator=generator,
+            )
+            eval_ds.tile_cache_size = TILE_SHUFFLE_GROUP_SIZE
+            shuffle = False
         return DataLoader(
             eval_ds,
             collate_fn=eval_collate_fn_variable_time,
@@ -724,6 +745,7 @@ class DownstreamEvaluator:
             num_workers=self.num_workers,
             generator=None if is_iterable else generator,
             worker_init_fn=worker_init_fn,
+            sampler=sampler,
             shuffle=False if is_iterable else shuffle,
         )
 

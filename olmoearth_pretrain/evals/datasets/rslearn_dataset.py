@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import Iterator
 from datetime import datetime
 from importlib.resources import files
@@ -445,12 +446,13 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._tiles_per_side = (
             sample_size // window_size if tile_samples else 1  # type: ignore[operator]
         )
-        # Last (base_idx, (input_dict, target)) loaded in tiled mode. A tiled
-        # sample's windows have consecutive indices, so with sequential access
-        # this avoids re-reading the full stored sample for every tile. Each
-        # DataLoader worker holds its own copy post-fork. Reuse is safe because
+        # LRU of stored samples loaded in tiled mode, so a sample is read once
+        # rather than once per tile: sequential access needs one entry,
+        # TileGroupSampler needs one per interleaved sample. Each DataLoader
+        # worker holds its own copy post-fork. Reuse is safe because
         # _transform_sample doesn't mutate its inputs.
-        self._cached_base: tuple[int, Any] | None = None
+        self._base_cache: OrderedDict[int, Any] = OrderedDict()
+        self.tile_cache_size = 1
 
         self._init_band_scatter(declared_bands)
 
@@ -1521,13 +1523,14 @@ class RslearnToOlmoEarthDataset(Dataset):
         """Return a MaskedOlmoEarthSample and target tensor."""
         if self._tiles_per_side > 1:
             base_idx, tile = divmod(idx, self._tiles_per_side**2)
-            if self._cached_base is None or self._cached_base[0] != base_idx:
+            if base_idx in self._base_cache:
+                self._base_cache.move_to_end(base_idx)
+            else:
                 input_dict, target, metadata = self.dataset[base_idx]
-                self._cached_base = (
-                    base_idx,
-                    (input_dict, target, _window_key(metadata)),
-                )
-            input_dict, target, window_key = self._cached_base[1]
+                self._base_cache[base_idx] = (input_dict, target, _window_key(metadata))
+                while len(self._base_cache) > max(1, self.tile_cache_size):
+                    self._base_cache.popitem(last=False)
+            input_dict, target, window_key = self._base_cache[base_idx]
             return self._transform_sample(
                 input_dict,
                 target,
