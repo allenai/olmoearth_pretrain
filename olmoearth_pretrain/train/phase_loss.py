@@ -34,8 +34,9 @@ def phase_loss(location_tokens: Tensor, token_grid: tuple[int, int], r: int) -> 
     )
     overall_mean = reduce(z, "b h i w j d -> d", "mean")
     phase_means = reduce(z, "b h i w j d -> i j d", "mean")  # one mean per phase
-    # Every phase has the same number of tokens, so the between-phase share of the
-    # variance is the mean over phases over the mean over tokens.
-    between = (phase_means - overall_mean).pow(2).sum(-1).mean()
-    total = (z - overall_mean).pow(2).sum(-1).mean()
+    # Squared distance from the overall mean (summed over features), averaged over
+    # phases and over tokens. Every phase has the same number of tokens, so the ratio
+    # is the between-phase share of the variance.
+    between = reduce((phase_means - overall_mean) ** 2, "i j d -> i j", "sum").mean()
+    total = reduce((z - overall_mean) ** 2, "b h i w j d -> b h i w j", "sum").mean()
     return between / total.clamp(min=torch.finfo(z.dtype).tiny)
