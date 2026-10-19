@@ -11,12 +11,19 @@ against its source.
 (symlinks to the source files) and ``<out>/rechunk`` (rewritten copies), both laid out
 as a dataset dir (``.../<modalities>/<n>/sample_{i}.h5`` + metadata + latlons).
 
-Usage: ``python rechunk_allcap_h5.py subset --src <h5py_dir> --out <dir> --n 12000``.
+``full`` mode rewrites samples ``[--start, --end)`` of ``--src`` into ``--dst`` (a dataset
+dir with the same name, so ``sample_{i}.h5`` keep their indices), copying the metadata
+CSV and latlons; files already written are skipped, so shards can run in parallel and a
+preempted shard can be rerun. A file that fails is reported and left unwritten.
+
+Usage: ``python rechunk_allcap_h5.py subset --src <h5py_dir> --out <dir> --n 12000`` or
+``python rechunk_allcap_h5.py full --src <h5py_dir> --dst <h5py_dir> --start 0 --end 100000``.
 """
 
 import argparse
 import json
 import os
+import shutil
 import time
 from multiprocessing import Pool
 from pathlib import Path
@@ -141,17 +148,90 @@ def subset(src_dir: Path, out: Path, n: int, workers: int, seed: int) -> None:
     )
 
 
+def _full_one(job: tuple[str, str]) -> dict:
+    src, dst = Path(job[0]), Path(job[1])
+    if dst.exists():
+        return {"skipped": True}
+    try:
+        return rechunk_file(src, dst)
+    except Exception as e:  # report and continue; the file stays unwritten
+        return {"error": f"{src.name}: {e!r}"[:300]}
+
+
+def full(src_dir: Path, dst_dir: Path, start: int, end: int, workers: int) -> None:
+    """Rechunk samples ``[start, end)`` of ``src_dir`` into ``dst_dir``."""
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("sample_metadata.csv", "latlon_distribution.npy"):
+        if not (dst_dir / name).exists():
+            tmp = dst_dir / f"{name}.tmp{os.getpid()}"
+            shutil.copyfile(src_dir / name, tmp)
+            tmp.rename(dst_dir / name)
+    end = min(end, int(src_dir.name))
+    jobs = [
+        (str(src_dir / f"sample_{i}.h5"), str(dst_dir / f"sample_{i}.h5"))
+        for i in range(start, end)
+    ]
+    t0 = time.perf_counter()
+    done = skipped = 0
+    errors: list[str] = []
+    src_mb = dst_mb = 0.0
+    with Pool(workers) as pool:
+        for k, r in enumerate(pool.imap_unordered(_full_one, jobs, chunksize=8)):
+            if "error" in r:
+                errors.append(r["error"])
+            elif r.get("skipped"):
+                skipped += 1
+            else:
+                done += 1
+                src_mb += r["src_mb"]
+                dst_mb += r["dst_mb"]
+            if (k + 1) % 2000 == 0:
+                print(
+                    json.dumps(
+                        {
+                            "progress": k + 1,
+                            "of": len(jobs),
+                            "s": round(time.perf_counter() - t0, 1),
+                            "errors": len(errors),
+                        }
+                    ),
+                    flush=True,
+                )
+    print(
+        json.dumps(
+            {
+                "start": start,
+                "end": end,
+                "written": done,
+                "skipped_existing": skipped,
+                "errors": len(errors),
+                "size_ratio": round(dst_mb / src_mb, 3) if src_mb else None,
+                "s": round(time.perf_counter() - t0, 1),
+            }
+        ),
+        flush=True,
+    )
+    for e in errors[:50]:
+        print(json.dumps({"error": e}), flush=True)
+
+
 def main() -> None:
     """CLI."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["subset"])
+    parser.add_argument("mode", choices=["subset", "full"])
     parser.add_argument("--src", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--dst", type=Path)
+    parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--end", type=int, default=10**9)
     parser.add_argument("--n", type=int, default=12000)
     parser.add_argument("--workers", type=int, default=64)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-    subset(args.src, args.out, args.n, args.workers, args.seed)
+    if args.mode == "full":
+        full(args.src, args.dst, args.start, args.end, args.workers)
+    else:
+        subset(args.src, args.out, args.n, args.workers, args.seed)
 
 
 if __name__ == "__main__":
