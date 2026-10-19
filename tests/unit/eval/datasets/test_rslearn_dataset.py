@@ -13,6 +13,8 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.evals.datasets.rslearn_dataset import (
     RslearnToOlmoEarthDataset,
+    add_embedding_product_inputs,
+    drop_windows_missing_layers,
 )
 from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -493,3 +495,79 @@ class TestSubsetBands:
         """A typo in model.yaml must not be silently ignored."""
         with pytest.raises(ValueError, match="not in its canonical band order"):
             self._dataset({Modality.SENTINEL2_L2A.name: ["B02", "NOPE"]})
+
+
+class TestEmbeddingProducts:
+    """Load-time product inputs and the shared window exclusion."""
+
+    @staticmethod
+    def model_config() -> dict[str, Any]:
+        """A parsed model.yaml with only an S2 input."""
+        return {"data": {"init_args": {"inputs": {S2: {"layers": ["s2"]}}}}}
+
+    def test_product_input_added_only_for_the_product(self) -> None:
+        """An S2 eval gets no gse input; the AEF eval gets a required one."""
+        config = self.model_config()
+        add_embedding_product_inputs(config, [S2])
+        assert set(config["data"]["init_args"]["inputs"]) == {S2}
+
+        add_embedding_product_inputs(config, [Modality.GSE.name])
+        gse = config["data"]["init_args"]["inputs"][Modality.GSE.name]
+        assert gse["layers"] == [Modality.GSE.name]
+        assert gse["required"] is True
+
+    @staticmethod
+    def rslearn_dataset(
+        layers: dict[str, set[str]], crops: bool = False
+    ) -> tuple[Any, list[str]]:
+        """A RetryDataset-like wrapper around a dataset of windows.
+
+        Args:
+            layers: window name -> the layers completed in it.
+            crops: return (window, bounds, idx) examples like load_all_crops.
+        """
+        names = list(layers)
+        windows = [
+            SimpleNamespace(
+                group="default",
+                name=n,
+                is_layer_completed=lambda layer, n=n: layer in layers[n],
+            )
+            for n in names
+        ]
+        examples: list[Any] = (
+            [(w, None, None) for w in windows] if crops else list(windows)
+        )
+        inner = SimpleNamespace(get_dataset_examples=lambda: examples)
+
+        class Wrapper:
+            dataset = inner
+
+            def __len__(self) -> int:
+                return len(examples)
+
+            def __getitem__(self, idx: int) -> str:
+                return names[idx]
+
+        return Wrapper(), names
+
+    @pytest.mark.parametrize("crops", [False, True])
+    def test_drops_windows_missing_any_layer(self, crops: bool) -> None:
+        """A window must have every live product's layer completed to be kept."""
+        dataset, _ = self.rslearn_dataset(
+            {"w1": {"gse", "tessera_v2"}, "w2": {"gse"}, "w3": set()}, crops=crops
+        )
+        kept, excluded = drop_windows_missing_layers(dataset, ["gse", "tessera_v2"])
+        assert [kept[i] for i in range(len(kept))] == ["w1"]
+        assert excluded == ["default/w2", "default/w3"]
+
+    def test_nothing_to_drop_returns_the_dataset(self) -> None:
+        """No live products, or full coverage, leave the dataset unwrapped."""
+        dataset, _ = self.rslearn_dataset({"w1": {"gse"}})
+        assert drop_windows_missing_layers(dataset, []) == (dataset, [])
+        assert drop_windows_missing_layers(dataset, ["gse"]) == (dataset, [])
+
+    def test_rejects_unindexed_datasets(self) -> None:
+        """A dataset that does not expose its windows fails loudly."""
+        with pytest.raises(TypeError, match="does not expose"):
+            drop_windows_missing_layers(object(), ["gse"])

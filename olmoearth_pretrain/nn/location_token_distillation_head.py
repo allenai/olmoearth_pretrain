@@ -1,4 +1,4 @@
-"""Distillation of the Perceiver's register grid into its detached student."""
+"""Distillation of the AttentionPooler's location-token grid into its detached student."""
 
 from dataclasses import dataclass
 
@@ -10,18 +10,18 @@ from olmoearth_pretrain.config import Config
 
 
 @dataclass
-class RegisterDistillationHeadConfig(Config):
-    """Configuration for :class:`RegisterDistillationHead`.
+class LocationTokenDistillationHeadConfig(Config):
+    """Configuration for :class:`LocationTokenDistillationHead`.
 
     Attaching this to ``LatentMIMConfig`` turns distillation on for the encoder's
-    detached student (``perceiver_config.student_dims``); without it the student
+    detached student (``attention_pooler_config.student_dims``); without it the student
     is trained by supervision alone, if at all.
 
     Args:
         back_projection_hidden: Hidden width of the per-prefix back-projection heads.
-            None keeps a single ``Linear(d, register_dim)``; an int makes each head a
-            2-layer MLP ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, register_dim)``.
-        gram_max_tokens: Max register cells entering the Gram terms per microbatch
+            None keeps a single ``Linear(d, pooler_dim)``; an int makes each head a
+            2-layer MLP ``Linear(d, H) -> LayerNorm -> ReLU -> Linear(H, pooler_dim)``.
+        gram_max_tokens: Max location tokens entering the Gram terms per microbatch
             (one random subsample shared across prefixes; bounds the O(n^2) matrices).
     """
 
@@ -41,29 +41,29 @@ class RegisterDistillationHeadConfig(Config):
             )
 
     def build(
-        self, register_dim: int, student_dims: list[int]
-    ) -> "RegisterDistillationHead":
+        self, pooler_dim: int, student_dims: list[int]
+    ) -> "LocationTokenDistillationHead":
         """Build the head.
 
         Args:
-            register_dim: Width of the teacher register grid (the Perceiver's
-                ``register_dim``, resolved by LatentMIMConfig).
+            pooler_dim: Width of the teacher location-token grid (the AttentionPooler's
+                ``pooler_dim``, resolved by LatentMIMConfig).
             student_dims: The student's Matryoshka prefix widths, descending.
         """
         self.validate()
-        return RegisterDistillationHead(
-            register_dim=register_dim,
+        return LocationTokenDistillationHead(
+            pooler_dim=pooler_dim,
             student_dims=student_dims,
             back_projection_hidden=self.back_projection_hidden,
             gram_max_tokens=self.gram_max_tokens,
         )
 
 
-class RegisterDistillationHead(nn.Module):
+class LocationTokenDistillationHead(nn.Module):
     """Per-prefix back-projections plus the loss that distils teacher into student.
 
     Each Matryoshka prefix width ``d`` of the student gets its own back-projection
-    ``d -> register_dim`` (keyed by ``str(d)`` in ``back_projections``, since
+    ``d -> pooler_dim`` (keyed by ``str(d)`` in ``back_projections``, since
     ``nn.ModuleDict`` keys must be strings). Calling the head returns the distillation
     loss and its per-prefix metrics, mirroring the supervision head: the module owns
     both the trainable parameters and the objective they serve. Training-only: never
@@ -72,7 +72,7 @@ class RegisterDistillationHead(nn.Module):
 
     def __init__(
         self,
-        register_dim: int,
+        pooler_dim: int,
         student_dims: list[int],
         back_projection_hidden: int | None = None,
         gram_max_tokens: int = 2048,
@@ -84,12 +84,12 @@ class RegisterDistillationHead(nn.Module):
 
         def head(prefix_dim: int) -> nn.Module:
             if back_projection_hidden is None:
-                return nn.Linear(prefix_dim, register_dim)
+                return nn.Linear(prefix_dim, pooler_dim)
             return nn.Sequential(
                 nn.Linear(prefix_dim, back_projection_hidden),
                 nn.LayerNorm(back_projection_hidden),
                 nn.ReLU(),
-                nn.Linear(back_projection_hidden, register_dim),
+                nn.Linear(back_projection_hidden, pooler_dim),
             )
 
         self.back_projections = nn.ModuleDict(
@@ -97,9 +97,9 @@ class RegisterDistillationHead(nn.Module):
         )
 
     def forward(
-        self, registers: Tensor, student_registers: Tensor
+        self, location_tokens: Tensor, student_location_tokens: Tensor
     ) -> tuple[Tensor, dict[str, Tensor]]:
-        """Distill the (detached) teacher register grid into the low-dim student.
+        """Distill the (detached) teacher location-token grid into the low-dim student.
 
         For every prefix ``d`` the first ``d`` dims of the student are distilled onto
         the full teacher through their own back-projection (``1 - cos``) and their own
@@ -108,9 +108,9 @@ class RegisterDistillationHead(nn.Module):
         self-sufficient. All terms are summed unweighted.
 
         Args:
-            registers: Teacher register grid ``[B, N, D]``; detached here, so the loss
+            location_tokens: Teacher location-token grid ``[B, N, D]``; detached here, so the loss
                 never reaches the encoder.
-            student_registers: Student grid ``[B, N, max_d]`` (its input was already
+            student_location_tokens: Student grid ``[B, N, max_d]`` (its input was already
                 detached inside the encoder, so gradients flow into the projection and
                 these heads only).
 
@@ -118,8 +118,8 @@ class RegisterDistillationHead(nn.Module):
             loss: Sum of the cosine and Gram terms across prefixes.
             metrics: Detached per-term, per-prefix values for logging.
         """
-        teacher = registers.detach().float()
-        student = student_registers.float()
+        teacher = location_tokens.detach().float()
+        student = student_location_tokens.float()
         metrics: dict[str, Tensor] = {}
         total = torch.zeros([], device=student.device, dtype=student.dtype)
         idx: Tensor | None = None

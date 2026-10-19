@@ -1,4 +1,4 @@
-"""Tests for the detached low-dim register projection ("student")."""
+"""Tests for the detached low-dim student projection ("student")."""
 
 import logging
 
@@ -7,14 +7,14 @@ import torch
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
     EncoderConfig,
-    PerceiverConfig,
     PredictorConfig,
 )
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
-from olmoearth_pretrain.nn.register_distillation_head import (
-    RegisterDistillationHead,
-    RegisterDistillationHeadConfig,
+from olmoearth_pretrain.nn.location_token_distillation_head import (
+    LocationTokenDistillationHead,
+    LocationTokenDistillationHeadConfig,
 )
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHeadConfig,
@@ -26,7 +26,7 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 logger = logging.getLogger(__name__)
 
 SUPPORTED_MODALITIES = [Modality.SENTINEL2_L2A, Modality.LATLON, Modality.WORLDCOVER]
-REGISTER_DIM = 16
+POOLER_DIM = 16
 PROJECTION_DIMS = [8, 4]
 
 
@@ -42,14 +42,14 @@ def _encoder_config(with_student: bool) -> EncoderConfig:
         max_sequence_length=12,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        perceiver_config=PerceiverConfig(
-            register_dim=REGISTER_DIM,
-            latent_depth=2,
+        attention_pooler_config=AttentionPoolerConfig(
+            pooler_dim=POOLER_DIM,
+            pooler_depth=2,
         ),
     )
     if with_student:
-        assert config.perceiver_config is not None
-        config.perceiver_config.student_dims = list(PROJECTION_DIMS)
+        assert config.attention_pooler_config is not None
+        config.attention_pooler_config.student_dims = list(PROJECTION_DIMS)
     return config
 
 
@@ -67,8 +67,8 @@ def _latent_mim_config(
         max_sequence_length=12,
         drop_path=0.0,
         spatial_pos_encoding="rope",
-        use_perceiver=True,
-        register_dim=REGISTER_DIM,
+        use_attention_pooler=True,
+        pooler_dim=POOLER_DIM,
     )
     supervision_config = None
     if with_supervision:
@@ -87,24 +87,24 @@ def _latent_mim_config(
         encoder_config=_encoder_config(with_student),
         decoder_config=decoder_config,
         supervision_head_config=supervision_config,
-        register_distillation_head_config=(
-            RegisterDistillationHeadConfig() if with_student else None
+        location_token_distillation_head_config=(
+            LocationTokenDistillationHeadConfig() if with_student else None
         ),
     )
 
 
 def _assert_student_isolated(model_or_encoder: torch.nn.Module) -> None:
-    """No encoder-block or primary-Perceiver parameter may carry gradient."""
+    """No encoder-block or primary-AttentionPooler parameter may carry gradient."""
     encoder = getattr(model_or_encoder, "encoder", model_or_encoder)
     for name, param in encoder.named_parameters():
-        if name.startswith("register_student"):
+        if name.startswith("attention_pooler.student"):
             continue
         assert param.grad is None or torch.all(param.grad == 0), (
             f"student gradient leaked into encoder parameter {name}"
         )
 
 
-def test_encoder_register_student_detached(
+def test_encoder_location_token_student_detached(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
     """The student outputs a max(dims)-wide grid and never grads the encoder."""
@@ -114,10 +114,18 @@ def test_encoder_register_student_detached(
     grid = (H // 4, W // 4)
 
     output_dict = encoder.forward(x, patch_size=4, input_res=10)
-    assert output_dict["registers"].shape == (B, *grid, REGISTER_DIM)
-    projected = output_dict["student_registers"]
+    assert output_dict["location_tokens"].shape == (B, *grid, POOLER_DIM)
+    projected = output_dict["student_location_tokens"]
     assert projected.shape == (B, *grid, max(PROJECTION_DIMS))
-    assert encoder.register_student is not None
+    assert (
+        encoder.attention_pooler is not None
+        and encoder.attention_pooler.student is not None
+    )
+    assert encoder.attention_pooler.student_dims == sorted(
+        PROJECTION_DIMS, reverse=True
+    )
+    # The student lives on the AttentionPooler, not loose on the encoder.
+    assert not hasattr(encoder, "register_student")
     # The training-only back-projection heads are not part of the encoder.
     assert not any(
         n.startswith("register_back_projections") for n, _ in encoder.named_parameters()
@@ -126,7 +134,7 @@ def test_encoder_register_student_detached(
     encoder.zero_grad()
     projected.sum().backward()
     _assert_student_isolated(encoder)
-    assert encoder.register_student[0].weight.grad is not None
+    assert encoder.attention_pooler.student[0].weight.grad is not None
 
 
 def test_encoder_registers_grad_without_student_interference(
@@ -137,17 +145,17 @@ def test_encoder_registers_grad_without_student_interference(
     x = MaskedOlmoEarthSample(**masked_sample_dict)
     output_dict = encoder.forward(x, patch_size=4, input_res=10)
     encoder.zero_grad()
-    output_dict["registers"].sum().backward()
-    assert encoder.perceiver is not None
-    assert encoder.perceiver.register.grad is not None
-    assert encoder.register_student is not None
-    assert encoder.register_student[0].weight.grad is None
+    output_dict["location_tokens"].sum().backward()
+    assert encoder.attention_pooler is not None
+    assert encoder.attention_pooler.learned_query.grad is not None
+    assert encoder.attention_pooler.student is not None
+    assert encoder.attention_pooler.student[0].weight.grad is None
 
 
-def test_latentmim_supervision_reads_the_registers(
+def test_latentmim_supervision_reads_the_location_tokens(
     masked_sample_dict: dict[str, torch.Tensor],
 ) -> None:
-    """The supervision head runs on the register grid next to the student outputs."""
+    """The supervision head runs on the location-token grid next to the student outputs."""
     model: LatentMIM = _latent_mim_config(True).build()
     assert model.supervision_head is not None
 
@@ -155,19 +163,19 @@ def test_latentmim_supervision_reads_the_registers(
     (_, _, _, _, _, supervision_preds, student_outputs) = model.forward(x, patch_size=4)
     assert supervision_preds is not None and "worldcover" in supervision_preds
     assert student_outputs is not None
-    assert student_outputs["student_registers"].shape[-1] == max(PROJECTION_DIMS)
-    assert student_outputs["registers"].shape[-1] == REGISTER_DIM
+    assert student_outputs["student_location_tokens"].shape[-1] == max(PROJECTION_DIMS)
+    assert student_outputs["location_tokens"].shape[-1] == POOLER_DIM
 
 
 def test_latent_mim_owns_the_distillation_head() -> None:
     """One back-projection per Matryoshka prefix, on the head, only when configured."""
     model = _latent_mim_config(True).build()
-    head = model.register_distillation_head
+    head = model.location_token_distillation_head
     assert head is not None
     assert set(head.back_projections.keys()) == {str(d) for d in PROJECTION_DIMS}
     for d in PROJECTION_DIMS:
         assert head.back_projections[str(d)].in_features == d
-    assert _latent_mim_config(False).build().register_distillation_head is None
+    assert _latent_mim_config(False).build().location_token_distillation_head is None
     # The encoder itself carries no distillation parameters.
     assert not any(
         n.startswith("register_back_projections")
@@ -178,20 +186,22 @@ def test_latent_mim_owns_the_distillation_head() -> None:
 def test_distillation_head_requires_a_student() -> None:
     """A distillation head without a student to distil into is a config error."""
     config = _latent_mim_config(False)
-    config.register_distillation_head_config = RegisterDistillationHeadConfig()
-    with pytest.raises(ValueError, match="requires a Perceiver with a student"):
+    config.location_token_distillation_head_config = (
+        LocationTokenDistillationHeadConfig()
+    )
+    with pytest.raises(ValueError, match="requires an AttentionPooler with a student"):
         config.validate()
 
 
 def test_distillation_head_loss_prefixes() -> None:
     """Per-prefix cosine + Gram terms; grads reach the student and heads, never the teacher."""
     torch.manual_seed(0)
-    B, N, D = 2, 9, REGISTER_DIM
+    B, N, D = 2, 9, POOLER_DIM
     teacher = torch.randn(B, N, D, requires_grad=True)
     student_source = torch.randn(B, N, max(PROJECTION_DIMS), requires_grad=True)
     student = student_source * 1.0
-    head = RegisterDistillationHead(
-        register_dim=D, student_dims=PROJECTION_DIMS, gram_max_tokens=8
+    head = LocationTokenDistillationHead(
+        pooler_dim=D, student_dims=PROJECTION_DIMS, gram_max_tokens=8
     )
     total, metrics = head(teacher, student)
     assert torch.isfinite(total)
@@ -206,10 +216,10 @@ def test_distillation_head_loss_prefixes() -> None:
         assert back_projection.weight.grad is not None
 
 
-def test_perceiver_config_rejects_empty_student_dims() -> None:
+def test_attention_pooler_config_rejects_empty_student_dims() -> None:
     """An empty student dim list is a config error, not a silent no-student."""
     config = _encoder_config(True)
-    assert config.perceiver_config is not None
-    config.perceiver_config.student_dims = []
+    assert config.attention_pooler_config is not None
+    config.attention_pooler_config.student_dims = []
     with pytest.raises(ValueError, match="student_dims"):
         config.validate()

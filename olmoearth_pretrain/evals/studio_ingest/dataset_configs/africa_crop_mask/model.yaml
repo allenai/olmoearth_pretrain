@@ -6,14 +6,6 @@ data:
   init_args:
     path: /weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/africa_crop_mask/
     inputs:
-      gse:
-        data_type: raster
-        dtype: FLOAT32
-        layers:
-          - gse
-        required: true
-        use_all_bands_in_order_of_band_set_idx: 0
-        passthrough: true
       sentinel2_l2a:
         data_type: "raster"
         layers: ["sentinel2", "sentinel2.1", "sentinel2.2", "sentinel2.3", "sentinel2.4", "sentinel2.5", "sentinel2.6", "sentinel2.7", "sentinel2.8", "sentinel2.9", "sentinel2.10", "sentinel2.11"]

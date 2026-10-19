@@ -50,9 +50,10 @@ class EvalWrapper:
         concat_features: bool = False,
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
-        eval_on_student_registers: bool = False,
+        eval_on_student_location_tokens: bool = False,
         eval_student_dim: int | None = None,
         use_center_token: bool = False,
+        location_query_patch_size: int | None = None,
     ):
         """Initialize the eval wrapper.
 
@@ -63,21 +64,24 @@ class EvalWrapper:
             pooling_type: The pooling type to use for the model.
             concat_features: Whether to concatenate features across modalities.
             use_pooled_tokens: Whether to use pooled tokens.
-            eval_on_encoder_tokens: If True and the model has a Perceiver,
-                probe the pooled encoder patch tokens instead of the register latents.
-                No effect when the model has no Perceiver (encoder tokens are
+            eval_on_encoder_tokens: If True and the model has an AttentionPooler,
+                probe the pooled encoder patch tokens instead of the location tokens.
+                No effect when the model has no AttentionPooler (encoder tokens are
                 always used in that case).
-            eval_on_student_registers: If True and the model has a detached register
-                projection (``register_student_dims``), probe the low-dim
-                ``student_registers`` instead of the register grid -- the same run
+            eval_on_student_location_tokens: If True and the model has a detached student
+                projection (``attention_pooler_config.student_dims``), probe the low-dim
+                ``student_location_tokens`` instead of the location-token grid -- the same run
                 can then be evaluated at both widths. Mutually exclusive with
                 eval_on_encoder_tokens.
-            eval_student_dim: With ``eval_on_student_registers``, probe only the
+            eval_student_dim: With ``eval_on_student_location_tokens``, probe only the
                 first ``eval_student_dim`` dims of the student (a Matryoshka
                 prefix, e.g. 64 of a [128, 64] student). None (default) probes the
                 full student width.
             use_center_token: Whether to use the center spatial patch embedding instead
                 of pooling across all patches for classification tasks.
+            location_query_patch_size: For OlmoEarth models with an AttentionPooler, pixels per location query
+                along each side (must divide ``patch_size``; 1 = per-pixel location queries).
+                None = one location query per token. Other models ignore it.
         """
         super().__init__()
         self.model = model
@@ -94,21 +98,27 @@ class EvalWrapper:
         )
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
-        self.eval_on_student_registers = eval_on_student_registers
+        self.eval_on_student_location_tokens = eval_on_student_location_tokens
         self.eval_student_dim = eval_student_dim
         self.use_center_token = use_center_token
-        if self.eval_on_student_registers and self.eval_on_encoder_tokens:
+        self.location_query_patch_size = location_query_patch_size
+        if self.eval_on_student_location_tokens and self.eval_on_encoder_tokens:
             raise ValueError(
-                "eval_on_student_registers and eval_on_encoder_tokens are mutually "
-                "exclusive (projected registers only exist under the bottleneck)"
+                "eval_on_student_location_tokens and eval_on_encoder_tokens are mutually "
+                "exclusive (projected location_tokens only exist under the bottleneck)"
             )
-        if self.eval_student_dim is not None and not self.eval_on_student_registers:
-            raise ValueError("eval_student_dim requires eval_on_student_registers=True")
-        if self.eval_on_student_registers and not getattr(
-            self.model, "use_perceiver", False
+        if (
+            self.eval_student_dim is not None
+            and not self.eval_on_student_location_tokens
         ):
             raise ValueError(
-                "eval_on_student_registers set to True but the model has no perceiver"
+                "eval_student_dim requires eval_on_student_location_tokens=True"
+            )
+        if self.eval_on_student_location_tokens and not getattr(
+            self.model, "use_attention_pooler", False
+        ):
+            raise ValueError(
+                "eval_on_student_location_tokens set to True but the model has no attention_pooler"
             )
         if self.use_center_token and self.spatial_pool:
             raise ValueError(
@@ -172,33 +182,33 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     return True
         return False
 
-    def _pool_registers(self, encoder_output: dict[str, Any]) -> torch.Tensor:
-        """Pool the register grid into the eval embedding.
+    def _pool_location_tokens(self, encoder_output: dict[str, Any]) -> torch.Tensor:
+        """Pool the location tokens into the eval embedding.
 
         For spatial tasks (segmentation/regression) the grid is returned as a coarse
         ``[B, n_h, n_w, D]`` spatial map for the downstream head to upsample. For
         center-pixel classification (``use_center_token``) only the center cell is kept,
         matching the non-bottleneck path -- the label describes the center pixel, so
         averaging the whole window would mix in unlabeled context. Otherwise the
-        registers are pooled across the grid to ``[B, D]``.
+        location tokens are pooled across the grid to ``[B, D]``.
 
-        With ``eval_on_student_registers`` the low-dim detached student
-        (``student_registers``) is probed instead of the register grid; it shares
-        the registers' grid layout, so the pooling is identical.
+        With ``eval_on_student_location_tokens`` the low-dim detached student
+        (``student_location_tokens``) is probed instead of the location-token grid; it shares
+        the location tokens' grid layout, so the pooling is identical.
         ``eval_student_dim`` keeps only the first d dims (a Matryoshka prefix).
         """
-        if self.eval_on_student_registers:
-            if "student_registers" not in encoder_output:
+        if self.eval_on_student_location_tokens:
+            if "student_location_tokens" not in encoder_output:
                 raise ValueError(
-                    "eval_on_student_registers requires a model with "
-                    "register_student_dims (no student_registers in the encoder "
+                    "eval_on_student_location_tokens requires a model with "
+                    "attention_pooler_config.student_dims (no student_location_tokens in the encoder "
                     "output)"
                 )
-            grid = encoder_output["student_registers"]  # [B, n_h, n_w, d]
+            grid = encoder_output["student_location_tokens"]  # [B, n_h, n_w, d]
             if self.eval_student_dim is not None:
                 grid = grid[..., : self.eval_student_dim]
         else:
-            grid = encoder_output["registers"]  # [B, n_h, n_w, D]
+            grid = encoder_output["location_tokens"]  # [B, n_h, n_w, D]
         if self.spatial_pool:
             return grid
         if self.use_center_token:
@@ -212,25 +222,34 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Forward pass through the model produces the embedding specified by initialization."""
+        # Only forwarded when set, so encoders without the argument keep working.
+        location_query_kwargs = (
+            {"location_query_patch_size": self.location_query_patch_size}
+            if self.location_query_patch_size is not None
+            else {}
+        )
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
             encoder_output = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=fast_pass
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=fast_pass,
+                **location_query_kwargs,
             )
             if (
                 not self.eval_on_encoder_tokens
-                and getattr(self.model, "use_perceiver", False)
-                and "registers" in encoder_output
+                and getattr(self.model, "use_attention_pooler", False)
+                and "location_tokens" in encoder_output
             ):
-                # Perceiver: probe the register grid (the model's compressed,
+                # AttentionPooler: probe the location-token grid (the model's compressed,
                 # spatially-anchored representation), not the per-modality patch tokens.
                 # Opt out with eval_on_encoder_tokens to fall through to the patch tokens.
-                batch_embeddings = self._pool_registers(encoder_output)
+                batch_embeddings = self._pool_location_tokens(encoder_output)
             else:
-                if self.eval_on_student_registers:
+                if self.eval_on_student_location_tokens:
                     raise ValueError(
-                        "eval_on_student_registers set to True but the model has set "
-                        "use_perceiver=False or doesn't have registers in the encoder output"
+                        "eval_on_student_location_tokens set to True but the model has set "
+                        "use_attention_pooler=False or doesn't have location_tokens in the encoder output"
                     )
                 tokens_and_masks: TokensAndMasks = encoder_output[
                     "tokens_and_masks"
@@ -254,7 +273,10 @@ class OlmoEarthEvalWrapper(EvalWrapper):
                     )
         else:
             pooled_tokens_dict = self.model(
-                masked_olmoearth_sample, patch_size=self.patch_size, fast_pass=True
+                masked_olmoearth_sample,
+                patch_size=self.patch_size,
+                fast_pass=True,
+                **location_query_kwargs,
             )["pooled_tokens_and_masks"]
             pooled_tokens = pooled_tokens_dict["modality_pooled_tokens"]
             # spatial pool is true means we want to keep the spatial dimensions

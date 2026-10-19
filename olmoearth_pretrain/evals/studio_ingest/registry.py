@@ -254,7 +254,9 @@ class Registry:
             List of datasets that include this modality
         """
         return [
-            entry for entry in self.datasets.values() if modality in entry.modalities
+            entry
+            for entry in self.datasets.values()
+            if modality in entry.supported_modalities
         ]
 
     def __len__(self) -> int:

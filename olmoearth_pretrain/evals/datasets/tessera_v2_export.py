@@ -49,18 +49,17 @@ dataset:
    EVAL window.
 5. Wire it up so the ``tessera_v2_precomputed`` baseline can read it::
 
-    python scripts/tools/wire_embedding_modalities.py \
-        --datasets <name> --products tessera_v2 --required
-    python scripts/tools/backfill_eval_registry_provenance.py
+    python scripts/tools/register_embedding_products.py \
+        --datasets <name> --products tessera_v2
 
    ``infer`` writes the same manifest shape the embedding materializer does,
-   so the wiring script's coverage gate works on tessera_v2 unchanged.
+   so the registration script's coverage gate works on tessera_v2 unchanged.
 
 ``--eval_ds_path`` lets step 4 read the fetched scenes from one dataset copy
 and write the embedding layer into another. That is the normal case for the
 ``*_year_aligned`` datasets: the scenes are fetched in the staging copy under
 ``rslearn-eai/datasets/olmoearth_evals`` (which is where the imagery pipeline
-runs), while the layer, the manifest and the wiring belong in the ingested
+runs), while the layer, the manifest and the registration belong in the ingested
 ``olmoearth/eval_datasets`` copy that model.yaml points at. Both copies hold
 the same windows on the same grids, so the layer is valid in either.
 
@@ -86,15 +85,13 @@ import numpy as np
 import torch
 from rasterio.enums import Resampling
 from rslearn.data_sources.data_source import Item
-from rslearn.dataset import Window
+from rslearn.dataset import Dataset, Window
+from rslearn.utils.raster_array import RasterArray, RasterMetadata
 from rslearn.utils.raster_format import GeotiffRasterFormat
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.embedding_materializer.materialize import write_manifest
-from olmoearth_pretrain.evals.embedding_materializer.providers import (
-    RslearnWindowProvider,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +254,7 @@ class NoS2ScenesError(ValueError):
     so no eval reads those windows either. ``infer`` records them as
     coverage gaps in the manifest (no imagery means no product, exactly like
     a published product's coverage hole) rather than failures, which would
-    hard-block wire_embedding_modalities.py. An *unmaterialized* S2 layer
+    hard-block register_embedding_products.py. An *unmaterialized* S2 layer
     still raises a plain ValueError and counts as a failure.
     """
 
@@ -525,9 +522,41 @@ def fetch_time_range(
     )
 
 
-def eval_windows_of(provider: RslearnWindowProvider, spec: DatasetSpec) -> list[Window]:
+def eval_windows_of(ds_path: UPath, spec: DatasetSpec) -> list[Window]:
     """Load the dataset's eval windows, excluding the fetch group."""
-    return [w for w in provider.load_windows() if w.group != spec.fetch_group]
+    windows = Dataset(ds_path).storage.get_windows(groups=spec.eval_groups)
+    return [w for w in windows if w.group != spec.fetch_group]
+
+
+def write_embedding_layer(window: Window, array: np.ndarray) -> None:
+    """Write a (128, H, W) embedding as the window's tessera_v2 raster layer.
+
+    Laid out the way rslearn materializes a layer
+    (``layers/<layer>/<bands>/geotiff.tif``) and marked completed, so rslearn
+    and the load-time layer-completion check treat it as materialized.
+    """
+    bands = Modality.TESSERA_V2.band_order
+    expected_shape = (
+        len(bands),
+        window.bounds[3] - window.bounds[1],
+        window.bounds[2] - window.bounds[0],
+    )
+    if array.shape != expected_shape:
+        raise ValueError(
+            f"window {window.group}/{window.name}: expected array of shape "
+            f"{expected_shape}, got {array.shape}"
+        )
+    GeotiffRasterFormat().encode_raster(
+        window.get_raster_dir(LAYER_NAME, bands),
+        window.projection,
+        window.bounds,
+        RasterArray(
+            chw_array=array.astype(np.float32),
+            time_range=window.time_range,
+            metadata=RasterMetadata(nodata_value=float("nan")),
+        ),
+    )
+    window.mark_layer_completed(LAYER_NAME)
 
 
 def check_names_unique(windows: list[Window]) -> None:
@@ -559,8 +588,7 @@ def create_windows(ds_path: str, spec: DatasetSpec) -> None:
         SystemExit: if window names collide across groups, or if any window's
             fetch year cannot be determined.
     """
-    provider = RslearnWindowProvider(UPath(ds_path), groups=spec.eval_groups)
-    windows = eval_windows_of(provider, spec)
+    windows = eval_windows_of(UPath(ds_path), spec)
     check_names_unique(windows)
 
     ranges = {w.name: fetch_time_range(w, spec.year) for w in windows}
@@ -628,7 +656,7 @@ def infer(
         num_shards: split the eval windows into this many disjoint shards (by
             a stable hash of the window name) so N GPU jobs can run the same
             dataset concurrently. Shard runs do NOT write the manifest — its
-            counters would only cover the shard, and the wiring gate reads
+            counters would only cover the shard, and the registration gate reads
             them as dataset totals. After every shard finishes, run one final
             unsharded pass: it skips all written windows and writes a correct
             combined manifest.
@@ -649,8 +677,7 @@ def infer(
     if not 0 <= shard_index < num_shards:
         raise SystemExit(f"--shard_index {shard_index} not in [0, {num_shards})")
     out_ds_path = eval_ds_path or ds_path
-    provider = RslearnWindowProvider(UPath(out_ds_path), groups=spec.eval_groups)
-    eval_windows = eval_windows_of(provider, spec)
+    eval_windows = eval_windows_of(UPath(out_ds_path), spec)
     check_names_unique(eval_windows)
     if num_shards > 1:
         # crc32, not hash(): python's str hash is salted per process, and the
@@ -663,8 +690,10 @@ def infer(
         logger.info(
             f"shard {shard_index}/{num_shards}: {len(eval_windows)} eval windows"
         )
-    fetch_provider = RslearnWindowProvider(UPath(ds_path), groups=[spec.fetch_group])
-    fetch_windows = {w.name: w for w in fetch_provider.load_windows()}
+    fetch_windows = {
+        w.name: w
+        for w in Dataset(UPath(ds_path)).storage.get_windows(groups=[spec.fetch_group])
+    }
     missing = [w.name for w in eval_windows if w.name not in fetch_windows]
     if missing:
         raise SystemExit(
@@ -676,7 +705,7 @@ def infer(
         eval_window: Window,
     ) -> tuple[Window, dict[str, Any] | None, str]:
         """Load one window's inputs -> (window, inputs or None, status)."""
-        if not overwrite and provider.is_layer_written(eval_window, LAYER_NAME):
+        if not overwrite and eval_window.is_layer_completed(LAYER_NAME):
             return eval_window, None, "skipped"
         try:
             inputs = build_dpixel_inputs(
@@ -735,19 +764,14 @@ def infer(
                 logger.exception(f"window {eval_window.name}: inference failed")
                 failed.append(eval_window.name)
                 continue
-            provider.write_embedding(
-                eval_window,
-                Modality.TESSERA_V2,
-                embedding.transpose(2, 0, 1),
-                nodata_value=float("nan"),
-            )
+            write_embedding_layer(eval_window, embedding.transpose(2, 0, 1))
             written += 1
             if written % 50 == 0:
                 logger.info(f"{written}/{len(eval_windows)} windows written")
 
     if num_shards > 1:
         # A shard's counters cover only its slice; writing them as THE
-        # manifest would feed the wiring gate shard totals as dataset totals.
+        # manifest would feed the registration gate shard totals as dataset totals.
         logger.info(
             f"Shard {shard_index}/{num_shards} done: {written} written, "
             f"{skipped} skipped, {len(coverage_gaps)} gaps, {len(failed)} "
@@ -756,10 +780,10 @@ def infer(
         )
         return
     # Same key names the embedding materializer writes, so the coverage gate in
-    # wire_embedding_modalities.py reads this manifest unchanged. Coverage
+    # register_embedding_products.py reads this manifest unchanged. Coverage
     # gaps are windows whose S2 layer was prepared but matched zero scenes
     # (see NoS2ScenesError): no imagery, no product -- distinct from
-    # windows_failed, which hard-blocks the wiring script.
+    # windows_failed, which hard-blocks registration.
     write_manifest(
         UPath(out_ds_path),
         LAYER_NAME,
