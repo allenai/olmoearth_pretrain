@@ -72,10 +72,13 @@ def _instrument(log_dir: str) -> None:
 
     def logged(self, args):  # type: ignore[no-untyped-def]
         h5t.update(wall=0.0, cpu=0.0, opens=0, reads=0, depth=0)
+        start = time.time()
         w, c, t = time.perf_counter(), time.process_time(), time.thread_time()
         out = getitem(self, args)
+        batch_getitem["wall"] += time.perf_counter() - w
         row = {
             "pid": os.getpid(),
+            "t0": start,
             "wall": time.perf_counter() - w,
             "proc_cpu": time.process_time() - c,
             "thread_cpu": time.thread_time() - t,
@@ -94,13 +97,65 @@ def _instrument(log_dir: str) -> None:
 
     OlmoEarthDataset.__getitem__ = logged  # type: ignore[method-assign]
 
+    # Batch assembly: time the collate (transform + masking) of each rank batch, with
+    # its shape and the getitem time that went into it.
+    from olmoearth_pretrain.data import collate as collate_module
+
+    batch_getitem = {"wall": 0.0}
+    collate = collate_module.collate_single_masked_batched
+
+    def timed_collate(batch, *a, **k):  # type: ignore[no-untyped-def]
+        start = time.time()
+        out = collate(batch, *a, **k)
+        sample = out[1]
+        steps = {
+            name: int(value.shape[3])
+            for name in ("sentinel2_l2a", "sentinel1", "landsat_l2")
+            if (value := getattr(sample, name, None)) is not None and value.ndim == 5
+        }
+        grid = next(
+            (
+                list(getattr(sample, n).shape[1:3])
+                for n in steps
+                if getattr(sample, n, None) is not None
+            ),
+            None,
+        )
+        row = {
+            "pid": os.getpid(),
+            "start": start,
+            "end": time.time(),
+            "getitem_wall": batch_getitem["wall"],
+            "patch_size": out[0],
+            "grid_px": grid,
+            "steps": steps,
+        }
+        batch_getitem["wall"] = 0.0
+        with open(f"{log_dir}/collate_{os.getpid()}.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+        return out
+
+    timed_collate.__module__ = collate.__module__
+    timed_collate.__qualname__ = collate.__qualname__
+    collate_module.collate_single_masked_batched = timed_collate  # type: ignore[assignment]
+    # The dataloader imported the name directly; its config.build reads it from there.
+    from olmoearth_pretrain.data import dataloader as dataloader_module
+
+    dataloader_module.collate_single_masked_batched = timed_collate  # type: ignore[assignment]
+
 
 def _summarize(log_dir: str) -> None:
     """Aggregate the per-sample logs of ``_instrument``."""
-    rows = []
+    rows, batches, mains = [], [], []
     for name in os.listdir(log_dir):
         with open(os.path.join(log_dir, name)) as f:
-            rows += [json.loads(line) for line in f]
+            lines = [json.loads(line) for line in f]
+        if name.startswith("collate_"):
+            batches += lines
+        elif name.startswith("main_"):
+            mains += lines
+        else:
+            rows += lines
     out: dict = {"samples": len(rows), "processes": len({r["pid"] for r in rows})}
     for key in ("wall", "proc_cpu", "thread_cpu", "h5_wall", "h5_cpu"):
         v = np.array([r[key] for r in rows])
@@ -118,6 +173,60 @@ def _summarize(log_dir: str) -> None:
     out["torch_threads"] = sorted({r["torch_threads"] for r in rows})
     out["h5_opens_per_sample"] = round(float(np.mean([r["h5_opens"] for r in rows])), 2)
     print(json.dumps(out), flush=True)
+    if not batches:
+        return
+    # Per worker: time from its first sample to each batch's collate end, and the gaps
+    # between consecutive batches (build time incl. any wait on a full queue).
+    first_sample = {}
+    for r in rows:
+        first_sample[r["pid"]] = min(first_sample.get(r["pid"], r["t0"]), r["t0"])
+    start = min(m["start"] for m in mains) if mains else min(first_sample.values())
+    collate_s = np.array([b["end"] - b["start"] for b in batches])
+    getitem_s = np.array([b["getitem_wall"] for b in batches])
+    by_pid: dict = {}
+    for b in batches:
+        by_pid.setdefault(b["pid"], []).append(b)
+    gaps = []
+    for pid_batches in by_pid.values():
+        ends = sorted(b["end"] for b in pid_batches)
+        gaps += list(np.diff(ends))
+    summary = {
+        "batches": len(batches),
+        "collate_s": {
+            "mean": round(float(collate_s.mean()), 2),
+            "p50": round(float(np.median(collate_s)), 2),
+            "p90": round(float(np.quantile(collate_s, 0.9)), 2),
+            "max": round(float(collate_s.max()), 2),
+        },
+        "getitem_s_per_batch": {
+            "mean": round(float(getitem_s.mean()), 2),
+            "p90": round(float(np.quantile(getitem_s, 0.9)), 2),
+        },
+        "worker_batch_gap_s": {
+            "mean": round(float(np.mean(gaps)), 2) if gaps else None,
+            "p50": round(float(np.median(gaps)), 2) if gaps else None,
+        },
+        "worker_startup_s": {
+            "min": round(min(first_sample.values()) - start, 1),
+            "max": round(max(first_sample.values()) - start, 1),
+        },
+        "main_receipts": len(mains),
+    }
+    print(json.dumps(summary), flush=True)
+    slow = sorted(batches, key=lambda b: b["start"] - b["end"])[:8]
+    for b in slow:
+        print(
+            json.dumps(
+                {
+                    "collate_s": round(b["end"] - b["start"], 2),
+                    "getitem_s": round(b["getitem_wall"], 2),
+                    "patch_size": b["patch_size"],
+                    "grid_px": b["grid_px"],
+                    "steps": b["steps"],
+                }
+            ),
+            flush=True,
+        )
 
 
 if os.environ.get("BENCH_SAMPLE_LOG"):
@@ -296,6 +405,10 @@ def main() -> None:
     loader.dp_world_size = args.world
     loader.dp_rank = args.rank
     loader.reshuffle(epoch=1)
+    log_dir = os.environ.get("BENCH_SAMPLE_LOG")
+    if log_dir:
+        with open(f"{log_dir}/main_{args.rank}.jsonl", "a") as f:
+            f.write(json.dumps({"rank": args.rank, "start": time.time()}) + "\n")
     t0 = time.perf_counter()
     last = t0
     for i, batch in enumerate(loader):
