@@ -558,8 +558,9 @@ def encoder_searchlight(
     for blk in encoder.blocks:
         x = _block(blk, x, pos, (n_h, n_w, k_tok), neighborhood_cells, settings)
     x = encoder.norm(x)
-    tokens_out = torch.zeros_like(tokens)
-    tokens_out[:, order] = x.to(tokens.dtype)
+    # Keep the norm's dtype, as the standard forward does; under CUDA autocast that's float32, not the tokens' bf16.
+    tokens_out = x.new_zeros(tokens.shape)
+    tokens_out[:, order] = x
 
     location_token_output = None
     if attention_pooler is not None:
