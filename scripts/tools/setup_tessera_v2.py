@@ -39,14 +39,12 @@ setup_extra_layers.py does for SCL/Landsat:
                The student is pinned to **large** -- every dataset must match
                pastis/africa/ethiopia or the numbers are not one Tessera
                column.
-  wire         NOT run -- the wire_embedding_modalities.py and
-               backfill_eval_registry_provenance.py commands are printed once
-               the manifest exists. ``--required`` is included only when the
-               manifest's ``num_windows_failed`` is 0 (the wiring script
-               hard-blocks on any failure anyway); a nonzero count usually
-               means scenes that 404 permanently at the source, which is what
-               ``infer --allow_unmaterialized_s1`` is for (S1 only, recorded
-               in the manifest).
+  wire         NOT run -- the register_embedding_products.py command is
+               printed once the manifest exists. The registration script
+               refuses a manifest with any ``num_windows_failed``; a nonzero
+               count usually means scenes that 404 permanently at the source,
+               which is what ``infer --allow_unmaterialized_s1`` is for (S1
+               only, recorded in the manifest).
 
 Scale, before launching all six at once: they total ~120k+ eval windows
 against the ~5.1k of africa+ethiopia combined (canada_coarse 16.1k,
@@ -83,12 +81,12 @@ import random
 import sys
 import uuid
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from rslearn.dataset import Dataset
 from upath import UPath
 
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
     FETCH_CONFIG_NAME,
     FETCH_LAYERS,
@@ -97,11 +95,10 @@ from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
     resolve_spec,
     write_fetch_config,
 )
+from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 
 logger = logging.getLogger(__name__)
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIG_ROOT = REPO_ROOT / "data" / "rslearn_dataset_configs"
 
 DATASETS = tuple(f"{name}_year_aligned" for name in YEAR_ALIGNED_DATASETS)
 
@@ -136,7 +133,7 @@ class DatasetState:
     num_item_groups: int  # prepared scenes (item groups) across the sample
     num_completed: int  # materialized scenes across the sample
     manifest: dict[str, Any] | None  # from the registered eval tree
-    wired: bool  # repo model.yaml declares a tessera_v2 input
+    wired: bool  # registry entry lists tessera_v2 under embedding_products
 
     @property
     def materialized_fraction(self) -> float:
@@ -174,8 +171,11 @@ def read_dataset_state(
 
     manifest_path = eval_path / MANIFEST_NAME
     manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
-    model_yaml = CONFIG_ROOT / name / "model.yaml"
-    wired = model_yaml.exists() and "tessera_v2" in model_yaml.read_text()
+    registry = Registry.load()
+    wired = (
+        name in registry
+        and Modality.TESSERA_V2.name in registry.get(name).embedding_products
+    )
 
     return DatasetState(
         has_fetch_config=(stage_path / FETCH_CONFIG_NAME).exists(),
@@ -233,20 +233,18 @@ def infer_command(
 
 
 def wire_commands(name: str, state: DatasetState) -> list[str]:
-    """The repo-side wiring commands, with --required only on a clean bake."""
+    """The repo-side registration command, behind a retry note on a failed bake."""
     manifest = state.manifest
-    required = " --required" if manifest and not manifest["num_windows_failed"] else ""
     commands = [
-        "python scripts/tools/wire_embedding_modalities.py "
-        f"--datasets {name} --products tessera_v2{required}",
-        "python scripts/tools/backfill_eval_registry_provenance.py",
+        "python scripts/tools/register_embedding_products.py "
+        f"--datasets {name} --products tessera_v2",
     ]
-    if not required:
+    if not manifest or manifest["num_windows_failed"]:
         commands.insert(
             0,
             f"# {manifest['num_windows_failed'] if manifest else '?'} windows failed "
-            "-- retry `infer` first (existing layers are skipped); --required "
-            "left off deliberately",
+            "-- retry `infer` first (existing layers are skipped); registration "
+            "refuses a bake with failures",
         )
     return commands
 

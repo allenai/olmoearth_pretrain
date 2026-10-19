@@ -60,16 +60,14 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   products instead of running a forward pass — the embeddings are read off the
   sample as data modalities (`gse`, `tessera_v2`) baked into eval dataset
   stores, then flow through the exact same probe/KNN code as every other
-  model. Tasks run only where the modality has been baked in (see the
-  per-dataset ``modalities`` in the registry). To onboard
-  a dataset: bake the rasters with
-  `olmoearth_pretrain/evals/embedding_materializer` (or
+  model. Tasks run only where the product is registered (see the
+  per-dataset ``embedding_products`` in the registry). Every model on such a
+  dataset skips windows whose product layer is not completed on disk, so all
+  models are scored on the same windows. To onboard a dataset: bake the
+  rasters with `olmoearth_pretrain/evals/embedding_materializer` (or
   `scripts/tools/materialize_aef_supplemental_embeddings.py` for the AEF
-  supplemental set), then run `scripts/tools/wire_embedding_modalities.py` to
-  declare the layer in the dataset's `config.json`, add the model.yaml input,
-  and list the modality in the registry, followed by
-  `scripts/tools/backfill_eval_registry_provenance.py` to re-stamp
-  `config_json_sha256`.
+  supplemental set), then run `scripts/tools/register_embedding_products.py`
+  on a Weka-mounted machine and commit `registry.json`.
 
   For head-to-head comparisons with these products, `all_evals.py` defines
   a separate `EMBEDDING_EVAL_TASKS` registry (swept via
@@ -77,12 +75,8 @@ The sweep scripts set `TRAIN_SCRIPT_PATH` automatically and select `torchrun` fo
   convention: 16×16 windows,
   `patch_size=1` (one embedding per 10 m pixel), and an int8 round-trip
   (`quantize_embeddings=True`) so forward-pass models are scored as int8
-  products too. The downloaded AEF product is *not* re-quantized because its
-  stored values already carry that loss, but
-  `tessera_v2` — which we bake ourselves in float32 — is; see
-  `QUANTIZE_AT_EVAL_MODALITIES` and `QuantizationScheme` in
-  `olmoearth_pretrain/evals/embedding_transforms.py`, which also covers why the fixed-scale power
-  quantizer clips LayerNorm-geometry embeddings (ours included). The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
+  products too. The precomputed products are *not* re-quantized because their
+  stored values already carry that loss. The `pastis_ws16_ps1_*_pretrain_export` tasks tile each
   128×128 PASTIS sample into 16×16 windows, reading the `pastis_rslearn`
   dataset — an rslearn export whose S1/S2 inputs mirror the pretraining
   dataset (see `olmoearth_pretrain/evals/datasets/pastis_rslearn_export.py`)
