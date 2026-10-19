@@ -10,9 +10,9 @@ For every registry entry this:
 1. Stamps ``config_json_sha256`` with the hash of the dataset folder's
    current config.json (trust-on-first-record — eval jobs then fail loudly
    if the file drifts afterwards).
-2. Sets ``config_repo_dir`` when data/rslearn_dataset_configs/<name>/model.yaml
-   exists in the repo AND is byte-identical to the Weka copy, so eval jobs
-   read the git-tracked file. A repo config that differs from the Weka copy
+2. Sets ``packaged_config`` when the packaged dataset_configs/<name>/model.yaml
+   exists AND is byte-identical to the Weka copy, so eval jobs read the
+   packaged file. A packaged config that differs from the Weka copy
    is reported but NOT linked — switching it would silently change eval
    behavior; reconcile the two and re-run (or re-ingest with --overwrite).
 
@@ -23,15 +23,12 @@ are skipped with a warning and left unchanged.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import logging
 
 from upath import UPath
 
-from olmoearth_pretrain.evals.studio_ingest.provenance import (
-    RSLEARN_DATASET_CONFIGS_DIR,
-    find_repo_root,
-    sha256_of_file,
-)
+from olmoearth_pretrain.evals.studio_ingest.provenance import DATASET_CONFIGS_DIR
 from olmoearth_pretrain.evals.studio_ingest.registry import Registry
 
 logger = logging.getLogger(__name__)
@@ -54,10 +51,6 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    repo_root = find_repo_root()
-    if repo_root is None:
-        raise RuntimeError("Could not locate the repo root; run from a checkout.")
-
     registry = Registry.load()
     changed = 0
     for entry in registry:
@@ -75,7 +68,7 @@ def main() -> int:
 
         entry_changed = False
 
-        sha = sha256_of_file(config_json)
+        sha = hashlib.sha256(config_json.read_bytes()).hexdigest()
         if entry.config_json_sha256 != sha:
             if entry.config_json_sha256 is not None:
                 logger.warning(
@@ -87,15 +80,14 @@ def main() -> int:
             entry_changed = True
             logger.info("%s: config_json_sha256 = %s", entry.name, sha)
 
-        if entry.config_repo_dir is None:
-            repo_dir = f"{RSLEARN_DATASET_CONFIGS_DIR}/{entry.name}"
-            repo_yaml = repo_root / repo_dir / "model.yaml"
+        if entry.packaged_config is None:
+            repo_yaml = DATASET_CONFIGS_DIR / entry.name / "model.yaml"
             weka_yaml = UPath(entry.weka_path) / "model.yaml"
             if repo_yaml.exists() and weka_yaml.exists():
-                if repo_yaml.read_bytes() == weka_yaml.open("rb").read():
-                    entry.config_repo_dir = repo_dir
+                if repo_yaml.read_bytes() == weka_yaml.read_bytes():
+                    entry.packaged_config = entry.name
                     entry_changed = True
-                    logger.info("%s: config_repo_dir = %s", entry.name, repo_dir)
+                    logger.info("%s: packaged_config = %s", entry.name, entry.name)
                 else:
                     logger.warning(
                         "%s: %s exists but differs from the Weka copy — NOT "

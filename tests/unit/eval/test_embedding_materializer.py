@@ -1,312 +1,324 @@
-"""Unit tests for the embedding materializer (fetchers, providers, orchestration)."""
+"""Unit tests for the embedding materializer (rslearn layer + manifest)."""
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pandas as pd
 import pytest
 import rasterio
-from affine import Affine
+import shapely
 from rasterio.crs import CRS
+from rasterio.enums import Resampling
+from rslearn.data_sources.aws_google_satellite_embedding_v1 import (
+    GoogleSatelliteEmbeddingV1,
+)
+from rslearn.data_sources.data_source import Item
 from rslearn.dataset import Dataset, Window
-from rslearn.utils.geometry import PixelBounds, Projection
+from rslearn.dataset import manage as rslearn_manage
+from rslearn.utils.geometry import (
+    WGS84_PROJECTION,
+    PixelBounds,
+    Projection,
+    STGeometry,
+)
+from rslearn.utils.raster_array import RasterArray, RasterMetadata
 from upath import UPath
 
-from olmoearth_pretrain.data.constants import Modality, ModalitySpec
-from olmoearth_pretrain.evals.embedding_materializer import materialize
-from olmoearth_pretrain.evals.embedding_materializer.fetchers import (
-    EmbeddingFetcher,
-    SourceTile,
-    mosaic_tiles_to_bounds,
-    year_time_range,
-)
+from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.embedding_materializer.materialize import (
-    materialize_product,
-    write_manifest,
-)
-from olmoearth_pretrain.evals.embedding_materializer.providers import (
-    RslearnWindowProvider,
+    AEF,
+    CONFIG_BACKUP_NAME,
+    EmbeddingProduct,
     get_target_year,
+    materialize_product,
+    request_time_offset,
+    write_manifest,
 )
 
 PROJECTION = Projection(CRS.from_epsg(32610), 10, -10)
 WINDOW_SIZE = 16
+# Starts in 2019 but is centred on 2020-03, so reading the midpoint year (2020)
+# differs from rslearn's default of the earliest matching item (2019).
 TIME_RANGE = (
-    datetime(2019, 6, 1, tzinfo=UTC),
-    datetime(2020, 6, 1, tzinfo=UTC),
+    datetime(2019, 9, 1, tzinfo=UTC),
+    datetime(2020, 9, 1, tzinfo=UTC),
 )
+# Pixel origin of the windows: 500 km easting, 4000 km northing in UTM 10N.
+ORIGIN = (50_000, -400_000)
+# w3 sits 100 km away from the product's footprint, so it is a coverage gap.
+GAP_OFFSET = 10_000
 
 
-class FakeFetcher(EmbeddingFetcher):
-    """Deterministic fetcher returning arange arrays, or None for gap bounds."""
+def window_bounds(idx: int) -> PixelBounds:
+    """Return the pixel bounds of the idx-th test window."""
+    offset = idx * WINDOW_SIZE + (GAP_OFFSET if idx == 2 else 0)
+    x0, y0 = ORIGIN[0] + offset, ORIGIN[1] + offset
+    return (x0, y0, x0 + WINDOW_SIZE, y0 + WINDOW_SIZE)
 
-    def __init__(self, gap_bounds: set[PixelBounds] | None = None) -> None:
-        """Initialize a FakeFetcher.
 
-        Args:
-            gap_bounds: window bounds for which fetch returns None (no
-                coverage).
-        """
-        self.gap_bounds = gap_bounds or set()
-        self.calls: list[tuple[PixelBounds, int]] = []
+def expected_raster(bounds: PixelBounds, year: int) -> np.ndarray:
+    """The deterministic (C, H, W) array FakeAEFSource returns for a read."""
+    num_bands = len(Modality.GSE.band_order)
+    height, width = bounds[3] - bounds[1], bounds[2] - bounds[0]
+    values = np.arange(num_bands * height * width, dtype=np.float32) / 1e6 + year
+    return values.reshape(num_bands, height, width)
 
-    @property
-    def modality(self) -> ModalitySpec:
-        """The GSE modality (64 bands)."""
-        return Modality.GSE
 
-    @property
-    def product_version(self) -> str:
-        """Fake product version."""
-        return "fake-v1"
+class FakeAEFSource(GoogleSatelliteEmbeddingV1):
+    """AEF data source with an in-memory index and synthetic rasters.
 
-    @property
-    def nodata_value(self) -> float:
-        """Fake nodata value."""
-        return -1.0
+    The index has 2019 and 2020 items covering w1 and w2 only. Reads for
+    bounds listed in ``fail_bounds`` raise OSError while their failure budget
+    lasts. State lives on the class because rslearn instantiates the source
+    from its class path.
+    """
 
-    def fetch(
-        self, bounds: PixelBounds, projection: Projection, year: int
-    ) -> np.ndarray | None:
-        """Return a deterministic (C, H, W) array, or None for gap bounds."""
-        self.calls.append((tuple(bounds), year))
-        if tuple(bounds) in self.gap_bounds:
-            return None
-        num_bands = len(self.modality.band_order)
-        height = bounds[3] - bounds[1]
-        width = bounds[2] - bounds[0]
-        return (
-            np.arange(num_bands * height * width, dtype=np.float32).reshape(
-                num_bands, height, width
-            )
-            + year
+    fail_bounds: dict[PixelBounds, int | None] = {}
+    attempts: dict[PixelBounds, int] = {}
+
+    def _read_index_csv(self) -> pd.DataFrame:
+        """Return a two-year index whose footprint covers w1 and w2."""
+        corners = [window_bounds(0), window_bounds(1)]
+        footprint = STGeometry(
+            PROJECTION,
+            shapely.box(
+                corners[0][0] - 64,
+                corners[0][1] - 64,
+                corners[1][2] + 64,
+                corners[1][3] + 64,
+            ),
+            None,
+        ).to_projection(WGS84_PROJECTION)
+        return pd.DataFrame(
+            [
+                {"WKT": footprint.shp.wkt, "year": year, "path": f"s3://x/{year}.tiff"}
+                for year in (2019, 2020)
+            ]
+        )
+
+    def read_raster(
+        self,
+        layer_name: str,
+        item: Item,
+        bands: list[str],
+        projection: Projection,
+        bounds: PixelBounds,
+        resampling: Resampling = Resampling.bilinear,
+    ) -> RasterArray:
+        """Return expected_raster for the item's year, failing on demand."""
+        key = tuple(bounds)
+        if key in self.fail_bounds:
+            self.attempts[key] = self.attempts.get(key, 0) + 1
+            budget = self.fail_bounds[key]
+            if budget is None or self.attempts[key] <= budget:
+                raise OSError("simulated transient read failure")
+        return RasterArray(
+            chw_array=expected_raster(bounds, item.geometry.time_range[0].year),
+            time_range=item.geometry.time_range,
+            metadata=RasterMetadata(nodata_value=-1.0),
         )
 
 
-def make_dataset(tmp_path: Path) -> tuple[UPath, list[Window]]:
+FAKE_AEF = EmbeddingProduct(
+    name="fake",
+    modality=Modality.GSE,
+    product_version="fake-v1",
+    data_source_class_path=f"{__name__}.FakeAEFSource",
+    nodata_value=-1.0,
+)
+
+
+@pytest.fixture(autouse=True)
+def reset_fake_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Clear FakeAEFSource's failure state and make rslearn retries instant."""
+    FakeAEFSource.fail_bounds = {}
+    FakeAEFSource.attempts = {}
+    monkeypatch.setattr(rslearn_manage.time, "sleep", lambda _: None)
+
+
+def make_dataset(
+    tmp_path: Path, time_ranges: list[tuple[datetime, datetime] | None] | None = None
+) -> tuple[UPath, list[Window]]:
     """Create a tiny rslearn dataset on disk with three windows.
 
     Args:
         tmp_path: pytest tmp_path fixture value.
+        time_ranges: per-window time ranges; defaults to TIME_RANGE for all.
 
     Returns:
-        tuple of (dataset path, list of windows). The third window ("w3") is
-        placed at distinct bounds so tests can designate it a coverage gap.
+        tuple of (dataset path, list of windows). The third window ("w3") lies
+        outside the fake product's footprint.
     """
     ds_path = UPath(tmp_path) / "dataset"
     ds_path.mkdir(parents=True)
     with (ds_path / "config.json").open("w") as f:
         json.dump({"layers": {}}, f)
 
+    if time_ranges is None:
+        time_ranges = [TIME_RANGE] * 3
     dataset = Dataset(ds_path)
     windows = []
-    for idx, name in enumerate(["w1", "w2", "w3"]):
-        offset = idx * WINDOW_SIZE
+    for idx, (name, time_range) in enumerate(zip(["w1", "w2", "w3"], time_ranges)):
         window = Window(
             storage=dataset.storage,
             group="default",
             name=name,
             projection=PROJECTION,
-            bounds=(offset, offset, offset + WINDOW_SIZE, offset + WINDOW_SIZE),
-            time_range=TIME_RANGE,
+            bounds=window_bounds(idx),
+            time_range=time_range,
         )
         window.save()
         windows.append(window)
     return ds_path, windows
 
 
-class FakeTime:
-    """Stand-in for the time module that records sleeps instead of waiting."""
-
-    def __init__(self) -> None:
-        """Initialize with no recorded sleeps."""
-        self.sleeps: list[float] = []
-
-    def sleep(self, seconds: float) -> None:
-        """Record the requested sleep without blocking."""
-        self.sleeps.append(seconds)
+def read_layer(window: Window) -> tuple[np.ndarray, Any]:
+    """Read a window's materialized gse raster and its nodata value."""
+    path = window.get_raster_dir("gse", Modality.GSE.band_order) / "geotiff.tif"
+    with rasterio.open(str(path)) as src:
+        return src.read(), src.nodata
 
 
-class FlakyFetcher(FakeFetcher):
-    """FakeFetcher that raises IO errors for designated bounds.
-
-    Bounds listed in fail_bounds raise on their first ``failures`` fetch
-    attempts, then behave like FakeFetcher (so failures=None means always
-    raise).
-    """
-
-    def __init__(
-        self, fail_bounds: set[PixelBounds], failures: int | None = None
-    ) -> None:
-        """Initialize a FlakyFetcher.
-
-        Args:
-            fail_bounds: window bounds whose fetch raises an OSError.
-            failures: number of times each failing bounds raises before
-                succeeding, or None to always raise.
-        """
-        super().__init__()
-        self.fail_bounds = fail_bounds
-        self.failures = failures
-        self.attempts: dict[PixelBounds, int] = {}
-
-    def fetch(
-        self, bounds: PixelBounds, projection: Projection, year: int
-    ) -> np.ndarray | None:
-        """Raise for failing bounds until their failure budget is spent."""
-        key = tuple(bounds)
-        if key in self.fail_bounds:
-            self.attempts[key] = self.attempts.get(key, 0) + 1
-            if self.failures is None or self.attempts[key] <= self.failures:
-                raise OSError("simulated transient read failure")
-        return super().fetch(bounds, projection, year)
-
-
-GAP_BOUNDS = (32, 32, 48, 48)  # bounds of window w3
-
-
-def test_materialize_writes_layers(tmp_path: Path) -> None:
-    """Layers are written as GeoTIFFs with the right bands and marked complete."""
+def test_materialize_writes_midpoint_year(tmp_path: Path) -> None:
+    """Covered windows get the midpoint year's raster; the gap window gets none."""
     ds_path, windows = make_dataset(tmp_path)
-    fetcher = FakeFetcher(gap_bounds={GAP_BOUNDS})
-    manifest = materialize_product(ds_path, fetcher, product_name="fake")
+    manifest = materialize_product(ds_path, FAKE_AEF)
 
-    bands = Modality.GSE.band_order
     for window in windows[:2]:
         assert window.is_layer_completed("gse")
-        raster_path = window.get_raster_dir("gse", bands) / "geotiff.tif"
-        assert raster_path.exists()
-        with rasterio.open(str(raster_path)) as src:
-            assert src.count == len(bands)
-            assert src.dtypes[0] == "float32"
-            assert src.nodata == -1.0
-            data = src.read()
-        # Deterministic content round-trips (midpoint year of TIME_RANGE = 2019).
-        expected = fetcher.fetch(window.bounds, window.projection, 2019)
-        np.testing.assert_array_equal(data, expected)
+        data, nodata = read_layer(window)
+        assert data.dtype == np.float32
+        assert nodata == -1.0
+        np.testing.assert_allclose(data, expected_raster(window.bounds, 2020))
 
-    # The gap window has no layer.
     assert not windows[2].is_layer_completed("gse")
     assert manifest["num_windows_written"] == 2
     assert manifest["coverage_gaps"] == ["default/w3"]
+    assert manifest["num_windows_failed"] == 0
+
+
+def test_layer_is_declared_in_config(tmp_path: Path) -> None:
+    """The layer is written to config.json with a direct-read data source."""
+    ds_path, _ = make_dataset(tmp_path)
+    materialize_product(ds_path, FAKE_AEF)
+
+    with (ds_path / "config.json").open() as f:
+        layer = json.load(f)["layers"]["gse"]
+    assert layer["band_sets"][0]["bands"] == list(Modality.GSE.band_order)
+    assert layer["data_source"]["class_path"] == FAKE_AEF.data_source_class_path
+    assert layer["data_source"]["ingest"] is False
+    assert (ds_path / CONFIG_BACKUP_NAME).exists()
+    # rslearn itself can load the config.
+    assert "gse" in Dataset(ds_path).layers
 
 
 def test_idempotent_rerun_skips_existing(tmp_path: Path) -> None:
-    """A re-run without overwrite skips windows whose layer already exists."""
+    """A re-run without overwrite reads nothing and reports every window as done."""
     ds_path, _ = make_dataset(tmp_path)
-    fetcher = FakeFetcher()
-    materialize_product(ds_path, fetcher, product_name="fake")
-    assert len(fetcher.calls) == 3
+    materialize_product(ds_path, FAKE_AEF)
 
-    rerun_fetcher = FakeFetcher()
-    manifest = materialize_product(ds_path, rerun_fetcher, product_name="fake")
-    assert len(rerun_fetcher.calls) == 0
+    FakeAEFSource.fail_bounds = {window_bounds(0): None, window_bounds(1): None}
+    manifest = materialize_product(ds_path, FAKE_AEF)
+    assert FakeAEFSource.attempts == {}
     assert manifest["num_windows_written"] == 0
-    assert manifest["num_windows_skipped_existing"] == 3
+    assert manifest["num_windows_skipped_existing"] == 2
+    assert manifest["num_coverage_gaps"] == 1
 
 
 def test_overwrite_rewrites(tmp_path: Path) -> None:
-    """With overwrite=True, existing layers are fetched and written again."""
+    """With overwrite=True, existing layers are materialized again."""
     ds_path, _ = make_dataset(tmp_path)
-    materialize_product(ds_path, FakeFetcher(), product_name="fake")
+    materialize_product(ds_path, FAKE_AEF)
 
-    # workers=2 also exercises the threaded fetch/write path.
-    fetcher = FakeFetcher()
-    manifest = materialize_product(
-        ds_path, fetcher, product_name="fake", overwrite=True, workers=2
-    )
-    assert len(fetcher.calls) == 3
-    assert manifest["num_windows_written"] == 3
+    # workers=2 also exercises the threaded path.
+    manifest = materialize_product(ds_path, FAKE_AEF, overwrite=True, workers=2)
+    assert manifest["num_windows_written"] == 2
     assert manifest["num_windows_skipped_existing"] == 0
 
 
-def test_transient_fetch_error_is_retried(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A fetch that fails transiently is retried and the window still written."""
-    monkeypatch.setattr(materialize, "time", FakeTime())
+def test_transient_read_error_is_retried(tmp_path: Path) -> None:
+    """A read that fails transiently is retried and the window still written."""
     ds_path, windows = make_dataset(tmp_path)
-    fetcher = FlakyFetcher(fail_bounds={GAP_BOUNDS}, failures=2)
-    manifest = materialize_product(ds_path, fetcher, product_name="fake")
+    FakeAEFSource.fail_bounds = {window_bounds(1): 2}
+    manifest = materialize_product(ds_path, FAKE_AEF)
 
-    assert fetcher.attempts[GAP_BOUNDS] == 3
-    assert manifest["num_windows_written"] == 3
-    assert manifest["num_windows_failed"] == 0
-    assert windows[2].is_layer_completed("gse")
-
-
-def test_persistent_fetch_error_recorded_not_fatal(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A window that keeps failing is recorded as failed; the run completes."""
-    monkeypatch.setattr(materialize, "time", FakeTime())
-    ds_path, windows = make_dataset(tmp_path)
-    fetcher = FlakyFetcher(fail_bounds={GAP_BOUNDS})
-    manifest = materialize_product(ds_path, fetcher, product_name="fake", workers=2)
-
+    assert FakeAEFSource.attempts[window_bounds(1)] == 3
     assert manifest["num_windows_written"] == 2
-    assert manifest["num_windows_failed"] == 1
-    assert manifest["windows_failed"] == ["default/w3"]
-    assert not windows[2].is_layer_completed("gse")
+    assert manifest["num_windows_failed"] == 0
+    assert windows[1].is_layer_completed("gse")
 
-    # A re-run picks the failed window back up.
-    retry_fetcher = FlakyFetcher(fail_bounds=set())
-    manifest = materialize_product(ds_path, retry_fetcher, product_name="fake")
+
+def test_persistent_read_error_recorded_not_fatal(tmp_path: Path) -> None:
+    """A window that keeps failing is recorded as failed; a re-run picks it up."""
+    ds_path, windows = make_dataset(tmp_path)
+    FakeAEFSource.fail_bounds = {window_bounds(1): None}
+    manifest = materialize_product(ds_path, FAKE_AEF, workers=2)
+
     assert manifest["num_windows_written"] == 1
-    assert manifest["num_windows_skipped_existing"] == 2
-    assert windows[2].is_layer_completed("gse")
+    assert manifest["windows_failed"] == ["default/w2"]
+    assert not windows[1].is_layer_completed("gse")
+
+    FakeAEFSource.fail_bounds = {}
+    manifest = materialize_product(ds_path, FAKE_AEF)
+    assert manifest["num_windows_written"] == 1
+    assert manifest["num_windows_skipped_existing"] == 1
+    assert windows[1].is_layer_completed("gse")
 
 
-def test_year_policy(tmp_path: Path) -> None:
-    """The fixed --year overrides the per-window time-range midpoint year."""
-    ds_path, _ = make_dataset(tmp_path)
+def test_windows_without_time_range_are_skipped(tmp_path: Path) -> None:
+    """Windows with no time range are reported, not materialized."""
+    ds_path, windows = make_dataset(tmp_path, [TIME_RANGE, None, TIME_RANGE])
+    manifest = materialize_product(ds_path, FAKE_AEF)
 
-    fetcher = FakeFetcher()
-    manifest = materialize_product(ds_path, fetcher, product_name="fake")
-    # Midpoint of 2019-06-01..2020-06-01 is 2019-12-01.
-    assert all(year == 2019 for _, year in fetcher.calls)
-    assert manifest["year_policy"] == "window_time_range_midpoint"
+    assert manifest["windows_without_year"] == ["default/w2"]
+    assert manifest["num_windows_written"] == 1
+    assert not windows[1].is_layer_completed("gse")
 
-    fetcher = FakeFetcher()
-    manifest = materialize_product(
-        ds_path, fetcher, product_name="fake", year=2021, overwrite=True
+
+def test_request_time_offset_handles_leap_years(tmp_path: Path) -> None:
+    """Calendar-year windows of 365 and 366 days share one offset."""
+    years = [2019, 2020, 2021]
+    _, windows = make_dataset(
+        tmp_path,
+        [
+            (datetime(y, 1, 1, tzinfo=UTC), datetime(y + 1, 1, 1, tzinfo=UTC))
+            for y in years
+        ],
     )
-    assert all(year == 2021 for _, year in fetcher.calls)
-    assert manifest["year_policy"] == "fixed:2021"
+    offset = request_time_offset(windows)
+    assert [(w.time_range[0] + offset).year for w in windows] == years
+    assert [get_target_year(w) for w in windows] == years
 
 
-def test_get_target_year_no_time_range() -> None:
-    """Windows without a time range yield None unless a year override is set."""
-    window = Window(
-        storage=None,
-        group="default",
-        name="no_time",
-        projection=PROJECTION,
-        bounds=(0, 0, WINDOW_SIZE, WINDOW_SIZE),
-        time_range=None,
+def test_request_time_offset_rejects_mixed_lengths(tmp_path: Path) -> None:
+    """One offset cannot serve windows whose midpoints fall in different years."""
+    start = datetime(2019, 9, 1, tzinfo=UTC)
+    _, windows = make_dataset(
+        tmp_path,
+        [
+            (start, start + timedelta(days=60)),
+            (start, start + timedelta(days=60)),
+            (start, start + timedelta(days=366)),
+        ],
     )
-    assert get_target_year(window) is None
-    assert get_target_year(window, year_override=2020) == 2020
+    with pytest.raises(ValueError, match="different year"):
+        request_time_offset(windows)
 
 
 def test_manifest_contents_and_write(tmp_path: Path) -> None:
     """The manifest records product metadata, tallies, gaps, and CLI args."""
     ds_path, _ = make_dataset(tmp_path)
-    fetcher = FakeFetcher(gap_bounds={GAP_BOUNDS})
     cli_args = {"dataset_path": str(ds_path), "products": "fake"}
-    manifest = materialize_product(
-        ds_path, fetcher, product_name="fake", cli_args=cli_args
-    )
+    manifest = materialize_product(ds_path, FAKE_AEF, cli_args=cli_args)
 
     assert manifest["product"] == "fake"
     assert manifest["product_version"] == "fake-v1"
     assert manifest["modality"] == "gse"
     assert manifest["year_policy"] == "window_time_range_midpoint"
-    assert manifest["num_windows_written"] == 2
-    assert manifest["num_windows_skipped_existing"] == 0
     assert manifest["num_coverage_gaps"] == 1
-    assert manifest["coverage_gaps"] == ["default/w3"]
     assert manifest["cli_args"] == cli_args
 
     manifest_path = write_manifest(ds_path, "fake", manifest)
@@ -315,71 +327,9 @@ def test_manifest_contents_and_write(tmp_path: Path) -> None:
         assert json.load(f) == manifest
 
 
-def test_write_embedding_validates_shape(tmp_path: Path) -> None:
-    """Arrays whose shape mismatches the modality/window are rejected."""
-    ds_path, windows = make_dataset(tmp_path)
-    provider = RslearnWindowProvider(ds_path)
-    bad_array = np.zeros((3, WINDOW_SIZE, WINDOW_SIZE), dtype=np.float32)
-    with pytest.raises(ValueError, match="expected array of shape"):
-        provider.write_embedding(windows[0], Modality.GSE, bad_array, nodata_value=-1.0)
-
-
-def test_mosaic_tiles_to_bounds() -> None:
-    """Tiles are placed on the requested grid; uncovered pixels stay NaN."""
-    num_bands = 2
-    bounds = (0, 0, 8, 8)
-    # A tile in the same CRS/resolution covering the left half of the bounds.
-    tile_array = np.ones((num_bands, 8, 4), dtype=np.float32)
-    tile_array[1] = 5.0
-    tile = SourceTile(
-        array=tile_array,
-        crs=PROJECTION.crs,
-        transform=Affine(10, 0, 0, 0, -10, 0),
+def test_aef_product_points_at_rslearn_source() -> None:
+    """The real AEF product uses rslearn's AWS Google Satellite Embedding source."""
+    module, _, name = AEF.data_source_class_path.rpartition(".")
+    assert (
+        getattr(__import__(module, fromlist=[name]), name) is GoogleSatelliteEmbeddingV1
     )
-    mosaic = mosaic_tiles_to_bounds([tile], PROJECTION, bounds, num_bands)
-    assert mosaic is not None
-    assert mosaic.shape == (num_bands, 8, 8)
-    np.testing.assert_array_equal(mosaic[0, :, :4], 1.0)
-    np.testing.assert_array_equal(mosaic[1, :, :4], 5.0)
-    assert np.isnan(mosaic[:, :, 4:]).all()
-
-
-def test_mosaic_tiles_to_bounds_first_valid_composite() -> None:
-    """When tiles overlap, the first tile providing a pixel wins."""
-    num_bands = 1
-    bounds = (0, 0, 4, 4)
-    transform = Affine(10, 0, 0, 0, -10, 0)
-    first = SourceTile(
-        array=np.full((1, 4, 4), 1.0, dtype=np.float32),
-        crs=PROJECTION.crs,
-        transform=transform,
-    )
-    second = SourceTile(
-        array=np.full((1, 4, 4), 2.0, dtype=np.float32),
-        crs=PROJECTION.crs,
-        transform=transform,
-    )
-    mosaic = mosaic_tiles_to_bounds([first, second], PROJECTION, bounds, num_bands)
-    assert mosaic is not None
-    np.testing.assert_array_equal(mosaic, 1.0)
-
-
-def test_mosaic_tiles_to_bounds_no_coverage() -> None:
-    """A tile entirely outside the requested bounds yields None."""
-    num_bands = 1
-    bounds = (0, 0, 4, 4)
-    # Tile located far away from the requested bounds.
-    tile = SourceTile(
-        array=np.ones((1, 4, 4), dtype=np.float32),
-        crs=PROJECTION.crs,
-        transform=Affine(10, 0, 100000, 0, -10, 100000),
-    )
-    assert mosaic_tiles_to_bounds([tile], PROJECTION, bounds, num_bands) is None
-    assert mosaic_tiles_to_bounds([], PROJECTION, bounds, num_bands) is None
-
-
-def test_year_time_range() -> None:
-    """year_time_range spans the full calendar year in UTC."""
-    start, end = year_time_range(2019)
-    assert start == datetime(2019, 1, 1, tzinfo=UTC)
-    assert end == datetime(2019, 12, 31, 23, 59, 59, tzinfo=UTC)
