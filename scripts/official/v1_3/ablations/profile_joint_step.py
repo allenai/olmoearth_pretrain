@@ -189,6 +189,41 @@ class RegionProfilerCallback(ProfilerCallback):
 
                     module.register_forward_pre_hook(fwd_pre)
                     module.register_forward_hook(fwd_post)
+        # Padding: the share of real (valid) positions in the padded [B, L] inputs of
+        # the first trunk block, the first decoder block and the narrow stage.
+        self._pad_stats: dict = {}
+
+        def valid_fraction(mask):  # type: ignore[no-untyped-def]
+            if mask is None:
+                return None
+            m = mask
+            while m.dim() > 2:
+                m = m.any(dim=-2) if m.shape[-2] > 1 else m.squeeze(-2)
+            return float(m.float().mean())
+
+        def pad_hook(name):  # type: ignore[no-untyped-def]
+            def hook(_m, args, kwargs):  # type: ignore[no-untyped-def]
+                x = kwargs.get("x", args[0] if args else None)
+                mask = kwargs.get("attn_mask", kwargs.get("valid"))
+                if mask is None and len(args) > 2:
+                    mask = args[2]
+                entry = self._pad_stats.setdefault(name, [])
+                if x is not None and x.dim() == 3:
+                    entry.append((x.shape[0], x.shape[1], valid_fraction(mask)))
+
+            return hook
+
+        for name, path in (
+            ("trunk_block0", "encoder.blocks.0"),
+            ("decoder_block0", "decoder.blocks.0"),
+            ("narrow_stage", "encoder.narrow_stage"),
+        ):
+            try:
+                model.get_submodule(path).register_forward_pre_hook(
+                    pad_hook(name), with_kwargs=True
+                )
+            except AttributeError:
+                pass
         logger.info(
             f"Region profiling on {len(REGIONS)} regions (cuda={torch.cuda.is_available()})"
         )
@@ -212,6 +247,25 @@ class RegionProfilerCallback(ProfilerCallback):
                 f"{key:40s} {calls:10.1f} {cpu / 1e3 / steps:12.1f} {device / 1e3 / steps:12.1f}"
             )
         logger.info("Region profile (per step):\n" + "\n".join(lines))
+        import torch
+
+        for name, entries in self._pad_stats.items():
+            recent = entries[-200:]
+            n = max(1, len(recent))
+            fracs = [f for _, _, f in recent if f is not None]
+            logger.info(
+                f"Padding {name}: calls {len(recent)}, "
+                f"mean B {sum(b for b, _, _ in recent) / n:.1f}, "
+                f"mean L {sum(seq for _, seq, _ in recent) / n:.0f}, "
+                f"max L {max((seq for _, seq, _ in recent), default=0)}, "
+                f"valid fraction {sum(fracs) / max(1, len(fracs)):.3f}"
+            )
+        if torch.cuda.is_available():
+            logger.info(
+                "Peak GPU memory: "
+                f"{torch.cuda.max_memory_allocated() / 2**30:.1f} GiB allocated, "
+                f"{torch.cuda.max_memory_reserved() / 2**30:.1f} GiB reserved"
+            )
         super()._on_trace_ready(prof)
 
 
