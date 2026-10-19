@@ -17,6 +17,7 @@ it and differ only in the encoder and, for `*_moddrop`, the masking.
 | `towers_t4_f8.py` | 3 × 4-block towers → 8 shared | v1.2 | equal depth per token (20 block-params) |
 | `towers_t4_f0.py` | 3 × 4-block towers → pooler only | v1.2 | equal params (12), fusion only in the reads |
 | `towers_t8_f4.py` | 3 × 8-block towers → 4 shared | v1.2 | equal depth per token, 324M; mid-point of t_k+f_(12−k) |
+| `towers_t12_f0.py` | 3 × 12-block towers → pooler only | v1.2 | equal depth per token, ~380M; Perceiver-only fusion at full depth |
 | `control_moddrop.py` | shared 12 blocks | + whole-modality dropout p=0.3 | isolates the masking effect |
 | `towers_t4_f8_moddrop.py` | 3 × 4 → 8 | + whole-modality dropout p=0.3 | towers with the structured asymmetry |
 | `smoke_nano.py` | nano, 3 × 2 → 2 | + dropout | 1-GPU functional check, not an arm |
