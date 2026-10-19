@@ -15,7 +15,7 @@ penalised.
 """
 
 import torch
-from einops import rearrange
+from einops import rearrange, reduce
 from torch import Tensor
 
 
@@ -32,8 +32,8 @@ def phase_loss(location_tokens: Tensor, token_grid: tuple[int, int], r: int) -> 
     z = rearrange(
         location_tokens.float(), "b (h i w j) d -> b h i w j d", h=n_h, i=r, w=n_w, j=r
     )
-    overall_mean = z.mean(dim=(0, 1, 2, 3, 4))
-    phase_means = z.mean(dim=(0, 1, 3))  # [r, r, D], one mean per phase
+    overall_mean = reduce(z, "b h i w j d -> d", "mean")
+    phase_means = reduce(z, "b h i w j d -> i j d", "mean")  # one mean per phase
     # Every phase has the same number of tokens, so the between-phase share of the
     # variance is the mean over phases over the mean over tokens.
     between = (phase_means - overall_mean).pow(2).sum(-1).mean()
