@@ -188,7 +188,10 @@ def _sample_to_olmoearth(
         if slug == Slug.SPACENET7:
             # PlanetScope uint8 [0–255]; rescale to S2 DN range.
             image = image * (_S2_DN_MAX / _UINT8_MAX)
-            rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+            # The 4th channel GeoBench-2 labels "nir" is an alpha/no-data mask (255
+            # almost everywhere), not NIR. Leave it unmapped so B08 is zero-filled
+            # and re-zeroed like any other missing band.
+            rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02"}
             src = [rgbn_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
