@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from base import build_common_components as _base_common_components  # noqa: E402
 from base import build_visualize_config  # noqa: E402
-from olmo_core.train.callbacks import ProfilerCallback  # noqa: E402
+from olmo_core.train.callbacks import Callback, ProfilerCallback  # noqa: E402
 from olmo_core.train.common import Duration  # noqa: E402
 
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
@@ -50,7 +50,14 @@ PROFILE_TARGETS = {
     # Same, with per-module profiler regions (REGION_PREFIXES).
     "prof_regD": "allcap_slot_n4d192",
     "prof_regv13": "rc_ld1_pixtgt_pix512",
+    # GPU memory snapshot (MemorySnapshotCallback) instead of the profiler.
+    "prof_memD": "allcap_slot_n4d192",
+    "prof_memv13": "rc_ld1_pixtgt_pix512",
 }
+MEMORY_PREFIXES = ("prof_memD", "prof_memv13")
+# Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
+MEMORY_START = 40
+MEMORY_STEPS = 4
 # Prefixes whose profile also times each named module's FORWARD as a region (backward
 # hooks break on modules returning dicts; backward is ~2x each region's forward).
 REGION_PREFIXES = ("prof_regD", "prof_regv13")
@@ -269,6 +276,104 @@ class RegionProfilerCallback(ProfilerCallback):
         super()._on_trace_ready(prof)
 
 
+class MemorySnapshotCallback(Callback):
+    """Record every CUDA allocation for a few steps; print what is live at the peak.
+
+    Replays the allocator trace (alloc / free events with stack frames) to find the
+    moment of peak allocated memory, then groups the blocks live at that moment by the
+    innermost ``olmoearth_pretrain`` frame that allocated them. Also logs the narrow
+    stage's grouped shape (cells G, padded length P, real-token fraction).
+    """
+
+    def pre_train(self):  # noqa: D102
+        model = self.trainer.train_module.model
+        model = getattr(model, "module", model)
+        self._narrow: list = []
+
+        def narrow_hook(_m, args, kwargs):  # type: ignore[no-untyped-def]
+            x = kwargs.get("x", args[0] if args else None)
+            mask = kwargs.get("attn_mask")
+            if x is not None and mask is not None and mask.dim() == 2:
+                self._narrow.append(
+                    (x.shape[0], x.shape[1], float(mask.float().mean()))
+                )
+
+        try:
+            model.get_submodule(
+                "encoder.narrow_stage.blocks.0"
+            ).register_forward_pre_hook(narrow_hook, with_kwargs=True)
+        except AttributeError:
+            pass
+
+    def pre_step(self, batch):  # noqa: D102
+        import torch
+
+        if self.trainer.global_step + 1 == MEMORY_START:
+            torch.cuda.reset_peak_memory_stats()
+            torch.cuda.memory._record_memory_history(max_entries=2_000_000)
+
+    def post_step(self):  # noqa: D102
+        import torch
+
+        if self.trainer.global_step != MEMORY_START + MEMORY_STEPS - 1:
+            return
+        snapshot = torch.cuda.memory._snapshot()
+        torch.cuda.memory._record_memory_history(enabled=None)
+        logger.info(
+            f"Memory: peak allocated {torch.cuda.max_memory_allocated() / 2**30:.1f} GiB, "
+            f"peak reserved {torch.cuda.max_memory_reserved() / 2**30:.1f} GiB "
+            f"over steps {MEMORY_START}..{MEMORY_START + MEMORY_STEPS - 1}"
+        )
+        if self._narrow:
+            recent = self._narrow[-20:]
+            logger.info(
+                "Narrow stage grouped [G, P]: "
+                + ", ".join(f"G={g} P={p} real={f:.3f}" for g, p, f in recent[:8])
+                + f" ... mean real {sum(f for *_, f in recent) / len(recent):.3f}"
+            )
+        live: dict = {}
+        current = peak = 0
+        peak_live: dict = {}
+        events = [e for trace in snapshot["device_traces"] for e in trace]
+        for e in events:
+            action, addr, size = e["action"], e["addr"], e["size"]
+            if action == "alloc":
+                live[addr] = e
+                current += size
+                if current > peak:
+                    peak = current
+                    peak_live = dict(live)
+            elif action in ("free_completed",) and addr in live:
+                current -= live.pop(addr)["size"]
+
+        def site(e):  # type: ignore[no-untyped-def]
+            frames = e.get("frames") or []
+            ours = [
+                f
+                for f in frames
+                if "olmoearth_pretrain" in f.get("filename", "")
+                or "/ablations/" in f.get("filename", "")
+            ]
+            f = ours[0] if ours else (frames[0] if frames else {})
+            name = f.get("filename", "?").split("olmoearth_pretrain/")[-1]
+            return f"{name}:{f.get('line', '?')} {f.get('name', '')}"
+
+        groups: dict = {}
+        for e in peak_live.values():
+            key = site(e)
+            n, b = groups.get(key, (0, 0))
+            groups[key] = (n + 1, b + e["size"])
+        lines = [
+            f"{b / 2**30:8.2f} GiB  {n:6d} blocks  {key}"
+            for key, (n, b) in sorted(groups.items(), key=lambda kv: -kv[1][1])[:30]
+        ]
+        logger.info(
+            f"Live at the traced peak ({peak / 2**30:.1f} GiB over {len(events)} events,"
+            " allocations made before tracing started are not seen):\n"
+            + "\n".join(lines)
+        )
+
+
 def build_trainer_config(common: CommonComponents):
     """The arm's trainer, stripped to a short profiled run."""
     trainer_config = _target(common).build_trainer_config(common)
@@ -285,6 +390,10 @@ def build_trainer_config(common: CommonComponents):
         if _prefix(common) in REGION_PREFIXES
         else ProfilerCallback
     )
+    if _prefix(common) in MEMORY_PREFIXES:
+        trainer_config.max_duration = Duration.steps(MEMORY_START + MEMORY_STEPS + 2)
+        trainer_config.callbacks["memory_snapshot"] = MemorySnapshotCallback()
+        return trainer_config
     trainer_config.callbacks["profiler"] = profiler_cls(
         skip_first=PROFILE_SKIP,
         wait=1,
