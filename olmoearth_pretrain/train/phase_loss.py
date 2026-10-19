@@ -15,6 +15,7 @@ penalised.
 """
 
 import torch
+from einops import rearrange
 from torch import Tensor
 
 
@@ -27,14 +28,14 @@ def phase_loss(location_tokens: Tensor, token_grid: tuple[int, int], r: int) -> 
         r: Location tokens per patch token along each axis (> 1).
     """
     n_h, n_w = token_grid
-    rows = torch.arange(n_h * r, device=location_tokens.device) % r
-    cols = torch.arange(n_w * r, device=location_tokens.device) % r
-    phase = (rows[:, None] * r + cols[None, :]).reshape(-1)
-    batch, num, dim = location_tokens.shape
-    z = location_tokens.float().reshape(batch * num, dim)
-    labels = phase.repeat(batch)
-    centred = z - z.mean(0)
-    sums = torch.zeros(r * r, dim, device=z.device).index_add_(0, labels, centred)
-    counts = torch.bincount(labels, minlength=r * r).to(z.dtype)
-    between = (sums.pow(2).sum(-1) / counts).sum()
-    return between / centred.pow(2).sum().clamp(min=torch.finfo(z.dtype).tiny)
+    # [B, n_h, r, n_w, r, D]: axes 2 and 4 are the row / column phase inside a token.
+    z = rearrange(
+        location_tokens.float(), "b (h i w j) d -> b h i w j d", h=n_h, i=r, w=n_w, j=r
+    )
+    overall_mean = z.mean(dim=(0, 1, 2, 3, 4))
+    phase_means = z.mean(dim=(0, 1, 3))  # [r, r, D], one mean per phase
+    # Every phase has the same number of tokens, so the between-phase share of the
+    # variance is the mean over phases over the mean over tokens.
+    between = (phase_means - overall_mean).pow(2).sum(-1).mean()
+    total = (z - overall_mean).pow(2).sum(-1).mean()
+    return between / total.clamp(min=torch.finfo(z.dtype).tiny)
