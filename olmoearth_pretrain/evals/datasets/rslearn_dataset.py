@@ -368,6 +368,12 @@ class RslearnToOlmoEarthDataset(Dataset):
             if sample_timesteps is None:
                 sample_timesteps = x.shape[2]
 
+            # Channels that are all-zero across every pixel and timestep were never
+            # materialized (e.g. B01/B09 in the non-year-aligned AEF-style datasets).
+            # Restore them to 0 after normalization, matching band dropout in
+            # pretraining and _rezero_padded_channels in the GeoBench-2 loader.
+            missing = (x == 0).all(axis=(0, 1, 2))
+
             if modality == Modality.SENTINEL1.name:
                 x = convert_to_db(x)
 
@@ -383,6 +389,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                     maxs=modality_stats["maxs"],
                     method=self.norm_method,
                 )
+            if missing.any():
+                x = x.copy()
+                x[..., missing] = 0.0
             sample_dict[modality] = torch.as_tensor(x, dtype=torch.float32)
 
         sample_timesteps = sample_timesteps or self.max_timesteps
