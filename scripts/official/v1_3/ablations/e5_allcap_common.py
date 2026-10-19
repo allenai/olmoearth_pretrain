@@ -86,7 +86,9 @@ ARM_B_CLOUD_TAU = 0.52
 # arm B at 0.52 0.0742 (median 0.003); S2 slots/sample 11.91 vs 11.94; S1 slots
 # 11.24 vs 11.03; mean |S1 date - slot stamp| 14.6 d vs 2.0 d.
 
-MAX_STEPS = 30_000
+# E5 long matched set (Hollis 2026-10-19 17:25Z, ML Sync: "30k isn't the most useful test"): E5_MAX_STEPS=90000
+# runs all four 2x2 cells on one cosine schedule to 90k (warmup unchanged). Unset = the original 30k arms.
+MAX_STEPS = int(os.environ.get("E5_MAX_STEPS", "30000"))
 # The RC's 8k warmup was set for a ~667k-step run (1.2%). The approved 60k-step E5 kept
 # 8k (13%); 4k keeps that fraction at 30k, so the 10k checkpoint is past warmup by 6k
 # steps instead of 2k. 4k x 512 = 2M samples is ample for AdamW at lr 1e-4.
