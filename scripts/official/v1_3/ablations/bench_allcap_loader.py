@@ -10,6 +10,7 @@ one sample in one process (h5 layout and read cost, getitem per composite mode w
 profile, and the batch collate).
 """
 
+import argparse
 import cProfile
 import io
 import json
@@ -174,31 +175,53 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "parts":
         _parts()
         return
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 60
-    workers = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+    parser = argparse.ArgumentParser()
+    parser.add_argument("n", type=int, nargs="?", default=60)
+    parser.add_argument("workers", type=int, nargs="?", default=12)
+    parser.add_argument("--h5py_dir", default=None)
+    # Emulate one rank of a ``world``-rank node: global batch 64 * world, this rank's
+    # slice of it (so concurrent ranks read disjoint samples, as in training).
+    parser.add_argument("--rank", type=int, default=0)
+    parser.add_argument("--world", type=int, default=1)
+    parser.add_argument("--quiet", action="store_true")
+    args = parser.parse_args()
     common = A.build_common_components(
         D.MODULE_PATH, SubCmd.dry_run, "bench", "ai2/jupiter", []
     )
-    dataset = D.build_dataset_config(common).build()
+    dataset_config = D.build_dataset_config(common)
+    if args.h5py_dir is not None:
+        dataset_config.h5py_dir = args.h5py_dir
+    dataset = dataset_config.build()
     config = D.build_dataloader_config(common)
-    config.global_batch_size = 64
-    config.num_workers = workers
+    config.global_batch_size = 64 * args.world
+    config.num_workers = args.workers
     config.work_dir = tempfile.mkdtemp(prefix="bench_allcap_loader_")
     config.target_device_type = "cpu"
     loader = config.build(dataset)
+    loader.dp_world_size = args.world
+    loader.dp_rank = args.rank
     loader.reshuffle(epoch=1)
     t0 = time.perf_counter()
     last = t0
     for i, batch in enumerate(loader):
         now = time.perf_counter()
-        row = {"batch": i, "s": round(now - last, 3), **_describe(batch)}
+        row = {"rank": args.rank, "batch": i, "s": round(now - last, 3)}
+        if not args.quiet:
+            row.update(_describe(batch))
         print(json.dumps(row), flush=True)
         last = now
-        if i + 1 >= n:
+        if i + 1 >= args.n:
             break
     total = time.perf_counter() - t0
     print(
-        json.dumps({"batches": n, "total_s": round(total, 1), "workers": workers}),
+        json.dumps(
+            {
+                "rank": args.rank,
+                "batches": args.n,
+                "total_s": round(total, 1),
+                "workers": args.workers,
+            }
+        ),
         flush=True,
     )
 
