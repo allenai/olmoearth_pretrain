@@ -27,7 +27,7 @@ from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
-from olmoearth_pretrain.train.phase_loss import phase_loss
+from olmoearth_pretrain.train.subpatch_offset_loss import subpatch_offset_loss
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -49,8 +49,9 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
             cell instead of on the whole patch (see
             ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
             queries; requires the projection-only target.
-        phase_loss_weight: Weight on :func:`~olmoearth_pretrain.train.phase_loss.phase_loss`,
-            applied when location queries are finer than the patch size.
+        subpatch_offset_loss_weight: Weight on the sub-patch offset loss (see
+            ``olmoearth_pretrain.train.subpatch_offset_loss``), applied when location
+            queries are finer than the patch size.
     """
 
     loss_config: LossConfig = field(
@@ -66,7 +67,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
-    phase_loss_weight: float = 0.0
+    subpatch_offset_loss_weight: float = 0.0
 
     def build(
         self,
@@ -136,7 +137,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
-        phase_loss_weight: float = 0.0,
+        subpatch_offset_loss_weight: float = 0.0,
     ):
         """Initialize the training module.
 
@@ -166,7 +167,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 its cell (decoder query at that pixel's center, target = the frozen
                 projection of that pixel). Requires the projection-only target: a
                 full target encoder would need a per-pixel forward.
-            phase_loss_weight: Weight on the sub-token phase loss.
+            subpatch_offset_loss_weight: Weight on the sub-patch offset loss.
         """
         super().__init__(
             model=model,
@@ -214,9 +215,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.model.target_encoder, FrozenTargetProjection
         ):
             raise ValueError("pixel_targets requires projection_only_target=True")
-        self.phase_loss_weight = phase_loss_weight
-        if phase_loss_weight > 0:
-            self.total_loss_name = f"{self.total_loss_name}+phase"
+        self.subpatch_offset_loss_weight = subpatch_offset_loss_weight
+        if subpatch_offset_loss_weight > 0:
+            self.total_loss_name = f"{self.total_loss_name}+subpatch_offset"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -429,19 +430,19 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     extra_metrics.update(distill_metrics)
 
                 if (
-                    self.phase_loss_weight > 0
+                    self.subpatch_offset_loss_weight > 0
                     and student_outputs is not None
                     and location_query_patch_size is not None
                     and location_query_patch_size < patch_size
                 ):
-                    phase = phase_loss(
+                    offset_loss = subpatch_offset_loss(
                         student_outputs["location_tokens"],
                         spatial_token_grid(batch, patch_size),
                         patch_size // location_query_patch_size,
                     )
-                    loss = loss + self.phase_loss_weight * phase
+                    loss = loss + self.subpatch_offset_loss_weight * offset_loss
                     if extra_metrics is None:
                         extra_metrics = {}
-                    extra_metrics["phase_loss"] = phase.detach()
+                    extra_metrics["subpatch_offset_loss"] = offset_loss.detach()
 
             return loss, latent, decoded, target_output, extra_metrics
