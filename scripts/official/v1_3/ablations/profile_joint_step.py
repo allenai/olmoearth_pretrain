@@ -53,14 +53,20 @@ PROFILE_TARGETS = {
     # GPU memory snapshot (MemorySnapshotCallback) instead of the profiler.
     "prof_memD": "allcap_slot_n4d192",
     "prof_memv13": "rc_ld1_pixtgt_pix512",
+    # D with the compiled mixed-RoPE rotation (encodings.use_compiled_mixed_rope).
+    "prof_regDcr": "allcap_slot_n4d192",
+    "prof_memDcr": "allcap_slot_n4d192",
 }
-MEMORY_PREFIXES = ("prof_memD", "prof_memv13")
+# Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
+# rotation is dozens of small elementwise kernels per q/k per block).
+COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
+MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr")
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
 # Prefixes whose profile also times each named module's FORWARD as a region (backward
 # hooks break on modules returning dicts; backward is ~2x each region's forward).
-REGION_PREFIXES = ("prof_regD", "prof_regv13")
+REGION_PREFIXES = ("prof_regD", "prof_regv13", "prof_regDcr")
 # Region name -> submodule path(s) on the model (missing ones are skipped; a trailing
 # ".*" means every child, aggregated under one name).
 REGIONS = {
@@ -135,6 +141,10 @@ def _target(common: CommonComponents):
 def build_model_config(common: CommonComponents):
     """The target arm's model (plus any per-prefix Perceiver overrides)."""
     config = _target(common).build_model_config(common)
+    if _prefix(common) in COMPILED_ROPE_PREFIXES:
+        from olmoearth_pretrain.nn.encodings import use_compiled_mixed_rope
+
+        use_compiled_mixed_rope(True)
     for field, value in PROFILE_PERCEIVER_OVERRIDES.get(_prefix(common), {}).items():
         setattr(config.encoder_config.perceiver_config, field, value)
     return config
