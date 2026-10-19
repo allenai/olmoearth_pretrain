@@ -29,6 +29,16 @@ Two selection rules (experiment E5, "which 12 captures and which dates"):
     missing there), and the rest of the 12 slots are missing, as in v1.3. Slots are
     sorted by date. Random on every read, i.e. per sample per epoch.
 
+Two more rules complete a 2x2 with A and B (E5 follow-up, 2026-10-19), since A and B
+differ both in whether captures are redrawn each read and in real vs slot-start dates:
+
+``least_cloudy_slot_real_dates`` (arm A_real)
+    Arm A's captures exactly, each slot stamped with its capture's real date.
+
+``random_clear_slot`` (arm B_slot)
+    Arm A's slot grid and slot-start stamps, but per slot a random clear S2 capture
+    (``tau``; least-cloudy fallback) and a random S1 capture, redrawn on every read.
+
 Arm C (``read_allcap_sample_two_draws``) reads the H5 once and applies the arm B rule
 twice with two independent generators, giving two "views" of the same pixel-year that
 differ only in which captures (and dates) were drawn.
@@ -45,7 +55,15 @@ from olmoearth_pretrain.data.constants import MAX_SEQUENCE_LENGTH, Modality
 
 ALLCAP_LEAST_CLOUDY_SLOT = "least_cloudy_slot"
 ALLCAP_RANDOM_CLEAR = "random_clear"
-ALLCAP_SELECTIONS = (ALLCAP_LEAST_CLOUDY_SLOT, ALLCAP_RANDOM_CLEAR)
+# E5 follow-up 2x2 (2026-10-19): A and B differ in fresh-vs-fixed captures AND real-vs-slot dates.
+ALLCAP_LEAST_CLOUDY_SLOT_REAL_DATES = "least_cloudy_slot_real_dates"  # A's captures, real dates
+ALLCAP_RANDOM_CLEAR_SLOT = "random_clear_slot"  # A's slot grid and stamps, captures redrawn per read
+ALLCAP_SELECTIONS = (
+    ALLCAP_LEAST_CLOUDY_SLOT,
+    ALLCAP_RANDOM_CLEAR,
+    ALLCAP_LEAST_CLOUDY_SLOT_REAL_DATES,
+    ALLCAP_RANDOM_CLEAR_SLOT,
+)
 
 NUM_SLOTS = MAX_SEQUENCE_LENGTH
 SLOT_DAYS = 30
@@ -133,6 +151,64 @@ def select_least_cloudy_per_slot(
             mid = slot_starts[k] + SLOT_DAYS // 2
             s1_idx[k] = cand[np.argmin(np.abs(s1_days[cand] - mid))]
     return SlotSelection(days=slot_starts, s2_idx=s2_idx, s1_idx=s1_idx)
+
+
+def select_least_cloudy_per_slot_real_dates(
+    s2_days: np.ndarray,
+    s2_cloud: np.ndarray,
+    s1_days: np.ndarray,
+    span_start: int,
+) -> SlotSelection:
+    """2x2 arm A_real: arm A's captures exactly, each slot stamped with a real capture date.
+
+    The slot's date is its S2 capture's date, else its S1 capture's date (S1-only slot),
+    else the slot start (an empty slot, which carries no tokens). The S1 capture of a
+    slot that also has S2 shares the S2 date, as both share the slot start in arm A
+    (within one 30-day slot either way). Slots stay in grid order, which is date order.
+    """
+    sel = select_least_cloudy_per_slot(s2_days, s2_cloud, s1_days, span_start)
+    s2_days = np.asarray(s2_days, dtype=np.int64)
+    s1_days = np.asarray(s1_days, dtype=np.int64)
+    days = sel.days.copy()
+    has_s2 = sel.s2_idx >= 0
+    s1_only = ~has_s2 & (sel.s1_idx >= 0)
+    days[has_s2] = s2_days[sel.s2_idx[has_s2]]
+    days[s1_only] = s1_days[sel.s1_idx[s1_only]]
+    return SlotSelection(days=days, s2_idx=sel.s2_idx, s1_idx=sel.s1_idx)
+
+
+def select_random_clear_per_slot(
+    s2_days: np.ndarray,
+    s2_cloud: np.ndarray,
+    s1_days: np.ndarray,
+    span_start: int,
+    tau: float,
+    rng: np.random.Generator | Any,
+) -> SlotSelection:
+    """2x2 arm B_slot: arm A's slot grid and slot-start stamps, captures redrawn every read.
+
+    Per 30-day slot: a uniformly random S2 capture among that slot's clear ones (cloud
+    fraction <= ``tau``), or arm A's least-cloudy one if the slot has none clear; and a
+    uniformly random S1 capture among that slot's S1 captures (arm A takes the one
+    nearest the midpoint). Both are stamped at the slot start, as in arm A.
+    """
+    s2_days = np.asarray(s2_days, dtype=np.int64)
+    s1_days = np.asarray(s1_days, dtype=np.int64)
+    cloud = _clean_cloud(s2_cloud)
+    assert len(cloud) == len(s2_days)
+    base = select_least_cloudy_per_slot(s2_days, cloud, s1_days, span_start)
+    s2_slot = np.clip((s2_days - span_start) // SLOT_DAYS, 0, NUM_SLOTS - 1)
+    s1_slot = np.clip((s1_days - span_start) // SLOT_DAYS, 0, NUM_SLOTS - 1)
+    s2_idx = base.s2_idx.copy()
+    s1_idx = base.s1_idx.copy()
+    for k in range(NUM_SLOTS):
+        clear = np.flatnonzero((s2_slot == k) & (cloud <= tau))
+        if len(clear):
+            s2_idx[k] = int(rng.choice(clear))
+        cand = np.flatnonzero(s1_slot == k)
+        if len(cand):
+            s1_idx[k] = int(rng.choice(cand))
+    return SlotSelection(days=base.days, s2_idx=s2_idx, s1_idx=s1_idx)
 
 
 def select_random_clear(
@@ -261,6 +337,10 @@ def select_slots(
         return select_least_cloudy_per_slot(s2_days, s2_cloud, s1_days, span_start)
     if selection == ALLCAP_RANDOM_CLEAR:
         return select_random_clear(s2_days, s2_cloud, s1_days, tau, rng)
+    if selection == ALLCAP_LEAST_CLOUDY_SLOT_REAL_DATES:
+        return select_least_cloudy_per_slot_real_dates(s2_days, s2_cloud, s1_days, span_start)
+    if selection == ALLCAP_RANDOM_CLEAR_SLOT:
+        return select_random_clear_per_slot(s2_days, s2_cloud, s1_days, span_start, tau, rng)
     raise ValueError(f"unknown allcap selection {selection!r}; use {ALLCAP_SELECTIONS}")
 
 
