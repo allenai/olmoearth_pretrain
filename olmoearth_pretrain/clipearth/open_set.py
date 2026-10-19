@@ -38,6 +38,11 @@ WINDOWS_DIR = (
     "windows/open_set"
 )
 MOLMO_SET_DIR = "/weka/oe-training-default/mm-olmo/rs_datasets/open_set_seg_train"
+# data/open_set_segmentation_data/class_mapping.json as of commit f6e5cfb64, since removed.
+CLASS_MAPPING = (
+    "/weka/dfive-default/agent/piperbots/clipearth/open_set_class_mapping.json"
+)
+CLASS_NODATA = 65535
 NUM_PERIODS = 12
 WINDOW_SIZE = 128
 MASK_NODATA = 255
@@ -68,12 +73,13 @@ MODALITIES = list(_LAYERS)
 
 @dataclass
 class WindowRecord:
-    """One window of the Molmo open-set set."""
+    """One window of the open-set bank."""
 
     name: str
     split: str
     slug: str
-    classes: dict[int, str]  # mask value -> class name
+    # Mask value -> class name for Molmo's masks; None reads the window's class raster.
+    classes: dict[int, str] | None
 
 
 def load_records(molmo_dir: str = MOLMO_SET_DIR) -> list[WindowRecord]:
@@ -97,6 +103,34 @@ def load_records(molmo_dir: str = MOLMO_SET_DIR) -> list[WindowRecord]:
                 )
             )
     return records
+
+
+def load_bank_records(molmo_dir: str = MOLMO_SET_DIR) -> list[WindowRecord]:
+    """Every window of the open-set bank, labeled from its own class raster.
+
+    Molmo's val windows stay val; everything else is train.
+    """
+    val = {
+        entry["image_id"]
+        for entry in json.load(open(os.path.join(molmo_dir, "manifest_val.json")))
+    }
+    index = json.load(open(os.path.join(molmo_dir, "open_set_index.json")))
+    return [
+        WindowRecord(
+            name=name,
+            split="val" if name in val else "train",
+            slug=slug,
+            classes=None,
+        )
+        for slug, names in index.items()
+        for name in names
+    ]
+
+
+def load_class_names(path: str = CLASS_MAPPING) -> dict[int, str]:
+    """Global open-set class id -> class name."""
+    classes = json.load(open(path))["open_set"]["classes"]
+    return {c["global_id"]: c["name"] for c in classes}
 
 
 def _read_modality(
@@ -189,6 +223,7 @@ class OpenSetWindows(Dataset):
         self.windows_dir = windows_dir
         self.molmo_dir = molmo_dir
         self.normalizer = Normalizer(Strategy.COMPUTED)
+        self.class_names: dict[int, str] | None = None
 
     def __len__(self) -> int:
         """Return the number of windows."""
@@ -201,13 +236,22 @@ class OpenSetWindows(Dataset):
         if not os.path.isdir(window_dir):
             window_dir += "_post"
         try:
+            if record.classes is None:
+                read = self._read_classes(window_dir)
+                if read is None:
+                    return None
+                mask, classes = read
+            else:
+                mask_path = os.path.join(self.molmo_dir, "masks", f"{record.name}.png")
+                mask = np.array(Image.open(mask_path)).astype(np.int32)
+                classes = record.classes
             metadata = json.load(open(os.path.join(window_dir, "metadata.json")))
             item: dict = {}
             for modality in self.modalities:
-                read = _read_modality(os.path.join(window_dir, "layers"), modality)
-                if read is None:
+                layer = _read_modality(os.path.join(window_dir, "layers"), modality)
+                if layer is None:
                     continue
-                data, missing = read
+                data, missing = layer
                 data = self.normalizer.normalize(Modality.get(modality), data)
                 any_missing = missing.any(axis=-1)
                 data[any_missing] = 0
@@ -216,8 +260,7 @@ class OpenSetWindows(Dataset):
             if Modality.SENTINEL2_L2A.name not in item:
                 return None
             item["timestamps"] = monthly_timestamps(metadata["time_range"][0])
-            mask_path = os.path.join(self.molmo_dir, "masks", f"{record.name}.png")
-            item["mask"] = torch.from_numpy(np.array(Image.open(mask_path)))
+            item["mask"] = torch.from_numpy(mask)
             item["tile_lat_lon"] = tile_centers(metadata, self.tile_size)
         except (OSError, ValueError, KeyError):
             return None
@@ -225,9 +268,29 @@ class OpenSetWindows(Dataset):
             name=record.name,
             split=record.split,
             slug=record.slug,
-            classes=record.classes,
+            classes=classes,
         )
         return item
+
+    def _read_classes(
+        self, window_dir: str
+    ) -> tuple[np.ndarray, dict[int, str]] | None:
+        """The window's class raster and the names of the classes in it, if any."""
+        path = os.path.join(window_dir, "layers", "open_set", "class", "geotiff.tif")
+        if not os.path.exists(path):
+            return None
+        if self.class_names is None:
+            self.class_names = load_class_names()
+        with rasterio.open(path) as src:
+            mask = src.read(1).astype(np.int32)
+        classes = {
+            int(v): self.class_names[int(v)]
+            for v in np.unique(mask)
+            if v != CLASS_NODATA and int(v) in self.class_names
+        }
+        if not classes:
+            return None
+        return mask, classes
 
 
 __all__ = [
@@ -235,5 +298,6 @@ __all__ = [
     "MODALITIES",
     "OpenSetWindows",
     "WindowRecord",
+    "load_bank_records",
     "load_records",
 ]

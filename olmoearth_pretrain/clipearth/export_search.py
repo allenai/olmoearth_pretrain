@@ -114,7 +114,16 @@ def main() -> None:
         views = text_views(name, visdesc)
         class_views.append(list(range(len(texts), len(texts) + len(views))))
         texts += views
-    view_emb = torch.from_numpy(encode_texts(texts, train_args["text_model"], "cpu"))
+    view_emb = torch.from_numpy(
+        encode_texts(
+            texts,
+            train_args["text_model"],
+            "cpu",
+            train_args.get("text_prefix", ""),
+            train_args.get("text_dims"),
+            train_args.get("text_onnx_file", "model_q4.onnx"),
+        )
+    )
 
     data = load_tiles(args.emb_dir)
     logger.info(f"{len(data['window'])} windows, {len(data['quad'])} quadrants")

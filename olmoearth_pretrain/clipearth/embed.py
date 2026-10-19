@@ -37,10 +37,10 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from olmoearth_pretrain.clipearth.open_set import (
-    MASK_NODATA,
     MODALITIES,
     WINDOW_SIZE,
     OpenSetWindows,
+    load_bank_records,
     load_records,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
@@ -89,11 +89,14 @@ def _from_tiles(x: Tensor, batch: int) -> Tensor:
 
 
 def build_sample(
-    items: list[dict], encoder: torch.nn.Module, device: torch.device
+    items: list[dict],
+    encoder: torch.nn.Module,
+    device: torch.device,
+    keep: Tensor | None = None,
 ) -> tuple[MaskedOlmoEarthSample, bool]:
     """Stack windows, cut them into tiles and build the encoder input.
 
-    Returns the sample and whether every token is visible (so ``fast_pass`` is safe).
+    With ``keep`` (one flag per tile), only those tiles are encoded. Returns the sample and whether every token is visible (so ``fast_pass`` is safe).
     """
     fields: dict[str, Tensor] = {}
     all_visible = True
@@ -116,12 +119,18 @@ def build_sample(
             missing, MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
         )
         mask = mask.unsqueeze(-1).expand(*mask.shape, num_band_sets)
-        all_visible &= not bool(missing.any())
-        fields[modality] = _to_tiles(data).to(device, non_blocking=True)
-        fields[f"{modality}_mask"] = _to_tiles(mask).to(device, non_blocking=True)
+        tiles, tile_mask = _to_tiles(data), _to_tiles(mask)
+        if keep is not None:
+            tiles, tile_mask = tiles[keep], tile_mask[keep]
+        all_visible &= not bool((tile_mask == MaskValue.MISSING.value).any())
+        fields[modality] = tiles.to(device, non_blocking=True)
+        fields[f"{modality}_mask"] = tile_mask.to(device, non_blocking=True)
     tiles_per_window = (WINDOW_SIZE // TILE) ** 2
     timestamps = torch.stack([item["timestamps"] for item in items])
-    fields["timestamps"] = timestamps.repeat_interleave(tiles_per_window, 0).to(device)
+    timestamps = timestamps.repeat_interleave(tiles_per_window, 0)
+    if keep is not None:
+        timestamps = timestamps[keep]
+    fields["timestamps"] = timestamps.to(device)
     return MaskedOlmoEarthSample(**fields), all_visible
 
 
@@ -133,8 +142,6 @@ def pool_regions(
     cell = WINDOW_SIZE // location.shape[0]
     out = []
     for value, name in item["classes"].items():
-        if value == MASK_NODATA:
-            continue
         hit = (mask == value).float()
         n_pixels = int(hit.sum())
         if n_pixels < min_pixels:
@@ -155,7 +162,26 @@ def embed_part(
     args: argparse.Namespace,
 ) -> dict[str, list]:
     """Encode a batch of windows and return its regions and tiles."""
-    sample, all_visible = build_sample(items, encoder, device)
+    n = WINDOW_SIZE // TILE
+    labeled_pixels = [
+        torch.isin(item["mask"], torch.tensor(list(item["classes"]))) for item in items
+    ]
+    keep = None
+    if args.labeled_tiles_only:
+        keep = torch.cat(
+            [
+                lab.reshape(n, TILE, n, TILE).any(3).any(1).reshape(-1)
+                for lab in labeled_pixels
+            ]
+        )
+    out: dict[str, list] = {k: [] for k in _KEYS}
+    if keep is not None and not keep.any():
+        for item in items:
+            out["window"].append(item["name"])
+            out["window_split"].append(item["split"])
+            out["window_slug"].append(item["slug"])
+        return out
+    sample, all_visible = build_sample(items, encoder, device, keep)
     with (
         torch.no_grad(),
         torch.autocast(
@@ -169,11 +195,22 @@ def embed_part(
             fast_pass=all_visible,
             location_query_patch_size=args.location_query_patch_size,
         )
-    location = _from_tiles(output["location_tokens"].float(), len(items))
-    student = _from_tiles(output["student_location_tokens"].float(), len(items))
+    location_tiles = output["location_tokens"].float()
+    student_tiles = output["student_location_tokens"].float()
+    if keep is not None:
+        # Unencoded tiles hold no labeled pixel, so their zeros carry no region weight.
+        full = (len(keep), *location_tiles.shape[1:])
+        location_tiles = location_tiles.new_zeros(full).index_copy_(
+            0, keep.nonzero()[:, 0].to(location_tiles.device), location_tiles
+        )
+        full = (len(keep), *student_tiles.shape[1:])
+        student_tiles = student_tiles.new_zeros(full).index_copy_(
+            0, keep.nonzero()[:, 0].to(student_tiles.device), student_tiles
+        )
+    location = _from_tiles(location_tiles, len(items))
+    student = _from_tiles(student_tiles, len(items))
     per_tile = (WINDOW_SIZE // TILE) ** 2
-    g = location.shape[1] // (WINDOW_SIZE // TILE)
-    out: dict[str, list] = {k: [] for k in _KEYS}
+    g = location.shape[1] // n
     for b, item in enumerate(items):
         for name, n_pixels, loc, stu in pool_regions(
             item, location[b], student[b], args.min_pixels
@@ -183,10 +220,14 @@ def embed_part(
             out["region_pixels"].append(n_pixels)
             out["region_loc"].append(loc)
             out["region_student"].append(stu)
-        n = WINDOW_SIZE // TILE
+        out["window"].append(item["name"])
+        out["window_split"].append(item["split"])
+        out["window_slug"].append(item["slug"])
+        if args.regions_only:
+            continue
         tile_loc = location[b].reshape(n, g, n, g, -1).mean((1, 3))
         tile_stu = student[b].reshape(n, g, n, g, -1).mean((1, 3))
-        labeled = (item["mask"] != MASK_NODATA).float().reshape(n, TILE, n, TILE)
+        labeled = labeled_pixels[b].float().reshape(n, TILE, n, TILE)
         out["tile_window"] += [item["name"]] * per_tile
         out["tile_rc"].append(
             np.stack(np.meshgrid(range(n), range(n), indexing="ij"), -1).reshape(-1, 2)
@@ -195,9 +236,6 @@ def embed_part(
         out["tile_labeled"].append(labeled.mean((1, 3)).reshape(-1).numpy())
         out["tile_loc"].append(tile_loc.reshape(per_tile, -1).cpu().numpy())
         out["tile_student"].append(tile_stu.reshape(per_tile, -1).cpu().numpy())
-        out["window"].append(item["name"])
-        out["window_split"].append(item["split"])
-        out["window_slug"].append(item["slug"])
     return out
 
 
@@ -236,6 +274,9 @@ def _save(path: str, part: dict[str, list]) -> None:
             "tile_student",
         ):
             dtype = np.float16 if key in ("tile_loc", "tile_student") else None
+            if not values:
+                arrays[key] = np.zeros((0,), dtype or np.float32)
+                continue
             arrays[key] = (
                 np.concatenate(values).astype(dtype)
                 if dtype
@@ -262,6 +303,17 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="windows, for tests")
     parser.add_argument("--fill", action="store_true")
     parser.add_argument(
+        "--bank", action="store_true", help="every window of the open-set bank"
+    )
+    parser.add_argument(
+        "--labeled_tiles_only",
+        action="store_true",
+        help="encode only tiles with a labeled pixel; regions are unchanged",
+    )
+    parser.add_argument(
+        "--regions_only", action="store_true", help="skip per-tile outputs"
+    )
+    parser.add_argument(
         "--rank", type=int, default=int(os.environ.get("BEAKER_REPLICA_RANK", 0))
     )
     parser.add_argument(
@@ -276,7 +328,9 @@ def main() -> None:
         _attn_mask_respecting_padding, encoder
     )
 
-    records = sorted(load_records(), key=lambda r: r.name)[: args.limit]
+    records = sorted(
+        load_bank_records() if args.bank else load_records(), key=lambda r: r.name
+    )[: args.limit]
     prefix = ""
     if args.fill:
         # Only the main parts count as done, so the fill list is the same on every

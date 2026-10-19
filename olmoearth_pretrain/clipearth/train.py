@@ -112,14 +112,46 @@ def text_views(name: str, visdesc: dict[str, dict]) -> list[str]:
     return views
 
 
-def encode_texts(texts: list[str], model_name: str, device: str) -> np.ndarray:
-    """Frozen sentence-transformer embeddings, L2-normalized."""
-    from sentence_transformers import SentenceTransformer
+def encode_texts(
+    texts: list[str],
+    model_name: str,
+    device: str,
+    prefix: str = "",
+    dims: int | None = None,
+    onnx_file: str = "model_q4.onnx",
+) -> np.ndarray:
+    """Frozen text embeddings, L2-normalized after keeping the first ``dims``.
 
-    model = SentenceTransformer(model_name, device=device)
-    return model.encode(
-        texts, batch_size=256, normalize_embeddings=True, show_progress_bar=False
-    ).astype(np.float32)
+    ``onnx:<dir>`` runs ``<dir>/onnx/<onnx_file>`` (its ``sentence_embedding``
+    output), the same file a browser runs through transformers.js; anything else
+    is a sentence-transformers model.
+    """
+    texts = [prefix + t for t in texts]
+    if model_name.startswith("onnx:"):
+        import onnxruntime as ort
+        from transformers import AutoTokenizer
+
+        path = model_name.removeprefix("onnx:")
+        tokenizer = AutoTokenizer.from_pretrained(path)  # nosec B615 - local dir
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = 16
+        session = ort.InferenceSession(f"{path}/onnx/{onnx_file}", options)
+        output = [o.name for o in session.get_outputs()].index("sentence_embedding")
+        batches = []
+        for start in range(0, len(texts), 64):
+            enc = tokenizer(
+                texts[start : start + 64], padding=True, return_tensors="np"
+            )
+            feeds = {i.name: enc[i.name] for i in session.get_inputs()}
+            batches.append(session.run(None, feeds)[output])
+        emb = np.concatenate(batches)
+    else:
+        from sentence_transformers import SentenceTransformer
+
+        model = SentenceTransformer(model_name, device=device)
+        emb = model.encode(texts, batch_size=256, show_progress_bar=False)
+    emb = emb[:, :dims].astype(np.float32)
+    return emb / np.linalg.norm(emb, axis=1, keepdims=True)
 
 
 def is_holdout(slug: str, fraction: float) -> bool:
@@ -131,29 +163,53 @@ def is_holdout(slug: str, fraction: float) -> bool:
 
 
 class Aligner(nn.Module):
-    """Project image and text embeddings into a shared space."""
+    """Project image and text embeddings into a shared space.
 
-    def __init__(self, image_dim: int, text_dim: int, dim: int, hidden: int) -> None:
-        """Build the two projections and the learnable temperature."""
+    With ``native`` the image embedding is used as it is and only text is projected,
+    into the image space, so text vectors can be scored directly against stored
+    OlmoEarth embeddings. ``dims`` keeps a leading (Matryoshka) prefix of each.
+    """
+
+    def __init__(
+        self,
+        image_dim: int,
+        text_dim: int,
+        dim: int,
+        hidden: int,
+        native: bool = False,
+        text_linear: bool = False,
+    ) -> None:
+        """Build the projections and the learnable temperature."""
         super().__init__()
-        self.image = nn.Sequential(
-            nn.LayerNorm(image_dim),
-            nn.Linear(image_dim, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, dim),
-        )
-        self.text = nn.Linear(text_dim, dim)
+        self.native = native
+        if native:
+            self.image: nn.Module = nn.Identity()
+            self.text: nn.Module = (
+                nn.Linear(text_dim, image_dim)
+                if text_linear
+                else nn.Sequential(
+                    nn.Linear(text_dim, hidden), nn.GELU(), nn.Linear(hidden, image_dim)
+                )
+            )
+        else:
+            self.image = nn.Sequential(
+                nn.LayerNorm(image_dim),
+                nn.Linear(image_dim, hidden),
+                nn.GELU(),
+                nn.Linear(hidden, dim),
+            )
+            self.text = nn.Linear(text_dim, dim)
         self.logit_scale = nn.Parameter(
             torch.tensor(np.log(1 / 0.07), dtype=torch.float32)
         )
 
-    def embed_image(self, x: Tensor) -> Tensor:
+    def embed_image(self, x: Tensor, dims: int | None = None) -> Tensor:
         """Normalized image-side embedding."""
-        return F.normalize(self.image(x), dim=-1)
+        return F.normalize(self.image(x)[..., :dims], dim=-1)
 
-    def embed_text(self, t: Tensor) -> Tensor:
+    def embed_text(self, t: Tensor, dims: int | None = None) -> Tensor:
         """Normalized text-side embedding."""
-        return F.normalize(self.text(t), dim=-1)
+        return F.normalize(self.text(t)[..., :dims], dim=-1)
 
 
 def contrastive_loss(
@@ -176,10 +232,13 @@ def contrastive_loss(
 
 
 def class_text_matrix(
-    model: Aligner, view_emb: Tensor, class_views: list[list[int]]
+    model: Aligner,
+    view_emb: Tensor,
+    class_views: list[list[int]],
+    dims: int | None = None,
 ) -> Tensor:
     """One normalized embedding per class: the mean of its projected views."""
-    projected = model.embed_text(view_emb)
+    projected = model.embed_text(view_emb, dims)
     return F.normalize(torch.stack([projected[v].mean(0) for v in class_views]), dim=-1)
 
 
@@ -226,6 +285,14 @@ def main() -> None:
         "--embedding", default="region_loc", choices=["region_loc", "region_student"]
     )
     parser.add_argument("--text_model", default="BAAI/bge-small-en-v1.5")
+    parser.add_argument("--text_prefix", default="")
+    parser.add_argument("--text_dims", type=int, default=None)
+    parser.add_argument("--text_linear", action="store_true")
+    parser.add_argument(
+        "--text_onnx_file",
+        default="model_q4.onnx",
+        help="with an onnx: text model; browsers need model_no_gather_q4.onnx",
+    )
     parser.add_argument("--dim", type=int, default=512)
     parser.add_argument("--hidden", type=int, default=1024)
     parser.add_argument("--batch_size", type=int, default=1024)
@@ -235,6 +302,16 @@ def main() -> None:
     parser.add_argument("--holdout_frac", type=float, default=0.1)
     parser.add_argument("--eval_every", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--native",
+        action="store_true",
+        help="score text against the raw image embedding (no image projection)",
+    )
+    parser.add_argument(
+        "--matryoshka",
+        default="",
+        help="with --native, also train these leading dims, e.g. 64",
+    )
     parser.add_argument(
         "--device", default="cuda" if torch.cuda.is_available() else "cpu"
     )
@@ -268,13 +345,35 @@ def main() -> None:
         texts += views
     logger.info(f"{len(class_names)} classes, {len(texts)} text views")
     device = torch.device(args.device)
-    view_emb = torch.from_numpy(encode_texts(texts, args.text_model, args.device)).to(
-        device
-    )
+    view_emb = torch.from_numpy(
+        encode_texts(
+            texts,
+            args.text_model,
+            args.device,
+            args.text_prefix,
+            args.text_dims,
+            args.text_onnx_file,
+        )
+    ).to(device)
 
-    mean = data["embedding"][train].mean(0)
+    # Native mode scores raw embeddings, as a search over stored embeddings would.
+    mean = (
+        np.zeros_like(data["embedding"][0])
+        if args.native
+        else data["embedding"][train].mean(0)
+    )
     image = torch.from_numpy(data["embedding"] - mean).to(device)
-    model = Aligner(image.shape[1], view_emb.shape[1], args.dim, args.hidden).to(device)
+    model = Aligner(
+        image.shape[1],
+        view_emb.shape[1],
+        args.dim,
+        args.hidden,
+        args.native,
+        args.text_linear,
+    ).to(device)
+    prefixes: list[int | None] = [None] + [
+        int(d) for d in args.matryoshka.split(",") if d and args.native
+    ]
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
@@ -290,19 +389,22 @@ def main() -> None:
     def run_eval() -> dict:
         model.eval()
         with torch.no_grad():
-            class_emb = class_text_matrix(model, view_emb, class_views)
-            projected = model.embed_image(image)
             seen_classes = np.unique(labels[train | val])
-            metrics = {
-                "val": evaluate(projected[val], labels[val], class_emb, seen_classes)
-            }
-            if unseen.any():
-                metrics["unseen"] = evaluate(
-                    projected[unseen],
-                    labels[unseen],
-                    class_emb,
-                    np.unique(labels[unseen]),
+            metrics = {}
+            for dims in prefixes:
+                suffix = f"_{dims}" if dims else ""
+                class_emb = class_text_matrix(model, view_emb, class_views, dims)
+                projected = model.embed_image(image, dims)
+                metrics["val" + suffix] = evaluate(
+                    projected[val], labels[val], class_emb, seen_classes
                 )
+                if unseen.any():
+                    metrics["unseen" + suffix] = evaluate(
+                        projected[unseen],
+                        labels[unseen],
+                        class_emb,
+                        np.unique(labels[unseen]),
+                    )
             # Bar for the text side: mean training embedding per class.
             prototypes = torch.zeros(len(class_names), image.shape[1], device=device)
             prototypes.index_add_(0, labels_t[train], image[train])
@@ -325,12 +427,17 @@ def main() -> None:
         )
         batch_classes, batch_labels = np.unique(labels[batch], return_inverse=True)
         views = view_start[batch_classes] + rng.integers(0, view_count[batch_classes])
-        loss = contrastive_loss(
-            model.embed_image(image[batch]),
-            model.embed_text(view_emb[views]),
-            torch.from_numpy(batch_labels).to(device),
-            model.logit_scale.exp().clamp(max=100),
-        )
+        targets = torch.from_numpy(batch_labels).to(device)
+        scale = model.logit_scale.exp().clamp(max=100)
+        loss = sum(
+            contrastive_loss(
+                model.embed_image(image[batch], dims),
+                model.embed_text(view_emb[views], dims),
+                targets,
+                scale,
+            )
+            for dims in prefixes
+        ) / len(prefixes)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
