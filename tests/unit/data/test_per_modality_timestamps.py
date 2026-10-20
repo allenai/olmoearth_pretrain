@@ -17,6 +17,7 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthDataset,
     build_union_timeline,
     nanmedian_axis2,
+    pick_captures,
     timestamps_to_ordinals,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
@@ -938,3 +939,49 @@ def test_read_ahead_matches_sequential_items(allcap_h5py_dir: UPath) -> None:
         assert len(got) == len(expected)
         for a, b in zip(got, expected):
             _assert_same_item(a, b)
+
+
+def test_pick_captures_prefers_clear_captures() -> None:
+    """One capture per bin: a clear one when the bin has any, else the least cloudy."""
+    rng = np.random.RandomState(0)
+    values = np.arange(4 * 4 * 6 * 2, dtype=np.float32).reshape(4, 4, 6, 2)
+    bin_index = np.array([0, 0, 0, 1, 1, 2])
+    cloudy = np.zeros((4, 4, 6), dtype=np.uint8)
+    cloudy[:, :, 0] = 1  # bin 0: capture 0 cloudy, 1 and 2 clear
+    cloudy[:, :, 3] = 1  # bin 1: both cloudy, capture 4 less so
+    cloudy[:2, :, 4] = 1
+    for _ in range(20):
+        out, bins, flags, chosen = pick_captures(values, bin_index, cloudy, rng)
+        assert bins.tolist() == [0, 1, 2]
+        assert chosen[0] in (1, 2) and chosen[1] == 4 and chosen[2] == 5
+        np.testing.assert_array_equal(out, values[:, :, chosen])
+        np.testing.assert_array_equal(flags, cloudy[:, :, chosen].astype(bool))
+
+
+def test_random_clear_composites_are_real_captures(allcap_h5py_dir: UPath) -> None:
+    """random_clear: each S2 timestep is a real capture with its own date; seeded."""
+    dataset = OlmoEarthDataset(
+        h5py_dir=allcap_h5py_dir,
+        training_modalities=MODALITIES,
+        dtype=np.float32,
+        normalize=False,
+        per_modality_timestamps=True,
+        load_s2_cloud_mask=True,
+        composite_selection="random_clear",
+    )
+    dataset.prepare()
+    raw = _raw(allcap_h5py_dir, 0)
+    raw_ts = {tuple(t) for t in raw["timestamps_sentinel2_l2a"].tolist()}
+    args = GetItemArgs(
+        idx=0, patch_size=1, sampled_hw_p=16, composite_days=30.0, seed=3
+    )
+    _, sample = dataset[args]
+    s2 = sample.sentinel2_l2a
+    index = sample.sentinel2_l2a_time_index
+    assert s2 is not None and index is not None and sample.timestamps is not None
+    dates = [tuple(sample.timestamps[i].tolist()) for i in index]
+    assert all(d in raw_ts for d in dates)
+    for t, d in enumerate(dates):
+        k = raw["timestamps_sentinel2_l2a"].tolist().index(list(d))
+        np.testing.assert_array_equal(s2[:, :, t], raw["sentinel2_l2a"][:, :, k])
+    _assert_same_item((1, sample), dataset[args])

@@ -140,12 +140,19 @@ def build_narrow_model_config(
 
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
-    """The AllCaptures corpus with per-modality timestamps and SCL (for composites)."""
+    """The AllCaptures corpus with per-modality timestamps and SCL (for composites).
+
+    Composite bins are one real capture each (a random one under 20% cloud over the
+    crop, S2), not per-pixel medians: on a full 8-GPU node the median compositing made
+    the loaders CPU-bound, so every step waited on the slowest rank's data (~0.4-0.7 s,
+    2026-10-20).
+    """
     return OlmoEarthDatasetConfig(
         h5py_dir=ALLCAP_H5PY_DIR,
         training_modalities=common.training_modalities,
         per_modality_timestamps=True,
         load_s2_cloud_mask=True,
+        composite_selection="random_clear",
     )
 
 

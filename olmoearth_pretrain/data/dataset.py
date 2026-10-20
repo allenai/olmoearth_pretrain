@@ -131,6 +131,45 @@ def composite_captures(
     return out, bins, no_clear
 
 
+def pick_captures(
+    values: np.ndarray,
+    bin_index: np.ndarray,
+    cloudy: np.ndarray | None,
+    rng: Any,
+    max_cloud_fraction: float = 0.2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One real capture per occupied bin instead of a per-pixel median.
+
+    With ``cloudy`` (``[H, W, T]`` cloud flags, S2), the capture is drawn uniformly
+    among the bin's captures whose cloud fraction over the crop is at most
+    ``max_cloud_fraction``, else the least cloudy one; without it, uniformly among the
+    bin's captures. Indexing only, so far cheaper than :func:`composite_captures`.
+
+    Returns:
+        ``(values [H, W, n_bins, C] float32, bins [n_bins], cloudy [H, W, n_bins] of
+        the picked captures (all False without ``cloudy``), picked capture indices)``.
+    """
+    bins = np.unique(bin_index)
+    picked = []
+    for b in bins:
+        members = np.flatnonzero(bin_index == b)
+        if cloudy is None:
+            picked.append(int(rng.choice(members)))
+            continue
+        fraction = cloudy[:, :, members].mean(axis=(0, 1))
+        clear = members[fraction <= max_cloud_fraction]
+        picked.append(
+            int(rng.choice(clear)) if len(clear) else int(members[np.argmin(fraction)])
+        )
+    chosen = np.array(picked, dtype=np.int64)
+    flags = (
+        cloudy[:, :, chosen].astype(bool)
+        if cloudy is not None
+        else np.zeros((*values.shape[:2], len(chosen)), dtype=bool)
+    )
+    return values[:, :, chosen].astype(np.float32), bins, flags, chosen
+
+
 # =============================================================================
 # Subsetting Functions
 # =============================================================================
@@ -559,6 +598,7 @@ class OlmoEarthDataset(Dataset):
         filter_idx_file: str | None = None,
         per_modality_timestamps: bool = False,
         load_s2_cloud_mask: bool = False,
+        composite_selection: str = "median",
     ):
         """Initialize the dataset.
 
@@ -593,6 +633,10 @@ class OlmoEarthDataset(Dataset):
                 scene classification and return per-pixel cloud flags for the
                 sample's S2 timesteps (``S2_CLOUD_FIELD``); the collator then drops
                 cloudy S2 tokens from the decoder targets.
+            composite_selection: How a composite bin becomes one timestep:
+                ``"median"`` (per-pixel median of the bin's captures, S2 over
+                SCL-clear pixels) or ``"random_clear"`` (one real capture per bin, see
+                :func:`pick_captures`; dated by that capture).
 
         Returns:
             None
@@ -636,6 +680,12 @@ class OlmoEarthDataset(Dataset):
         if load_s2_cloud_mask and not per_modality_timestamps:
             raise ValueError("load_s2_cloud_mask needs per_modality_timestamps")
         self.load_s2_cloud_mask = load_s2_cloud_mask
+        if composite_selection not in ("median", "random_clear"):
+            raise ValueError(
+                f"composite_selection must be 'median' or 'random_clear', got "
+                f"{composite_selection!r}"
+            )
+        self.composite_selection = composite_selection
 
     @property
     def fingerprint_version(self) -> str:
@@ -1111,6 +1161,8 @@ class OlmoEarthDataset(Dataset):
         composite_days: float,
         scl: np.ndarray | None,
         scl_timestamps: np.ndarray | None,
+        selection: str = "median",
+        rng: Any = np.random,
     ) -> tuple[
         dict[str, np.ndarray],
         dict[str, np.ndarray],
@@ -1123,7 +1175,8 @@ class OlmoEarthDataset(Dataset):
         modalities, so a bin covers the same days for every modality. A composite
         is the per-pixel median of the bin's captures (S2: over SCL-clear pixels,
         falling back to all captures; S1 and Landsat: all captures). Its date is
-        the bin centre. Returns updated ``(data, timestamps, kept, s2_no_clear)``;
+        the bin centre. With ``selection="random_clear"`` a bin is instead one real
+        capture (:func:`pick_captures`), dated by that capture. Returns updated ``(data, timestamps, kept, s2_no_clear)``;
         ``s2_no_clear`` is ``[H, W, n_s2_bins]`` (pixels with no clear S2 capture),
         or None without S2.
         """
@@ -1143,17 +1196,26 @@ class OlmoEarthDataset(Dataset):
             if is_s2 and scl is not None and scl_timestamps is not None:
                 cloudy = s2_cloud_flags(scl, scl_timestamps, timestamps[modality])
                 clear = cloudy[:, :, captures] == 0
-            values, bins, no_clear = composite_captures(
-                data[modality][:, :, captures], capture_ordinals, bin_index, clear
-            )
-            centres = origin + (bins * composite_days + composite_days / 2).astype(
-                np.int64
-            )
-            days = [date.fromordinal(int(o)) for o in centres]
+            if selection == "random_clear":
+                values, bins, no_clear, chosen = pick_captures(
+                    data[modality][:, :, captures],
+                    bin_index,
+                    None if clear is None else ~clear,
+                    rng,
+                )
+                timestamps[modality] = timestamps[modality][captures][chosen]
+            else:
+                values, bins, no_clear = composite_captures(
+                    data[modality][:, :, captures], capture_ordinals, bin_index, clear
+                )
+                centres = origin + (bins * composite_days + composite_days / 2).astype(
+                    np.int64
+                )
+                days = [date.fromordinal(int(o)) for o in centres]
+                timestamps[modality] = np.array(
+                    [[d.day, d.month - 1, d.year] for d in days], dtype=np.int64
+                )
             data[modality] = values
-            timestamps[modality] = np.array(
-                [[d.day, d.month - 1, d.year] for d in days], dtype=np.int64
-            )
             kept[modality] = np.arange(len(bins))
             if is_s2:
                 s2_no_clear = no_clear
@@ -1340,6 +1402,8 @@ class OlmoEarthDataset(Dataset):
                 float(args.composite_days),
                 scl,
                 scl_timestamps,
+                self.composite_selection,
+                rng,
             )
         else:
             s2_no_clear = None
@@ -1546,6 +1610,7 @@ class OlmoEarthDatasetConfig(Config):
     filter_idx_file: str | None = None
     per_modality_timestamps: bool = False
     load_s2_cloud_mask: bool = False
+    composite_selection: str = "median"
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
