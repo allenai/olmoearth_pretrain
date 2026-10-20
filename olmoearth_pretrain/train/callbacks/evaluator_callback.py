@@ -174,6 +174,10 @@ class DownstreamTaskConfig:
     # windows (the pastis convention above) instead of center-cropping one
     # window per sample. Mutually exclusive with label_at_center_pixel.
     tile_samples: bool = False
+    # With tile_samples, draw each training window at a random offset inside the
+    # stored sample instead of at its fixed tile position. The number of windows
+    # per sample is unchanged; val and test keep the fixed tiles.
+    random_crop: bool = False
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -366,6 +370,9 @@ class DownstreamEvaluator:
         self.landsat_reflectance = task.landsat_reflectance
         self.computed_norm_config = task.computed_norm_config
         self.tile_samples = task.tile_samples
+        self.random_crop = task.random_crop
+        if self.random_crop and not self.tile_samples:
+            raise ValueError("random_crop requires tile_samples")
         if self.tile_samples:
             if not self._is_registry_dataset:
                 raise ValueError(
@@ -671,6 +678,8 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
+            if self.random_crop:
+                extra_kwargs["random_crop"] = True
             if self.scl_cloud_mask:
                 extra_kwargs["scl_cloud_mask"] = True
                 if self.scl_cloud_classes is not None:

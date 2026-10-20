@@ -237,6 +237,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         window_size: int | None = None,
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
+        random_crop: bool = False,
         sample_size: int | None = None,
         declared_bands: dict[str, list[str]] | None = None,
         scl_cloud_mask: bool = False,
@@ -288,6 +289,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 per sample. Requires sample_size, a dense (segmentation or
                 per-pixel regression) target, and is mutually exclusive with
                 label_at_center_pixel.
+            random_crop: With tile_samples, emit each window at a random offset
+                inside the stored sample instead of at its fixed tile position;
+                the number of windows per sample is unchanged.
             sample_size: Stored sample height/width in pixels (required with
                 tile_samples; must be divisible by window_size).
             declared_bands: modality -> the band list model.yaml declares. When a
@@ -440,6 +444,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                 raise ValueError(
                     f"window_size {window_size} must divide sample_size {sample_size}"
                 )
+        if random_crop and not tile_samples:
+            raise ValueError("random_crop requires tile_samples")
+        self.random_crop = random_crop
         self.sample_size = sample_size
         # Each stored sample yields _tiles_per_side^2 windows (1 = no tiling).
         self._tiles_per_side = (
@@ -487,6 +494,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         window_size: int | None = None,
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
+        random_crop: bool = False,
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
@@ -528,6 +536,8 @@ class RslearnToOlmoEarthDataset(Dataset):
                 classification label (see RslearnToOlmoEarthDataset).
             tile_samples: Tile every sample into window_size x window_size
                 windows instead of center-cropping (see
+                RslearnToOlmoEarthDataset).
+            random_crop: Random window offsets instead of fixed tiles (see
                 RslearnToOlmoEarthDataset).
             sample_size: Stored sample height/width, required with tile_samples.
             scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
@@ -657,6 +667,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             window_size=window_size,
             label_at_center_pixel=label_at_center_pixel,
             tile_samples=tile_samples,
+            random_crop=random_crop,
             sample_size=sample_size,
             scl_cloud_mask=scl_cloud_mask,
             scl_cloud_classes=scl_cloud_classes,
@@ -797,7 +808,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
 
         With tile set (tile_samples mode), (tile_row, tile_col) selects which
-        window_size x window_size tile of the stored sample to emit.
+        window_size x window_size tile of the stored sample to emit; with
+        random_crop the window is placed at a random offset instead.
         window_key ("group/name") keys the Landsat cloud-cover and calibration
         sidecars.
         """
@@ -819,10 +831,14 @@ class RslearnToOlmoEarthDataset(Dataset):
                     f"tile_samples expects {self.sample_size}x{self.sample_size} "
                     f"label rasters, got {tuple(label.shape)}"
                 )
-            tile_row, tile_col = tile
             ws = self.window_size
-            crop_rows = slice(tile_row * ws, (tile_row + 1) * ws)
-            crop_cols = slice(tile_col * ws, (tile_col + 1) * ws)
+            if self.random_crop:
+                assert self.sample_size is not None
+                top, left = torch.randint(self.sample_size - ws + 1, (2,)).tolist()
+            else:
+                top, left = tile[0] * ws, tile[1] * ws
+            crop_rows = slice(top, top + ws)
+            crop_cols = slice(left, left + ws)
             label = label[crop_rows, crop_cols]
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
@@ -1580,6 +1596,7 @@ def from_registry_entry(
     window_size: int | None = None,
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
+    random_crop: bool = False,
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     landsat_cloud_cover_max: float | None = None,
@@ -1621,6 +1638,8 @@ def from_registry_entry(
         tile_samples: Tile every sample into window_size x window_size windows
             instead of center-cropping; the stored sample size is taken from
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
+        random_crop: Random window offsets instead of fixed tiles (see
+            RslearnToOlmoEarthDataset); applied to the train split only.
         scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
             optional "scl" input (see RslearnToOlmoEarthDataset).
         scl_cloud_classes: SCL classes to treat as cloud (None =
@@ -1749,6 +1768,7 @@ def from_registry_entry(
         window_size=window_size,
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
+        random_crop=random_crop and normalized_split == "train",
         sample_size=entry.window_size if tile_samples else None,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,

@@ -30,6 +30,7 @@ def build_dataset(
     label_at_center_pixel: bool = False,
     target_task_type: TaskType = TaskType.SEGMENTATION,
     tile_samples: bool = False,
+    random_crop: bool = False,
     sample_size: int | None = None,
     model_dataset: list | None = None,
     scl_cloud_mask: bool = False,
@@ -44,6 +45,7 @@ def build_dataset(
         window_size=window_size,
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
+        random_crop=random_crop,
         sample_size=sample_size,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
@@ -334,6 +336,54 @@ class TestTileSamples:
                 tile_samples=True,
                 label_at_center_pixel=True,
             )
+
+    def build_random(
+        self, n_samples: int = 1, size: int = 32, ws: int = 16
+    ) -> RslearnToOlmoEarthDataset:
+        """Build a random-crop wrapper over n_samples fake position-label samples."""
+        model_dataset = [(*make_position_sample(size), None) for _ in range(n_samples)]
+        return build_dataset(
+            window_size=ws,
+            tile_samples=True,
+            random_crop=True,
+            sample_size=size,
+            model_dataset=model_dataset,
+        )
+
+    def test_random_crop_keeps_len(self) -> None:
+        """Random crops emit as many windows per sample as fixed tiles."""
+        assert len(self.build_random(n_samples=3)) == 3 * 4
+
+    def test_random_crop_is_contiguous_window(self) -> None:
+        """Each random window is a ws x ws block of the label raster, at varying offsets."""
+        torch.manual_seed(0)
+        ds = self.build_random()
+        full = torch.arange(32 * 32, dtype=torch.long).reshape(32, 32)
+        offsets = set()
+        for _ in range(20):
+            _, label = ds[0]
+            top, left = divmod(int(label[0, 0]), 32)
+            assert torch.equal(label, full[top : top + 16, left : left + 16])
+            offsets.add((top, left))
+        assert len(offsets) > 1
+
+    def test_random_crop_imagery_matches_label(self) -> None:
+        """Imagery is cropped at the same random offset as the label."""
+        torch.manual_seed(0)
+        ds = self.build_random()
+        raw = ds.dataset[0][0][S2].image.clone()
+        masked_sample, label = ds[0]
+        top, left = divmod(int(label[0, 0]), 32)
+        expected = ds.normalizer_computed.normalize(
+            Modality.get(S2),
+            raw[:, :, top : top + 16, left : left + 16].permute(2, 3, 1, 0).numpy(),
+        )
+        assert np.allclose(np.asarray(getattr(masked_sample, S2)), expected)
+
+    def test_random_crop_requires_tile_samples(self) -> None:
+        """random_crop only applies to tiled datasets."""
+        with pytest.raises(ValueError, match="random_crop requires tile_samples"):
+            build_dataset(window_size=16, random_crop=True)
 
     def test_window_size_must_divide_sample_size(self) -> None:
         """Non-divisible tilings are rejected up front."""

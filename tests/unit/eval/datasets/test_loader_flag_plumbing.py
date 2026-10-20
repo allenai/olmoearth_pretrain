@@ -50,6 +50,7 @@ RENAMED = {"input_modalities": "input_modalities_override"}
 SENTINELS: dict[str, Any] = {
     "window_size": 8,
     "tile_samples": True,
+    "random_crop": True,
     "label_at_center_pixel": True,
     "scl_cloud_mask": True,
     "scl_cloud_classes": (8, 9),
