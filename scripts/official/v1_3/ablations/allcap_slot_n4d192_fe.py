@@ -15,6 +15,7 @@ slots per cell, 12 x d768 trunk), except:
   time on D (1-GPU profile, 2026-10-19).
 - **Recomputed MLP activations** (``attention.use_recompute_mlp_activation``): the GELU
   output is recomputed in backward instead of stored.
+- **Decoder cap 1100** tokens per sample (D: 2048), about v1.3's mean.
 
 W&B project ``20261016_allcap_slot_narrow``; trained as ``v1_3_allcap_slot_n4d192_fe``.
 """
@@ -50,6 +51,10 @@ NARROW_DIM = 192
 # Raw input tokens per sample; the trunk still sees <= allcap_narrow.TOKEN_BUDGET
 # merged tokens. Set from the 1-GPU memory/speed sweep before training.
 INPUT_TOKEN_BUDGET = 12288
+# Decoder tokens per sample: ~v1.3's mean (~1.1k) rather than its p90 (D's 2048). The
+# loss's per-sample score matrices scale with its square; at 2048, mb64 still OOMed on
+# rare heavy batches (2026-10-20, step ~206).
+MAX_DECODE_TOKENS = 1100
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -70,6 +75,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config = _allcap_dataloader(common)
     config.merged_slots = [SLOT_RATIO, SLOT_MIN, SLOT_CAP]
     config.input_token_budget = INPUT_TOKEN_BUDGET
+    config.max_decode_tokens = MAX_DECODE_TOKENS
     return config
 
 
