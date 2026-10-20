@@ -13,6 +13,8 @@ slots per cell, 12 x d768 trunk), except:
   <= 32 tokens).
 - **Compiled mixed-RoPE rotation** (``encodings.use_compiled_mixed_rope``): -19% step
   time on D (1-GPU profile, 2026-10-19).
+- **Recomputed MLP activations** (``attention.use_recompute_mlp_activation``): the GELU
+  output is recomputed in backward instead of stored.
 
 W&B project ``20261016_allcap_slot_narrow``; trained as ``v1_3_allcap_slot_n4d192_fe``.
 """
@@ -38,6 +40,7 @@ from base import build_visualize_config  # noqa: E402
 
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
+from olmoearth_pretrain.nn.attention import use_recompute_mlp_activation  # noqa: E402
 from olmoearth_pretrain.nn.encodings import use_compiled_mixed_rope  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 
@@ -50,8 +53,11 @@ INPUT_TOKEN_BUDGET = 12288
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """D's model with the narrow front end; compiled RoPE for this process."""
+    """D's model with the narrow front end; compiled RoPE and recomputed MLP GELUs."""
     use_compiled_mixed_rope(True)
+    # The MLP's GELU output was the 2nd-largest activation (6.7 GiB of ~43 at mb32,
+    # 2026-10-20 snapshot); recompute it in backward instead (same values).
+    use_recompute_mlp_activation(True)
     config = build_narrow_model_config(common, NARROW_DEPTH, NARROW_DIM)
     slot_merge = config.encoder_config.slot_merge_config
     assert slot_merge is not None
