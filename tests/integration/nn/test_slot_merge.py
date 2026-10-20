@@ -375,6 +375,14 @@ def test_narrow_front_end_embeds_at_the_narrow_width() -> None:
     assert s2_out is not None and full.sentinel2_l2a is not None
     assert s2_out.shape[:4] == (full.sentinel2_l2a.shape[0], PX // PS, PX // PS, T)
     assert s2_out.shape[-1] == D
+    # The projection-only target stays an encoder-width projection (what the decoder
+    # predicts), not a copy of the narrow embedding.
+    from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection
+
+    target = FrozenTargetProjection(enc)
+    t_out = target(full, patch_size=PS)["tokens_and_masks"].sentinel2_l2a
+    assert t_out is not None and t_out.shape[-1] == D
+    assert not any(p.requires_grad for p in target.parameters())
 
 
 def test_narrow_front_end_requires_a_narrow_stage() -> None:

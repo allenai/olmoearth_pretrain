@@ -48,7 +48,14 @@ class FrozenTargetProjection(nn.Module):
     def __init__(self, encoder: nn.Module):
         """Copy and freeze the projection submodules of ``encoder``."""
         super().__init__()
-        self.patch_embeddings = deepcopy(encoder.patch_embeddings)
+        if getattr(encoder, "narrow_front_end", False):
+            # The online encoder embeds at its narrow width; the targets stay a
+            # random ENCODER-width projection (what the decoder predicts).
+            self.patch_embeddings = encoder.build_patch_embeddings(
+                encoder.embedding_size
+            )
+        else:
+            self.patch_embeddings = deepcopy(encoder.patch_embeddings)
         self.embedding_projector = deepcopy(encoder.embedding_projector)
         for p in self.parameters():
             p.requires_grad = False

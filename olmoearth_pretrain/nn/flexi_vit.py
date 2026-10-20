@@ -2610,18 +2610,7 @@ class Encoder(FlexiVitBase):
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
-        self.patch_embeddings = MultiModalPatchEmbeddings(
-            self.supported_modality_names,
-            self.max_patch_size,
-            self.embedding_size,
-            tokenization_config=self.tokenization_config,
-            use_linear_patch_embed=self.use_linear_patch_embed,
-            band_dropout_rate=0.0,
-            random_band_dropout=self.random_band_dropout,
-            band_dropout_modalities=self.band_dropout_modalities,
-            patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
-            post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-        )
+        self.patch_embeddings = self.build_patch_embeddings(self.embedding_size)
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
         self.embedding_projector: ProjectAndAggregate | None = None
@@ -2679,18 +2668,7 @@ class Encoder(FlexiVitBase):
                     # Everything before the merge at the narrow width: embed straight
                     # to narrow_dim (same tokenization and options) and skip the
                     # narrow stage's down-projection.
-                    self.patch_embeddings = MultiModalPatchEmbeddings(
-                        self.supported_modality_names,
-                        self.max_patch_size,
-                        narrow_dim,
-                        tokenization_config=self.tokenization_config,
-                        use_linear_patch_embed=self.use_linear_patch_embed,
-                        band_dropout_rate=0.0,
-                        random_band_dropout=self.random_band_dropout,
-                        band_dropout_modalities=self.band_dropout_modalities,
-                        patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
-                        post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-                    )
+                    self.patch_embeddings = self.build_patch_embeddings(narrow_dim)
                     self.composite_encodings = CompositeEncodings(
                         narrow_dim,
                         self.supported_modalities,
@@ -2920,6 +2898,27 @@ class Encoder(FlexiVitBase):
         else:
             exit_ids_seq = None
         return exit_ids_seq
+
+    def build_patch_embeddings(self, width: int) -> MultiModalPatchEmbeddings:
+        """A freshly initialized patch embedding to ``width`` with this encoder's options.
+
+        The encoder's own embedding is built with it; the projection-only target
+        (``FrozenTargetProjection``) builds an encoder-width one with it when the
+        encoder embeds at the narrow width (``narrow_front_end``), so the targets keep
+        the same random encoder-width projection as without the front end.
+        """
+        return MultiModalPatchEmbeddings(
+            self.supported_modality_names,
+            self.max_patch_size,
+            width,
+            tokenization_config=self.tokenization_config,
+            use_linear_patch_embed=self.use_linear_patch_embed,
+            band_dropout_rate=0.0,
+            random_band_dropout=self.random_band_dropout,
+            band_dropout_modalities=self.band_dropout_modalities,
+            patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
+            post_proj_hidden_sizes=self.post_proj_hidden_sizes,
+        )
 
     def _apply_slot_merge(
         self,
