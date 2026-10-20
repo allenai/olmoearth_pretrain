@@ -7,7 +7,7 @@ from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection
 from olmoearth_pretrain.train.loss import (
-    CompactDecoderTargets,
+    CompactDecoderTokens,
     ModalityPatchDiscriminationMaskedNegativesVec,
 )
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -77,7 +77,7 @@ def test_compact_targets_give_the_same_loss(chunk: int) -> None:
         full = target(sample, patch_size=PS)["tokens_and_masks"]
     predictions = _predictions(full)
     compact = compact_decoder_targets(target, sample, PS, None, predictions, chunk)
-    assert isinstance(compact, CompactDecoderTargets)
+    assert isinstance(compact, CompactDecoderTokens)
     loss = ModalityPatchDiscriminationMaskedNegativesVec(tau=0.1)
     torch.testing.assert_close(
         loss.compute(predictions, compact), loss.compute(predictions, full)

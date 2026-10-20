@@ -108,6 +108,23 @@ def test_unmerge_returns_to_the_input_layout() -> None:
                 )
 
 
+def test_unmerge_gives_merged_tokens_their_cell_mean() -> None:
+    """A merged cell's tokens all get the mean of that cell's slot outputs."""
+    merge = _merge()
+    counts = [[12, 3, 7]]
+    x, pos, valid, cell, mod = _cells(counts)
+    out, out_pos, out_valid, unmerge, _ = merge(x, pos, valid, cell, mod)
+    y = torch.randn_like(out) * out_valid[..., None]
+    back = unmerge(y)
+    for c, n in enumerate(counts[0]):
+        if n <= 4:
+            continue
+        slots = out_valid[0] & (out_pos[0, :, 1] == c)
+        sel = valid[0] & (cell[0] == c)
+        expected = y[0][slots].mean(dim=0).expand(int(sel.sum()), -1)
+        torch.testing.assert_close(back[0][sel], expected, atol=1e-5, rtol=1e-5)
+
+
 def test_every_parameter_gets_a_gradient_even_without_merging() -> None:
     """DDP needs grads for all parameters; a batch with only small cells must not drop them."""
     for counts in ([[12, 2]], [[2, 3]]):

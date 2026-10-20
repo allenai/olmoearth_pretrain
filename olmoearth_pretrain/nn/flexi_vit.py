@@ -3097,12 +3097,16 @@ class Encoder(FlexiVitBase):
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
         modality_timestamps: dict[str, Tensor] | None = None,
+        token_outputs: bool = True,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
         """Apply the attention to the tokens and masks.
 
         ``modality_timestamps`` (per-modality ``[B, T_m, 3]`` dates, from
         ``MaskedOlmoEarthSample.modality_timestamps``) puts each multitemporal
         modality on its own time axis (every-capture / composited inputs).
+        ``token_outputs=False`` (slot-merge encoders only): skip the per-token
+        outputs (the unmerge) and return zero placeholders of the right shape;
+        everything that trains reads the registers.
         """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
@@ -3279,7 +3283,8 @@ class Encoder(FlexiVitBase):
             # unmerged back to the input layout: each token gets its assignment-weighted
             # mix of its cell's (final, normed) slots; bypassed tokens their own output.
             perceiver_tokens, perceiver_mask = tokens, merged_valid
-            tokens = slot_unmerge(tokens)
+            if token_outputs:
+                tokens = slot_unmerge(tokens)
 
         # Both register modules run on the COMPACT sequence -- the visible tokens only,
         # padded to the batch's longest sample -- BEFORE the removed tokens are added
@@ -3329,19 +3334,29 @@ class Encoder(FlexiVitBase):
                 "registers": registers,
                 "register_positions": register_positions,
             }
-        # we don't care about the mask returned by add_removed_tokens, since we will
-        # just use the original, unclipped mask here
-        tokens = self._maybe_add_removed_tokens(tokens, indices, new_mask, fast_pass)
-
         if register_output is not None and self.register_student is not None:
             # Detached student readout of the registers just computed.
             register_output["student_registers"] = self.register_student(
                 register_output["registers"].detach()
             )
 
-        tokens_per_modality_dict = self.split_and_expand_per_modality(
-            tokens, modalities_to_dims_dict
-        )
+        if self.slot_merge is not None and not token_outputs:
+            # No per-token outputs: zero-stride placeholders (no memory) in each
+            # modality's layout, so callers still get the shapes and masks.
+            zero = tokens.new_zeros(())
+            tokens_per_modality_dict = {
+                modality: zero.expand(*dims[:-1], self.embedding_size)
+                for modality, dims in modalities_to_dims_dict.items()
+            }
+        else:
+            # we don't care about the mask returned by add_removed_tokens, since we
+            # will just use the original, unclipped mask here
+            tokens = self._maybe_add_removed_tokens(
+                tokens, indices, new_mask, fast_pass
+            )
+            tokens_per_modality_dict = self.split_and_expand_per_modality(
+                tokens, modalities_to_dims_dict
+            )
         # merge original masks and the processed tokens
         tokens_per_modality_dict.update(original_masks_dict)
         return tokens_per_modality_dict, token_norm_stats, register_output
@@ -3353,6 +3368,7 @@ class Encoder(FlexiVitBase):
         input_res: int = BASE_GSD,
         token_exit_cfg: dict | None = None,
         fast_pass: bool = False,
+        token_outputs: bool = True,
     ) -> dict[str, Any]:
         """Process masked input samples into token representations.
 
@@ -3362,6 +3378,9 @@ class Encoder(FlexiVitBase):
             input_res: Resolution of the input data
             token_exit_cfg: Configuration for token exit
             fast_pass: Whether to always pass None as the mask to the transformer, this enables torch based flash attention, and skips mask construciton and sorting
+            token_outputs: Slot-merge encoders only: False skips the per-token
+                outputs (zero placeholders in ``tokens_and_masks``; the registers are
+                unchanged) and the token-pooled contrastive projection.
 
         Returns:
             TokensAndMasks containing the encoded representations and their masks
@@ -3385,6 +3404,7 @@ class Encoder(FlexiVitBase):
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
                     modality_timestamps=x.modality_timestamps(),
+                    token_outputs=token_outputs,
                 )
             )
         else:
@@ -3417,9 +3437,9 @@ class Encoder(FlexiVitBase):
                     output_dict["project_aggregated"] = self.project_and_aggregate(
                         register_output["registers"]
                     )
-            else:
+            elif token_outputs or self.slot_merge is None:
                 # No bottleneck: project from the encoder's patch-token output
-                # (masked-mean pooled).
+                # (masked-mean pooled). Skipped without per-token outputs.
                 output_dict["project_aggregated"] = self.project_and_aggregate(output)
 
         return output_dict
@@ -3443,6 +3463,26 @@ class Encoder(FlexiVitBase):
         for block in self.blocks:
             block.apply_compile()
         # torch.compile(self.patch_embeddings, dynamic=False, mode="max-autotune-no-cudagraphs", fullgraph=True)
+
+
+@dataclass
+class CompactDecoderTokens:
+    """Predictions or targets at the decoder positions only, per modality.
+
+    ``tokens[i]`` is ``[B, K_i, D]`` for modality ``modalities[i]``: row ``j < count``
+    of sample ``b`` belongs to that sample's ``j``-th DECODER token in flattened
+    ``(h, w, t, band set)`` order (the stable decoder-first sort the loss applies to
+    full tokens), with ``K_i`` the batch's largest decoder count (>= 1); rows past a
+    sample's count are padding the loss masks out. ``counts[i]`` (``[B]``) and
+    ``orders[i]`` (``[B, K_i]``, the flattened index of each row) are set when the
+    tokens are predictions (``Predictor.forward_compact``); targets built for them
+    (``compact_decoder_targets``) reuse the orders.
+    """
+
+    modalities: list[str]
+    tokens: list[Tensor]
+    counts: list[Tensor] | None = None
+    orders: list[Tensor] | None = None
 
 
 class PredictorBase(FlexiVitBase):
@@ -3979,6 +4019,123 @@ class Predictor(PredictorBase):
             output_dict[modality] = torch.stack(per_modality_output_tokens, dim=-2)
             output_dict[masked_modality_name] = modality_mask
         return TokensAndMasks(**output_dict)
+
+    def forward_compact(
+        self,
+        x: TokensAndMasks,
+        timestamps: Tensor,
+        patch_size: int,
+        input_res: int = BASE_GSD,
+        registers: Tensor | None = None,
+        register_positions: Tensor | None = None,
+        query_pixel_shift: Tensor | dict[str, Tensor] | None = None,
+        modality_timestamps: dict[str, Tensor] | None = None,
+    ) -> CompactDecoderTokens:
+        """Decode only the DECODER tokens, against the Perceiver registers.
+
+        Equal to :meth:`forward` at the DECODER positions, without building the full
+        token grid: with registers as the context a query attends only to them (never
+        to other tokens), and its input is the mask token plus its composite
+        encodings (channel, slot-index time, month), so it is computed for those
+        positions alone. ``x``'s token values are never read -- only its masks and
+        layout -- so the encoder may hand placeholders (``token_outputs=False``).
+        Returns each modality's decoder tokens in the order the loss reads them.
+        """
+        if registers is None or self.register_to_decoder_embed is None:
+            raise ValueError("forward_compact decodes against the Perceiver registers")
+        if self.use_flash_attn:
+            raise NotImplementedError("forward_compact runs the padded path")
+        if not PositionEncoding.is_rope(self.position_encoding):
+            raise NotImplementedError(
+                "forward_compact needs RoPE (absolute spatial encodings are additive "
+                "per token and are not rebuilt here)"
+            )
+        enc = self.composite_encodings
+        n = enc.embedding_dim_per_embedding_type
+        dim = self.mask_token.shape[0]
+        names = [
+            m
+            for m in get_modalities_to_process(
+                x.modalities, self.supported_modality_names
+            )
+            if getattr(x, m) is not None
+        ]
+        masks = [getattr(x, x.get_masked_modality_name(m)) for m in names]
+        batch_size = masks[0].shape[0]
+        # Full-grid RoPE positions (a few numbers per token) from the layout alone.
+        zero = self.mask_token.new_zeros(())
+        layout = {m: zero.expand(*mask.shape, dim) for m, mask in zip(names, masks)}
+        layout.update(
+            {x.get_masked_modality_name(m): mask for m, mask in zip(names, masks)}
+        )
+        positions = self.build_rope_positions(
+            {m: layout[m] for m in names},
+            {x.get_masked_modality_name(m): mask for m, mask in zip(names, masks)},
+            patch_size,
+            input_res,
+            timestamps=timestamps,
+            query_pixel_shift=query_pixel_shift,
+            modality_timestamps=modality_timestamps,
+        )
+        assert positions is not None
+        decoder = [
+            mask.reshape(batch_size, -1) == MaskValue.DECODER.value for mask in masks
+        ]
+        counts = [d.sum(dim=-1) for d in decoder]
+        widths = torch.stack([c.max() for c in counts]).tolist()  # one host sync
+        queries, query_positions, orders = [], [], []
+        start = 0
+        for name, mask, dec, width in zip(names, masks, decoder, widths):
+            k = max(int(width), 1)
+            order = dec.long().sort(dim=1, descending=True, stable=True)[1][:, :k]
+            grid = mask.shape[1:]
+            index = torch.unravel_index(order, grid)
+            embed = torch.zeros(batch_size, k, dim, device=order.device)
+            channel = enc.per_modality_channel_embeddings[name]
+            embed[..., :n] += channel[index[-1]].to(embed.dtype)  # band set
+            modality = Modality.get(name)
+            # A time axis: [B, T, b_s] or [B, h, w, T, b_s] (as the full path's 4D / 6D
+            # token layouts).
+            if modality.is_multitemporal and mask.ndim in (3, 5):
+                t_index = index[-2]
+                if not PositionEncoding.is_3d_rope(self.position_encoding):
+                    time = get_1d_sincos_pos_encoding(t_index.reshape(-1), n)
+                    embed[..., n : n * 2] += time.view(batch_size, k, n)
+                stamps = (modality_timestamps or {}).get(name, timestamps)
+                months = stamps[:, :, 1].gather(1, t_index)
+                embed[..., n * 2 : n * 3] += enc.month_embed(months).to(embed.dtype)
+            queries.append(self.mask_token + embed)
+            flat_positions = positions[:, start : start + dec.shape[1]]
+            query_positions.append(
+                flat_positions.gather(
+                    1, order.unsqueeze(-1).expand(-1, -1, flat_positions.shape[-1])
+                )
+            )
+            orders.append(order)
+            start += dec.shape[1]
+        q = torch.cat(queries, dim=1)
+        q_pos = torch.cat(query_positions, dim=1)
+        context = self.register_to_decoder_embed(
+            rearrange(registers, "b h w d -> b (h w) d")
+        )
+        for blk in self.blocks:
+            q = blk(
+                x=q,
+                y=context,
+                attn_mask=None,
+                max_seqlen_q=q.shape[1],
+                max_seqlen_k=context.shape[1],
+                rope_positions=q_pos,
+                rope_positions_y=register_positions,
+            )
+        out = self.to_output_embed(self.norm(q))
+        tokens, offset = [], 0
+        for order in orders:
+            tokens.append(out[:, offset : offset + order.shape[1]])
+            offset += order.shape[1]
+        return CompactDecoderTokens(
+            modalities=names, tokens=tokens, counts=counts, orders=orders
+        )
 
     def forward_pooled(
         self,

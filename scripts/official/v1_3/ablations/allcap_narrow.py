@@ -181,6 +181,10 @@ def build_train_module_config(common: CommonComponents):
     # over every (padded) every-capture position was the largest allocation at large
     # input budgets (2026-10-20 OOM). Same loss values.
     config.target_chunk_size = TARGET_CHUNK_SIZE
+    # Decode only the DECODER tokens against the registers and skip the per-token
+    # encoder outputs (the unmerge), which nothing reads in training: the decoder
+    # and every loss read the Perceiver registers. Same loss.
+    config.compact_decode = True
     return config
 
 
