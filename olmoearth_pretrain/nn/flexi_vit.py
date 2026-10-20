@@ -2638,6 +2638,9 @@ class Encoder(FlexiVitBase):
         self.norm = nn.LayerNorm(self.embedding_size)
 
         self.slot_merge_after: int | None = None
+        self.narrow_front_end = bool(
+            slot_merge_config is not None and slot_merge_config.narrow_front_end
+        )
         self.slot_merge = None
         self.narrow_stage: NarrowStage | None = None
         self.narrow_up: nn.Linear | None = None
@@ -2672,6 +2675,47 @@ class Encoder(FlexiVitBase):
                 )
                 self.narrow_up = nn.Linear(narrow_dim, embedding_size)
                 self.slot_merge = slot_merge_config.build(narrow_dim)
+                if slot_merge_config.narrow_front_end:
+                    # Everything before the merge at the narrow width: embed straight
+                    # to narrow_dim (same tokenization and options) and skip the
+                    # narrow stage's down-projection.
+                    self.patch_embeddings = MultiModalPatchEmbeddings(
+                        self.supported_modality_names,
+                        self.max_patch_size,
+                        narrow_dim,
+                        tokenization_config=self.tokenization_config,
+                        use_linear_patch_embed=self.use_linear_patch_embed,
+                        band_dropout_rate=0.0,
+                        random_band_dropout=self.random_band_dropout,
+                        band_dropout_modalities=self.band_dropout_modalities,
+                        patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
+                        post_proj_hidden_sizes=self.post_proj_hidden_sizes,
+                    )
+                    self.composite_encodings = CompositeEncodings(
+                        narrow_dim,
+                        self.supported_modalities,
+                        None,
+                        learnable_channel_embeddings,
+                        random_channel_embeddings,
+                        tokenization_config=self._base_tokenization_config,
+                        position_encoding=self.position_encoding,
+                    )
+                    self.composite_encodings.apply(self._init_weights)
+                    self.narrow_stage = NarrowStage(
+                        narrow_dim,
+                        narrow_dim,
+                        slot_merge_config.narrow_depth,
+                        mlp_ratio=mlp_ratio,
+                        qkv_bias=True,
+                        qk_norm=qk_norm,
+                        norm_layer=nn.LayerNorm,
+                        drop_path=drop_path,
+                        position_encoding=self.position_encoding,
+                        rope_base=self.rope_base,
+                        rope_mixed_base=self.rope_mixed_base,
+                        temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                        rope_temporal_base=self.rope_temporal_base,
+                    )
             else:
                 self.slot_merge = slot_merge_config.build(embedding_size)
 
@@ -2908,16 +2952,20 @@ class Encoder(FlexiVitBase):
             # encoder width plus the slot-pooled encoder-width input (a skip).
             assert self.narrow_up is not None
             narrow = self.narrow_stage(tokens, positions, valid, cell_ids[..., 0])
+            # The narrow front end has no encoder-width input to carry as a skip.
             merged, merged_positions, merged_valid, unmerge, skip = self.slot_merge(
                 narrow,
                 positions,
                 valid,
                 cell_ids[..., 0],
                 modality_ids[..., 0],
-                extra=tokens,
+                extra=None if self.narrow_front_end else tokens,
             )
-            assert skip is not None
-            merged = self.narrow_up(merged).to(skip.dtype) + skip
+            if self.narrow_front_end:
+                merged = self.narrow_up(merged)
+            else:
+                assert skip is not None
+                merged = self.narrow_up(merged).to(skip.dtype) + skip
         else:
             merged, merged_positions, merged_valid, unmerge, _ = self.slot_merge(
                 tokens, positions, valid, cell_ids[..., 0], modality_ids[..., 0]

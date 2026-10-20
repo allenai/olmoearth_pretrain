@@ -849,3 +849,60 @@ def test_decoder_token_cap() -> None:
     )
     assert torch.equal(counts, torch.clamp(before_counts, max=20))
     assert _cap_decoder_tokens(sample, p, None) is sample
+
+
+def test_merged_slot_budget_counts_tokens_after_the_merge(
+    allcap_h5py_dir: UPath,
+) -> None:
+    """merged_slots: token_budget caps the merged slots, input_token_budget the inputs.
+
+    The run keeps more input tokens than a plain budget of the same size would, its
+    merged count fits token_budget and its input count fits input_token_budget.
+    """
+    from olmoearth_pretrain.data.dataset import merged_slot_count
+
+    dataset = _dataset(allcap_h5py_dir)
+    np.random.seed(0)
+    hw_p, budget, input_cap = 2, 40, 300
+    plain: list[int] = []
+    merged: list[int] = []
+    for slots in (None, (3, 4, 24)):
+        for _ in range(30):
+            _, sample = dataset[
+                GetItemArgs(
+                    idx=0,
+                    patch_size=2,
+                    sampled_hw_p=hw_p,
+                    token_budget=budget,
+                    tokenization_config=S2_SINGLE,
+                    budget_exclude_modalities=frozenset({"srtm"}),
+                    merged_slots=slots,
+                    input_token_budget=input_cap if slots else None,
+                )
+            ]
+            dense = _dense(sample)
+            per_cell = sum(
+                int((d != MISSING_VALUE).any(axis=(0, 1, 3)).sum())
+                for d in dense.values()
+            )
+            (merged if slots else plain).append(per_cell)
+            if slots:
+                n_in = per_cell * hw_p * hw_p
+                assert n_in <= max(input_cap, 3 * hw_p * hw_p)
+                assert hw_p * hw_p * merged_slot_count(per_cell, *slots) <= max(
+                    budget, 3 * hw_p * hw_p
+                )
+    assert np.mean(merged) > 2 * np.mean(plain)
+
+
+def test_merged_slot_count_matches_slot_merge() -> None:
+    """merged_slot_count is SlotMerge.num_slots on single cells."""
+    import torch
+
+    from olmoearth_pretrain.data.dataset import merged_slot_count
+    from olmoearth_pretrain.nn.slot_merge import SlotMergeConfig
+
+    merge = SlotMergeConfig(ratio=3, min_slots=4, max_slots_per_cell=24).build(8)
+    n = torch.arange(0, 400)
+    expected = merge.num_slots(n).tolist()
+    assert [merged_slot_count(int(k), 3, 4, 24) for k in n] == expected

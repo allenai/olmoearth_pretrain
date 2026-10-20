@@ -29,6 +29,12 @@ the wide blocks start from the full-width input plus the narrow stage's output.
 This is how every-capture inputs (hundreds of tokens per cell) stay at v1.3's cost:
 the per-token work happens at low width, the encoder-width blocks see <=
 ``max_slots_per_cell`` tokens per cell.
+
+Narrow front end (``narrow_front_end``): the patch embedding and composite encodings
+produce ``narrow_dim``-wide tokens directly (no down-projection) and there is no
+encoder-width skip, so nothing before the merge is encoder-width: the per-input-token
+cost and memory are all at the narrow width, which lets far more input tokens through
+than the encoder-width blocks would allow.
 """
 
 from __future__ import annotations
@@ -62,6 +68,9 @@ class SlotMergeConfig(Config):
             (0 = no narrow stage; then the merge sits after ``merge_after`` blocks).
         narrow_dim: Width of the narrow stage (and of the merge); required with
             ``narrow_depth > 0``. Heads = ``narrow_dim // 64``.
+        narrow_front_end: Embed straight to ``narrow_dim`` (patch embedding and
+            composite encodings at the narrow width) and drop the encoder-width skip;
+            requires the narrow stage.
     """
 
     merge_after: int = 4
@@ -73,6 +82,7 @@ class SlotMergeConfig(Config):
     max_slots_per_cell: int | None = None
     narrow_depth: int = 0
     narrow_dim: int | None = None
+    narrow_front_end: bool = False
 
     def validate(self, depth: int) -> None:
         """Check the merge point fits the encoder depth."""
@@ -86,6 +96,8 @@ class SlotMergeConfig(Config):
                 raise ValueError(
                     f"narrow_dim must be a multiple of 64: {self.narrow_dim}"
                 )
+        elif self.narrow_front_end:
+            raise ValueError("narrow_front_end needs a narrow stage (narrow_depth > 0)")
         elif not 0 < self.merge_after < depth:
             raise ValueError(
                 f"merge_after must be in (0, depth={depth}), got {self.merge_after}"
@@ -117,7 +129,10 @@ class NarrowStage(nn.Module):
     def __init__(self, in_dim: int, dim: int, depth: int, **block_kwargs: object):
         """Initialize: ``in_dim -> dim`` projection and ``depth`` blocks at ``dim``."""
         super().__init__()
-        self.down = nn.Linear(in_dim, dim)
+        # Tokens already at the narrow width (narrow front end) need no projection.
+        self.down: nn.Module = (
+            nn.Linear(in_dim, dim) if in_dim != dim else nn.Identity()
+        )
         self.blocks = nn.ModuleList(
             Block(dim, dim // 64, **block_kwargs)  # type: ignore[arg-type]
             for _ in range(depth)

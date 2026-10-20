@@ -2,6 +2,7 @@
 
 import math
 
+import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
@@ -23,7 +24,8 @@ T, PX, PS, D = 6, 8, 2, 32
 
 def _merge(**kwargs: int) -> SlotMerge:
     torch.manual_seed(0)
-    cfg = SlotMergeConfig(**{"ratio": 3, "min_slots": 4, "iters": 3, **kwargs})
+    settings: dict[str, int] = {"ratio": 3, "min_slots": 4, "iters": 3, **kwargs}
+    cfg = SlotMergeConfig(**settings)  # type: ignore[arg-type]
     return cfg.build(D)
 
 
@@ -299,3 +301,83 @@ def test_narrow_encoder_trains_and_infers() -> None:
     s2_out = a["tokens_and_masks"].sentinel2_l2a
     assert s2_out is not None and full.sentinel2_l2a is not None
     assert s2_out.shape[:4] == (full.sentinel2_l2a.shape[0], PX // PS, PX // PS, T)
+
+
+def test_narrow_front_end_embeds_at_the_narrow_width() -> None:
+    """narrow_front_end: patch embedding at narrow_dim, no skip; trains and infers.
+
+    The pre-merge tokens are narrow_dim wide, every new parameter gets a gradient,
+    eval and fast_pass agree, and per-token outputs keep the input layout at the
+    encoder width.
+    """
+    torch.manual_seed(0)
+    narrow = 64
+    enc = (
+        EncoderConfig(
+            supported_modality_names=MODALITIES,
+            embedding_size=D,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=2.0,
+            max_patch_size=4,
+            min_patch_size=1,
+            max_sequence_length=12,
+            drop_path=0.0,
+            position_encoding="rope_3d_mixed",
+            tokenization_config=S2_ONE_BANDSET,
+            perceiver_config=PerceiverConfig(
+                register_dim=16,
+                latent_depth=1,
+                pixel_latents=True,
+                random_latent_stride=True,
+                max_latents=64,
+                eval_latent_stride=1,
+                student_dims=[8],
+                student_output_norm=True,
+            ),
+            slot_merge_config=SlotMergeConfig(
+                merge_after=0,
+                narrow_depth=1,
+                narrow_dim=narrow,
+                max_slots_per_cell=4,
+                narrow_front_end=True,
+            ),
+        )
+        .build()
+        .train()
+    )
+    assert enc.narrow_stage is not None and enc.narrow_up is not None
+    assert isinstance(enc.narrow_stage.down, torch.nn.Identity)
+    sample = _sample()
+    embedded = enc.patch_embeddings(sample, PS)
+    assert embedded["sentinel2_l2a"].shape[-1] == narrow
+    out = enc(sample, patch_size=PS)
+    out["registers"].float().pow(2).mean().backward()
+    for module in (
+        enc.patch_embeddings,
+        enc.narrow_stage,
+        enc.narrow_up,
+        enc.slot_merge,
+    ):
+        for name, p in module.named_parameters():
+            if p.requires_grad and "per_modality_embeddings" not in name:
+                assert p.grad is not None and torch.isfinite(p.grad).all(), name
+    assert any(p.grad is not None for p in enc.patch_embeddings.parameters()), (
+        "the narrow patch embedding must be trained"
+    )
+    enc.eval()
+    full = _sample(encode_frac=1.1)
+    with torch.no_grad():
+        a = enc(full, patch_size=PS)
+        b = enc(full, patch_size=PS, fast_pass=True)
+    torch.testing.assert_close(a["registers"], b["registers"], atol=1e-5, rtol=1e-5)
+    s2_out = a["tokens_and_masks"].sentinel2_l2a
+    assert s2_out is not None and full.sentinel2_l2a is not None
+    assert s2_out.shape[:4] == (full.sentinel2_l2a.shape[0], PX // PS, PX // PS, T)
+    assert s2_out.shape[-1] == D
+
+
+def test_narrow_front_end_requires_a_narrow_stage() -> None:
+    """narrow_front_end without a narrow stage is rejected at validation."""
+    with pytest.raises(ValueError, match="narrow_front_end"):
+        SlotMergeConfig(merge_after=1, narrow_front_end=True).validate(depth=3)

@@ -56,6 +56,8 @@ PROFILE_TARGETS = {
     # D with the compiled mixed-RoPE rotation (encodings.use_compiled_mixed_rope).
     "prof_regDcr": "allcap_slot_n4d192",
     "prof_memDcr": "allcap_slot_n4d192",
+    # D' (narrow front end, merged-slot budget, compiled RoPE built in).
+    "prof_regDfe": "allcap_slot_n4d192_fe",
 }
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
@@ -66,7 +68,7 @@ MEMORY_START = 40
 MEMORY_STEPS = 4
 # Prefixes whose profile also times each named module's FORWARD as a region (backward
 # hooks break on modules returning dicts; backward is ~2x each region's forward).
-REGION_PREFIXES = ("prof_regD", "prof_regv13", "prof_regDcr")
+REGION_PREFIXES = ("prof_regD", "prof_regv13", "prof_regDcr", "prof_regDfe")
 # Region name -> submodule path(s) on the model (missing ones are skipped; a trailing
 # ".*" means every child, aggregated under one name).
 REGIONS = {

@@ -83,6 +83,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         tile_size: int = 128,
         time_range_days_choices: list[float] | None = None,
         composite_days_choices: list[float] | None = None,
+        merged_slots: tuple[int, int, int] | None = None,
+        input_token_budget: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -158,6 +160,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 rank batch, with 0 = every capture (no compositing); e.g.
                 ``[0, 14, 30]`` mixes every-capture, biweekly and monthly batches.
                 None = always every capture.
+            merged_slots: Per-modality-timestamps datasets only: ``(ratio,
+                min_slots, cap)`` to budget the tokens left after a per-cell slot
+                merge (``token_budget``) instead of the input tokens.
+            input_token_budget: With ``merged_slots``, a separate cap on the raw
+                input tokens per sample (None = no cap).
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -205,6 +212,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.tile_size = tile_size
         self.time_range_days_choices = time_range_days_choices
         self.composite_days_choices = composite_days_choices
+        self.merged_slots = tuple(merged_slots) if merged_slots is not None else None
+        self.input_token_budget = input_token_budget
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -431,6 +440,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
             budget_exclude_modalities=self.budget_exclude_modalities,
             time_range_days=time_range_days,
             composite_days=composite_days,
+            merged_slots=self.merged_slots,  # type: ignore[arg-type]
+            input_token_budget=self.input_token_budget,
         )
         item = self.dataset[args]
         return item
@@ -898,6 +909,12 @@ class OlmoEarthDataLoaderConfig(Config):
     tile_size: int = 128
     time_range_days_choices: list[float] | None = None
     composite_days_choices: list[float] | None = None
+    # Per-modality-timestamps datasets only: budget encoder-width tokens after a per-cell
+    # slot merge, (ratio, min_slots, cap) as in SlotMerge.num_slots; token_budget then
+    # caps the merged tokens and input_token_budget the raw input tokens (see
+    # GetItemArgs.merged_slots).
+    merged_slots: list[int] | None = None
+    input_token_budget: int | None = None
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -1013,6 +1030,8 @@ class OlmoEarthDataLoaderConfig(Config):
             tile_size=self.tile_size,
             time_range_days_choices=self.time_range_days_choices,
             composite_days_choices=self.composite_days_choices,
+            merged_slots=tuple(self.merged_slots) if self.merged_slots else None,  # type: ignore[arg-type]
+            input_token_budget=self.input_token_budget,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

@@ -519,6 +519,18 @@ class GetItemArgs(NamedTuple):
     # bins of this many days (per-pixel median; S2 over SCL-clear pixels).
     # None or 0 = every capture.
     composite_days: float | None = None
+    # Per-modality-timestamps datasets only: budget the encoder-width tokens AFTER a
+    # per-cell slot merge instead of the input tokens. ``(ratio, min_slots, cap)`` as
+    # in ``SlotMerge.num_slots``: a cell of n tokens costs max(min(ceil(n / ratio),
+    # cap), min(n, min_slots)) tokens against ``token_budget``, and the raw input
+    # tokens are capped separately by ``input_token_budget`` (None = no cap).
+    merged_slots: tuple[int, int, int] | None = None
+    input_token_budget: int | None = None
+
+
+def merged_slot_count(n: int, ratio: int, min_slots: int, cap: int) -> int:
+    """Slots a cell of ``n`` tokens keeps (``SlotMerge.num_slots``; n = bypass)."""
+    return max(min(-(-n // ratio), cap), min(n, min_slots))
 
 
 # TODO should training modalities be str or modality_spec
@@ -1193,6 +1205,28 @@ class OlmoEarthDataset(Dataset):
             first, last = 0, n_steps - 1
             if args.token_budget is not None and n_steps > 0:
                 first = last = int(np.random.randint(n_steps))
+                if args.merged_slots is not None:
+                    # Every cell of the crop holds the same captures, so a cell's
+                    # token count is the run's tokens / hw_p**2; the encoder-width
+                    # cost is hw_p**2 merged slots per cell.
+                    ratio, min_slots, cap = args.merged_slots
+                    input_cap = args.input_token_budget
+                    merged_budget = args.token_budget
+
+                    def fits(total: int) -> bool:
+                        per_cell = total // hw_p_sq
+                        slots = merged_slot_count(per_cell, ratio, min_slots, cap)
+                        return hw_p_sq * slots <= merged_budget and (
+                            input_cap is None or total <= input_cap
+                        )
+
+                    total = fixed_tokens + step_tokens[first]
+                    while last + 1 < n_steps and fits(
+                        total + int(step_tokens[last + 1])
+                    ):
+                        last += 1
+                        total += int(step_tokens[last])
+                    return first, last
                 total = fixed_tokens + step_tokens[first]
                 while (
                     last + 1 < n_steps
