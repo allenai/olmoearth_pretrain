@@ -265,6 +265,15 @@ def _summarize(log_dir: str) -> None:
                     v = np.array([r[key] for r in sub], dtype=float)
                     half[f"{key}_mean"] = round(float(v.mean()), 1)
                     half[f"{key}_p90"] = round(float(np.quantile(v, 0.9)), 1)
+                for mode in sorted({r["composite"] for r in sub}, key=str):
+                    b = [r for r in sub if r["composite"] == mode]
+                    half[f"composite_{mode}"] = {
+                        "n": len(b),
+                        "io_mb": round(
+                            float(np.mean([r["io_bytes"] for r in b])) / 1e6, 2
+                        ),
+                        "h5_wall": round(float(np.mean([r["h5_wall"] for r in b])), 4),
+                    }
                 for lo, hi in ((0, 64), (64, 129), (129, 10**6)):
                     b = [r for r in sub if lo <= r["hw_px"] < hi]
                     if b:
@@ -520,6 +529,7 @@ def main() -> None:
     parser.add_argument("--prefetch", type=int, default=None)
     parser.add_argument("--read_ahead", type=int, default=None)
     parser.add_argument("--read_block_size", type=int, default=None)
+    parser.add_argument("--budget_before_read", type=int, default=None)
     # Emulate one rank of a ``world``-rank node: global batch 64 * world, this rank's
     # slice of it (so concurrent ranks read disjoint samples, as in training).
     parser.add_argument("--rank", type=int, default=0)
@@ -534,6 +544,8 @@ def main() -> None:
         dataset_config.h5py_dir = args.h5py_dir
     if args.read_block_size is not None:
         dataset_config.read_block_size = args.read_block_size
+    if args.budget_before_read is not None:
+        dataset_config.budget_before_read = bool(args.budget_before_read)
     dataset = dataset_config.build()
     config = D.build_dataloader_config(common)
     config.global_batch_size = 64 * args.world

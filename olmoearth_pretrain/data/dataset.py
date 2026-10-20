@@ -685,6 +685,7 @@ class OlmoEarthDataset(Dataset):
         load_s2_cloud_mask: bool = False,
         composite_selection: str = "median",
         read_block_size: int = 0,
+        budget_before_read: bool = False,
     ):
         """Initialize the dataset.
 
@@ -726,6 +727,10 @@ class OlmoEarthDataset(Dataset):
             read_block_size: With ``per_modality_timestamps``, read each h5 file in
                 aligned blocks of this many bytes, cached for the sample
                 (:class:`BlockCachedFile`): fewer, larger requests. 0 = off.
+            budget_before_read: With composites, choose the token-budget run of bins
+                from the timestamps before reading, and read only those bins'
+                captures (without composites the run is always chosen first). Same
+                binning and budget rule; reads only what the sample keeps.
 
         Returns:
             None
@@ -776,6 +781,7 @@ class OlmoEarthDataset(Dataset):
             )
         self.composite_selection = composite_selection
         self.read_block_size = read_block_size
+        self.budget_before_read = budget_before_read
 
     @property
     def fingerprint_version(self) -> str:
@@ -1253,6 +1259,7 @@ class OlmoEarthDataset(Dataset):
         scl_timestamps: np.ndarray | None,
         selection: str = "median",
         rng: Any = np.random,
+        origin: int | None = None,
     ) -> tuple[
         dict[str, np.ndarray],
         dict[str, np.ndarray],
@@ -1273,7 +1280,8 @@ class OlmoEarthDataset(Dataset):
         non_empty = [ordinals[m][k] for m, k in kept.items() if len(k) > 0]
         if not non_empty:
             return data, timestamps, kept, None
-        origin = min(int(o.min()) for o in non_empty)
+        if origin is None:
+            origin = min(int(o.min()) for o in non_empty)
         data, timestamps, kept = dict(data), dict(timestamps), dict(kept)
         s2_no_clear = None
         for modality, captures in list(kept.items()):
@@ -1416,6 +1424,9 @@ class OlmoEarthDataset(Dataset):
             crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
             ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
             kept = self._select_time_range(ordinals, args.time_range_days, rng)
+            origin = None
+            if args.composite_days and self.budget_before_read:
+                origin, kept = self._budget_bins(args, present, ordinals, kept, rng)
             if not args.composite_days:
                 union_ts, step_index = build_union_timeline(
                     {m: timestamps[m][kept[m]] for m in timestamps}
@@ -1471,6 +1482,40 @@ class OlmoEarthDataset(Dataset):
             "kept": kept,
             "scl": scl,
             "scl_timestamps": scl_timestamps,
+            "origin": origin,
+        }
+
+    def _budget_bins(
+        self,
+        args: GetItemArgs,
+        present: list[str],
+        ordinals: dict[str, np.ndarray],
+        kept: dict[str, np.ndarray],
+        rng: Any,
+    ) -> tuple[int | None, dict[str, np.ndarray]]:
+        """The budget run over composite bins, from dates alone (no pixels read).
+
+        A bin costs, per modality with a capture in it, what one composite timestep
+        of that modality costs. Returns the bin origin (first kept capture, as
+        :meth:`_composite` computes it) and the captures of the kept run of bins.
+        """
+        non_empty = [ordinals[m][k] for m, k in kept.items() if len(k) > 0]
+        if not non_empty:
+            return None, kept
+        days = float(args.composite_days)  # type: ignore[arg-type]
+        origin = min(int(o.min()) for o in non_empty)
+        bin_of = {
+            m: ((ordinals[m][k] - origin) // days).astype(np.int64)
+            for m, k in kept.items()
+        }
+        bins = np.unique(np.concatenate([b for b in bin_of.values() if len(b)]))
+        step_index = {
+            m: np.searchsorted(bins, np.unique(b)) for m, b in bin_of.items() if len(b)
+        }
+        first, last = self._budget_run(args, present, len(bins), step_index, rng)
+        lo, hi = bins[first], bins[last]
+        return origin, {
+            m: k[(bin_of[m] >= lo) & (bin_of[m] <= hi)] for m, k in kept.items()
         }
 
     def _finish_per_capture(
@@ -1506,13 +1551,14 @@ class OlmoEarthDataset(Dataset):
                 scl_timestamps,
                 self.composite_selection,
                 rng,
+                read["origin"],
             )
         else:
             s2_no_clear = None
         union_ts, step_index = build_union_timeline(
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
-        if args.composite_days:
+        if args.composite_days and read["origin"] is None:
             first_step, last_step = self._budget_run(
                 args, list(data), len(union_ts), step_index, rng
             )
@@ -1714,6 +1760,7 @@ class OlmoEarthDatasetConfig(Config):
     load_s2_cloud_mask: bool = False
     composite_selection: str = "median"
     read_block_size: int = 0
+    budget_before_read: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

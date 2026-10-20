@@ -1028,3 +1028,61 @@ def test_block_cached_reads_give_the_same_item(
             seed=seed,
         )
         _assert_same_item(plain[args], cached[args])
+
+
+def test_budget_before_read_without_a_budget_changes_nothing(
+    allcap_h5py_dir: UPath,
+) -> None:
+    """With no token budget, budgeting bins before the read keeps every bin."""
+    plain = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    early = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    early.budget_before_read = True
+    for days in (14.0, 30.0):
+        args = GetItemArgs(
+            idx=0, patch_size=1, sampled_hw_p=16, composite_days=days, seed=5
+        )
+        _assert_same_item(plain[args], early[args])
+
+
+def test_budget_before_read_keeps_true_bin_medians_within_budget(
+    allcap_h5py_dir: UPath,
+) -> None:
+    """Budgeted before the read: within budget, and each slot is its bin's median."""
+    from olmoearth_pretrain.data.dataset import CLOUD_SCL_CLASSES
+
+    dataset = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    dataset.budget_before_read = True
+    raw = _raw(allcap_h5py_dir, 0)
+    ords = {
+        m: timestamps_to_ordinals(raw[f"timestamps_{m}"])
+        for m in ("sentinel2_l2a", "sentinel1", "landsat_l2")
+    }
+    origin = min(int(o.min()) for o in ords.values())
+    clear = ~np.isin(raw["sentinel2_scl"][..., 0], CLOUD_SCL_CLASSES)
+    days = 30.0
+    expected, bins = _expected_composites(
+        raw["sentinel2_l2a"], ords["sentinel2_l2a"], origin, days, clear
+    )
+    centre_to_slot = {origin + int(b * days + days / 2): j for j, b in enumerate(bins)}
+    budget = 3 * 256 * 3
+    for seed in range(5):
+        args = GetItemArgs(
+            idx=0,
+            patch_size=1,
+            sampled_hw_p=16,
+            token_budget=budget,
+            composite_days=days,
+            tokenization_config=S2_SINGLE,
+            budget_exclude_modalities=frozenset({"srtm"}),
+            seed=seed,
+        )
+        _, sample = dataset[args]
+        assert _real_tokens(sample, 16, {"srtm"}) <= budget
+        union = _field(sample, "timestamps")
+        index = _field(sample, "sentinel2_l2a_time_index")
+        s2 = _field(sample, "sentinel2_l2a")
+        assert 0 < s2.shape[2] < len(bins)
+        for t, o in enumerate(timestamps_to_ordinals(union[index])):
+            np.testing.assert_allclose(
+                s2[:, :, t], expected[:, :, centre_to_slot[int(o)]], rtol=1e-6
+            )
