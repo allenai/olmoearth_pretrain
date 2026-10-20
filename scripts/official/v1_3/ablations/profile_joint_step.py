@@ -65,28 +65,14 @@ PROFILE_TARGETS = {
     "prof_peakv13": "rc_ld1_pixtgt_pix512",
     "prof_peakFDfe": "allcap_slot_n4d192_fe",
     "prof_peakFv13": "rc_ld1_pixtgt_pix512",
-    # D' minus the memory/speed changes made while its budget was 2x v1.3's (see
-    # MINIMAL_PREFIXES).
-    "prof_regDmin": "allcap_slot_n4d192_fe",
-    "prof_peakFDmin": "allcap_slot_n4d192_fe",
 }
-# D' with plain v1.3 machinery: no compiled RoPE, no recomputed GELU, full (not compact)
-# decode and targets, a plain 1536-token budget (no merged-slot accounting; merged <= raw
-# so it never bound) and D's decoder cap of 2048.
-MINIMAL_PREFIXES = ("prof_regDmin", "prof_peakFDmin")
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
 COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
 MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 # Peak / OOM capture (PeakMemoryCallback): what is live at each new peak step and at an
 # OOM, plus that batch's shape.
-PEAK_PREFIXES = (
-    "prof_peakDfe",
-    "prof_peakv13",
-    "prof_peakFDfe",
-    "prof_peakFv13",
-    "prof_peakFDmin",
-)
+PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakFDfe", "prof_peakFv13")
 PEAK_MAX_STEPS = 320
 # Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
 # steps suffice. The shape comes from --data_loader.patch_size_choices / sampled_hw_p_list
@@ -97,13 +83,7 @@ MEMORY_START = 40
 MEMORY_STEPS = 4
 # Prefixes whose profile also times each named module's FORWARD as a region (backward
 # hooks break on modules returning dicts; backward is ~2x each region's forward).
-REGION_PREFIXES = (
-    "prof_regD",
-    "prof_regv13",
-    "prof_regDcr",
-    "prof_regDfe",
-    "prof_regDmin",
-)
+REGION_PREFIXES = ("prof_regD", "prof_regv13", "prof_regDcr", "prof_regDfe")
 # Region name -> submodule path(s) on the model (missing ones are skipped; a trailing
 # ".*" means every child, aggregated under one name).
 REGIONS = {
@@ -184,22 +164,12 @@ def build_model_config(common: CommonComponents):
         use_compiled_mixed_rope(True)
     for field, value in PROFILE_PERCEIVER_OVERRIDES.get(_prefix(common), {}).items():
         setattr(config.encoder_config.perceiver_config, field, value)
-    if _prefix(common) in MINIMAL_PREFIXES:
-        from olmoearth_pretrain.nn.attention import use_recompute_mlp_activation
-        from olmoearth_pretrain.nn.encodings import use_compiled_mixed_rope
-
-        use_compiled_mixed_rope(False)
-        use_recompute_mlp_activation(False)
     return config
 
 
 def build_train_module_config(common: CommonComponents):
     """The target arm's train module (keeps its rank microbatch)."""
-    config = _target(common).build_train_module_config(common)
-    if _prefix(common) in MINIMAL_PREFIXES:
-        config.compact_decode = False
-        config.target_chunk_size = None
-    return config
+    return _target(common).build_train_module_config(common)
 
 
 def build_dataset_config(common: CommonComponents):
@@ -211,10 +181,6 @@ def build_dataloader_config(common: CommonComponents):
     """The target arm's sampler at the real per-rank batch on one GPU."""
     config = _target(common).build_dataloader_config(common)
     config.global_batch_size = GLOBAL_BATCH_SIZE
-    if _prefix(common) in MINIMAL_PREFIXES:
-        config.merged_slots = None
-        config.input_token_budget = None
-        config.max_decode_tokens = 2048
     return config
 
 
