@@ -1,5 +1,6 @@
 """Tests for per-modality-timestamp (every-capture) samples."""
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from olmoearth_pretrain.data.dataset import (
     GetItemArgs,
     OlmoEarthDataset,
     build_union_timeline,
+    nanmedian_axis2,
     timestamps_to_ordinals,
 )
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, OlmoEarthSample
@@ -906,3 +908,16 @@ def test_merged_slot_count_matches_slot_merge() -> None:
     n = torch.arange(0, 400)
     expected = merge.num_slots(n).tolist()
     assert [merged_slot_count(int(k), 3, 4, 24) for k in n] == expected
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_nanmedian_axis2_matches_numpy(seed: int) -> None:
+    """The sort-based median equals np.nanmedian exactly (ties, all-NaN pixels)."""
+    rng = np.random.default_rng(seed)
+    for n in range(1, 9):
+        x = np.round(rng.random((6, 5, n, 3)) * 50).astype(np.float32)
+        x[rng.random((6, 5, n)) < 0.5] = np.nan
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels
+            expected = np.nanmedian(x, axis=2)
+        np.testing.assert_array_equal(nanmedian_axis2(x), expected)

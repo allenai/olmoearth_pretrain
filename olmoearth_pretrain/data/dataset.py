@@ -6,7 +6,6 @@ import hashlib
 import logging
 import shutil
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, NamedTuple
@@ -73,6 +72,22 @@ def s2_cloud_flags(
     return flags
 
 
+def nanmedian_axis2(x: np.ndarray) -> np.ndarray:
+    """``np.nanmedian(x, axis=2)`` for float arrays, by one sort (same values).
+
+    numpy's nanmedian takes a masked-array path for short axes that is ~10x slower;
+    composite bins hold a handful of captures, so it dominated sample loading. NaN
+    sorts last, so the median of a pixel's ``n`` valid values sits at ranks
+    ``(n - 1) // 2`` and ``n // 2``; all-NaN pixels stay NaN.
+    """
+    ordered = np.sort(x, axis=2)
+    count = (~np.isnan(x)).sum(axis=2, keepdims=True)
+    low = np.take_along_axis(ordered, np.maximum(count - 1, 0) // 2, axis=2)
+    high = np.take_along_axis(ordered, count // 2, axis=2)
+    middle = ((low + high) / 2)[:, :, 0]
+    return np.where(count[:, :, 0] > 0, middle, np.nan).astype(x.dtype)
+
+
 def composite_captures(
     values: np.ndarray,
     ordinals: np.ndarray,
@@ -100,17 +115,18 @@ def composite_captures(
     for j, b in enumerate(bins):
         members = np.flatnonzero(bin_index == b)
         chunk = values[:, :, members].astype(np.float32)
-        everything = np.median(chunk, axis=2)
         if clear is None:
-            out[:, :, j] = everything
+            out[:, :, j] = np.median(chunk, axis=2)
             continue
         ok = clear[:, :, members]
         masked = np.where(ok[..., None], chunk, np.nan)
-        with np.errstate(all="ignore"), warnings.catch_warnings():
-            warnings.simplefilter("ignore", RuntimeWarning)
-            clear_median = np.nanmedian(masked, axis=2)
+        clear_median = nanmedian_axis2(masked)
         none_clear = ~ok.any(axis=2)
-        out[:, :, j] = np.where(none_clear[..., None], everything, clear_median)
+        if none_clear.any():
+            # The all-captures median is only the fallback for pixels never clear.
+            everything = np.median(chunk, axis=2)
+            clear_median = np.where(none_clear[..., None], everything, clear_median)
+        out[:, :, j] = clear_median
         no_clear[:, :, j] = none_clear
     return out, bins, no_clear
 
