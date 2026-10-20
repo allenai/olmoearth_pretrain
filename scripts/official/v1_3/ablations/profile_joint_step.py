@@ -72,7 +72,7 @@ COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
 MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 # Peak / OOM capture (PeakMemoryCallback): what is live at each new peak step and at an
 # OOM, plus that batch's shape.
-PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakF")
+PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakFDfe", "prof_peakFv13")
 PEAK_MAX_STEPS = 320
 # Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
 # steps suffice. The shape comes from --data_loader.patch_size_choices / sampled_hw_p_list
