@@ -18,6 +18,7 @@ from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
 from olmoearth_pretrain.train.masking import (
     MaskedOlmoEarthSample,
     MaskingConfig,
+    MaskingStrategy,
     ModalityDropoutMaskingStrategy,
     RandomWithDecodeMaskingStrategy,
 )
@@ -373,3 +374,65 @@ def test_modality_dropout_propagates_ratios() -> None:
     strategy = _dropout_strategy(rate=0.3)
     assert strategy.encode_ratio == 0.5
     assert strategy.decode_ratio == 0.5
+
+
+# --------------------------------------------------------------------------- random_all masking
+
+
+def _random_all_strategy(
+    encode: float = 1 / 3, decode: float = 1 / 6
+) -> MaskingStrategy:
+    return MaskingConfig(
+        strategy_config={
+            "type": "random_all_with_decode",
+            "encode_ratio": encode,
+            "decode_ratio": decode,
+            "only_decode_modalities": MAPS,
+        }
+    ).build()
+
+
+def test_random_all_every_input_visible_in_every_sample() -> None:
+    """Every input modality has encoder-visible tokens in every sample; maps never do."""
+    torch.manual_seed(0)
+    masked = _random_all_strategy().apply_mask(_raw_sample(b=16), patch_size=PATCH_SIZE)
+    for m in INPUTS:
+        assert bool((_online_count(masked, m) > 0).all()), m
+    wc = torch.as_tensor(masked.worldcover_mask)
+    assert bool((wc == MaskValue.DECODER.value).all())
+
+
+def test_random_all_fractions_match_ratios() -> None:
+    """Per input modality: ~1/3 encoded, ~1/6 decoded, rest target-only."""
+    torch.manual_seed(1)
+    masked = _random_all_strategy().apply_mask(_raw_sample(b=16), patch_size=PATCH_SIZE)
+    for m in INPUTS:
+        mk = torch.as_tensor(
+            getattr(masked, MaskedOlmoEarthSample.get_masked_modality_name(m))
+        )[:, ::PATCH_SIZE, ::PATCH_SIZE]
+        n = mk.numel()
+        enc = (mk == MaskValue.ONLINE_ENCODER.value).sum().item() / n
+        dec = (mk == MaskValue.DECODER.value).sum().item() / n
+        # int() floors per sample: allow one token of slack per sample
+        assert abs(enc - 1 / 3) < 0.1, (m, enc)
+        assert abs(dec - 1 / 6) < 0.1, (m, dec)
+
+
+def test_random_all_rejects_bad_ratios() -> None:
+    """Encode must be positive and encode + decode at most 1."""
+    with pytest.raises(ValueError):
+        _random_all_strategy(encode=0.0)
+    with pytest.raises(ValueError):
+        _random_all_strategy(encode=0.7, decode=0.5)
+
+
+def test_random_all_runs_through_multi_encoder() -> None:
+    """The masked batch trains a MultiEncoder: finite location tokens and tower grads."""
+    torch.manual_seed(2)
+    x = _random_all_strategy().apply_mask(_raw_sample(b=4), patch_size=PATCH_SIZE)
+    enc = MultiEncoderConfig(**_encoder_kwargs(depth=0, tower_depth=1)).build()
+    out = enc(x, patch_size=PATCH_SIZE)
+    assert torch.isfinite(out["location_tokens"]).all()
+    out["location_tokens"].square().sum().backward()
+    for group in ("sentinel2_l2a", "sentinel1"):
+        assert enc.towers[group][0].attn.q.weight.grad is not None, group

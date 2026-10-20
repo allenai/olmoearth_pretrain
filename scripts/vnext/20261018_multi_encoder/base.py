@@ -110,6 +110,13 @@ TOWER_GROUPS = {name: [name] for name in INPUT_MODALITIES}
 # Whole-modality dropout for the *_moddrop arms: per sample, each input modality's
 # visible tokens all become decoder targets with this probability (never all three).
 MODALITY_DROPOUT_RATE = 0.3
+# random_all_with_decode arms: random masking inside EVERY input modality at the token
+# budget the v1.2 masking actually produces (measured 2026-10-19 on S2/S1/Landsat: 1/3 of
+# input tokens visible, 1/6 decoded, 1/2 target-only), so compute and memory match the
+# current arms and only the holdout structure changes. Under the v1.2 masking S2 has a
+# visible token in only ~59% of samples; under this one, in every sample.
+RANDOM_ALL_ENCODE_RATIO = 1.0 / 3.0
+RANDOM_ALL_DECODE_RATIO = 1.0 / 6.0
 
 # --- location-token supervision (v1.3) ---------------------------------------------------
 SUPERVISION_BASE_WEIGHT = 1.0
@@ -307,9 +314,25 @@ def masking_config(
     tokenization_config: TokenizationConfig | None,
     *,
     modality_dropout: bool = False,
+    random_all: bool = False,
 ) -> MaskingConfig:
-    """v1.2 masking (``random_time_with_decode``), optionally under whole-modality dropout."""
+    """v1.2 masking (``random_time_with_decode``), optionally under whole-modality dropout.
+
+    ``random_all=True`` swaps the base strategy for ``random_all_with_decode`` at the
+    matched token budget (``RANDOM_ALL_*_RATIO``): every input modality partly visible
+    in every sample, maps decode-only.
+    """
     base = _v1_2_masking_config(tokenization_config)
+    if random_all:
+        base = MaskingConfig(
+            strategy_config={
+                "type": "random_all_with_decode",
+                "encode_ratio": RANDOM_ALL_ENCODE_RATIO,
+                "decode_ratio": RANDOM_ALL_DECODE_RATIO,
+                "only_decode_modalities": list(ONLY_DECODE_MODALITIES),
+            },
+            tokenization_config=tokenization_config,
+        )
     if not modality_dropout:
         return base
     return MaskingConfig(
@@ -330,7 +353,10 @@ def masking_config(
 
 
 def build_dataloader_config(
-    common: CommonComponents, *, modality_dropout: bool = False
+    common: CommonComponents,
+    *,
+    modality_dropout: bool = False,
+    random_all: bool = False,
 ) -> OlmoEarthDataLoaderConfig:
     """v1.2 dataloader, single masked view, v1.3 decorrelated shape sampler."""
     config = _v1_2_build_dataloader_config(common)
@@ -341,13 +367,18 @@ def build_dataloader_config(
     config.time_priority_prob = TIME_PRIORITY_PROB
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     config.masking_config = masking_config(
-        common.tokenization_config, modality_dropout=modality_dropout
+        common.tokenization_config,
+        modality_dropout=modality_dropout,
+        random_all=random_all,
     )
     return config
 
 
 def build_train_module_config(
-    common: CommonComponents, *, modality_dropout: bool = False
+    common: CommonComponents,
+    *,
+    modality_dropout: bool = False,
+    random_all: bool = False,
 ) -> LatentMIMTrainModuleConfig:
     """Single-forward-pass train module: fused AdamW, DDP, bf16 autocast (v1.3).
 
@@ -360,7 +391,9 @@ def build_train_module_config(
         rank_microbatch_size=RANK_MICROBATCH_SIZE,
         transform_config=base.transform_config,
         masking_config=masking_config(
-            common.tokenization_config, modality_dropout=modality_dropout
+            common.tokenization_config,
+            modality_dropout=modality_dropout,
+            random_all=random_all,
         ),
         loss_config=base.loss_config,
         mae_loss_config=base.mae_loss_config,

@@ -18,6 +18,8 @@ it and differ only in the encoder and, for `*_moddrop`, the masking.
 | `towers_t4_f0.py` | 3 × 4-block towers → pooler only | v1.2 | equal params (12), fusion only in the reads |
 | `towers_t8_f4.py` | 3 × 8-block towers → 4 shared | v1.2 | equal depth per token, 324M; mid-point of t_k+f_(12−k) |
 | `towers_t12_f0.py` | 3 × 12-block towers → pooler only | v1.2 | equal depth per token, ~380M; Perceiver-only fusion at full depth |
+| `towers_t12_f0_randmask.py` | 3 × 12-block towers → pooler only | `random_all_with_decode` (1/3 visible, 1/6 decoded per modality) | every tower trains every step; same token budget as v1.2 masking |
+| `control_randmask.py` | shared 12 blocks | `random_all_with_decode` | masking control for the randmask t12/f0 arm |
 | `control_moddrop.py` | shared 12 blocks | + whole-modality dropout p=0.3 | isolates the masking effect |
 | `towers_t4_f8_moddrop.py` | 3 × 4 → 8 | + whole-modality dropout p=0.3 | towers with the structured asymmetry |
 | `smoke_nano.py` | nano, 3 × 2 → 2 | + dropout | 1-GPU functional check, not an arm |
@@ -65,3 +67,14 @@ Inference = unmasked encoder on S1+S2+L8 (location tokens + patch tokens):
 The control's 2449 G at 16x16/T12/p1 is the number recorded for the v1.3 RC, so the counter is
 anchored. Per block over N visible tokens: linear 12·N·d², attention 2·N²·d; a tower layer costs
 the same linear work as a shared layer and 1/3 of its attention.
+
+## Masking budget (measured 2026-10-19, S2/S1/Landsat)
+
+| masking | visible | decoded | target-only | samples with any visible S2 / S1 / Landsat |
+|---|---|---|---|---|
+| v1.2 `random_time_with_decode` | 0.333 | 0.167 | 0.500 | 0.59 / 0.72 / 0.69 |
+| `random_all_with_decode` (1/3, 1/6) | 0.333 | 0.167 | 0.500 | 1.00 / 1.00 / 1.00 |
+
+The v1.2 masking holds one whole input modality out per sample, so a per-modality tower gets no input
+(and no gradient) in about a third of samples. `random_all_with_decode` keeps the token budget and
+removes the holdout.

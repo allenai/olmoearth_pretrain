@@ -2055,6 +2055,76 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         return mask
 
 
+@MASKING_STRATEGY_REGISTRY.register("random_all_with_decode")
+class RandomAllModalitiesWithDecodeMaskingStrategy(MaskingStrategy):
+    """Random token masking inside EVERY encodable modality; decode-only modalities are decoded.
+
+    Unlike ``random_with_decode`` / ``random_time_with_decode``, which split each
+    instance's band sets into an encode role and a decode role (so one whole input
+    modality is usually held out), this applies the same random encode / decode /
+    target split to every encodable modality of every instance. Each modality is
+    then partly visible in every sample, so a per-modality encoder tower trains on
+    every step; cross-modal prediction still arises from masked positions.
+
+    ``only_decode_modalities`` behave as in ``random_with_decode``: every non-missing
+    token is a DECODER target and none is ever encoded. The leftover fraction
+    ``1 - encode_ratio - decode_ratio`` is TARGET_ENCODER_ONLY (not predicted).
+
+    Args:
+        encode_ratio: Fraction of each encodable modality's tokens given to the encoder.
+        decode_ratio: Fraction of each encodable modality's tokens to predict.
+        only_decode_modalities: Modalities that are only ever decoded (e.g. maps).
+    """
+
+    def __init__(
+        self,
+        encode_ratio: float = 0.5,
+        decode_ratio: float = 0.5,
+        only_decode_modalities: list[str] | None = None,
+    ):
+        """Initialize the strategy."""
+        if encode_ratio <= 0 or decode_ratio < 0 or encode_ratio + decode_ratio > 1:
+            raise ValueError(
+                "need 0 < encode_ratio, 0 <= decode_ratio, encode_ratio + decode_ratio <= 1; "
+                f"got {encode_ratio}, {decode_ratio}"
+            )
+        self._encode_ratio = encode_ratio
+        self._decode_ratio = decode_ratio
+        self.only_decode_modalities = list(only_decode_modalities or [])
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
+        """Random-mask every encodable modality; decode every decode-only modality."""
+        if patch_size is None:
+            raise ValueError("patch_size must be provided for random masking")
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        for modality_name in batch.modalities:
+            instance = getattr(batch, modality_name)
+            mask_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            if instance is None:
+                output_dict[modality_name] = None
+                output_dict[mask_name] = None
+                continue
+            device = instance.device if isinstance(instance, torch.Tensor) else None
+            modality = Modality.get(modality_name)
+            if modality_name in self.only_decode_modalities:
+                mask = torch.full(
+                    instance.shape[:-1] + (self._get_num_bandsets(modality_name),),
+                    fill_value=MaskValue.DECODER.value,
+                    device=device,
+                )
+            else:
+                mask = self._create_random_mask(
+                    modality, instance.shape, patch_size, device
+                )
+            output_dict[modality_name] = instance
+            output_dict[mask_name] = self.fill_mask_with_missing_values(
+                instance, mask, modality
+            )
+        return MaskedOlmoEarthSample(**output_dict)
+
+
 @MASKING_STRATEGY_REGISTRY.register("modality_dropout")
 class ModalityDropoutMaskingStrategy(MaskingStrategy):
     """Wrap a base strategy and drop whole input modalities per sample.
