@@ -13,6 +13,7 @@ from upath import UPath
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import (
+    BlockCachedFile,
     GetItemArgs,
     OlmoEarthDataset,
     build_union_timeline,
@@ -985,3 +986,45 @@ def test_random_clear_composites_are_real_captures(allcap_h5py_dir: UPath) -> No
         k = raw["timestamps_sentinel2_l2a"].tolist().index(list(d))
         np.testing.assert_array_equal(s2[:, :, t], raw["sentinel2_l2a"][:, :, k])
     _assert_same_item((1, sample), dataset[args])
+
+
+def test_block_cached_file_reads_exact_bytes(tmp_path: Path) -> None:
+    """Random reads through the block cache equal direct reads, incl. the file end."""
+    data = np.random.default_rng(0).integers(0, 256, 10_000, dtype=np.uint8).tobytes()
+    path = tmp_path / "blob.bin"
+    path.write_bytes(data)
+    rng = np.random.default_rng(1)
+    with open(path, "rb") as raw:
+        cached = BlockCachedFile(raw, block_size=1024)
+        for _ in range(200):
+            pos = int(rng.integers(0, len(data)))
+            n = int(rng.integers(0, 3000))
+            cached.seek(pos)
+            buffer = bytearray(n)
+            got = cached.readinto(buffer)
+            assert bytes(buffer[:got]) == data[pos : pos + n]
+            assert cached.tell() == pos + got
+        cached.seek(9_990)
+        assert cached.read(50) == data[9_990:]
+
+
+@pytest.mark.parametrize("composite_days", [None, 30.0])
+def test_block_cached_reads_give_the_same_item(
+    allcap_h5py_dir: UPath, composite_days: float | None
+) -> None:
+    """read_block_size changes how the file is read, not the sample."""
+    plain = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    cached = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    cached.read_block_size = 4096
+    for seed in range(4):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=2,
+            sampled_hw_p=4,
+            token_budget=200,
+            tokenization_config=S2_SINGLE,
+            time_range_days=120.0,
+            composite_days=composite_days,
+            seed=seed,
+        )
+        _assert_same_item(plain[args], cached[args])

@@ -170,6 +170,91 @@ def pick_captures(
     return values[:, :, chosen].astype(np.float32), bins, flags, chosen
 
 
+class BlockCachedFile:
+    """A read-only file object that fetches whole aligned blocks and caches them.
+
+    h5py reads a chunked dataset with one small read per chunk (~100 per every-capture
+    sample), and those reads cluster within a few MB of the file. Fetching aligned
+    ``block_size`` blocks (consecutive missing blocks in one request) and serving later
+    reads from memory turns them into a handful of larger requests, which is what a
+    remote filesystem shared by many readers is limited by. The cache lives as long as
+    the object (one sample's open file).
+    """
+
+    def __init__(self, f: Any, block_size: int) -> None:
+        """Wrap ``f`` (seekable, binary)."""
+        self._f = f
+        self._block = block_size
+        self._blocks: dict[int, bytes] = {}
+        self._pos = 0
+
+    def _fetch(self, first: int, last: int) -> None:
+        """Load blocks ``first..last`` (inclusive), each run of missing ones at once."""
+        b = first
+        while b <= last:
+            if b in self._blocks:
+                b += 1
+                continue
+            end = b
+            while end + 1 <= last and end + 1 not in self._blocks:
+                end += 1
+            self._f.seek(b * self._block)
+            data = self._f.read((end - b + 1) * self._block)
+            for k in range(b, end + 1):
+                piece = data[(k - b) * self._block : (k - b + 1) * self._block]
+                self._blocks[k] = piece
+            b = end + 1
+
+    def readinto(self, buffer: Any) -> int:
+        """Read up to ``len(buffer)`` bytes at the current position."""
+        view = memoryview(buffer).cast("B")
+        want = len(view)
+        if want == 0:
+            return 0
+        first, last = self._pos // self._block, (self._pos + want - 1) // self._block
+        self._fetch(first, last)
+        done = 0
+        for k in range(first, last + 1):
+            block = self._blocks[k]
+            start = self._pos + done - k * self._block
+            piece = block[start : start + (want - done)]
+            view[done : done + len(piece)] = piece
+            done += len(piece)
+            if len(block) < self._block:  # end of file
+                break
+        self._pos += done
+        return done
+
+    def read(self, size: int = -1) -> bytes:
+        """Read ``size`` bytes (all remaining when negative)."""
+        if size is None or size < 0:
+            self._f.seek(self._pos)
+            out = self._f.read()
+            self._pos += len(out)
+            return out
+        buffer = bytearray(size)
+        n = self.readinto(buffer)
+        return bytes(buffer[:n])
+
+    def seek(self, offset: int, whence: int = 0) -> int:
+        """Move the position (as :meth:`io.IOBase.seek`)."""
+        if whence == 0:
+            self._pos = offset
+        elif whence == 1:
+            self._pos += offset
+        else:
+            self._pos = self._f.seek(0, 2) + offset
+        return self._pos
+
+    def tell(self) -> int:
+        """Current position."""
+        return self._pos
+
+    def __getattr__(self, name: str) -> Any:
+        """Everything else (close, flags, ...) from the wrapped file."""
+        return getattr(self._f, name)
+
+
 # =============================================================================
 # Subsetting Functions
 # =============================================================================
@@ -599,6 +684,7 @@ class OlmoEarthDataset(Dataset):
         per_modality_timestamps: bool = False,
         load_s2_cloud_mask: bool = False,
         composite_selection: str = "median",
+        read_block_size: int = 0,
     ):
         """Initialize the dataset.
 
@@ -637,6 +723,9 @@ class OlmoEarthDataset(Dataset):
                 ``"median"`` (per-pixel median of the bin's captures, S2 over
                 SCL-clear pixels) or ``"random_clear"`` (one real capture per bin, see
                 :func:`pick_captures`; dated by that capture).
+            read_block_size: With ``per_modality_timestamps``, read each h5 file in
+                aligned blocks of this many bytes, cached for the sample
+                (:class:`BlockCachedFile`): fewer, larger requests. 0 = off.
 
         Returns:
             None
@@ -686,6 +775,7 @@ class OlmoEarthDataset(Dataset):
                 f"{composite_selection!r}"
             )
         self.composite_selection = composite_selection
+        self.read_block_size = read_block_size
 
     @property
     def fingerprint_version(self) -> str:
@@ -1298,7 +1388,19 @@ class OlmoEarthDataset(Dataset):
         # the timestamps and shapes alone, then read only those pixels and captures:
         # a whole every-capture tile is 30-60 MB, the sample a few MB.
         h5_file_path = self._local_h5_path(self._get_h5_file_path(index))
-        with h5_file_path.open("rb") as f, h5py.File(f, "r") as h5file:
+        with h5_file_path.open("rb") as raw_file:
+            f = (
+                BlockCachedFile(raw_file, self.read_block_size)
+                if self.read_block_size > 0
+                else raw_file
+            )
+            return self._read_open_file(f, args, rng, sampled_hw)
+
+    def _read_open_file(
+        self, f: Any, args: GetItemArgs, rng: Any, sampled_hw: int
+    ) -> dict[str, Any]:
+        """:meth:`_read_per_capture` on an open file object."""
+        with h5py.File(f, "r") as h5file:
             present = [m for m in self.training_modalities if m in h5file]
             timestamps = {
                 m: h5file[f"timestamps_{m}"][()]
@@ -1611,6 +1713,7 @@ class OlmoEarthDatasetConfig(Config):
     per_modality_timestamps: bool = False
     load_s2_cloud_mask: bool = False
     composite_selection: str = "median"
+    read_block_size: int = 0
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
