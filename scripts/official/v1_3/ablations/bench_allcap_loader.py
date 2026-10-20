@@ -528,7 +528,6 @@ def main() -> None:
     parser.add_argument("--h5py_dir", default=os.environ.get("BENCH_H5PY_DIR"))
     parser.add_argument("--prefetch", type=int, default=None)
     parser.add_argument("--read_ahead", type=int, default=None)
-    parser.add_argument("--read_block_size", type=int, default=None)
     parser.add_argument("--budget_before_read", type=int, default=None)
     # Emulate one rank of a ``world``-rank node: global batch 64 * world, this rank's
     # slice of it (so concurrent ranks read disjoint samples, as in training).
@@ -542,8 +541,6 @@ def main() -> None:
     dataset_config = D.build_dataset_config(common)
     if args.h5py_dir is not None:
         dataset_config.h5py_dir = args.h5py_dir
-    if args.read_block_size is not None:
-        dataset_config.read_block_size = args.read_block_size
     if args.budget_before_read is not None:
         dataset_config.budget_before_read = bool(args.budget_before_read)
     dataset = dataset_config.build()

@@ -153,6 +153,9 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
         per_modality_timestamps=True,
         load_s2_cloud_mask=True,
         composite_selection="random_clear",
+        # Composite samples choose their budget run of bins before reading, so they
+        # read ~2-3 MB instead of ~5 (loader ~30% faster on a full node, 2026-10-20).
+        budget_before_read=True,
     )
 
 
