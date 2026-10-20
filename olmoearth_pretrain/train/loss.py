@@ -14,7 +14,7 @@ from einops import rearrange, repeat
 from torch import Tensor
 
 from olmoearth_pretrain.config import Config
-from olmoearth_pretrain.nn.flexi_vit import CompactDecoderTokens, TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
@@ -510,6 +510,23 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         return self.weight * total_loss
 
 
+@dataclass
+class CompactDecoderTargets:
+    """Targets at the decoder positions only, per modality, as the loss reads them.
+
+    ``tokens[i]`` is ``[B, K_i, D]`` for modality ``modalities[i]``: row ``j < count``
+    of sample ``b`` is the target of that sample's ``j``-th DECODER token in flattened
+    ``(h, w, t, band set)`` order (the stable decoder-first sort the loss applies to
+    full targets), with ``K_i`` the batch's largest decoder count (>= 1); rows past a
+    sample's count are padding the loss masks out. Built by
+    ``LatentMIMTrainModule`` with ``target_chunk_size`` so the full-grid target is
+    never held for the whole microbatch.
+    """
+
+    modalities: list[str]
+    tokens: list[Tensor]
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_masked_negatives_vec")
 class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
     """Vectorized patch discrimination with same-target negative masking.
@@ -545,26 +562,9 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         modality: str,
         max_decoder_count: int | None = None,
         sorted_targets: Tensor | None = None,
-        sorted_count: Tensor | None = None,
     ) -> Tensor:
-        """Loss for one modality.
-
-        ``sorted_targets``: compact targets (``CompactDecoderTokens``). With
-        ``sorted_count`` too, ``all_preds`` are compact predictions in the same order
-        and ``all_masks`` is unused.
-        """
+        """Loss for one modality; ``sorted_targets`` = compact targets (see above)."""
         batch_size, _, dim = all_preds.shape
-        if sorted_count is not None:
-            assert sorted_targets is not None
-            count = sorted_count
-            num_tokens = all_preds.shape[1]
-            sorted_preds = all_preds.float()
-            sorted_targets = sorted_targets.float()
-            range_tensor = torch.arange(num_tokens, device=count.device)
-            valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)
-            return self._loss_from_sorted(
-                sorted_preds, sorted_targets, count, valid_mask, modality
-            )
         decoder_mask = all_masks == MaskValue.DECODER.value
         count = decoder_mask.sum(dim=-1)  # (batch,)
 
@@ -589,21 +589,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         # valid_mask[b, i] = True iff position i is a decoder token for sample b
         range_tensor = torch.arange(num_tokens, device=count.device)
         valid_mask = range_tensor.unsqueeze(0) < count.unsqueeze(1)  # (batch, T)
-        return self._loss_from_sorted(
-            sorted_preds, sorted_targets, count, valid_mask, modality
-        )
 
-    def _loss_from_sorted(
-        self,
-        sorted_preds: Tensor,
-        sorted_targets: Tensor,
-        count: Tensor,
-        valid_mask: Tensor,
-        modality: str,
-    ) -> Tensor:
-        """The loss once each sample's decoder tokens come first (``[B, T, D]``)."""
-        batch_size, num_tokens = sorted_preds.shape[:2]
-        range_tensor = torch.arange(num_tokens, device=count.device)
         if self.pred2unit:
             mask_float = valid_mask.unsqueeze(-1).float()
             total_decoder = mask_float.sum().clamp(min=1)
@@ -691,45 +677,21 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
 
     def compute(
         self,
-        predictions: TokensAndMasks | CompactDecoderTokens,
-        targets: TokensAndMasks | CompactDecoderTokens,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks | CompactDecoderTargets,
         **kwargs: Any,
     ) -> Tensor:
         """Compute patch discrimination loss with masked same-target negatives (vectorized).
 
-        ``targets`` may be full per-token targets or ``CompactDecoderTokens``; compact
-        predictions (with counts) need compact targets in the same order.
+        ``targets`` may be full per-token targets or ``CompactDecoderTargets``.
         """
-        if isinstance(predictions, CompactDecoderTokens):
-            if not isinstance(targets, CompactDecoderTokens):
-                raise ValueError("compact predictions need compact targets")
-            assert predictions.counts is not None
-            total = 0
-            for preds, tgts, count, modality in zip(
-                predictions.tokens,
-                targets.tokens,
-                predictions.counts,
-                predictions.modalities,
-            ):
-                loss = self._compute_modality_loss_parallel(
-                    preds,
-                    preds,
-                    preds,
-                    modality,
-                    sorted_targets=tgts,
-                    sorted_count=count,
-                )
-                if self.modality_weights is not None:
-                    loss = loss * self.modality_weights.get(modality, 1.0)
-                total = total + loss
-            return self.weight * total
         modality_preds, modality_masks = (
             predictions.flatten_tokens_and_masks_per_modality()
         )
-        compact = isinstance(targets, CompactDecoderTokens)
+        compact = isinstance(targets, CompactDecoderTargets)
         modality_targets: list[Tensor] = (
             targets.tokens
-            if isinstance(targets, CompactDecoderTokens)
+            if isinstance(targets, CompactDecoderTargets)
             else targets.flatten_tokens_and_masks_per_modality()[0]
         )
         # Per-modality max decoder-token counts in ONE host sync (each sizes that

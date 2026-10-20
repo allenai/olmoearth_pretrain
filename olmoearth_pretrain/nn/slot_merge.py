@@ -14,11 +14,10 @@ proportion to their visible counts, and then move freely over ``iters`` rounds
 (GRU + MLP update). A slot's RoPE position is the cell's row/col and the
 attention-weighted mean time of the tokens it absorbed (a point position).
 
-The merge also returns an *unmerge* for callers that want per-token outputs in the
-pre-merge layout (evals without the Perceiver): each token of a merged cell gets the
-MEAN of its cell's slot outputs, and bypassed tokens get their own output -- what
-pooling the outputs over the cell would give anyway. Training never needs it (the
-decoder and losses read the Perceiver registers), so the encoder skips it there.
+The merge also returns an *unmerge*: given the merged sequence after later blocks, each
+original token gets the mix of its cell's slot outputs weighted by its own final
+assignment (its softmax over slots, summing to 1), and bypassed tokens get their own
+output. That gives per-token features after the merge, in the pre-merge layout.
 
 Narrow stage (``narrow_depth > 0``, then ``merge_after = 0``): before any encoder
 block, the tokens are projected down to ``narrow_dim`` and run through
@@ -372,16 +371,15 @@ class SlotMerge(nn.Module):
         n_keep = int(keep.sum().item())
         keep_b, keep_l = b_idx[keep], l_idx[keep]
         slot_b, slot_i = g_b[s_g], dst_i[n_keep:]
-        n_slots = t_g.clamp(min=1)
+        assign = attn  # last round: each token's softmax over its cell's slots
 
         def unmerge(y: Tensor) -> Tensor:
             out = y.new_zeros(B, L, y.shape[-1])
             out[keep_b, keep_l] = y[keep_b, dst_i[:n_keep]]
             slot_out = y.new_zeros(G, S, y.shape[-1])
             slot_out[s_g, s_j] = y[slot_b, slot_i]
-            # Each merged token: the mean of its cell's slot outputs.
-            cell_mean = slot_out.sum(dim=1) / n_slots[:, None].to(y.dtype)
-            out[m_b, m_l] = cell_mean[g_local].to(out.dtype)
+            mixed = torch.einsum("gps,gsd->gpd", assign.to(y.dtype), slot_out)
+            out[m_b, m_l] = mixed[g_local, rank].to(out.dtype)  # einsum may autocast
             return out
 
         return new_x, new_pos, new_valid, unmerge, merged_extra

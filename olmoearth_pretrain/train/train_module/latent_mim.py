@@ -31,7 +31,7 @@ from olmoearth_pretrain.nn.pixel_targets import (
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import (
-    CompactDecoderTokens,
+    CompactDecoderTargets,
     LossConfig,
     ModalityPatchDiscriminationMaskedNegativesVec,
 )
@@ -67,36 +67,26 @@ def compact_decoder_targets(
     target_input: MaskedOlmoEarthSample,
     patch_size: int,
     token_exit_cfg: dict[str, int] | None,
-    predictions: TokensAndMasks | CompactDecoderTokens,
+    predictions: TokensAndMasks,
     chunk_size: int,
-) -> CompactDecoderTokens:
+) -> CompactDecoderTargets:
     """The projection-only target at the decoder positions only, built in chunks.
 
     The projection is per sample (patch resize, per-token linear), so a chunk's
     targets equal the whole batch's. Each chunk's full-grid target is reduced to its
-    decoder positions, in the loss's order (``CompactDecoderTokens``; compact
-    predictions bring that order with them), and freed.
+    decoder positions, in the loss's order (``CompactDecoderTargets``), and freed.
     """
-    if isinstance(predictions, CompactDecoderTokens):
-        assert predictions.orders is not None
-        names = list(predictions.modalities)
-        order = list(predictions.orders)
-    else:
-        _, pred_masks = predictions.flatten_tokens_and_masks_per_modality()
-        names = [
-            m for m in predictions.modalities if getattr(predictions, m) is not None
-        ]
-        decoder = [mask == MaskValue.DECODER.value for mask in pred_masks]
-        counts = (
-            torch.stack([d.sum(dim=-1).max() for d in decoder]).tolist()
-            if decoder
-            else []
-        )
-        order = [
-            d.long().sort(dim=1, descending=True, stable=True)[1][:, : max(int(c), 1)]
-            for d, c in zip(decoder, counts)
-        ]
-    batch_size = order[0].shape[0] if order else 0
+    pred_tokens, pred_masks = predictions.flatten_tokens_and_masks_per_modality()
+    names = [m for m in predictions.modalities if getattr(predictions, m) is not None]
+    decoder = [mask == MaskValue.DECODER.value for mask in pred_masks]
+    counts = (
+        torch.stack([d.sum(dim=-1).max() for d in decoder]).tolist() if decoder else []
+    )
+    order = [
+        d.long().sort(dim=1, descending=True, stable=True)[1][:, : max(int(c), 1)]
+        for d, c in zip(decoder, counts)
+    ]
+    batch_size = pred_tokens[0].shape[0] if pred_tokens else 0
     out: list[Tensor | None] = [None] * len(names)
     for start in range(0, batch_size, chunk_size):
         end = min(start + chunk_size, batch_size)
@@ -115,7 +105,7 @@ def compact_decoder_targets(
                 out[i] = picked.new_empty(batch_size, idx.shape[1], flat.shape[-1])
             out[i][start:end] = picked  # type: ignore[index]
         del chunk, chunk_tokens
-    return CompactDecoderTokens(
+    return CompactDecoderTargets(
         modalities=names, tokens=[t for t in out if t is not None]
     )
 
@@ -140,9 +130,6 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
             reads nothing else), so the full-grid target is never held for the whole
             microbatch. Same values; needs the projection-only target and the
             masked-negatives patch-discrimination loss.
-        compact_decode: Decode only the DECODER tokens against the registers
-            (``Predictor.forward_compact``) and skip the encoder's per-token outputs;
-            implies compact targets (``target_chunk_size``, default 4). Same loss.
     """
 
     loss_config: LossConfig = field(
@@ -160,7 +147,6 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     pixel_targets: bool = False
     pixel_target_draw: str = "shared"
     target_chunk_size: int | None = None
-    compact_decode: bool = False
 
     def build(
         self,
@@ -232,7 +218,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         pixel_targets: bool = False,
         pixel_target_draw: str = "shared",
         target_chunk_size: int | None = None,
-        compact_decode: bool = False,
     ):
         """Initialize the training module.
 
@@ -271,7 +256,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 footprint can get zero or several; needs one band set per modality.
             target_chunk_size: Compute the projection-only target this many samples
                 at a time, keeping only the decoder positions (see the config).
-            compact_decode: Decode only the DECODER tokens (see the config).
         """
         super().__init__(
             model=model,
@@ -325,11 +309,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
-        self.compact_decode = compact_decode
-        if compact_decode and target_chunk_size is None:
-            target_chunk_size = 4
-        if compact_decode and pixel_target_draw == "pooled" and pixel_targets:
-            raise ValueError("compact_decode excludes the pooled pixel-target draw")
         self.target_chunk_size = target_chunk_size
         if target_chunk_size is not None:
             if target_chunk_size < 1:
@@ -461,8 +440,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
-        TokensAndMasks | CompactDecoderTokens,
-        TokensAndMasks | CompactDecoderTokens,
+        TokensAndMasks,
+        TokensAndMasks | CompactDecoderTargets,
         dict[str, Any] | None,
     ]:
         """Run a forward pass."""
@@ -508,7 +487,6 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 patch_size,
                 query_pixel_shift=query_pixel_shift,
                 pooled_queries=pooled_queries,
-                compact_decode=self.compact_decode,
             )
 
             with torch.no_grad():

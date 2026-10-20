@@ -17,7 +17,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import CompactDecoderTokens, TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.register_distillation_head import (
     RegisterDistillationHead,
     RegisterDistillationHeadConfig,
@@ -134,10 +134,9 @@ class LatentMIM(nn.Module, DistributedMixins):
         patch_size: int,
         query_pixel_shift: torch.Tensor | dict[str, torch.Tensor] | None = None,
         pooled_queries: dict[str, Any] | None = None,
-        compact_decode: bool = False,
     ) -> tuple[
         TokensAndMasks,
-        TokensAndMasks | CompactDecoderTokens,
+        TokensAndMasks,
         torch.Tensor,
         TokensAndMasks | None,
         dict[str, Any],
@@ -156,11 +155,6 @@ class LatentMIM(nn.Module, DistributedMixins):
             pooled_queries: Optional ``{modality: PooledPixelQueries}`` for the
                 pooled pixel-target draw: the decoder then decodes these slots
                 (``Predictor.forward_pooled``) instead of one query per masked token.
-            compact_decode: Decode only the DECODER tokens
-                (``Predictor.forward_compact``, ``decoded`` is then
-                ``CompactDecoderTokens``) and skip the encoder's per-token outputs
-                (``token_outputs=False``), which nothing then reads. Same predictions
-                at the decoder positions.
 
         Returns:
             latent: embeddings from encoder
@@ -177,11 +171,7 @@ class LatentMIM(nn.Module, DistributedMixins):
                 takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
-        if compact_decode and (pooled_queries is not None or self.reconstructor):
-            raise ValueError("compact_decode excludes pooled queries and the MAE head")
-        output_dict = self.encoder(
-            x, patch_size=patch_size, token_outputs=not compact_decode
-        )
+        output_dict = self.encoder(x, patch_size=patch_size)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
             output_dict
@@ -198,14 +188,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         modality_timestamps = x.modality_timestamps()
         if modality_timestamps is not None:
             decoder_kwargs["modality_timestamps"] = modality_timestamps
-        decoded: TokensAndMasks | CompactDecoderTokens
-        if compact_decode:
-            if query_pixel_shift is not None:
-                decoder_kwargs["query_pixel_shift"] = query_pixel_shift
-            decoded = self.decoder.forward_compact(
-                latent, timestamps=x.timestamps, patch_size=patch_size, **decoder_kwargs
-            )
-        elif pooled_queries is not None:
+        if pooled_queries is not None:
             decoded = self.decoder.forward_pooled(
                 latent,
                 timestamps=x.timestamps,
