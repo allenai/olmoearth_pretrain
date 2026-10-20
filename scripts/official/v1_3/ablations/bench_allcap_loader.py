@@ -101,12 +101,71 @@ def _instrument(log_dir: str) -> None:
 
     OlmoEarthDataset.__getitem__ = logged  # type: ignore[method-assign]
 
+    # File-level reads under h5py (the dataset opens each h5 through a Python file
+    # object): count calls and bytes per sample, and how many separate requests would
+    # remain if reads < 1 MiB apart were merged (what a large read buffer could do).
+    import threading
+
+    from upath.implementations.local import LocalPath
+
+    io_log = threading.local()
+    open_ = LocalPath.open
+
+    class CountingFile:
+        def __init__(self, f):  # type: ignore[no-untyped-def]
+            self._f = f
+
+        def readinto(self, b):  # type: ignore[no-untyped-def]
+            pos = self._f.tell()
+            n = self._f.readinto(b)
+            getattr(io_log, "reads", []).append((pos, n or 0))
+            return n
+
+        def read(self, *a):  # type: ignore[no-untyped-def]
+            pos = self._f.tell()
+            out = self._f.read(*a)
+            getattr(io_log, "reads", []).append((pos, len(out)))
+            return out
+
+        def __getattr__(self, name):  # type: ignore[no-untyped-def]
+            return getattr(self._f, name)
+
+        def __enter__(self):  # type: ignore[no-untyped-def]
+            return self
+
+        def __exit__(self, *a):  # type: ignore[no-untyped-def]
+            return self._f.__exit__(*a)
+
+    def counting_open(self, mode="r", *a, **k):  # type: ignore[no-untyped-def]
+        f = open_(self, mode, *a, **k)
+        if "r" in mode and "b" in mode and str(self).endswith(".h5"):
+            return CountingFile(f)
+        return f
+
+    LocalPath.open = counting_open  # type: ignore[method-assign]
+
+    def io_stats() -> dict:
+        reads = sorted(getattr(io_log, "reads", []))
+        io_log.reads = []
+        merged, end = 0, -(2**62)
+        for pos, n in reads:
+            if pos > end + (1 << 20):
+                merged += 1
+            end = max(end, pos + n)
+        return {
+            "io_reads": len(reads),
+            "io_bytes": sum(n for _, n in reads),
+            "io_merged_1mib": merged,
+            "io_span": (reads[-1][0] + reads[-1][1] - reads[0][0]) if reads else 0,
+        }
+
     # Read-ahead halves: read_item runs in the worker's read thread, finish_item in its
     # main thread. finish wall >> its thread CPU means it waited (e.g. on the GIL).
     def halves(fn, kind):  # type: ignore[no-untyped-def]
         def wrapper(self, *a):  # type: ignore[no-untyped-def]
             if kind == "read":
                 h5t.update(wall=0.0, cpu=0.0, opens=0, reads=0, depth=0)
+                io_log.reads = []
             w, t = time.perf_counter(), time.thread_time()
             out = fn(self, *a)
             wall = time.perf_counter() - w
@@ -121,7 +180,10 @@ def _instrument(log_dir: str) -> None:
                 "h5_wall": h5t["wall"] if kind == "read" else 0.0,
                 "h5_cpu": h5t["cpu"] if kind == "read" else 0.0,
                 "composite": a[0].composite_days,
+                "hw_px": a[0].sampled_hw_p * a[0].patch_size,
             }
+            if kind == "read":
+                row.update(io_stats())
             with open(f"{log_dir}/{kind}_{os.getpid()}.jsonl", "a") as f:
                 f.write(json.dumps(row) + "\n")
             return out
@@ -198,6 +260,26 @@ def _summarize(log_dir: str) -> None:
             half = {"n": len(sub)}
             for key in ("wall", "thread_cpu", "h5_wall", "h5_cpu"):
                 half[key] = round(float(np.mean([r[key] for r in sub])), 4)
+            if kind == "read" and "io_reads" in sub[0]:
+                for key in ("io_reads", "io_merged_1mib", "io_bytes", "io_span"):
+                    v = np.array([r[key] for r in sub], dtype=float)
+                    half[f"{key}_mean"] = round(float(v.mean()), 1)
+                    half[f"{key}_p90"] = round(float(np.quantile(v, 0.9)), 1)
+                for lo, hi in ((0, 64), (64, 129), (129, 10**6)):
+                    b = [r for r in sub if lo <= r["hw_px"] < hi]
+                    if b:
+                        half[f"crop_{lo}_{hi}px"] = {
+                            "n": len(b),
+                            "io_reads": round(
+                                float(np.mean([r["io_reads"] for r in b])), 1
+                            ),
+                            "io_mb": round(
+                                float(np.mean([r["io_bytes"] for r in b])) / 1e6, 2
+                            ),
+                            "h5_wall": round(
+                                float(np.mean([r["h5_wall"] for r in b])), 4
+                            ),
+                        }
             print(json.dumps({f"read_ahead_{kind}": half}), flush=True)
     if not rows:
         rows = [
