@@ -492,64 +492,6 @@ class Attention(nn.Module):
         return x
 
 
-_RECOMPUTE_MLP_ACTIVATION = False
-
-
-def use_recompute_mlp_activation(enabled: bool = True) -> None:
-    """Have GELU MLPs recompute their activation in backward (process-wide).
-
-    An MLP's backward normally keeps both ``fc1``'s output and the GELU of it, the two
-    largest activations of a transformer block. With this on, ``fc2(gelu(h))`` keeps
-    only ``h`` and recomputes ``gelu(h)`` in backward: same values and gradients, one
-    hidden-width tensor less per MLP for one extra GELU. Applies to MLPs with
-    ``nn.GELU`` and no dropout; others are unchanged. Opt-in, like
-    ``encodings.use_compiled_mixed_rope``.
-    """
-    global _RECOMPUTE_MLP_ACTIVATION
-    _RECOMPUTE_MLP_ACTIVATION = enabled
-
-
-class _GeluLinear(torch.autograd.Function):
-    """``F.linear(gelu(h), weight, bias)``, saving only ``h`` for backward."""
-
-    @staticmethod
-    @torch.amp.custom_fwd(device_type="cuda")
-    def forward(  # type: ignore[override]
-        ctx: Any,
-        h: torch.Tensor,
-        weight: torch.Tensor,
-        bias: torch.Tensor | None,
-        approximate: str,
-    ) -> torch.Tensor:
-        ctx.save_for_backward(h, weight)
-        ctx.has_bias = bias is not None
-        ctx.approximate = approximate
-        return F.linear(F.gelu(h, approximate=approximate), weight, bias)
-
-    @staticmethod
-    @torch.amp.custom_bwd(device_type="cuda")
-    def backward(  # type: ignore[override]
-        ctx: Any, grad_out: torch.Tensor
-    ) -> tuple[torch.Tensor | None, ...]:
-        h, weight = ctx.saved_tensors
-        a = F.gelu(h, approximate=ctx.approximate)  # recomputed
-        grad_a = grad_out.matmul(weight.to(grad_out.dtype))
-        grad_h = torch.ops.aten.gelu_backward(
-            grad_a.to(h.dtype), h, approximate=ctx.approximate
-        )
-        flat_grad = grad_out.reshape(-1, grad_out.shape[-1])
-        grad_weight = flat_grad.t().matmul(
-            a.reshape(-1, a.shape[-1]).to(flat_grad.dtype)
-        )
-        grad_bias = flat_grad.sum(dim=0) if ctx.has_bias else None
-        return (
-            grad_h,
-            grad_weight.to(weight.dtype),
-            grad_bias.to(weight.dtype) if grad_bias is not None else None,
-            None,
-        )
-
-
 class Mlp(nn.Module):
     """MLP module used in Vision Transformer, MLP-Mixer and related networks.
 
@@ -601,19 +543,9 @@ class Mlp(nn.Module):
             Output tensor
         """
         x = self.fc1(x)
-        if (
-            _RECOMPUTE_MLP_ACTIVATION
-            and type(self.act) is nn.GELU
-            and self.drop1.p == 0.0
-            and torch.is_grad_enabled()
-        ):
-            x = _GeluLinear.apply(
-                x, self.fc2.weight, self.fc2.bias, self.act.approximate
-            )
-        else:
-            x = self.act(x)
-            x = self.drop1(x)
-            x = self.fc2(x)
+        x = self.act(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
         x = self.drop2(x)
         return x
 
