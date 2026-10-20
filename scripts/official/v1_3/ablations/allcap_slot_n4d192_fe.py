@@ -6,11 +6,9 @@ slots per cell, 12 x d768 trunk), except:
 - **Narrow front end** (``SlotMergeConfig.narrow_front_end``): the patch embedding and
   composite encodings produce d192 tokens directly and there is no encoder-width skip,
   so everything before the merge runs at the narrow width.
-- **Budget on the merged tokens:** ``TOKEN_BUDGET`` (v1.3's 3072) caps the tokens the
-  encoder-width trunk sees after the per-cell merge, and ``INPUT_TOKEN_BUDGET`` caps the
-  raw input tokens separately. Training cells then hold up to a year of captures, the
-  regime an embedding run sees (with D's input budget, ~99.5% of training cells held
-  <= 32 tokens).
+- **v1.3's raw-token budget:** ``INPUT_TOKEN_BUDGET`` (1536 real tokens, what v1.3's
+  3072 band-set budget allows) caps the raw input tokens and the shape sampler, so D'
+  draws the same grids and timestep counts as v1.3.
 - **Compiled mixed-RoPE rotation** (``encodings.use_compiled_mixed_rope``): -19% step
   time on D (1-GPU profile, 2026-10-19).
 - **Recomputed MLP activations** (``attention.use_recompute_mlp_activation``): the GELU
@@ -48,9 +46,13 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 MODULE_PATH = "scripts/official/v1_3/ablations/allcap_slot_n4d192_fe.py"
 NARROW_DEPTH = 4
 NARROW_DIM = 192
-# Raw input tokens per sample; the trunk still sees <= allcap_narrow.TOKEN_BUDGET
-# merged tokens. Set from the 1-GPU memory/speed sweep before training.
-INPUT_TOKEN_BUDGET = 12288
+# Raw input tokens per sample, matched to v1.3. v1.3's loader budgets 3072 in default
+# band sets (no tokenization_config: S2 = 3, Landsat = 2, S1 = 1, so 6 per cell and
+# timestep) while its model makes 3 tokens there (S2 and Landsat are one band set
+# each), i.e. <= 1536 real tokens and grids <= 22 cells. This loader counts real tokens,
+# so 3072 here drew up to 2x v1.3's tokens and 32x32 grids that OOMed at mb64
+# (2026-10-20). Merged tokens <= raw tokens, so the merged budget no longer binds.
+INPUT_TOKEN_BUDGET = 1536
 # Decoder tokens per sample: ~v1.3's mean (~1.1k) rather than its p90 (D's 2048). The
 # loss's per-sample score matrices scale with its square; at 2048, mb64 still OOMed on
 # rare heavy batches (2026-10-20, step ~206).
@@ -74,6 +76,9 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     """D's sampler, budgeting the merged tokens and capping the input tokens."""
     config = _allcap_dataloader(common)
     config.merged_slots = [SLOT_RATIO, SLOT_MIN, SLOT_CAP]
+    # The shape sampler (grid, timesteps) reads token_budget at the real-token rates,
+    # so it gets the raw cap too.
+    config.token_budget = INPUT_TOKEN_BUDGET
     config.input_token_budget = INPUT_TOKEN_BUDGET
     config.max_decode_tokens = MAX_DECODE_TOKENS
     return config
