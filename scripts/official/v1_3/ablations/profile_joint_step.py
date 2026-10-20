@@ -183,6 +183,20 @@ def build_dataloader_config(common: CommonComponents):
     """The target arm's sampler at the real per-rank batch on one GPU."""
     config = _target(common).build_dataloader_config(common)
     config.global_batch_size = GLOBAL_BATCH_SIZE
+    if _prefix(common).startswith("prof_peakF"):
+        # Force the patch size on the loader as it is built (before any worker
+        # copies it): the config's min/max must match the model's range.
+        import numpy as np
+
+        build = config.build
+
+        def forced_build(*args, **kwargs):  # type: ignore[no-untyped-def]
+            loader = build(*args, **kwargs)
+            loader.patch_sizes = np.array([FORCED_PATCH_SIZE])
+            logger.info(f"Forcing patch size {FORCED_PATCH_SIZE} on the loader")
+            return loader
+
+        object.__setattr__(config, "build", forced_build)
     return config
 
 
@@ -726,11 +740,7 @@ def build_trainer_config(common: CommonComponents):
             if _prefix(common).startswith("prof_peakF")
             else PEAK_MAX_STEPS
         )
-        trainer_config.callbacks["peak_memory"] = PeakMemoryCallback(
-            forced_patch_size=FORCED_PATCH_SIZE
-            if _prefix(common).startswith("prof_peakF")
-            else None
-        )
+        trainer_config.callbacks["peak_memory"] = PeakMemoryCallback()
         return trainer_config
     if _prefix(common) in MEMORY_PREFIXES:
         trainer_config.max_duration = Duration.steps(MEMORY_START + MEMORY_STEPS + 2)
