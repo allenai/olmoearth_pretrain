@@ -255,6 +255,41 @@ def test_train_module_pixel_target_forward(patch_size: int) -> None:
     assert grads and all(torch.isfinite(g).all() for g in grads)
 
 
+@pytest.mark.parametrize("patch_size", [1, 2])
+def test_subpatch_offset_loss_applies_only_to_finer_registers(patch_size: int) -> None:
+    """The sub-patch offset loss is added only when registers are finer than tokens."""
+    torch.manual_seed(0)
+    model_config = _model_config()
+    perceiver = model_config.encoder_config.perceiver_config
+    assert perceiver is not None
+    perceiver.random_latent_stride = False  # training stride 1: finer than ps 2
+    model: LatentMIM = model_config.build()
+    config = LatentMIMTrainModuleConfig(
+        optim_config=AdamWConfig(lr=1e-4),
+        rank_microbatch_size=B,
+        loss_config=LossConfig(
+            loss_config={
+                "type": "modality_patch_discrimination_masked_negatives_vec",
+                "tau": 0.1,
+                "same_target_threshold": 0.999,
+            }
+        ),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(1.0, 1.0),
+        transform_config=TransformConfig(transform_type="no_transform"),
+        pixel_targets=True,
+        subpatch_offset_loss_weight=1.0,
+    )
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        train_module = config.build(model, device=torch.device("cpu"))
+    loss, _latent, _decoded, _target, metrics = train_module.model_forward(
+        _make_sample(), patch_size, train_module.token_exit_cfg
+    )
+    assert torch.isfinite(loss)
+    assert ("subpatch_offset_loss" in (metrics or {})) == (patch_size > 1)
+
+
 def test_pixel_targets_require_projection_target() -> None:
     """A full target encoder cannot be projected per pixel: refuse it at build time."""
     model_config = _model_config()

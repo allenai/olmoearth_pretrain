@@ -8,6 +8,7 @@ slots per cell, 12 x d768 trunk), except:
   so everything before the merge runs at the narrow width.
 - **v1.3's real-token budget:** ``TOKEN_BUDGET`` (1536 real tokens, what v1.3's 3072
   band-set budget allows), so D' draws the same grids and timestep counts as v1.3.
+- **Microbatch 64** (v1.3's; D: 32).
 - **Compiled mixed-RoPE rotation** (``encodings.use_compiled_mixed_rope``): -19% step
   time on D (1-GPU profile, 2026-10-19).
 
@@ -25,9 +26,11 @@ from allcap_narrow import (  # noqa: E402
     build_common_components,
     build_dataset_config,
     build_narrow_model_config,
-    build_train_module_config,
 )
 from allcap_narrow import build_dataloader_config as _allcap_dataloader  # noqa: E402
+from allcap_narrow import (  # noqa: E402
+    build_train_module_config as _allcap_train_module,
+)
 from base import build_visualize_config  # noqa: E402
 
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
@@ -45,6 +48,9 @@ NARROW_DIM = 192
 # so 3072 here drew up to 2x v1.3's tokens and 32x32 grids that OOMed at mb64
 # (2026-10-20).
 TOKEN_BUDGET = 1536
+# v1.3's microbatch: the whole rank batch in one pass. Fits at 1536 tokens (peak 71 GiB
+# on the heaviest shape, 1-GPU profile 2026-10-20); D's 32 was for its 2x budget.
+RANK_MICROBATCH_SIZE = 64
 
 
 def build_model_config(common: CommonComponents) -> LatentMIMConfig:
@@ -61,6 +67,13 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     """D's sampler at v1.3's real-token budget."""
     config = _allcap_dataloader(common)
     config.token_budget = TOKEN_BUDGET
+    return config
+
+
+def build_train_module_config(common: CommonComponents):
+    """D's train module at v1.3's microbatch."""
+    config = _allcap_train_module(common)
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     return config
 
 

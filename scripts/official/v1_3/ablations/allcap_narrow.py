@@ -174,9 +174,14 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
 
 
 def build_train_module_config(common: CommonComponents):
-    """rc_pixtgt_pix512's train module (shared pixel targets) at a smaller microbatch."""
+    """rc_pixtgt_pix512's train module (shared pixel targets) at a smaller microbatch.
+
+    Plus the sub-patch offset loss (PR #630) at weight 1.0, on for new runs: it keeps the
+    per-offset stripe out of registers finer than the patch tokens.
+    """
     config = _pixtgt_train_module_config(common)
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE
+    config.subpatch_offset_loss_weight = 1.0
     return config
 
 
