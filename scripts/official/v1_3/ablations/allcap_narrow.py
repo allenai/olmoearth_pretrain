@@ -162,6 +162,10 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     # ahead of the model.
     config.num_workers = 16
     config.in_order = False
+    # A thread per worker reads the next samples from WEKA while the worker computes
+    # the current one: on the full corpus most reads are first touches (~15% data
+    # wait at 16 workers, 1-GPU profile 2026-10-20).
+    config.read_ahead = 2
     config.prefetch_factor = 1
     config.pin_memory = False
     config.uint8_masks = True

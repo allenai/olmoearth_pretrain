@@ -5,7 +5,9 @@ import logging
 import math
 import multiprocessing as mp
 import signal
+from collections import deque
 from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -97,6 +99,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         multiprocessing_context: str = "spawn",
         pin_memory: bool = True,
         in_order: bool = True,
+        read_ahead: int = 0,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
@@ -176,6 +179,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
             in_order: Deliver batches in worker order (torch's default). False hands
                 over whichever worker's batch is ready first, so one slow batch does
                 not stall the others; the batch order is then not reproducible.
+            read_ahead: Per-modality-timestamps datasets only: a thread in each worker
+                reads this many samples ahead while the worker computes the current
+                one, overlapping storage waits with CPU work. 0 = off. Each sample then
+                draws from its own seed (deterministic, but a different random stream
+                than with 0).
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
             masking_strategy: Masking strategy to apply in the dataloader workers.
@@ -217,6 +225,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.multiprocessing_context = multiprocessing_context
         self.pin_memory = pin_memory
         self.in_order = in_order
+        self.read_ahead = read_ahead
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
 
         # Dataloader-side masking configuration
@@ -421,7 +430,23 @@ class OlmoEarthDataLoader(DataLoaderBase):
         composite_days: float | None = None,
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
-        args = GetItemArgs(
+        return self.dataset[
+            self._get_item_args(
+                idx, patch_size, sampled_hw_p, target_t, time_range_days, composite_days
+            )
+        ]
+
+    def _get_item_args(
+        self,
+        idx: int,
+        patch_size: int,
+        sampled_hw_p: int,
+        target_t: int | None = None,
+        time_range_days: float | None = None,
+        composite_days: float | None = None,
+        seed: int | None = None,
+    ) -> GetItemArgs:
+        return GetItemArgs(
             idx=idx,
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
@@ -431,9 +456,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
             budget_exclude_modalities=self.budget_exclude_modalities,
             time_range_days=time_range_days,
             composite_days=composite_days,
+            seed=seed,
         )
-        item = self.dataset[args]
-        return item
 
     def state_dict(self) -> dict[str, Any]:
         """Get the state dict."""
@@ -844,6 +868,16 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         indices = self.data_loader._get_local_instance_indices(global_indices)
 
         # Create iterator that fetches samples from the dataset
+        params = self._get_batch_item_params_iterator(
+            indices,
+            self.data_loader.patch_sizes,
+            self.data_loader.sampled_hw_p_list,
+            self.data_loader.rank_batch_size,
+        )
+        if self.data_loader.read_ahead > 0 and getattr(
+            self.dataset, "per_modality_timestamps", False
+        ):
+            return self._batches(self._read_ahead_items(params))
         instance_iterator = (
             self.data_loader._get_dataset_item(
                 int(idx),
@@ -860,24 +894,54 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 target_t,
                 time_range_days,
                 composite_days,
-            ) in (
-                self._get_batch_item_params_iterator(
-                    indices,
-                    self.data_loader.patch_sizes,
-                    self.data_loader.sampled_hw_p_list,
-                    self.data_loader.rank_batch_size,
-                )
-            )
+            ) in params
         )
+        return self._batches(instance_iterator)
 
+    def _batches(self, instances: Iterator[Any]) -> Iterator[Any]:
         return (
             self.data_loader.collator(batch)  # type: ignore[arg-type]
             for batch in iter_batched(
-                instance_iterator,  # type: ignore[arg-type]
+                instances,  # type: ignore[arg-type]
                 self.data_loader.rank_batch_size,
                 self.data_loader.drop_last,
             )
         )
+
+    def _read_ahead_items(
+        self, params: Iterator[tuple[int, int, int, int, float | None, float | None]]
+    ) -> Iterator[tuple[int, OlmoEarthSample]]:
+        """Items with storage reads overlapped with the CPU work of earlier items.
+
+        One thread per worker runs :meth:`OlmoEarthDataset.read_item` up to
+        ``read_ahead`` items ahead while this thread finishes the current one
+        (composites, normalization). Each item draws from its own seed, taken in item
+        order from the worker's numpy state, so the batches are deterministic whatever
+        the thread timing.
+        """
+        dl = self.data_loader
+        executor = ThreadPoolExecutor(max_workers=1)
+        pending: deque[tuple[GetItemArgs, Future]] = deque()
+        try:
+            for idx, patch_size, hw_p, target_t, days, composite in params:
+                args = dl._get_item_args(
+                    int(idx),
+                    patch_size,
+                    hw_p,
+                    target_t,
+                    days,
+                    composite,
+                    seed=int(np.random.randint(2**31 - 1)),
+                )
+                pending.append((args, executor.submit(self.dataset.read_item, args)))
+                if len(pending) > dl.read_ahead:
+                    done_args, future = pending.popleft()
+                    yield self.dataset.finish_item(done_args, future.result())
+            while pending:
+                done_args, future = pending.popleft()
+                yield self.dataset.finish_item(done_args, future.result())
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 @dataclass
@@ -907,6 +971,9 @@ class OlmoEarthDataLoaderConfig(Config):
     # False: hand over batches as workers finish them (no head-of-line blocking when
     # per-batch cost varies); the batch order is then not reproducible.
     in_order: bool = True
+    # Per-modality-timestamps datasets: samples a thread in each worker reads ahead of
+    # the one being computed (0 = off; see OlmoEarthDataLoader).
+    read_ahead: int = 0
     # Send masks to the main process as uint8 instead of int64 (8x smaller; the
     # masks are pixel-resolution). Restored to int64 on device.
     uint8_masks: bool = False
@@ -1002,6 +1069,7 @@ class OlmoEarthDataLoaderConfig(Config):
             drop_last=self.drop_last,
             pin_memory=self.pin_memory,
             in_order=self.in_order,
+            read_ahead=self.read_ahead,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,

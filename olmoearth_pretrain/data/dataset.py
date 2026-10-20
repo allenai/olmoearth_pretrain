@@ -535,6 +535,9 @@ class GetItemArgs(NamedTuple):
     # bins of this many days (per-pixel median; S2 over SCL-clear pixels).
     # None or 0 = every capture.
     composite_days: float | None = None
+    # Per-modality-timestamps datasets only: seed of this sample's own random draws
+    # (crop, time range, budget run). None = numpy's global random state.
+    seed: int | None = None
 
 
 # TODO should training modalities be str or modality_spec
@@ -1071,7 +1074,9 @@ class OlmoEarthDataset(Dataset):
 
     @staticmethod
     def _select_time_range(
-        ordinals: dict[str, np.ndarray], time_range_days: float | None
+        ordinals: dict[str, np.ndarray],
+        time_range_days: float | None,
+        rng: Any = np.random,
     ) -> dict[str, np.ndarray]:
         """Pick a random range of ``time_range_days`` and keep every capture in it.
 
@@ -1088,7 +1093,7 @@ class OlmoEarthDataset(Dataset):
         last = max(int(o[-1]) for o in non_empty)
         length = min(float(time_range_days), float(last - first))
         for _ in range(8):
-            start = first + np.random.random() * (last - first - length)
+            start = first + rng.random() * (last - first - length)
             kept = {
                 m: np.flatnonzero((o >= start) & (o <= start + length))
                 for m, o in ordinals.items()
@@ -1172,52 +1177,61 @@ class OlmoEarthDataset(Dataset):
            with ``{modality}_time_index`` giving each slot's row in ``timestamps``
            (the run's union timeline). Masking, month encodings and 3D RoPE read
            a modality's dates through that index.
+
+        Steps 1-2 and the reads are :meth:`_read_per_capture` (storage-bound), the
+        rest :meth:`_finish_per_capture` (CPU-bound), so a loader can read ahead.
         """
+        rng = np.random if args.seed is None else np.random.RandomState(args.seed)
+        return self._finish_per_capture(
+            args, self._read_per_capture(index, args, rng), rng
+        )
 
-        def prepare(modality: str, values: np.ndarray) -> np.ndarray:
-            values = values.astype(self.dtype)
-            if not self.normalize:
-                return values
-            return self.normalize_image(Modality.get(modality), values).astype(
-                self.dtype
-            )
+    @staticmethod
+    def _budget_run(
+        args: GetItemArgs,
+        modalities: list[str],
+        n_steps: int,
+        step_index: dict[str, np.ndarray],
+        rng: Any,
+    ) -> tuple[int, int]:
+        """The kept run of union steps under ``args.token_budget`` (real tokens).
 
-        sampled_hw = args.sampled_hw_p * args.patch_size
+        The run starts at a random step and extends forward while it fits the
+        budget (always at least one step).
+        """
 
         def num_bandsets(modality: str) -> int:
             if args.tokenization_config is not None:
                 return args.tokenization_config.get_num_bandsets(modality)
             return Modality.get(modality).num_band_sets
 
-        def budget_run(
-            modalities: list[str], n_steps: int, step_index: dict[str, np.ndarray]
-        ) -> tuple[int, int]:
-            # Real tokens per union step; the run starts at a random step and extends
-            # forward while it fits the budget (always at least one step).
-            hw_p_sq = args.sampled_hw_p**2
-            step_tokens = np.zeros(n_steps, dtype=np.int64)
-            fixed_tokens = 0
-            for modality in modalities:
-                if modality in args.budget_exclude_modalities:
-                    continue
-                if modality in step_index:
-                    step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(
-                        modality
-                    )
-                else:
-                    fixed_tokens += hw_p_sq * num_bandsets(modality)
-            first, last = 0, n_steps - 1
-            if args.token_budget is not None and n_steps > 0:
-                first = last = int(np.random.randint(n_steps))
-                total = fixed_tokens + step_tokens[first]
-                while (
-                    last + 1 < n_steps
-                    and total + step_tokens[last + 1] <= args.token_budget
-                ):
-                    last += 1
-                    total += step_tokens[last]
-            return first, last
+        hw_p_sq = args.sampled_hw_p**2
+        step_tokens = np.zeros(n_steps, dtype=np.int64)
+        fixed_tokens = 0
+        for modality in modalities:
+            if modality in args.budget_exclude_modalities:
+                continue
+            if modality in step_index:
+                step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(modality)
+            else:
+                fixed_tokens += hw_p_sq * num_bandsets(modality)
+        first, last = 0, n_steps - 1
+        if args.token_budget is not None and n_steps > 0:
+            first = last = int(rng.randint(n_steps))
+            total = fixed_tokens + step_tokens[first]
+            while (
+                last + 1 < n_steps
+                and total + step_tokens[last + 1] <= args.token_budget
+            ):
+                last += 1
+                total += step_tokens[last]
+        return first, last
 
+    def _read_per_capture(
+        self, index: int, args: GetItemArgs, rng: Any
+    ) -> dict[str, Any]:
+        """Draw the crop, time range and (without composites) budget run; read them."""
+        sampled_hw = args.sampled_hw_p * args.patch_size
         # Choose the crop, time range and (without composites) the budget run from
         # the timestamps and shapes alone, then read only those pixels and captures:
         # a whole every-capture tile is 30-60 MB, the sample a few MB.
@@ -1233,16 +1247,18 @@ class OlmoEarthDataset(Dataset):
             tile_h, tile_w = next(
                 h5file[m].shape[:2] for m in present if Modality.get(m).is_spatial
             )
-            start_h = np.random.choice(tile_h - sampled_hw + 1)
-            start_w = np.random.choice(tile_w - sampled_hw + 1)
+            start_h = rng.choice(tile_h - sampled_hw + 1)
+            start_w = rng.choice(tile_w - sampled_hw + 1)
             crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
             ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
-            kept = self._select_time_range(ordinals, args.time_range_days)
+            kept = self._select_time_range(ordinals, args.time_range_days, rng)
             if not args.composite_days:
                 union_ts, step_index = build_union_timeline(
                     {m: timestamps[m][kept[m]] for m in timestamps}
                 )
-                first_step, last_step = budget_run(present, len(union_ts), step_index)
+                first_step, last_step = self._budget_run(
+                    args, present, len(union_ts), step_index, rng
+                )
                 kept = {
                     m: kept[m][
                         (step_index[m] >= first_step) & (step_index[m] <= last_step)
@@ -1284,6 +1300,36 @@ class OlmoEarthDataset(Dataset):
                         lo, hi = int(within[0]), int(within[-1]) + 1
                 scl = h5file[S2_SCL_LAYER][(*crop, slice(lo, hi))]
                 scl_timestamps = scl_timestamps[lo:hi]
+        return {
+            "data": data,
+            "timestamps": timestamps,
+            "ordinals": ordinals,
+            "kept": kept,
+            "scl": scl,
+            "scl_timestamps": scl_timestamps,
+        }
+
+    def _finish_per_capture(
+        self, args: GetItemArgs, read: dict[str, Any], rng: Any
+    ) -> dict[str, Any]:
+        """Composite, budget and assemble the sample from :meth:`_read_per_capture`."""
+
+        def prepare(modality: str, values: np.ndarray) -> np.ndarray:
+            values = values.astype(self.dtype)
+            if not self.normalize:
+                return values
+            return self.normalize_image(Modality.get(modality), values).astype(
+                self.dtype
+            )
+
+        sampled_hw = args.sampled_hw_p * args.patch_size
+        data, timestamps, ordinals, kept = (
+            read["data"],
+            read["timestamps"],
+            read["ordinals"],
+            read["kept"],
+        )
+        scl, scl_timestamps = read["scl"], read["scl_timestamps"]
 
         if args.composite_days:
             data, timestamps, kept, s2_no_clear = self._composite(
@@ -1301,7 +1347,9 @@ class OlmoEarthDataset(Dataset):
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
         if args.composite_days:
-            first_step, last_step = budget_run(list(data), len(union_ts), step_index)
+            first_step, last_step = self._budget_run(
+                args, list(data), len(union_ts), step_index, rng
+            )
         else:
             # The captures were already cut to the budget run before reading.
             first_step, last_step = 0, len(union_ts) - 1
@@ -1371,6 +1419,31 @@ class OlmoEarthDataset(Dataset):
                     f"per_modality_timestamps only supports spatial modalities, got {modality}"
                 )
         return sample_dict
+
+    def read_item(self, args: GetItemArgs) -> tuple[Any, dict[str, Any]]:
+        """Storage half of a per-modality-timestamps item (see :meth:`finish_item`).
+
+        Safe to run in a read-ahead thread: it draws only from the sample's own
+        ``args.seed`` generator, which :meth:`finish_item` then continues.
+        """
+        if not self.per_modality_timestamps or args.seed is None:
+            raise ValueError(
+                "read_item needs a per-modality-timestamps dataset and a seed"
+            )
+        if hasattr(self, "sample_indices") and self.sample_indices is not None:
+            index = self.sample_indices[args.idx]
+        else:
+            index = args.idx
+        rng = np.random.RandomState(args.seed)
+        return rng, self._read_per_capture(index, args, rng)
+
+    def finish_item(
+        self, args: GetItemArgs, read: tuple[Any, dict[str, Any]]
+    ) -> tuple[int, OlmoEarthSample]:
+        """CPU half of :meth:`read_item`; together they equal ``self[args]``."""
+        rng, raw = read
+        sample_dict = self._finish_per_capture(args, raw, rng)
+        return args.patch_size, OlmoEarthSample(**sample_dict)
 
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""

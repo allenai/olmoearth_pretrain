@@ -864,3 +864,77 @@ def test_nanmedian_axis2_matches_numpy(seed: int) -> None:
             warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN pixels
             expected = np.nanmedian(x, axis=2)
         np.testing.assert_array_equal(nanmedian_axis2(x), expected)
+
+
+def _assert_same_item(
+    a: tuple[int, OlmoEarthSample], b: tuple[int, OlmoEarthSample]
+) -> None:
+    assert a[0] == b[0]
+    da, db = a[1].as_dict(), b[1].as_dict()
+    assert set(da) == set(db)
+    for name, value in da.items():
+        np.testing.assert_array_equal(value, db[name], err_msg=name)
+
+
+@pytest.mark.parametrize("composite_days", [None, 30.0])
+def test_read_then_finish_equals_getitem(
+    allcap_h5py_dir: UPath, composite_days: float | None
+) -> None:
+    """read_item + finish_item is self[args]; a seeded item is reproducible."""
+    dataset = _dataset(allcap_h5py_dir, normalize=True, load_s2_cloud_mask=True)
+    for seed in range(6):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=2,
+            sampled_hw_p=4,
+            token_budget=200,
+            tokenization_config=S2_SINGLE,
+            time_range_days=120.0,
+            composite_days=composite_days,
+            seed=seed,
+        )
+        whole = dataset[args]
+        _assert_same_item(whole, dataset.finish_item(args, dataset.read_item(args)))
+        _assert_same_item(whole, dataset[args])
+
+
+def test_read_ahead_matches_sequential_items(allcap_h5py_dir: UPath) -> None:
+    """The read-ahead iterator yields the seeded items in order, at any depth."""
+    from types import SimpleNamespace
+
+    from olmoearth_pretrain.data.dataloader import (
+        OlmoEarthDataLoader,
+        _IterableDatasetWrapper,
+    )
+
+    dataset = _dataset(allcap_h5py_dir)
+    params = [
+        (i % 2, 2, 4, None, 90.0, 30.0 if i % 3 == 0 else None) for i in range(10)
+    ]
+
+    loader = SimpleNamespace(
+        token_budget=200,
+        tokenization_config=S2_SINGLE,
+        budget_exclude_modalities=frozenset(),
+    )
+
+    def make_args(*p: Any, seed: int | None = None) -> GetItemArgs:
+        get_args: Any = OlmoEarthDataLoader._get_item_args
+        return get_args(loader, *p, seed=seed)
+
+    np.random.seed(0)
+    expected = [
+        dataset[make_args(*p, seed=int(np.random.randint(2**31 - 1)))] for p in params
+    ]
+    for depth in (1, 3):
+        wrapper = SimpleNamespace(
+            data_loader=SimpleNamespace(read_ahead=depth, _get_item_args=make_args),
+            dataset=dataset,
+        )
+        np.random.seed(0)
+        got = list(
+            _IterableDatasetWrapper._read_ahead_items(wrapper, iter(params))  # type: ignore[arg-type]
+        )
+        assert len(got) == len(expected)
+        for a, b in zip(got, expected):
+            _assert_same_item(a, b)
