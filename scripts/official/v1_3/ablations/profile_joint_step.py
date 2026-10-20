@@ -69,13 +69,11 @@ PROFILE_TARGETS = {
     # MINIMAL_PREFIXES).
     "prof_regDmin": "allcap_slot_n4d192_fe",
     "prof_peakFDmin": "allcap_slot_n4d192_fe",
-    # Minimal D' with the compiled mixed-RoPE rotation back on.
-    "prof_regDminR": "allcap_slot_n4d192_fe",
 }
 # D' with plain v1.3 machinery: no compiled RoPE, no recomputed GELU, full (not compact)
 # decode and targets, a plain 1536-token budget (no merged-slot accounting; merged <= raw
 # so it never bound) and D's decoder cap of 2048.
-MINIMAL_PREFIXES = ("prof_regDmin", "prof_peakFDmin", "prof_regDminR")
+MINIMAL_PREFIXES = ("prof_regDmin", "prof_peakFDmin")
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
 COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
@@ -105,7 +103,6 @@ REGION_PREFIXES = (
     "prof_regDcr",
     "prof_regDfe",
     "prof_regDmin",
-    "prof_regDminR",
 )
 # Region name -> submodule path(s) on the model (missing ones are skipped; a trailing
 # ".*" means every child, aggregated under one name).
@@ -191,7 +188,7 @@ def build_model_config(common: CommonComponents):
         from olmoearth_pretrain.nn.attention import use_recompute_mlp_activation
         from olmoearth_pretrain.nn.encodings import use_compiled_mixed_rope
 
-        use_compiled_mixed_rope(_prefix(common) == "prof_regDminR")
+        use_compiled_mixed_rope(False)
         use_recompute_mlp_activation(False)
     return config
 
