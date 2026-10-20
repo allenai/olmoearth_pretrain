@@ -62,8 +62,10 @@ logger = logging.getLogger(__name__)
 
 WANDB_PROJECT = "20261016_allcap_slot_narrow"
 
+# The 32 x 32 x 16-chunked copy of osm_allcaptures (same arrays; the original stores one
+# chunk per array, so a crop decompressed the whole tile; ~4x less h5 time, 2026-10-19).
 ALLCAP_H5PY_DIR = (
-    "/weka/dfive-default/helios/dataset/osm_allcaptures/"
+    "/weka/dfive-default/helios/dataset/osm_allcaptures_rechunk32x32x16/"
     "h5py_data_w_missing_timesteps_zstd_3_128_x_4/"
     "cdl_landsat_l2_openstreetmap_raster_sentinel1_sentinel2_l2a_sentinel2_scl_"
     "srtm_worldcereal_worldcover_wri_canopy_height_map/395660"

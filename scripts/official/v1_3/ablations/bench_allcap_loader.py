@@ -277,7 +277,6 @@ def _parts() -> None:
     dataset = dataset_config.build()
     dataset.prepare()
     config = D.build_dataloader_config(common)
-    merged = tuple(config.merged_slots) if config.merged_slots else None
     rng = np.random.default_rng(0)
     indices = rng.choice(len(dataset), 40, replace=False)
     # 1. h5 layout and read cost (whole dataset vs a 32 x 32 crop of every capture).
@@ -330,8 +329,6 @@ def _parts() -> None:
                 tokenization_config=config.tokenization_config,
                 time_range_days=float(rng.choice(config.time_range_days_choices)),
                 composite_days=composite,
-                merged_slots=merged,  # type: ignore[arg-type]
-                input_token_budget=config.input_token_budget,
             )
             t0 = time.perf_counter()
             profile.enable()
@@ -364,8 +361,6 @@ def _parts() -> None:
                     tokenization_config=config.tokenization_config,
                     time_range_days=365.0,
                     composite_days=composite,
-                    merged_slots=merged,  # type: ignore[arg-type]
-                    input_token_budget=config.input_token_budget,
                 )
             ]
             for idx in np.resize(indices, 64)

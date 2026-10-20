@@ -75,8 +75,8 @@ MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakFDfe", "prof_peakFv13")
 PEAK_MAX_STEPS = 320
 # Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
-# steps suffice. The shape comes from --data_loader.patch_size_choices / sampled_hw_p_list
-# overrides on the launch.
+# steps suffice. The grid comes from a --data_loader.sampled_hw_p_list override on the
+# launch (the patch size is still drawn per batch).
 PEAK_FORCED_MAX_STEPS = 40
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
