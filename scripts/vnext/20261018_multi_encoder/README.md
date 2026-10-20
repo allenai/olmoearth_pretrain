@@ -78,3 +78,16 @@ the same linear work as a shared layer and 1/3 of its attention.
 The v1.2 masking holds one whole input modality out per sample, so a per-modality tower gets no input
 (and no gradient) in about a third of samples. `random_all_with_decode` keeps the token budget and
 removes the holdout.
+
+## Result: random masking for towers (2026-10-20)
+
+`towers_t12_f0_randmask` vs `towers_t12_f0` (identical except masking), pastis mIoU (in-loop linear probe, S2):
+
+| step | t12/f0, v1.2 masking | t12/f0, random_all masking |
+|---|---|---|
+| 20000 | 0.375 | 0.364 |
+| 40000 | 0.447 | 0.392 |
+| 60000 | 0.463 | 0.382 |
+
+Every tower seeing input in every sample did not help; random masking is ~8 points worse at 60k and flat. The
+whole-modality holdout of the v1.2 masking (cross-modal prediction) is the useful pretext. Run stopped at ~65k.
