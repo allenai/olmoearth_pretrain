@@ -4083,67 +4083,38 @@ class Predictor(PredictorBase):
         ]
         counts = [d.sum(dim=-1) for d in decoder]
         widths = torch.stack([c.max() for c in counts]).tolist()  # one host sync
-        # Per modality: the loss's order (decoder positions first, flattened order)
-        # and, per row, the small indices the query needs -- band set (global into
-        # the concatenated channel table), timestep, month and RoPE position.
-        channel_tables, orders, valids = [], [], []
-        bandset_rows, time_rows, month_rows, position_rows = [], [], [], []
-        start, channel_offset = 0, 0
-        for name, mask, dec, count, width in zip(names, masks, decoder, counts, widths):
+        queries, query_positions, orders = [], [], []
+        start = 0
+        for name, mask, dec, width in zip(names, masks, decoder, widths):
             k = max(int(width), 1)
             order = dec.long().sort(dim=1, descending=True, stable=True)[1][:, :k]
-            index = torch.unravel_index(order, mask.shape[1:])
-            table = enc.per_modality_channel_embeddings[name]
-            channel_tables.append(table)
-            bandset_rows.append(index[-1] + channel_offset)
-            channel_offset += table.shape[0]
+            grid = mask.shape[1:]
+            index = torch.unravel_index(order, grid)
+            embed = torch.zeros(batch_size, k, dim, device=order.device)
+            channel = enc.per_modality_channel_embeddings[name]
+            embed[..., :n] += channel[index[-1]].to(embed.dtype)  # band set
+            modality = Modality.get(name)
             # A time axis: [B, T, b_s] or [B, h, w, T, b_s] (as the full path's 4D / 6D
             # token layouts).
-            if Modality.get(name).is_multitemporal and mask.ndim in (3, 5):
+            if modality.is_multitemporal and mask.ndim in (3, 5):
                 t_index = index[-2]
+                if not PositionEncoding.is_3d_rope(self.position_encoding):
+                    time = get_1d_sincos_pos_encoding(t_index.reshape(-1), n)
+                    embed[..., n : n * 2] += time.view(batch_size, k, n)
                 stamps = (modality_timestamps or {}).get(name, timestamps)
-                time_rows.append(t_index)
-                month_rows.append(stamps[:, :, 1].gather(1, t_index))
-            else:
-                time_rows.append(torch.full_like(order, -1))
-                month_rows.append(torch.full_like(order, -1))
+                months = stamps[:, :, 1].gather(1, t_index)
+                embed[..., n * 2 : n * 3] += enc.month_embed(months).to(embed.dtype)
+            queries.append(self.mask_token + embed)
             flat_positions = positions[:, start : start + dec.shape[1]]
-            position_rows.append(
+            query_positions.append(
                 flat_positions.gather(
                     1, order.unsqueeze(-1).expand(-1, -1, flat_positions.shape[-1])
                 )
             )
             orders.append(order)
-            valids.append(torch.arange(k, device=order.device)[None] < count[:, None])
             start += dec.shape[1]
-        # Pack each sample's decoder tokens from every modality into one row, padded
-        # to the batch's largest per-sample total (per-modality padding would add up
-        # to far more than the per-sample decode cap).
-        valid = torch.cat(valids, dim=1)
-        total = int(valid.sum(dim=1).max().item()) or 1
-        pack = valid.long().sort(dim=1, descending=True, stable=True)[1][:, :total]
-        packed_valid = valid.gather(1, pack)
-
-        def packed(rows: list[Tensor]) -> Tensor:
-            cat = torch.cat(rows, dim=1)
-            if cat.ndim == 2:
-                return cat.gather(1, pack)
-            return cat.gather(1, pack.unsqueeze(-1).expand(-1, -1, cat.shape[-1]))
-
-        bandset = packed(bandset_rows)
-        t_index = packed(time_rows)
-        months = packed(month_rows)
-        q_pos = packed(position_rows)
-        timed = (t_index >= 0)[..., None]
-        embed = torch.zeros(batch_size, total, dim, device=pack.device)
-        channel = torch.cat(list(channel_tables), dim=0)[bandset]
-        embed[..., :n] += channel.to(embed.dtype)
-        if not PositionEncoding.is_3d_rope(self.position_encoding):
-            time = get_1d_sincos_pos_encoding(t_index.clamp(min=0).reshape(-1), n)
-            embed[..., n : n * 2] += time.view(batch_size, total, n) * timed
-        month = enc.month_embed(months.clamp(min=0)).to(embed.dtype)
-        embed[..., n * 2 : n * 3] += month * timed
-        q = self.mask_token + embed
+        q = torch.cat(queries, dim=1)
+        q_pos = torch.cat(query_positions, dim=1)
         context = self.register_to_decoder_embed(
             rearrange(registers, "b h w d -> b (h w) d")
         )
@@ -4158,14 +4129,9 @@ class Predictor(PredictorBase):
                 rope_positions_y=register_positions,
             )
         out = self.to_output_embed(self.norm(q))
-        # Back to each modality's rows in the loss's order (padding rows stay zero).
-        out = out * packed_valid[..., None].to(out.dtype)
-        unpacked = out.new_zeros(batch_size, valid.shape[1], out.shape[-1]).scatter(
-            1, pack.unsqueeze(-1).expand(-1, -1, out.shape[-1]), out
-        )
         tokens, offset = [], 0
         for order in orders:
-            tokens.append(unpacked[:, offset : offset + order.shape[1]])
+            tokens.append(out[:, offset : offset + order.shape[1]])
             offset += order.shape[1]
         return CompactDecoderTokens(
             modalities=names, tokens=tokens, counts=counts, orders=orders
