@@ -11,10 +11,11 @@ from olmo_core.distributed.utils import get_local_rank, get_local_tensor
 from olmo_core.optim import OptimConfig
 from olmo_core.optim.scheduler import Scheduler
 from olmo_core.train.common import ReduceType
+from torch import Tensor
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
 from olmoearth_pretrain.nn.latent_mim import FrozenTargetProjection, LatentMIM
 from olmoearth_pretrain.nn.pixel_targets import (
@@ -29,7 +30,11 @@ from olmoearth_pretrain.nn.pixel_targets import (
 )
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
-from olmoearth_pretrain.train.loss import LossConfig
+from olmoearth_pretrain.train.loss import (
+    CompactDecoderTargets,
+    LossConfig,
+    ModalityPatchDiscriminationMaskedNegativesVec,
+)
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
@@ -38,6 +43,71 @@ from olmoearth_pretrain.train.train_module.train_module import (
 from olmoearth_pretrain.train.utils import split_masked_batch
 
 logger = getLogger(__name__)
+
+
+def _batch_slice(
+    sample: MaskedOlmoEarthSample, start: int, end: int
+) -> MaskedOlmoEarthSample:
+    """Samples ``[start, end)`` of a batch, every field sliced, NOTHING trimmed.
+
+    (``split_masked_batch`` also trims time padding, which would change the token
+    layout the targets are matched to.)
+    """
+    return MaskedOlmoEarthSample(
+        **{
+            name: (value[start:end] if torch.is_tensor(value) else value)
+            for name, value in sample._asdict().items()
+        }
+    )
+
+
+@torch.no_grad()
+def compact_decoder_targets(
+    target_encoder: FrozenTargetProjection,
+    target_input: MaskedOlmoEarthSample,
+    patch_size: int,
+    token_exit_cfg: dict[str, int] | None,
+    predictions: TokensAndMasks,
+    chunk_size: int,
+) -> CompactDecoderTargets:
+    """The projection-only target at the decoder positions only, built in chunks.
+
+    The projection is per sample (patch resize, per-token linear), so a chunk's
+    targets equal the whole batch's. Each chunk's full-grid target is reduced to its
+    decoder positions, in the loss's order (``CompactDecoderTargets``), and freed.
+    """
+    pred_tokens, pred_masks = predictions.flatten_tokens_and_masks_per_modality()
+    names = [m for m in predictions.modalities if getattr(predictions, m) is not None]
+    decoder = [mask == MaskValue.DECODER.value for mask in pred_masks]
+    counts = (
+        torch.stack([d.sum(dim=-1).max() for d in decoder]).tolist() if decoder else []
+    )
+    order = [
+        d.long().sort(dim=1, descending=True, stable=True)[1][:, : max(int(c), 1)]
+        for d, c in zip(decoder, counts)
+    ]
+    batch_size = pred_tokens[0].shape[0] if pred_tokens else 0
+    out: list[Tensor | None] = [None] * len(names)
+    for start in range(0, batch_size, chunk_size):
+        end = min(start + chunk_size, batch_size)
+        chunk = target_encoder.forward(
+            _batch_slice(target_input, start, end),
+            patch_size=patch_size,
+            token_exit_cfg=token_exit_cfg,
+        )["tokens_and_masks"]
+        chunk_tokens, _ = chunk.flatten_tokens_and_masks_per_modality()
+        chunk_names = [m for m in chunk.modalities if getattr(chunk, m) is not None]
+        for i, name in enumerate(names):
+            flat = chunk_tokens[chunk_names.index(name)]
+            idx = order[i][start:end]
+            picked = flat.gather(1, idx.unsqueeze(-1).expand(-1, -1, flat.shape[-1]))
+            if out[i] is None:
+                out[i] = picked.new_empty(batch_size, idx.shape[1], flat.shape[-1])
+            out[i][start:end] = picked  # type: ignore[index]
+        del chunk, chunk_tokens
+    return CompactDecoderTargets(
+        modalities=names, tokens=[t for t in out if t is not None]
+    )
 
 
 @dataclass
@@ -55,6 +125,11 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         pixel_target_draw: ``"shared"`` (one pixel per cell for all its tokens),
             ``"independent"`` (one pixel per token) or ``"pooled"`` (as many pixels
             as masked tokens, drawn from all masked pixels of the sample).
+        target_chunk_size: If set, compute the frozen projection-only target this
+            many samples at a time and keep only the decoder positions (the loss
+            reads nothing else), so the full-grid target is never held for the whole
+            microbatch. Same values; needs the projection-only target and the
+            masked-negatives patch-discrimination loss.
     """
 
     loss_config: LossConfig = field(
@@ -71,6 +146,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
     pixel_target_draw: str = "shared"
+    target_chunk_size: int | None = None
 
     def build(
         self,
@@ -141,6 +217,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
         pixel_target_draw: str = "shared",
+        target_chunk_size: int | None = None,
     ):
         """Initialize the training module.
 
@@ -177,6 +254,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 ``"pooled"``: per (sample, modality), as many targets as masked
                 tokens, drawn without replacement from every masked pixel, so a
                 footprint can get zero or several; needs one band set per modality.
+            target_chunk_size: Compute the projection-only target this many samples
+                at a time, keeping only the decoder positions (see the config).
         """
         super().__init__(
             model=model,
@@ -230,6 +309,19 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
+        self.target_chunk_size = target_chunk_size
+        if target_chunk_size is not None:
+            if target_chunk_size < 1:
+                raise ValueError(f"target_chunk_size must be >= 1: {target_chunk_size}")
+            if not isinstance(self.model.target_encoder, FrozenTargetProjection):
+                raise ValueError("target_chunk_size requires projection_only_target")
+            if not isinstance(
+                self.base_loss, ModalityPatchDiscriminationMaskedNegativesVec
+            ):
+                raise ValueError(
+                    "target_chunk_size needs the masked-negatives patch-discrimination "
+                    f"loss, got {type(self.base_loss).__name__}"
+                )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -349,7 +441,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         torch.Tensor,
         TokensAndMasks,
         TokensAndMasks,
-        TokensAndMasks,
+        TokensAndMasks | CompactDecoderTargets,
         dict[str, Any] | None,
     ]:
         """Run a forward pass."""
@@ -414,12 +506,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         target_input, pixel_offsets, patch_size
                     )
                     target_patch_size = 1
-                output_dict = self.model.target_encoder.forward(
-                    target_input,
-                    patch_size=target_patch_size,
-                    token_exit_cfg=token_exit_cfg,
-                )
-                target_output, _, _ = unpack_encoder_output(output_dict)
+                if self.target_chunk_size is not None:
+                    target_output = compact_decoder_targets(
+                        self.model.target_encoder,
+                        target_input,
+                        target_patch_size,
+                        token_exit_cfg,
+                        decoded,
+                        self.target_chunk_size,
+                    )
+                else:
+                    output_dict = self.model.target_encoder.forward(
+                        target_input,
+                        patch_size=target_patch_size,
+                        token_exit_cfg=token_exit_cfg,
+                    )
+                    target_output, _, _ = unpack_encoder_output(output_dict)
             # Compute losses outside autocast: the loss internals cast to fp32
             # explicitly, but under autocast ops like bmm get re-cast to bf16,
             # silently changing the loss values (e.g. the same_target_threshold

@@ -87,6 +87,8 @@ RANK_MICROBATCH_SIZE = 32
 # costs what it does in v1.3 while the encoder sees every capture.
 MAX_DECODE_TOKENS = 2048
 
+TARGET_CHUNK_SIZE = 4
+
 SLOT_RATIO = 3
 SLOT_MIN = 4
 SLOT_CAP = 24
@@ -175,6 +177,10 @@ def build_train_module_config(common: CommonComponents):
     """rc_pixtgt_pix512's train module (shared pixel targets) at a smaller microbatch."""
     config = _pixtgt_train_module_config(common)
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE
+    # Targets at decoder positions only, 4 samples at a time: the full-grid target
+    # over every (padded) every-capture position was the largest allocation at large
+    # input budgets (2026-10-20 OOM). Same loss values.
+    config.target_chunk_size = TARGET_CHUNK_SIZE
     return config
 
 

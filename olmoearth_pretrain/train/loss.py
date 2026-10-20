@@ -510,6 +510,23 @@ class ModalityPatchDiscriminationMaskedNegatives(Loss):
         return self.weight * total_loss
 
 
+@dataclass
+class CompactDecoderTargets:
+    """Targets at the decoder positions only, per modality, as the loss reads them.
+
+    ``tokens[i]`` is ``[B, K_i, D]`` for modality ``modalities[i]``: row ``j < count``
+    of sample ``b`` is the target of that sample's ``j``-th DECODER token in flattened
+    ``(h, w, t, band set)`` order (the stable decoder-first sort the loss applies to
+    full targets), with ``K_i`` the batch's largest decoder count (>= 1); rows past a
+    sample's count are padding the loss masks out. Built by
+    ``LatentMIMTrainModule`` with ``target_chunk_size`` so the full-grid target is
+    never held for the whole microbatch.
+    """
+
+    modalities: list[str]
+    tokens: list[Tensor]
+
+
 @LOSS_REGISTRY.register("modality_patch_discrimination_masked_negatives_vec")
 class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
     """Vectorized patch discrimination with same-target negative masking.
@@ -544,7 +561,9 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         all_targets: Tensor,
         modality: str,
         max_decoder_count: int | None = None,
+        sorted_targets: Tensor | None = None,
     ) -> Tensor:
+        """Loss for one modality; ``sorted_targets`` = compact targets (see above)."""
         batch_size, _, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
         count = decoder_mask.sum(dim=-1)  # (batch,)
@@ -561,7 +580,11 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         sort_indices = sort_indices[:, :num_tokens]
         sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
         sorted_preds = all_preds.gather(1, sort_expanded).float()
-        sorted_targets = all_targets.gather(1, sort_expanded).float()
+        if sorted_targets is None:
+            sorted_targets = all_targets.gather(1, sort_expanded).float()
+        else:
+            # Already in this order (CompactDecoderTargets), K == num_tokens.
+            sorted_targets = sorted_targets.float()
 
         # valid_mask[b, i] = True iff position i is a decoder token for sample b
         range_tensor = torch.arange(num_tokens, device=count.device)
@@ -653,13 +676,24 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         return loss
 
     def compute(
-        self, predictions: TokensAndMasks, targets: TokensAndMasks, **kwargs: Any
+        self,
+        predictions: TokensAndMasks,
+        targets: TokensAndMasks | CompactDecoderTargets,
+        **kwargs: Any,
     ) -> Tensor:
-        """Compute patch discrimination loss with masked same-target negatives (vectorized)."""
+        """Compute patch discrimination loss with masked same-target negatives (vectorized).
+
+        ``targets`` may be full per-token targets or ``CompactDecoderTargets``.
+        """
         modality_preds, modality_masks = (
             predictions.flatten_tokens_and_masks_per_modality()
         )
-        modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
+        compact = isinstance(targets, CompactDecoderTargets)
+        modality_targets: list[Tensor] = (
+            targets.tokens
+            if isinstance(targets, CompactDecoderTargets)
+            else targets.flatten_tokens_and_masks_per_modality()[0]
+        )
         # Per-modality max decoder-token counts in ONE host sync (each sizes that
         # modality's score tensors).
         max_decoder_counts: list[int | None] = [None] * len(modality_masks)
@@ -684,7 +718,12 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
             max_decoder_counts,
         ):
             loss = self._compute_modality_loss_parallel(
-                all_preds, all_masks, all_targets, modality, max_count
+                all_preds,
+                all_masks,
+                all_targets,
+                modality,
+                max_count,
+                sorted_targets=all_targets if compact else None,
             )
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)
