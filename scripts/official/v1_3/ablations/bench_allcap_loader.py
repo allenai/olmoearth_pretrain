@@ -15,6 +15,7 @@ storage separates from decompression and compute); ``summarize <dir>`` aggregate
 
 import argparse
 import cProfile
+import importlib
 import io
 import json
 import os
@@ -32,7 +33,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import allcap_narrow as A  # noqa: E402
-import allcap_slot_n4d192 as D  # noqa: E402
+
+# The arm whose dataset and dataloader are benched (BENCH_ARM, default config D), and
+# an optional corpus override for both modes (BENCH_H5PY_DIR).
+D = importlib.import_module(os.environ.get("BENCH_ARM", "allcap_slot_n4d192"))
 
 from olmoearth_pretrain.internal.experiment import SubCmd  # noqa: E402
 
@@ -267,9 +271,13 @@ def _parts() -> None:
     common = A.build_common_components(
         D.MODULE_PATH, SubCmd.dry_run, "bench", "ai2/jupiter", []
     )
-    dataset = D.build_dataset_config(common).build()
+    dataset_config = D.build_dataset_config(common)
+    if os.environ.get("BENCH_H5PY_DIR"):
+        dataset_config.h5py_dir = os.environ["BENCH_H5PY_DIR"]
+    dataset = dataset_config.build()
     dataset.prepare()
     config = D.build_dataloader_config(common)
+    merged = tuple(config.merged_slots) if config.merged_slots else None
     rng = np.random.default_rng(0)
     indices = rng.choice(len(dataset), 40, replace=False)
     # 1. h5 layout and read cost (whole dataset vs a 32 x 32 crop of every capture).
@@ -322,6 +330,8 @@ def _parts() -> None:
                 tokenization_config=config.tokenization_config,
                 time_range_days=float(rng.choice(config.time_range_days_choices)),
                 composite_days=composite,
+                merged_slots=merged,  # type: ignore[arg-type]
+                input_token_budget=config.input_token_budget,
             )
             t0 = time.perf_counter()
             profile.enable()
@@ -354,6 +364,8 @@ def _parts() -> None:
                     tokenization_config=config.tokenization_config,
                     time_range_days=365.0,
                     composite_days=composite,
+                    merged_slots=merged,  # type: ignore[arg-type]
+                    input_token_budget=config.input_token_budget,
                 )
             ]
             for idx in np.resize(indices, 64)
@@ -382,7 +394,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("n", type=int, nargs="?", default=60)
     parser.add_argument("workers", type=int, nargs="?", default=12)
-    parser.add_argument("--h5py_dir", default=None)
+    parser.add_argument("--h5py_dir", default=os.environ.get("BENCH_H5PY_DIR"))
+    parser.add_argument("--prefetch", type=int, default=None)
     # Emulate one rank of a ``world``-rank node: global batch 64 * world, this rank's
     # slice of it (so concurrent ranks read disjoint samples, as in training).
     parser.add_argument("--rank", type=int, default=0)
@@ -399,6 +412,8 @@ def main() -> None:
     config = D.build_dataloader_config(common)
     config.global_batch_size = 64 * args.world
     config.num_workers = args.workers
+    if args.prefetch is not None:
+        config.prefetch_factor = args.prefetch
     config.work_dir = tempfile.mkdtemp(prefix="bench_allcap_loader_")
     config.target_device_type = "cpu"
     loader = config.build(dataset)
