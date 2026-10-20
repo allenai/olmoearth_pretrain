@@ -58,11 +58,12 @@ PROFILE_TARGETS = {
     "prof_memDcr": "allcap_slot_n4d192",
     # D' (narrow front end, merged-slot budget, compiled RoPE built in).
     "prof_regDfe": "allcap_slot_n4d192_fe",
+    "prof_memDfe": "allcap_slot_n4d192_fe",
 }
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
 COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
-MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr")
+MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
