@@ -75,11 +75,9 @@ MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakF")
 PEAK_MAX_STEPS = 320
 # Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
-# steps suffice. The grid comes from a --data_loader.sampled_hw_p_list override; the
-# patch size is narrowed on the built loader (FORCED_PATCH_SIZE), since the configs'
-# min/max patch size must match the model's.
+# steps suffice. The shape comes from --data_loader.patch_size_choices / sampled_hw_p_list
+# overrides on the launch.
 PEAK_FORCED_MAX_STEPS = 40
-FORCED_PATCH_SIZE = 3
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
@@ -183,20 +181,6 @@ def build_dataloader_config(common: CommonComponents):
     """The target arm's sampler at the real per-rank batch on one GPU."""
     config = _target(common).build_dataloader_config(common)
     config.global_batch_size = GLOBAL_BATCH_SIZE
-    if _prefix(common).startswith("prof_peakF"):
-        # Force the patch size on the loader as it is built (before any worker
-        # copies it): the config's min/max must match the model's range.
-        import numpy as np
-
-        build = config.build
-
-        def forced_build(*args, **kwargs):  # type: ignore[no-untyped-def]
-            loader = build(*args, **kwargs)
-            loader.patch_sizes = np.array([FORCED_PATCH_SIZE])
-            logger.info(f"Forcing patch size {FORCED_PATCH_SIZE} on the loader")
-            return loader
-
-        object.__setattr__(config, "build", forced_build)
     return config
 
 
@@ -653,16 +637,7 @@ class PeakMemoryCallback(Callback):
     blocks at that moment (plus the batch) before re-raising.
     """
 
-    # Draw every batch at this patch size (None = the sampler's own choice).
-    forced_patch_size: int | None = None
-
     def pre_train(self):  # noqa: D102
-        if self.forced_patch_size is not None:
-            import numpy as np
-
-            loader = self.trainer.data_loader
-            loader.patch_sizes = np.array([self.forced_patch_size])
-            logger.info(f"Forcing patch size {self.forced_patch_size}")
         torch.cuda.memory._record_memory_history(max_entries=1_500_000)
         self._spans = _module_spans()
         self._best = 0.0

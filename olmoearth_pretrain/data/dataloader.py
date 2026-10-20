@@ -85,6 +85,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         composite_days_choices: list[float] | None = None,
         merged_slots: tuple[int, int, int] | None = None,
         input_token_budget: int | None = None,
+        patch_size_choices: list[int] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -165,6 +166,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 merge (``token_budget``) instead of the input tokens.
             input_token_budget: With ``merged_slots``, a separate cap on the raw
                 input tokens per sample (None = no cap).
+            patch_size_choices: Optional subset of ``[min_patch_size,
+                max_patch_size]`` to draw patch sizes from (e.g. one patch size for a
+                memory profile); None = the whole range.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -204,6 +208,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
             logger.warning("No token budget provided ALL PIXELS WILL BE USED")
         self.token_budget = token_budget
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
+        if patch_size_choices:
+            if not set(patch_size_choices) <= set(self.patch_sizes.tolist()):
+                raise ValueError(
+                    f"patch_size_choices {patch_size_choices} must lie in "
+                    f"[{min_patch_size}, {max_patch_size}]"
+                )
+            self.patch_sizes = np.array(sorted(patch_size_choices))
         self.sampled_hw_p_list = sampled_hw_p_list
         self.time_priority_prob = time_priority_prob
         self.temporal_bias = temporal_bias
@@ -915,6 +926,8 @@ class OlmoEarthDataLoaderConfig(Config):
     # GetItemArgs.merged_slots).
     merged_slots: list[int] | None = None
     input_token_budget: int | None = None
+    # Optional subset of [min_patch_size, max_patch_size] to draw patch sizes from.
+    patch_size_choices: list[int] | None = None
     shuffle: bool = True
     num_workers: int = 0
     prefetch_factor: int | None = None
@@ -1032,6 +1045,7 @@ class OlmoEarthDataLoaderConfig(Config):
             composite_days_choices=self.composite_days_choices,
             merged_slots=tuple(self.merged_slots) if self.merged_slots else None,  # type: ignore[arg-type]
             input_token_budget=self.input_token_budget,
+            patch_size_choices=self.patch_size_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
