@@ -4,6 +4,7 @@ import functools
 import logging
 import math
 import multiprocessing as mp
+import os
 import signal
 from collections import deque
 from collections.abc import Callable, Iterable, Iterator
@@ -62,6 +63,18 @@ def _worker_ignore_sigterm(worker_id: int) -> None:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
 
+def _worker_init(worker_id: int, nice: int = 0) -> None:
+    """Ignore SIGTERM (see :func:`_worker_ignore_sigterm`); optionally lower priority.
+
+    ``nice > 0`` lowers the worker's CPU scheduling priority (threads it starts, e.g.
+    the read-ahead thread, inherit it), so on a crowded host the training processes,
+    which launch the GPU kernels, get CPU first.
+    """
+    _worker_ignore_sigterm(worker_id)
+    if nice > 0:
+        os.nice(nice)
+
+
 class OlmoEarthDataLoader(DataLoaderBase):
     """OlmoEarth Pretrain dataloader.
 
@@ -100,6 +113,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         pin_memory: bool = True,
         in_order: bool = True,
         read_ahead: int = 0,
+        worker_nice: int = 0,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
         transform: Transform | None = None,
@@ -184,6 +198,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 one, overlapping storage waits with CPU work. 0 = off. Each sample then
                 draws from its own seed (deterministic, but a different random stream
                 than with 0).
+            worker_nice: Lower each worker's CPU priority by this much (``os.nice``);
+                0 = unchanged.
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
             transform: Optional transform to apply in the dataloader workers.
             masking_strategy: Masking strategy to apply in the dataloader workers.
@@ -226,6 +242,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.pin_memory = pin_memory
         self.in_order = in_order
         self.read_ahead = read_ahead
+        self.worker_nice = worker_nice
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
 
         # Dataloader-side masking configuration
@@ -394,7 +411,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
             multiprocessing_context=(
                 self.multiprocessing_context if self.num_workers > 0 else None
             ),
-            worker_init_fn=_worker_ignore_sigterm if self.num_workers > 0 else None,
+            worker_init_fn=(
+                functools.partial(_worker_init, nice=self.worker_nice)
+                if self.num_workers > 0
+                else None
+            ),
             timeout=0,
         )
 
@@ -974,6 +995,8 @@ class OlmoEarthDataLoaderConfig(Config):
     # Per-modality-timestamps datasets: samples a thread in each worker reads ahead of
     # the one being computed (0 = off; see OlmoEarthDataLoader).
     read_ahead: int = 0
+    # Lower loader workers' CPU priority by this much (os.nice); 0 = unchanged.
+    worker_nice: int = 0
     # Send masks to the main process as uint8 instead of int64 (8x smaller; the
     # masks are pixel-resolution). Restored to int64 on device.
     uint8_masks: bool = False
@@ -1070,6 +1093,7 @@ class OlmoEarthDataLoaderConfig(Config):
             pin_memory=self.pin_memory,
             in_order=self.in_order,
             read_ahead=self.read_ahead,
+            worker_nice=self.worker_nice,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,

@@ -57,6 +57,9 @@ from olmoearth_pretrain.internal.experiment import (  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 from olmoearth_pretrain.nn.slot_merge import SlotMergeConfig  # noqa: E402
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig  # noqa: E402
+from olmoearth_pretrain.train.callbacks.rank_timing import (  # noqa: E402
+    RankTimingCallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -239,4 +242,7 @@ def build_allcap_trainer_config(common: CommonComponents, module_path: str):
         trainer_config, module_path, allcap_eval_tasks(catalog)
     )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    # Every rank's data wait and step time (max / mean / min across ranks): the speed
+    # monitor only sees rank 0, where other ranks' stalls look like model time.
+    trainer_config.callbacks["rank_timing"] = RankTimingCallback()
     return trainer_config
