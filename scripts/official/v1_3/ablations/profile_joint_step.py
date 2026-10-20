@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import torch  # noqa: E402
 from base import build_common_components as _base_common_components  # noqa: E402
 from base import build_visualize_config  # noqa: E402
 from olmo_core.train.callbacks import Callback, ProfilerCallback  # noqa: E402
@@ -59,11 +60,17 @@ PROFILE_TARGETS = {
     # D' (narrow front end, merged-slot budget, compiled RoPE built in).
     "prof_regDfe": "allcap_slot_n4d192_fe",
     "prof_memDfe": "allcap_slot_n4d192_fe",
+    "prof_peakDfe": "allcap_slot_n4d192_fe",
+    "prof_peakv13": "rc_ld1_pixtgt_pix512",
 }
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
 COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
 MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
+# Peak / OOM capture (PeakMemoryCallback): what is live at each new peak step and at an
+# OOM, plus that batch's shape.
+PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13")
+PEAK_MAX_STEPS = 320
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
@@ -458,6 +465,133 @@ class MemorySnapshotCallback(Callback):
         )
 
 
+def _live_by_site(snapshot: dict, top: int = 30) -> tuple[float, list[str]]:
+    """Replay the allocator trace; return the peak and what is live at it, by site."""
+    live: dict = {}
+    current = peak = 0
+    peak_live: dict = {}
+    for trace in snapshot["device_traces"]:
+        for e in trace:
+            action, addr, size = e["action"], e["addr"], e["size"]
+            if action == "alloc":
+                live[addr] = e
+                current += size
+                if current > peak:
+                    peak, peak_live = current, dict(live)
+            elif action == "free_completed" and addr in live:
+                current -= live.pop(addr)["size"]
+    return peak / 2**30, _group_by_site(peak_live.values(), top)
+
+
+def _group_by_site(blocks, top: int) -> list[str]:  # type: ignore[no-untyped-def]
+    groups: dict = {}
+    for e in blocks:
+        frames = e.get("frames") or []
+        ours = [
+            f
+            for f in frames
+            if "olmoearth_pretrain" in f.get("filename", "")
+            or "/ablations/" in f.get("filename", "")
+        ]
+        f = ours[0] if ours else (frames[0] if frames else {})
+        key = (
+            f"{f.get('filename', '?').split('olmoearth_pretrain/')[-1]}:"
+            f"{f.get('line', '?')} {f.get('name', '')}"
+        )
+        n, b = groups.get(key, (0, 0))
+        groups[key] = (n + 1, b + e["size"])
+    return [
+        f"{b / 2**30:8.2f} GiB  {n:6d} blocks  {key}"
+        for key, (n, b) in sorted(groups.items(), key=lambda kv: -kv[1][1])[:top]
+    ]
+
+
+def _describe_batch(batch) -> str:  # type: ignore[no-untyped-def]
+    """Patch size and, per modality, the tensor shape and real / encoded counts."""
+    from olmoearth_pretrain.datatypes import MaskValue
+
+    parts = []
+    items = batch if isinstance(batch, tuple | list) else (batch,)
+    for item in items:
+        if isinstance(item, int):
+            parts.append(f"patch_size={item}")
+            continue
+        fields = getattr(item, "_fields", None) or []
+        for name in fields:
+            value = getattr(item, name)
+            if not torch.is_tensor(value) or name.endswith("_mask"):
+                continue
+            mask = getattr(item, f"{name}_mask", None)
+            desc = f"{name}{list(value.shape)}"
+            if torch.is_tensor(mask):
+                desc += (
+                    f" enc={int((mask == MaskValue.ONLINE_ENCODER.value).sum())}"
+                    f" dec={int((mask == MaskValue.DECODER.value).sum())}"
+                    f" missing={int((mask == MaskValue.MISSING.value).sum())}"
+                    f" of {mask.numel()}"
+                )
+            parts.append(desc)
+    return "; ".join(parts)
+
+
+class PeakMemoryCallback(Callback):
+    """Log what is live at each new peak step and at an OOM, with the batch's shape.
+
+    Keeps a ring buffer of allocator events (long enough for a step). On a step whose
+    peak beats every earlier one it replays the buffer to the peak and logs the live
+    blocks by allocating line; an OutOfMemoryError in ``train_batch`` logs the live
+    blocks at that moment (plus the batch) before re-raising.
+    """
+
+    def pre_train(self):  # noqa: D102
+        torch.cuda.memory._record_memory_history(max_entries=1_500_000)
+        self._best = 0.0
+        self._batch_desc = ""
+        module = self.trainer.train_module
+        original = module.train_batch
+
+        def guarded(batch, *args, **kwargs):  # type: ignore[no-untyped-def]
+            self._batch_desc = _describe_batch(batch)
+            try:
+                return original(batch, *args, **kwargs)
+            except torch.OutOfMemoryError:
+                snapshot = torch.cuda.memory._snapshot()
+                live = [
+                    {"size": blk["size"], "frames": blk.get("frames", [])}
+                    for seg in snapshot["segments"]
+                    for blk in seg["blocks"]
+                    if blk["state"] == "active_allocated"
+                ]
+                lines = _group_by_site(live, 30)
+                logger.info(
+                    f"OOM at step {self.trainer.global_step}; batch: {self._batch_desc}\n"
+                    f"live at OOM ({sum(b['size'] for b in live) / 2**30:.1f} GiB):\n"
+                    + "\n".join(lines)
+                )
+                raise
+
+        module.train_batch = guarded  # type: ignore[method-assign]
+
+    def pre_step(self, batch):  # noqa: D102
+        torch.cuda.reset_peak_memory_stats()
+
+    def post_step(self):  # noqa: D102
+        peak = torch.cuda.max_memory_allocated() / 2**30
+        logger.info(
+            f"step {self.trainer.global_step} peak allocated {peak:.1f} GiB; "
+            f"batch: {self._batch_desc}"
+        )
+        if peak <= self._best + 0.5 or self.trainer.global_step < 5:
+            return
+        self._best = peak
+        traced_peak, lines = _live_by_site(torch.cuda.memory._snapshot())
+        logger.info(
+            f"NEW PEAK step {self.trainer.global_step}: {peak:.1f} GiB allocated "
+            f"(traced {traced_peak:.1f} GiB); batch: {self._batch_desc}\n"
+            + "\n".join(lines)
+        )
+
+
 def build_trainer_config(common: CommonComponents):
     """The arm's trainer, stripped to a short profiled run."""
     trainer_config = _target(common).build_trainer_config(common)
@@ -474,6 +608,10 @@ def build_trainer_config(common: CommonComponents):
         if _prefix(common) in REGION_PREFIXES
         else ProfilerCallback
     )
+    if _prefix(common) in PEAK_PREFIXES:
+        trainer_config.max_duration = Duration.steps(PEAK_MAX_STEPS)
+        trainer_config.callbacks["peak_memory"] = PeakMemoryCallback()
+        return trainer_config
     if _prefix(common) in MEMORY_PREFIXES:
         trainer_config.max_duration = Duration.steps(MEMORY_START + MEMORY_STEPS + 2)
         trainer_config.callbacks["memory_snapshot"] = MemorySnapshotCallback()
