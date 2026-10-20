@@ -15,6 +15,7 @@ prof_tmlp1 ai2/jupiter --launch.num_gpus=1 --launch.priority=urgent``.
 import importlib
 import logging
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -74,9 +75,11 @@ MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakF")
 PEAK_MAX_STEPS = 320
 # Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
-# steps suffice; the shape comes from --data_loader.{min,max}_patch_size /
-# sampled_hw_p_list overrides on the launch.
+# steps suffice. The grid comes from a --data_loader.sampled_hw_p_list override; the
+# patch size is narrowed on the built loader (FORCED_PATCH_SIZE), since the configs'
+# min/max patch size must match the model's.
 PEAK_FORCED_MAX_STEPS = 40
+FORCED_PATCH_SIZE = 3
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
@@ -626,6 +629,7 @@ def _describe_batch(batch) -> str:  # type: ignore[no-untyped-def]
     return "; ".join(parts)
 
 
+@dataclass
 class PeakMemoryCallback(Callback):
     """Log what is live at each new peak step and at an OOM, with the batch's shape.
 
@@ -635,7 +639,16 @@ class PeakMemoryCallback(Callback):
     blocks at that moment (plus the batch) before re-raising.
     """
 
+    # Draw every batch at this patch size (None = the sampler's own choice).
+    forced_patch_size: int | None = None
+
     def pre_train(self):  # noqa: D102
+        if self.forced_patch_size is not None:
+            import numpy as np
+
+            loader = self.trainer.data_loader
+            loader.patch_sizes = np.array([self.forced_patch_size])
+            logger.info(f"Forcing patch size {self.forced_patch_size}")
         torch.cuda.memory._record_memory_history(max_entries=1_500_000)
         self._spans = _module_spans()
         self._best = 0.0
@@ -713,7 +726,11 @@ def build_trainer_config(common: CommonComponents):
             if _prefix(common).startswith("prof_peakF")
             else PEAK_MAX_STEPS
         )
-        trainer_config.callbacks["peak_memory"] = PeakMemoryCallback()
+        trainer_config.callbacks["peak_memory"] = PeakMemoryCallback(
+            forced_patch_size=FORCED_PATCH_SIZE
+            if _prefix(common).startswith("prof_peakF")
+            else None
+        )
         return trainer_config
     if _prefix(common) in MEMORY_PREFIXES:
         trainer_config.max_duration = Duration.steps(MEMORY_START + MEMORY_STEPS + 2)
