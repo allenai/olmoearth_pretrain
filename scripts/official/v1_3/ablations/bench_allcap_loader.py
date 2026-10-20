@@ -101,6 +101,36 @@ def _instrument(log_dir: str) -> None:
 
     OlmoEarthDataset.__getitem__ = logged  # type: ignore[method-assign]
 
+    # Read-ahead halves: read_item runs in the worker's read thread, finish_item in its
+    # main thread. finish wall >> its thread CPU means it waited (e.g. on the GIL).
+    def halves(fn, kind):  # type: ignore[no-untyped-def]
+        def wrapper(self, *a):  # type: ignore[no-untyped-def]
+            if kind == "read":
+                h5t.update(wall=0.0, cpu=0.0, opens=0, reads=0, depth=0)
+            w, t = time.perf_counter(), time.thread_time()
+            out = fn(self, *a)
+            wall = time.perf_counter() - w
+            if kind == "finish":
+                batch_getitem["wall"] += wall
+            row = {
+                "pid": os.getpid(),
+                "kind": kind,
+                "t0": time.time() - wall,
+                "wall": wall,
+                "thread_cpu": time.thread_time() - t,
+                "h5_wall": h5t["wall"] if kind == "read" else 0.0,
+                "h5_cpu": h5t["cpu"] if kind == "read" else 0.0,
+                "composite": a[0].composite_days,
+            }
+            with open(f"{log_dir}/{kind}_{os.getpid()}.jsonl", "a") as f:
+                f.write(json.dumps(row) + "\n")
+            return out
+
+        return wrapper
+
+    OlmoEarthDataset.read_item = halves(OlmoEarthDataset.read_item, "read")  # type: ignore[method-assign]
+    OlmoEarthDataset.finish_item = halves(OlmoEarthDataset.finish_item, "finish")  # type: ignore[method-assign]
+
     # Batch assembly: time the collate (transform + masking) of each rank batch, with
     # its shape and the getitem time that went into it.
     from olmoearth_pretrain.data import collate as collate_module
@@ -150,7 +180,7 @@ def _instrument(log_dir: str) -> None:
 
 def _summarize(log_dir: str) -> None:
     """Aggregate the per-sample logs of ``_instrument``."""
-    rows, batches, mains = [], [], []
+    rows, batches, mains, halves = [], [], [], []
     for name in os.listdir(log_dir):
         with open(os.path.join(log_dir, name)) as f:
             lines = [json.loads(line) for line in f]
@@ -158,8 +188,23 @@ def _summarize(log_dir: str) -> None:
             batches += lines
         elif name.startswith("main_"):
             mains += lines
+        elif name.startswith(("read_", "finish_")):
+            halves += lines
         else:
             rows += lines
+    for kind in ("read", "finish"):
+        sub = [r for r in halves if r["kind"] == kind]
+        if sub:
+            half = {"n": len(sub)}
+            for key in ("wall", "thread_cpu", "h5_wall", "h5_cpu"):
+                half[key] = round(float(np.mean([r[key] for r in sub])), 4)
+            print(json.dumps({f"read_ahead_{kind}": half}), flush=True)
+    if not rows:
+        rows = [
+            r | {"proc_cpu": r["thread_cpu"], "torch_threads": 0, "h5_opens": 1}
+            for r in halves
+            if r["kind"] == "finish"
+        ]
     out: dict = {"samples": len(rows), "processes": len({r["pid"] for r in rows})}
     for key in ("wall", "proc_cpu", "thread_cpu", "h5_wall", "h5_cpu"):
         v = np.array([r[key] for r in rows])
@@ -391,6 +436,7 @@ def main() -> None:
     parser.add_argument("workers", type=int, nargs="?", default=12)
     parser.add_argument("--h5py_dir", default=os.environ.get("BENCH_H5PY_DIR"))
     parser.add_argument("--prefetch", type=int, default=None)
+    parser.add_argument("--read_ahead", type=int, default=None)
     # Emulate one rank of a ``world``-rank node: global batch 64 * world, this rank's
     # slice of it (so concurrent ranks read disjoint samples, as in training).
     parser.add_argument("--rank", type=int, default=0)
@@ -409,6 +455,8 @@ def main() -> None:
     config.num_workers = args.workers
     if args.prefetch is not None:
         config.prefetch_factor = args.prefetch
+    if args.read_ahead is not None:
+        config.read_ahead = args.read_ahead
     config.work_dir = tempfile.mkdtemp(prefix="bench_allcap_loader_")
     config.target_device_type = "cpu"
     loader = config.build(dataset)
