@@ -62,6 +62,8 @@ PROFILE_TARGETS = {
     "prof_memDfe": "allcap_slot_n4d192_fe",
     "prof_peakDfe": "allcap_slot_n4d192_fe",
     "prof_peakv13": "rc_ld1_pixtgt_pix512",
+    "prof_peakFDfe": "allcap_slot_n4d192_fe",
+    "prof_peakFv13": "rc_ld1_pixtgt_pix512",
 }
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
@@ -69,8 +71,12 @@ COMPILED_ROPE_PREFIXES = ("prof_regDcr", "prof_memDcr")
 MEMORY_PREFIXES = ("prof_memD", "prof_memv13", "prof_memDcr", "prof_memDfe")
 # Peak / OOM capture (PeakMemoryCallback): what is live at each new peak step and at an
 # OOM, plus that batch's shape.
-PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13")
+PEAK_PREFIXES = ("prof_peakDfe", "prof_peakv13", "prof_peakF")
 PEAK_MAX_STEPS = 320
+# Forced-shape peak runs (prof_peakF*): every batch at one (heavy) shape, so a few dozen
+# steps suffice; the shape comes from --data_loader.{min,max}_patch_size /
+# sampled_hw_p_list overrides on the launch.
+PEAK_FORCED_MAX_STEPS = 40
 # Record allocations over steps [MEMORY_START, MEMORY_START + MEMORY_STEPS).
 MEMORY_START = 40
 MEMORY_STEPS = 4
@@ -483,6 +489,24 @@ def _live_by_site(snapshot: dict, top: int = 30) -> tuple[float, list[str]]:
     return peak / 2**30, _group_by_site(peak_live.values(), top)
 
 
+def _peak_blocks(snapshot: dict) -> list:
+    """The allocator-trace blocks live at the traced peak."""
+    live: dict = {}
+    current = peak = 0
+    peak_live: dict = {}
+    for trace in snapshot["device_traces"]:
+        for e in trace:
+            action, addr, size = e["action"], e["addr"], e["size"]
+            if action == "alloc":
+                live[addr] = e
+                current += size
+                if current > peak:
+                    peak, peak_live = current, dict(live)
+            elif action == "free_completed" and addr in live:
+                current -= live.pop(addr)["size"]
+    return list(peak_live.values())
+
+
 def _group_by_site(blocks, top: int) -> list[str]:  # type: ignore[no-untyped-def]
     groups: dict = {}
     for e in blocks:
@@ -503,6 +527,74 @@ def _group_by_site(blocks, top: int) -> list[str]:  # type: ignore[no-untyped-de
     return [
         f"{b / 2**30:8.2f} GiB  {n:6d} blocks  {key}"
         for key, (n, b) in sorted(groups.items(), key=lambda kv: -kv[1][1])[:top]
+    ]
+
+
+def _module_spans() -> list[tuple[str, str, int, int, set[int] | None]]:
+    """(label, source file, first line, last line, trunk call lines) per component.
+
+    A live block is assigned to the innermost of these on its allocation stack. Inside
+    ``Encoder.apply_attn`` the lines that call a block are the trunk; the rest of that
+    method is encoder bookkeeping (encodings, collapse, masks, the merge call).
+    """
+    import inspect
+
+    from olmoearth_pretrain.nn import (
+        flexi_vit,
+        latent_mim,
+        slot_merge,
+        supervision_head,
+    )
+
+    def span(label, fn, trunk=False):  # type: ignore[no-untyped-def]
+        lines, start = inspect.getsourcelines(fn)
+        calls = (
+            {start + i for i, line in enumerate(lines) if "blk(" in line}
+            if trunk
+            else None
+        )
+        return (label, inspect.getsourcefile(fn), start, start + len(lines) - 1, calls)
+
+    spans = [
+        span("narrow stage", slot_merge.NarrowStage.forward),
+        span("slot merge", slot_merge.SlotMerge.forward),
+        span("perceiver", flexi_vit.Perceiver.forward),
+        span("decoder", flexi_vit.Predictor.forward),
+        span("decoder", flexi_vit.Predictor.apply_attn),
+        span("target projection", latent_mim.FrozenTargetProjection.forward),
+        span("patch embedding", flexi_vit.MultiModalPatchEmbeddings.forward),
+        span("supervision head", supervision_head.SupervisionHead.forward),
+        span("encoder", flexi_vit.Encoder.apply_attn, trunk=True),
+    ]
+    if hasattr(flexi_vit.Predictor, "forward_compact"):
+        spans.append(span("decoder", flexi_vit.Predictor.forward_compact))
+    return spans
+
+
+def _group_by_module(blocks, spans) -> list[str]:  # type: ignore[no-untyped-def]
+    """Live bytes per model component (innermost component on the stack)."""
+    totals: dict = {}
+    for e in blocks:
+        label = "other"
+        for f in e.get("frames") or []:
+            name, line = f.get("filename", ""), f.get("line", -1)
+            if name.endswith("train/loss.py"):
+                label = "loss"
+                break
+            hit = None
+            for lab, src, first, last, calls in spans:
+                if name == src and first <= line <= last:
+                    hit = lab
+                    if calls is not None:
+                        hit = "trunk blocks" if line in calls else "encoder bookkeeping"
+                    break
+            if hit is not None:
+                label = hit
+                break
+        totals[label] = totals.get(label, 0) + e["size"]
+    return [
+        f"{b / 2**30:8.2f} GiB  {lab}"
+        for lab, b in sorted(totals.items(), key=lambda kv: -kv[1])
     ]
 
 
@@ -545,6 +637,7 @@ class PeakMemoryCallback(Callback):
 
     def pre_train(self):  # noqa: D102
         torch.cuda.memory._record_memory_history(max_entries=1_500_000)
+        self._spans = _module_spans()
         self._best = 0.0
         self._batch_desc = ""
         module = self.trainer.train_module
@@ -565,7 +658,10 @@ class PeakMemoryCallback(Callback):
                 lines = _group_by_site(live, 30)
                 logger.info(
                     f"OOM at step {self.trainer.global_step}; batch: {self._batch_desc}\n"
-                    f"live at OOM ({sum(b['size'] for b in live) / 2**30:.1f} GiB):\n"
+                    f"live at OOM ({sum(b['size'] for b in live) / 2**30:.1f} GiB) by "
+                    "module:\n"
+                    + "\n".join(_group_by_module(live, self._spans))
+                    + "\nby line:\n"
                     + "\n".join(lines)
                 )
                 raise
@@ -584,10 +680,13 @@ class PeakMemoryCallback(Callback):
         if peak <= self._best + 0.5 or self.trainer.global_step < 5:
             return
         self._best = peak
-        traced_peak, lines = _live_by_site(torch.cuda.memory._snapshot())
+        snapshot = torch.cuda.memory._snapshot()
+        traced_peak, lines = _live_by_site(snapshot)
         logger.info(
             f"NEW PEAK step {self.trainer.global_step}: {peak:.1f} GiB allocated "
-            f"(traced {traced_peak:.1f} GiB); batch: {self._batch_desc}\n"
+            f"(traced {traced_peak:.1f} GiB); batch: {self._batch_desc}\nby module:\n"
+            + "\n".join(_group_by_module(_peak_blocks(snapshot), self._spans))
+            + "\nby line:\n"
             + "\n".join(lines)
         )
 
@@ -609,7 +708,11 @@ def build_trainer_config(common: CommonComponents):
         else ProfilerCallback
     )
     if _prefix(common) in PEAK_PREFIXES:
-        trainer_config.max_duration = Duration.steps(PEAK_MAX_STEPS)
+        trainer_config.max_duration = Duration.steps(
+            PEAK_FORCED_MAX_STEPS
+            if _prefix(common).startswith("prof_peakF")
+            else PEAK_MAX_STEPS
+        )
         trainer_config.callbacks["peak_memory"] = PeakMemoryCallback()
         return trainer_config
     if _prefix(common) in MEMORY_PREFIXES:
