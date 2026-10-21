@@ -4,6 +4,8 @@ import numpy as np
 import torch
 
 from olmoearth_pretrain.evals.embedding_transforms import (
+    EmbeddingNormalization,
+    EmbeddingNormalizer,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     quantize_embeddings,
@@ -233,3 +235,39 @@ class TestPercentileQuantization:
         assert mse_dim0 < 5  # reasonable for range 10 with 4 buckets
         assert mse_dim1 < 500  # reasonable for range 100 with 4 buckets
         assert mse_dim1 > mse_dim0 * 10  # dim 1 should have much larger MSE
+
+
+class TestEmbeddingNormalization:
+    """Tests for the pre-quantization embedding normalizations."""
+
+    def test_none_is_identity(self) -> None:
+        """NONE leaves the tensor (and its dtype) exactly as extracted."""
+        embeddings = torch.randn(64, 32, dtype=torch.bfloat16)
+        out = EmbeddingNormalizer(mode=EmbeddingNormalization.NONE)(embeddings)
+        assert out.dtype == torch.bfloat16
+        assert torch.equal(out, embeddings)
+
+    def test_l2_is_stateless(self) -> None:
+        """L2 needs no statistics: every row lands on the unit sphere."""
+        normalizer = EmbeddingNormalizer(mode=EmbeddingNormalization.L2)
+        out = normalizer(torch.randn(64, 32) * 100)
+        assert torch.allclose(out.norm(dim=-1), torch.ones(64), atol=1e-5)
+
+    def test_l2_rescues_the_int8_round_trip(self) -> None:
+        """The point of L2: unit-norm embeddings survive quantization.
+
+        LayerNorm-scale embeddings saturate the power scheme (which assumes
+        AEF's value range), so their round trip loses far more.
+        """
+        raw = torch.randn(512, 64)
+        normalized = EmbeddingNormalizer(mode=EmbeddingNormalization.L2)(raw)
+        raw_cos = torch.nn.functional.cosine_similarity(
+            raw, dequantize_embeddings(quantize_embeddings(raw)), dim=-1
+        ).mean()
+        norm_cos = torch.nn.functional.cosine_similarity(
+            normalized,
+            dequantize_embeddings(quantize_embeddings(normalized)),
+            dim=-1,
+        ).mean()
+        assert norm_cos > raw_cos
+        assert norm_cos > 0.999
