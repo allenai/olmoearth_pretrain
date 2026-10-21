@@ -171,4 +171,7 @@ def get_eval_dataset(
             norm_method=norm_method,
             input_modalities_override=input_modalities if input_modalities else None,
             label_fraction=label_fraction,
+            window_size=kwargs.get("window_size"),
+            label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
+            tile_samples=kwargs.get("tile_samples", False),
         )

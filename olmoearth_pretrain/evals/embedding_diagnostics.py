@@ -19,11 +19,30 @@ import logging
 import torch
 from torch import Tensor
 
+from olmoearth_pretrain.evals.embedding_transforms import QUANTIZE_CLIP_THRESHOLD
+
 logger = logging.getLogger(__name__)
 
 MAX_PAIRWISE_SAMPLES = 2048
 MAX_SVD_SAMPLES = 4096
 MAX_INTRA_SAMPLE_IMAGES = 256
+# Rows kept for the pipeline (raw -> normalized -> int8 round-trip) diagnostics.
+# Bounded so a dense task's millions of patch embeddings cost a fixed amount.
+MAX_PIPELINE_ROWS = 4096
+
+# These metrics are read as trends across checkpoints, so the subsample must not
+# move between calls -- otherwise sampling noise is indistinguishable from drift.
+SUBSAMPLE_SEED = 0
+
+
+def _subsample(embeddings: Tensor, max_samples: int) -> Tensor:
+    """Take a fixed pseudo-random subset of rows, identical across calls."""
+    n = embeddings.shape[0]
+    if n <= max_samples:
+        return embeddings
+    generator = torch.Generator().manual_seed(SUBSAMPLE_SEED)
+    idx = torch.randperm(n, generator=generator)[:max_samples]
+    return embeddings[idx.to(embeddings.device)]
 
 
 def effective_rank(embeddings: Tensor) -> float:
@@ -32,10 +51,7 @@ def effective_rank(embeddings: Tensor) -> float:
     Returns a value between 1 (full collapse) and min(N, D) (maximally spread).
     Roy & Bhattacharyya (2007).
     """
-    n = embeddings.shape[0]
-    if n > MAX_SVD_SAMPLES:
-        idx = torch.randperm(n, device=embeddings.device)[:MAX_SVD_SAMPLES]
-        embeddings = embeddings[idx]
+    embeddings = _subsample(embeddings, MAX_SVD_SAMPLES)
     S = torch.linalg.svdvals(embeddings.float())
     S = S[S > 0]
     if S.numel() == 0:
@@ -48,11 +64,8 @@ def effective_rank(embeddings: Tensor) -> float:
 def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
     """Uniformity metric (Wang & Isola 2020). More negative = more uniform."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
+    z = _subsample(z, MAX_PAIRWISE_SAMPLES)
     n = z.shape[0]
-    if n > MAX_PAIRWISE_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
-        z = z[idx]
-        n = MAX_PAIRWISE_SAMPLES
     sq_dists = torch.cdist(z, z, p=2).pow(2)
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sq_dists_upper = sq_dists[mask]
@@ -62,11 +75,8 @@ def uniformity(embeddings: Tensor, t: float = 2.0) -> float:
 def pairwise_cosine_stats(embeddings: Tensor) -> dict[str, float]:
     """Pairwise cosine similarity stats. High mean + low std = crowding."""
     z = torch.nn.functional.normalize(embeddings.float(), dim=-1)
+    z = _subsample(z, MAX_PAIRWISE_SAMPLES)
     n = z.shape[0]
-    if n > MAX_PAIRWISE_SAMPLES:
-        idx = torch.randperm(n, device=z.device)[:MAX_PAIRWISE_SAMPLES]
-        z = z[idx]
-        n = MAX_PAIRWISE_SAMPLES
     sim = z @ z.T
     mask = torch.triu(torch.ones(n, n, device=z.device, dtype=torch.bool), diagonal=1)
     sims = sim[mask]
@@ -76,6 +86,40 @@ def pairwise_cosine_stats(embeddings: Tensor) -> dict[str, float]:
         "cosine_sim_min": sims.min().item(),
         "cosine_sim_max": sims.max().item(),
     }
+
+
+def anisotropy_stats(embeddings: Tensor) -> dict[str, float]:
+    """Split embedding spread into a shared offset and the per-sample variation.
+
+    ``effective_rank`` alone conflates two very different geometries: a cloud
+    genuinely spread over many directions, and a tight cloud sitting far from the
+    origin along one dominant direction. Cosine KNN and linear probes only see the
+    second component, so a representation can look healthy by rank while carrying
+    almost no usable per-sample signal.
+
+    ``common_mode_frac`` is ``||E[e]|| / E[||e||]``: 0 when embeddings are centered
+    at the origin, 1 when every sample is the same vector. ``centered_effective_rank``
+    re-measures rank after removing that offset, and ``top1_var_share`` is the
+    fraction of centered variance in the leading principal direction -- the standard
+    anisotropy summary, where a large value means one direction dominates whatever
+    variation survives.
+    """
+    e = embeddings.float()
+    mean = e.mean(dim=0)
+    mean_norm = mean.norm().item()
+    avg_norm = e.norm(dim=-1).mean().item()
+    centered = e - mean
+
+    metrics = {
+        "common_mode_frac": mean_norm / max(avg_norm, 1e-12),
+        "centered_effective_rank": effective_rank(centered),
+    }
+
+    S = torch.linalg.svdvals(_subsample(centered, MAX_SVD_SAMPLES))
+    total = S.pow(2).sum()
+    if total > 0:
+        metrics["top1_var_share"] = (S[0].pow(2) / total).item()
+    return metrics
 
 
 def embedding_norm_stats(embeddings: Tensor) -> dict[str, float]:
@@ -103,11 +147,154 @@ def compute_embedding_diagnostics(embeddings: Tensor) -> dict[str, float]:
     metrics["embedding_dim"] = float(d)
     metrics["num_samples"] = float(n)
     metrics.update(embedding_norm_stats(embeddings))
+    metrics.update(anisotropy_stats(embeddings))
 
     if n >= 4:
         metrics["uniformity"] = uniformity(embeddings)
         metrics.update(pairwise_cosine_stats(embeddings))
 
+    return metrics
+
+
+def flatten_rows(embeddings: Tensor) -> Tensor:
+    """Collapse ``[N, ..., D]`` to a ``[rows, D]`` float32 matrix."""
+    return embeddings.reshape(-1, embeddings.shape[-1]).float()
+
+
+def sample_row_indices(
+    num_rows: int, max_rows: int = MAX_PIPELINE_ROWS, seed: int = 0
+) -> Tensor | None:
+    """Deterministic row subsample, or None when everything fits.
+
+    Shared across the stages of one pipeline so raw / normalized / round-tripped
+    views stay row-aligned and can be compared elementwise.
+    """
+    if num_rows <= max_rows:
+        return None
+    generator = torch.Generator().manual_seed(seed)
+    return torch.randperm(num_rows, generator=generator)[:max_rows]
+
+
+def per_dim_stats(rows: Tensor) -> dict[str, float]:
+    """Per-dimension scale and shared-offset stats on ``[rows, D]``.
+
+    ``dim_std_ratio`` is the anisotropy a KNN distance or a probe without
+    BatchNorm sees directly; ``mean_component_ratio`` is the share of a typical
+    embedding's magnitude that is a constant offset every embedding carries
+    (0 = centered, ->1 = every vector points the same way, which compresses
+    cosine similarities and drives KNN hubness).
+    """
+    dim_std = rows.std(dim=0)
+    mean_vec = rows.mean(dim=0)
+    mean_norm = rows.norm(dim=-1).mean()
+    return {
+        "dim_std_mean": dim_std.mean().item(),
+        "dim_std_min": dim_std.min().item(),
+        "dim_std_max": dim_std.max().item(),
+        "dim_std_ratio": (dim_std.max() / dim_std.min().clamp_min(1e-12)).item(),
+        "mean_component_ratio": ((mean_vec.norm() / mean_norm.clamp_min(1e-12)).item()),
+    }
+
+
+def quantization_clip_stats(rows: Tensor) -> dict[str, float]:
+    """How much of ``rows`` the legacy int8 power scheme would saturate.
+
+    ``clip_fraction`` counts coordinates past ``QUANTIZE_CLIP_THRESHOLD`` (which
+    all map to the same int8 code, so their magnitude is erased);
+    ``clip_fraction_rows`` counts embeddings losing at least one coordinate.
+    """
+    magnitude = rows.abs()
+    clipped = magnitude > QUANTIZE_CLIP_THRESHOLD
+    return {
+        "clip_fraction": clipped.float().mean().item(),
+        "clip_fraction_rows": clipped.any(dim=-1).float().mean().item(),
+        "abs_max": magnitude.max().item(),
+        "abs_p999": torch.quantile(magnitude.flatten().float(), 0.999).item(),
+    }
+
+
+def round_trip_stats(before: Tensor, after: Tensor) -> dict[str, float]:
+    """Damage done by a quantize -> dequantize round trip, row-aligned.
+
+    ``roundtrip_cosine_mean`` is what a cosine KNN loses; ``roundtrip_rel_mse``
+    is the squared error relative to the embedding's own energy.
+    """
+    before = before.float()
+    after = after.float()
+    cosine = torch.nn.functional.cosine_similarity(before, after, dim=-1)
+    rel_mse = (after - before).pow(2).sum(dim=-1) / before.pow(2).sum(dim=-1).clamp_min(
+        1e-12
+    )
+    return {
+        "roundtrip_cosine_mean": cosine.mean().item(),
+        "roundtrip_cosine_min": cosine.min().item(),
+        "roundtrip_rel_mse": rel_mse.mean().item(),
+    }
+
+
+def compute_geometry_diagnostics(rows: Tensor) -> dict[str, float]:
+    """Geometry of a ``[rows, D]`` embedding matrix as the probes consume it.
+
+    ``effective_rank`` is uncentered (a large shared offset alone can pin it
+    near 1); ``effective_rank_centered`` reports the spread that survives
+    removing that offset, so the two together separate "collapsed" from
+    "off-center".
+    """
+    if rows.shape[0] < 2:
+        logger.warning("Need at least 2 rows for geometry diagnostics")
+        return {}
+    metrics: dict[str, float] = {
+        "effective_rank": effective_rank(rows),
+        "effective_rank_centered": effective_rank(rows - rows.mean(dim=0)),
+        "embedding_dim": float(rows.shape[-1]),
+    }
+    metrics.update(embedding_norm_stats(rows))
+    metrics.update(per_dim_stats(rows))
+    metrics.update(quantization_clip_stats(rows))
+    if rows.shape[0] >= 4:
+        metrics.update(pairwise_cosine_stats(rows))
+    return metrics
+
+
+def compute_pipeline_diagnostics(
+    raw: Tensor,
+    normalized: Tensor | None = None,
+    round_tripped: Tensor | None = None,
+    seed: int = 0,
+) -> dict[str, float]:
+    """Diagnostics along one split's extract -> normalize -> int8 pipeline.
+
+    Emits ``raw_*`` for the embeddings as the model produced them, ``norm_*``
+    for the normalized ones (omitted when no normalization ran, since the
+    numbers would be identical), and ``roundtrip_*`` comparing what the probe
+    actually receives against its pre-quantization input.
+
+    All three views are subsampled with the same row indices, so the round-trip
+    comparison is elementwise. Each may be passed at full size; only the
+    subsample is materialized.
+    """
+    raw_rows = flatten_rows(raw)
+    idx = sample_row_indices(raw_rows.shape[0], seed=seed)
+    if idx is not None:
+        raw_rows = raw_rows[idx]
+
+    metrics = {f"raw_{k}": v for k, v in compute_geometry_diagnostics(raw_rows).items()}
+
+    probe_input = raw_rows
+    if normalized is not None:
+        norm_rows = flatten_rows(normalized)
+        if idx is not None:
+            norm_rows = norm_rows[idx]
+        metrics.update(
+            {f"norm_{k}": v for k, v in compute_geometry_diagnostics(norm_rows).items()}
+        )
+        probe_input = norm_rows
+
+    if round_tripped is not None:
+        rt_rows = flatten_rows(round_tripped)
+        if idx is not None:
+            rt_rows = rt_rows[idx]
+        metrics.update(round_trip_stats(probe_input, rt_rows))
     return metrics
 
 

@@ -4,13 +4,69 @@ import pytest
 import torch
 
 from olmoearth_pretrain.evals.embedding_diagnostics import (
+    MAX_PIPELINE_ROWS,
+    anisotropy_stats,
     compute_embedding_diagnostics,
+    compute_pipeline_diagnostics,
     compute_spatial_embedding_diagnostics,
     effective_rank,
     embedding_norm_stats,
     pairwise_cosine_stats,
+    per_dim_stats,
+    quantization_clip_stats,
+    round_trip_stats,
     uniformity,
 )
+from olmoearth_pretrain.evals.embedding_transforms import (
+    dequantize_embeddings,
+    quantize_embeddings,
+)
+
+
+class TestAnisotropyStats:
+    """Tests for anisotropy_stats function."""
+
+    def test_centered_cloud_has_no_common_mode(self) -> None:
+        """An origin-centered cloud has common_mode_frac near 0."""
+        torch.manual_seed(0)
+        stats = anisotropy_stats(torch.randn(2000, 32))
+        assert stats["common_mode_frac"] < 0.1
+
+    def test_offset_cloud_is_almost_all_common_mode(self) -> None:
+        """A tight cloud far from the origin has common_mode_frac near 1."""
+        torch.manual_seed(0)
+        offset = 50.0 * torch.nn.functional.normalize(torch.randn(32), dim=0)
+        stats = anisotropy_stats(torch.randn(2000, 32) * 0.1 + offset)
+        assert stats["common_mode_frac"] > 0.99
+
+    def test_common_mode_does_not_lower_centered_rank(self) -> None:
+        """Adding a constant offset changes only the common mode, not the rank.
+
+        This is the property that motivates reporting both: uncentered
+        effective_rank collapses under a large offset even though no per-sample
+        information was lost.
+        """
+        torch.manual_seed(0)
+        base = torch.randn(2000, 32)
+        offset = 50.0 * torch.nn.functional.normalize(torch.randn(32), dim=0)
+        centered_rank = anisotropy_stats(base)["centered_effective_rank"]
+        offset_rank = anisotropy_stats(base + offset)["centered_effective_rank"]
+        assert abs(centered_rank - offset_rank) < 0.01
+        assert effective_rank(base + offset) < 0.5 * centered_rank
+
+    def test_top1_var_share_detects_dominant_direction(self) -> None:
+        """Variance concentrated in one direction pushes top1_var_share to 1."""
+        torch.manual_seed(0)
+        direction = torch.nn.functional.normalize(torch.randn(32), dim=0)
+        spike = torch.randn(2000, 32) * 0.05 + torch.randn(2000, 1) * direction
+        assert anisotropy_stats(spike)["top1_var_share"] > 0.9
+        assert anisotropy_stats(torch.randn(2000, 32))["top1_var_share"] < 0.1
+
+    def test_deterministic_across_calls(self) -> None:
+        """Subsampling is fixed, so trends across checkpoints are comparable."""
+        torch.manual_seed(0)
+        embeddings = torch.randn(6000, 32)
+        assert anisotropy_stats(embeddings) == anisotropy_stats(embeddings)
 
 
 class TestEffectiveRank:
@@ -116,6 +172,9 @@ class TestComputeEmbeddingDiagnostics:
             "cosine_sim_std",
             "cosine_sim_min",
             "cosine_sim_max",
+            "common_mode_frac",
+            "centered_effective_rank",
+            "top1_var_share",
         }
         assert expected == set(metrics.keys())
 
@@ -171,3 +230,98 @@ class TestSpatialEmbeddingDiagnostics:
         """2D input raises ValueError."""
         with pytest.raises(ValueError, match="3\\+ dim"):
             compute_spatial_embedding_diagnostics(torch.randn(10, 64))
+
+
+class TestPerDimStats:
+    """Tests for per-dimension scale and shared-offset stats."""
+
+    def test_isotropic_dims(self) -> None:
+        """Standard normal dims have a per-dim std ratio near 1."""
+        stats = per_dim_stats(torch.randn(4096, 32))
+        assert 0.8 < stats["dim_std_ratio"] < 1.5
+        assert stats["mean_component_ratio"] < 0.1
+
+    def test_anisotropy_detected(self) -> None:
+        """One inflated dimension shows up in the std ratio."""
+        rows = torch.randn(4096, 32)
+        rows[:, 0] *= 50
+        stats = per_dim_stats(rows)
+        assert stats["dim_std_ratio"] > 20
+
+    def test_shared_offset_detected(self) -> None:
+        """A large constant offset dominates the typical embedding."""
+        rows = torch.randn(1024, 32) * 0.01 + 10.0
+        stats = per_dim_stats(rows)
+        assert stats["mean_component_ratio"] > 0.99
+
+
+class TestQuantizationClipStats:
+    """Tests for int8 saturation accounting."""
+
+    def test_unit_norm_embeddings_do_not_clip(self) -> None:
+        """AEF-style unit-L2 embeddings sit well inside the int8 range."""
+        rows = torch.nn.functional.normalize(torch.randn(512, 64), dim=-1)
+        assert quantization_clip_stats(rows)["clip_fraction"] == 0.0
+
+    def test_layernorm_scale_embeddings_clip(self) -> None:
+        """Per-coordinate std ~1 saturates roughly a third of coordinates."""
+        stats = quantization_clip_stats(torch.randn(4096, 64))
+        assert 0.25 < stats["clip_fraction"] < 0.40
+        assert stats["clip_fraction_rows"] > 0.99
+
+
+class TestRoundTripStats:
+    """Tests for quantization round-trip damage."""
+
+    def test_identical_is_lossless(self) -> None:
+        """Comparing a tensor to itself reports no damage."""
+        rows = torch.randn(64, 32)
+        stats = round_trip_stats(rows, rows)
+        assert stats["roundtrip_cosine_mean"] > 0.999
+        assert stats["roundtrip_rel_mse"] < 1e-6
+
+    def test_clipping_shows_as_damage(self) -> None:
+        """The int8 round trip damages LayerNorm-scale embeddings more than unit ones."""
+        wide = torch.randn(512, 64)
+        unit = torch.nn.functional.normalize(torch.randn(512, 64), dim=-1)
+        wide_damage = round_trip_stats(
+            wide, dequantize_embeddings(quantize_embeddings(wide))
+        )
+        unit_damage = round_trip_stats(
+            unit, dequantize_embeddings(quantize_embeddings(unit))
+        )
+        assert wide_damage["roundtrip_rel_mse"] > unit_damage["roundtrip_rel_mse"]
+        assert (
+            wide_damage["roundtrip_cosine_mean"] < unit_damage["roundtrip_cosine_mean"]
+        )
+
+
+class TestPipelineDiagnostics:
+    """Tests for the extract -> normalize -> quantize pipeline diagnostics."""
+
+    def test_raw_only(self) -> None:
+        """Without a normalizer or quantization, only raw_* keys are emitted."""
+        metrics = compute_pipeline_diagnostics(torch.randn(128, 32))
+        assert any(k.startswith("raw_") for k in metrics)
+        assert not any(k.startswith(("norm_", "roundtrip_")) for k in metrics)
+
+    def test_all_stages(self) -> None:
+        """Each stage contributes its own prefix."""
+        raw = torch.randn(128, 32)
+        normalized = torch.nn.functional.normalize(raw, dim=-1)
+        round_tripped = dequantize_embeddings(quantize_embeddings(normalized))
+        metrics = compute_pipeline_diagnostics(raw, normalized, round_tripped)
+        assert metrics["raw_clip_fraction"] > metrics["norm_clip_fraction"]
+        assert metrics["roundtrip_cosine_mean"] > 0.99
+
+    def test_spatial_input(self) -> None:
+        """Spatial embeddings are flattened to rows before analysis."""
+        metrics = compute_pipeline_diagnostics(torch.randn(8, 4, 4, 32))
+        assert metrics["raw_embedding_dim"] == 32.0
+
+    def test_subsample_keeps_views_aligned(self) -> None:
+        """Above the row cap, all three views are cut with the same indices."""
+        raw = torch.randn(MAX_PIPELINE_ROWS * 2, 16)
+        metrics = compute_pipeline_diagnostics(raw, raw, raw)
+        # Misaligned rows would break the elementwise comparison, not match it.
+        assert metrics["roundtrip_cosine_mean"] > 0.999
