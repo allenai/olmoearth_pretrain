@@ -75,6 +75,7 @@ from olmoearth_pretrain.train.callbacks.evaluator_callback import (
     DownstreamEvaluatorCallback,
     define_checkpoint_step_metrics,
     eval_result_log_dict,
+    extra_results_log_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,15 @@ def evaluate_checkpoints(
                 metrics.update(
                     eval_result_log_dict(
                         "eval/test", evaluator.evaluation_name, test_result
+                    )
+                )
+
+            if result.extra_results:
+                metrics.update(extra_results_log_dict(result.extra_results))
+            if eval_callback.run_on_test and result.extra_test_results:
+                metrics.update(
+                    extra_results_log_dict(
+                        result.extra_test_results, prefix="eval/test"
                     )
                 )
 
