@@ -102,8 +102,8 @@ def _model_task_names(
             f"No embedding eval task's dataset supports the precomputed "
             f"'{modality}' modality, so --model={model} would run zero tasks. "
             f"Bake the embeddings into the eval datasets first (embedding "
-            f"materializer / pastis_processor --embedding_products {product}) "
-            f"and list '{modality}' in the dataset's supported_modalities."
+            f"materializer --products {product}), then register them with "
+            f"scripts/tools/register_embedding_products.py."
         )
     return lp, knn
 
