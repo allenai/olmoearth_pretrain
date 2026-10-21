@@ -259,8 +259,20 @@ class OlmoEarthDataLoader(DataLoaderBase):
             raise ValueError(f"num_masked_views must be 1 or 2, got {num_masked_views}")
 
         if self.num_workers > 0 and self.multiprocessing_context == "forkserver":
-            # Overhead of loading modules on import by preloading them
-            mp.set_forkserver_preload(["torch", "rasterio"])
+            # Workers fork from one server that imported these once, instead of each
+            # (re)spawned worker -- every epoch -- importing them from scratch.
+            mp.set_forkserver_preload(
+                [
+                    "torch",
+                    "rasterio",
+                    "numpy",
+                    "h5py",
+                    "hdf5plugin",
+                    "olmoearth_pretrain.data.dataset",
+                    "olmoearth_pretrain.data.collate",
+                    "olmoearth_pretrain.train.masking",
+                ]
+            )
 
         # Modalities kept out of the encoder token budget (decode-only targets are
         # never encoded, so they should not consume budget meant for the encoder).
