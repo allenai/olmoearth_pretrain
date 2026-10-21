@@ -15,6 +15,7 @@ from typing import Any
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import dataset_to_config, get_eval_mode
+from olmoearth_pretrain.evals.embedding_transforms import QuantizationScheme
 from olmoearth_pretrain.evals.models import (
     MODELS_WITH_MULTIPLE_SIZES,
     BaselineModelName,
@@ -259,7 +260,7 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
     whose dataset has no such modality baked in keep their imagery
     input_modalities and are skipped at runtime by the modality check.
 
-    The product is already int8 at source, so it is not re-quantized.
+    Quantization is per-product, see ``QUANTIZE_AT_EVAL_MODALITIES``.
     """
     capable_tasks = _modality_capable_tasks(modality_name)
     args = dataset_args
@@ -271,11 +272,19 @@ def _get_precomputed_embedding_args(modality_name: str) -> str:
         f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}.input_modalities=[{modality_name}]"
         for task_name in capable_tasks
     )
+    quantize = modality_name in QUANTIZE_AT_EVAL_MODALITIES
     args += " " + " ".join(
         f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
-        ".quantize_embeddings=False"
+        f".quantize_embeddings={quantize}"
         for task_name in capable_tasks
     )
+    if quantize:
+        scheme = QUANTIZE_SCHEME_BY_MODALITY[modality_name]
+        args += " " + " ".join(
+            f"--trainer.callbacks.downstream_evaluator.tasks.{task_name}"
+            f".quantization_scheme=QuantizationScheme.{scheme.name}"
+            for task_name in capable_tasks
+        )
     return args
 
 
@@ -1355,6 +1364,40 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 # product name) they read.
 PRECOMPUTED_MODEL_TO_MODALITY = {
     BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    # tessera_v2 is baked by our own v2 inference run
+    # (evals/datasets/tessera_v2_export.py), not by the embedding materializer.
+    BaselineModelName.TESSERA_V2_PRECOMPUTED: (
+        Modality.TESSERA_V2.name,
+        "tessera_v2",
+    ),
+}
+
+
+# Precomputed modalities that must be int8 round-tripped AT EVAL TIME, because
+# unlike the others they do not already carry their product's quantization loss.
+#
+# The rule is "score every product at the precision it ships", and the
+# downloaded AEF product satisfies it for free: the GSE fetcher reads int8 COGs
+# and dequantizes to float32, so the loss is baked into the stored values and
+# re-quantizing would charge it twice.
+#
+# tessera_v2 is the exception, and it is an artifact of HOW WE MADE IT: we run
+# their pixel student ourselves (evals/datasets/tessera_v2_export.py) and their
+# infer_v2.py defaults to float32, with `--int8` opt-in. The shipped v2 product
+# is int8 (quantization-aware training, see the TESSERA paper), so leaving this
+# unquantized scores v2 ABOVE its own release precision -- which is exactly the
+# mistake made in the 2026-08-07 and 2026-08-11 ethiopia/africa sweeps.
+#
+# Each product is quantized under ITS OWN scheme, not ours: AlphaEarth's
+# fixed-scale power scheme suits AEF's unit-L2 vectors and clips a
+# LayerNorm-geometry embedding (see QuantizationScheme), and the v2 student ends
+# in a non-affine LayerNorm, so scoring v2 under the power scheme would charge it
+# a ~5-point cosine loss its real product does not pay. TESSERA_PER_VECTOR
+# reproduces geotessera's decoder instead.
+QUANTIZE_AT_EVAL_MODALITIES = frozenset({Modality.TESSERA_V2.name})
+
+QUANTIZE_SCHEME_BY_MODALITY = {
+    Modality.TESSERA_V2.name: QuantizationScheme.TESSERA_PER_VECTOR,
 }
 
 

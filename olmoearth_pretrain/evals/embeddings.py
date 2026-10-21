@@ -12,10 +12,12 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 )
 from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalizer,
+    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     quantize_embeddings,
     quantize_embeddings_percentile,
+    roundtrip_embeddings_tessera,
 )
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
@@ -30,6 +32,7 @@ def normalize_and_quantize(
     quantize_bits: int | None = None,
     quantile_config: dict | None = None,
     diagnostics_out: dict[str, float] | None = None,
+    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER,
 ) -> torch.Tensor:
     """Normalize then (optionally) quantize one split's embeddings.
 
@@ -49,10 +52,14 @@ def normalize_and_quantize(
         diagnostics_out: If provided, filled with geometry diagnostics for each
             stage of the pipeline (a bounded row subsample, so the cost does not
             scale with the split size).
+        quantization_scheme: Which int8 scheme to apply. ``TESSERA_PER_VECTOR``
+            returns **float32** already round-tripped, because its per-vector
+            scales are needed to reconstruct; the other schemes return int8
+            codes for a caller-side dequantize.
 
     Returns:
-        The transformed embeddings: int8 codes if quantizing (for a caller-side
-        dequantize), float otherwise.
+        The transformed embeddings: int8 under the code-returning schemes,
+        float32 under ``TESSERA_PER_VECTOR``, and float if quantization is off.
     """
     raw = embeddings if diagnostics_out is not None else None
 
@@ -60,8 +67,15 @@ def normalize_and_quantize(
         embeddings = normalizer(embeddings)
     normalized = embeddings if raw is not None and normalizer is not None else None
 
+    tessera_scheme = quantization_scheme == QuantizationScheme.TESSERA_PER_VECTOR
     if quantize:
-        if quantize_bits is not None and quantile_config is not None:
+        if tessera_scheme:
+            logger.info(
+                "Quantizing embeddings through Tessera's int8 scheme "
+                "(linear, per-vector scale); returns float32"
+            )
+            embeddings = roundtrip_embeddings_tessera(embeddings)
+        elif quantize_bits is not None and quantile_config is not None:
             key = f"{quantize_bits}bit"
             if key not in quantile_config:
                 raise ValueError(
@@ -99,7 +113,10 @@ def normalize_and_quantize(
         quantized_rows = embeddings.reshape(-1, embeddings.shape[-1])
         if idx is not None:
             quantized_rows = quantized_rows[idx]
-        if quantize_bits is not None and quantile_config is not None:
+        if tessera_scheme:
+            # Already float32 and already round-tripped.
+            round_tripped = quantized_rows
+        elif quantize_bits is not None and quantile_config is not None:
             midpoints = quantile_config[f"{quantize_bits}bit"]["midpoints"]
             round_tripped = dequantize_embeddings_percentile(quantized_rows, midpoints)
         else:
@@ -123,6 +140,7 @@ def get_embeddings(
     | None = None,
     normalizer: EmbeddingNormalizer | None = None,
     diagnostics_out: dict[str, float] | None = None,
+    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Get embeddings from model for the data in data_loader.
 
@@ -147,9 +165,11 @@ def get_embeddings(
             precomputed constants); None keeps the model's raw output.
         diagnostics_out: If provided, filled with per-stage geometry diagnostics
             for this split (see ``normalize_and_quantize``).
+        quantization_scheme: Which int8 scheme to apply when quantizing.
 
     Returns:
-        Tuple of (embeddings, labels). If quantize=True, embeddings are int8
+        Tuple of (embeddings, labels). If quantize=True, embeddings are int8 —
+        except under ``TESSERA_PER_VECTOR``, which returns round-tripped float32
         (see ``normalize_and_quantize``).
     """
     embeddings_list: list[torch.Tensor] = []
@@ -193,5 +213,6 @@ def get_embeddings(
         quantize_bits=quantize_bits,
         quantile_config=quantile_config,
         diagnostics_out=diagnostics_out,
+        quantization_scheme=quantization_scheme,
     )
     return embeddings, labels
