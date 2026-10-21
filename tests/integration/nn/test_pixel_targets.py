@@ -224,14 +224,17 @@ def test_train_module_pixel_target_forward(patch_size: int) -> None:
         ema_decay=(1.0, 1.0),
         transform_config=TransformConfig(transform_type="no_transform"),
         pixel_targets=True,
+        subpatch_offset_loss_weight=1.0,
     )
     with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
         train_module = config.build(model, device=torch.device("cpu"))
     sample = _make_sample()
-    loss, _latent, decoded, target_output, _metrics = train_module.model_forward(
+    loss, _latent, decoded, target_output, metrics = train_module.model_forward(
         sample, patch_size, train_module.token_exit_cfg, location_query_patch_size=1
     )
     assert torch.isfinite(loss)
+    # The sub-patch offset loss applies only when location queries are finer than the tokens.
+    assert ("subpatch_offset_loss" in (metrics or {})) == (patch_size > 1)
     # One query and one target per token, exactly as with patch targets.
     assert decoded.sentinel2_l2a is not None and target_output.sentinel2_l2a is not None
     assert decoded.sentinel2_l2a.shape[:3] == (B, H // patch_size, W // patch_size)
