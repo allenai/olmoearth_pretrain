@@ -179,6 +179,10 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     # the current one: on the full corpus most reads are first touches (~15% data
     # wait at 16 workers, 1-GPU profile 2026-10-20).
     config.read_ahead = 2
+    # Workers fork from a server that preloaded the heavy imports instead of each
+    # spawned worker importing them, every epoch: epoch-boundary stall 141 -> 66 s
+    # (1-GPU test, 2026-10-21). An epoch here is only ~770 steps.
+    config.multiprocessing_context = "forkserver"
     config.prefetch_factor = 1
     config.pin_memory = False
     config.uint8_masks = True
