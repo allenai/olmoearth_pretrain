@@ -252,6 +252,13 @@ def build_allcap_trainer_config(common: CommonComponents, module_path: str):
         trainer_config, module_path, allcap_eval_tasks(catalog)
     )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    # The eval jobs rebuild the model from MODULE_PATH: pass on this run's own
+    # --model.* overrides (e.g. a sweep arm's depth / narrow width), or they build the
+    # script's default model and fail to load the checkpoint (2026-10-21).
+    if common.launch is not None:
+        trainer_config.callbacks["downstream_evaluator"].beaker_eval_extra_overrides = [
+            arg for arg in common.launch.cmd if arg.startswith("--model.")
+        ]
     # Every rank's data wait and step time (max / mean / min across ranks): the speed
     # monitor only sees rank 0, where other ranks' stalls look like model time.
     trainer_config.callbacks["rank_timing"] = RankTimingCallback()
