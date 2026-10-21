@@ -16,6 +16,9 @@ dir with the same name, so ``sample_{i}.h5`` keep their indices), copying the me
 CSV and latlons; files already written are skipped, so shards can run in parallel and a
 preempted shard can be rerun. A file that fails is reported and left unwritten.
 
+``--spatial`` / ``--time`` / ``--shuffle`` pick the chunk shape and filter (default
+32 x 32 x 16, no shuffle: the full copy's layout).
+
 Usage: ``python rechunk_allcap_h5.py subset --src <h5py_dir> --out <dir> --n 12000`` or
 ``python rechunk_allcap_h5.py full --src <h5py_dir> --dst <h5py_dir> --start 0 --end 100000``.
 """
@@ -36,6 +39,9 @@ import pandas as pd
 SPATIAL = 32
 TIME = 16
 ZSTD_LEVEL = 3
+# Byte-shuffle before zstd (HDF5 shuffle filter); set by --shuffle. Process-wide like the
+# chunk shape: set before the worker pool forks.
+SHUFFLE = False
 
 
 def _chunks(shape: tuple[int, ...]) -> tuple[int, ...] | None:
@@ -64,6 +70,7 @@ def rechunk_file(src: Path, dst: Path) -> dict:
                 name,
                 data=obj[()],
                 chunks=chunks,
+                shuffle=SHUFFLE,
                 **hdf5plugin.Zstd(clevel=ZSTD_LEVEL),
             )
             out.attrs.update(obj.attrs)
@@ -217,6 +224,7 @@ def full(src_dir: Path, dst_dir: Path, start: int, end: int, workers: int) -> No
 
 def main() -> None:
     """CLI."""
+    global SPATIAL, TIME, SHUFFLE
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["subset", "full"])
     parser.add_argument("--src", type=Path, required=True)
@@ -227,7 +235,11 @@ def main() -> None:
     parser.add_argument("--n", type=int, default=12000)
     parser.add_argument("--workers", type=int, default=64)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--spatial", type=int, default=SPATIAL)
+    parser.add_argument("--time", type=int, default=TIME)
+    parser.add_argument("--shuffle", action="store_true")
     args = parser.parse_args()
+    SPATIAL, TIME, SHUFFLE = args.spatial, args.time, args.shuffle
     if args.mode == "full":
         full(args.src, args.dst, args.start, args.end, args.workers)
     else:
