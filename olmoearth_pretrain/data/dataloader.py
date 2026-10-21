@@ -1004,6 +1004,9 @@ class OlmoEarthDataLoaderConfig(Config):
     # False: hand over batches as workers finish them (no head-of-line blocking when
     # per-batch cost varies); the batch order is then not reproducible.
     in_order: bool = True
+    # Worker start method: "spawn" (fresh interpreter per worker, every epoch) or
+    # "forkserver" (workers fork from one server that preloaded the heavy imports).
+    multiprocessing_context: str = "spawn"
     # Per-modality-timestamps datasets: samples a thread in each worker reads ahead of
     # the one being computed (0 = off; see OlmoEarthDataLoader).
     read_ahead: int = 0
@@ -1104,6 +1107,7 @@ class OlmoEarthDataLoaderConfig(Config):
             drop_last=self.drop_last,
             pin_memory=self.pin_memory,
             in_order=self.in_order,
+            multiprocessing_context=self.multiprocessing_context,
             read_ahead=self.read_ahead,
             worker_nice=self.worker_nice,
             min_patch_size=self.min_patch_size,
