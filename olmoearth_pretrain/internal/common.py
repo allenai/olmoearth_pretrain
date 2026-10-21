@@ -143,11 +143,16 @@ def build_launch_config(
     if weka_buckets:
         # Share a uv cache on Weka across jobs so wheels are downloaded (and
         # sdists like flash-attn are compiled) only once. Gantry's entrypoint
-        # picks this up and flock-guards it against concurrent jobs.
+        # picks this up and flock-guards it against concurrent jobs. Set
+        # OE_UV_CACHE_DIR (e.g. /tmp/uv-cache) at launch to use a node-local cache
+        # instead and skip the shared lock.
         env_vars.append(
             BeakerEnvVar(
                 name="UV_CACHE_DIR",
-                value=f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache",
+                value=os.environ.get(
+                    "OE_UV_CACHE_DIR",
+                    f"/weka/{DEFAULT_OLMOEARTH_PRETRAIN_WEKA_BUCKET.bucket}/{PROJECT_NAME}/uv-cache",
+                ),
             )
         )
     nccl_debug_env_vars = set_nccl_debug_env_vars(nccl_debug=nccl_debug)
