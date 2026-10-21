@@ -2151,6 +2151,8 @@ class Encoder(FlexiVitBase):
             aggregate_then_project=aggregate_then_project,
         )
 
+        self._warned_searchlight_without_rope = False
+
         self.apply(self._init_weights)
 
         if frozen_patch_embeddings:
@@ -2471,6 +2473,16 @@ class Encoder(FlexiVitBase):
         tokens_dict.update(original_masks_dict)
 
         tokens, mask = self.collapse_and_combine_hwtc(tokens_dict)
+
+        if searchlight is not None and positions is None:
+            # Searchlight's neighborhoods follow RoPE positions; absolute encodings have none.
+            if not self._warned_searchlight_without_rope:
+                self._warned_searchlight_without_rope = True
+                logger.warning(
+                    f"Searchlight needs a RoPE position encoding, not {self.position_encoding!r}; "
+                    "running the standard forward"
+                )
+            searchlight = None
 
         if searchlight is not None:
             from olmoearth_pretrain.nn.searchlight import encoder_searchlight
