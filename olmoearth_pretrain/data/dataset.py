@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import shutil
 import time
@@ -1298,15 +1299,23 @@ class OlmoEarthDataset(Dataset):
         return first, last
 
     def _read_per_capture(
-        self, index: int, args: GetItemArgs, rng: Any
+        self, index: int, args: GetItemArgs, rng: Any, raw: bytes | None = None
     ) -> dict[str, Any]:
-        """Draw the crop, time range and (without composites) budget run; read them."""
+        """Draw the crop, time range and (without composites) budget run; read them.
+
+        ``raw``: the whole h5 file already in memory (:meth:`read_tile_bytes`), read
+        instead of the file on disk.
+        """
         sampled_hw = args.sampled_hw_p * args.patch_size
         # Choose the crop, time range and (without composites) the budget run from
         # the timestamps and shapes alone, then read only those pixels and captures:
         # a whole every-capture tile is 30-60 MB, the sample a few MB.
-        h5_file_path = self._local_h5_path(self._get_h5_file_path(index))
-        with h5_file_path.open("rb") as f, h5py.File(f, "r") as h5file:
+        source = (
+            io.BytesIO(raw)
+            if raw is not None
+            else self._local_h5_path(self._get_h5_file_path(index)).open("rb")
+        )
+        with source as f, h5py.File(f, "r") as h5file:
             present = [m for m in self.training_modalities if m in h5file]
             timestamps = {
                 m: h5file[f"timestamps_{m}"][()]
@@ -1530,11 +1539,20 @@ class OlmoEarthDataset(Dataset):
                 )
         return sample_dict
 
-    def read_item(self, args: GetItemArgs) -> tuple[Any, dict[str, Any]]:
+    def read_tile_bytes(self, idx: int) -> bytes:
+        """The whole h5 file of item ``idx``, for :meth:`read_item`'s ``raw``."""
+        if hasattr(self, "sample_indices") and self.sample_indices is not None:
+            idx = self.sample_indices[idx]
+        return self._local_h5_path(self._get_h5_file_path(idx)).read_bytes()
+
+    def read_item(
+        self, args: GetItemArgs, raw: bytes | None = None
+    ) -> tuple[Any, dict[str, Any]]:
         """Storage half of a per-modality-timestamps item (see :meth:`finish_item`).
 
         Safe to run in a read-ahead thread: it draws only from the sample's own
-        ``args.seed`` generator, which :meth:`finish_item` then continues.
+        ``args.seed`` generator, which :meth:`finish_item` then continues. ``raw``:
+        the item's file already in memory (:meth:`read_tile_bytes`).
         """
         if not self.per_modality_timestamps or args.seed is None:
             raise ValueError(
@@ -1545,7 +1563,7 @@ class OlmoEarthDataset(Dataset):
         else:
             index = args.idx
         rng = np.random.RandomState(args.seed)
-        return rng, self._read_per_capture(index, args, rng)
+        return rng, self._read_per_capture(index, args, rng, raw)
 
     def finish_item(
         self, args: GetItemArgs, read: tuple[Any, dict[str, Any]]

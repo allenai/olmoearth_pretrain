@@ -1043,3 +1043,66 @@ def test_budget_before_read_keeps_true_bin_medians_within_budget(
             np.testing.assert_allclose(
                 s2[:, :, t], expected[:, :, centre_to_slot[int(o)]], rtol=1e-6
             )
+
+
+def test_raw_tile_bytes_give_the_same_item(allcap_h5py_dir: UPath) -> None:
+    """read_item on the file's bytes in memory equals reading the file."""
+    dataset = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    for seed in range(4):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=2,
+            sampled_hw_p=4,
+            token_budget=200,
+            tokenization_config=S2_SINGLE,
+            time_range_days=120.0,
+            composite_days=30.0 if seed % 2 else None,
+            seed=seed,
+        )
+        raw = dataset.read_tile_bytes(args.idx)
+        _assert_same_item(
+            dataset.finish_item(args, dataset.read_item(args)),
+            dataset.finish_item(args, dataset.read_item(args, raw=raw)),
+        )
+
+
+def test_tile_pool_reuses_files_and_keeps_batches_distinct() -> None:
+    """Each file feeds <= tile_reuse samples; one batch never repeats a file."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from olmoearth_pretrain.data.dataloader import _IterableDatasetWrapper
+
+    reads: list[int] = []
+
+    def read_tile_bytes(idx: int) -> bytes:
+        reads.append(idx)
+        return str(idx).encode()
+
+    dataset = SimpleNamespace(
+        read_tile_bytes=read_tile_bytes,
+        read_item=lambda args, raw=None: raw,
+        finish_item=lambda args, read: (args.patch_size, (args.idx, read)),
+    )
+    loader = SimpleNamespace(
+        tile_reuse=3,
+        tile_pool_size=4,
+        rank_batch_size=2,
+        _get_item_args=lambda idx, ps, hw, t, d, c, seed=None: SimpleNamespace(
+            idx=idx, patch_size=ps
+        ),
+    )
+    wrapper = SimpleNamespace(data_loader=loader, dataset=dataset)
+    params = [(0, 2, 4, None, None, None)] * 60
+    np.random.seed(0)
+    items: list[Any] = list(
+        _IterableDatasetWrapper._tile_pool_items(wrapper, iter(params), range(100))  # type: ignore[arg-type]
+    )
+    assert len(items) == 60
+    assert all(raw == str(idx).encode() for _, (idx, raw) in items)
+    uses = Counter(idx for _, (idx, _) in items)
+    assert max(uses.values()) <= 3
+    for b in range(0, 60, 2):
+        assert items[b][1][0] != items[b + 1][1][0]
+    # ~1 read per 3 samples once the pool is full (plus the pool and its buffer)
+    assert len(reads) <= 60 // 3 + 4 + 8

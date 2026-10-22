@@ -113,6 +113,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         pin_memory: bool = True,
         in_order: bool = True,
         read_ahead: int = 0,
+        tile_reuse: int = 1,
+        tile_pool_size: int = 72,
         worker_nice: int = 0,
         num_dataset_repeats_per_epoch: int = 1,
         # Dataloader-side masking
@@ -198,6 +200,15 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 one, overlapping storage waits with CPU work. 0 = off. Each sample then
                 draws from its own seed (deterministic, but a different random stream
                 than with 0).
+            tile_reuse: Per-modality-timestamps datasets only: each worker keeps a pool
+                of whole h5 files in memory and draws every sample from it, using a
+                file ``tile_reuse`` times (fresh crop / time range / composite draws
+                each time) before replacing it with a new read. One large read per
+                ``tile_reuse`` samples instead of many small reads per sample. An
+                epoch is ``tile_reuse`` times longer (each file is used that often).
+                1 = off.
+            tile_pool_size: Files in each worker's pool with ``tile_reuse > 1``
+                (>= the rank batch size: a batch never uses one file twice).
             worker_nice: Lower each worker's CPU priority by this much (``os.nice``);
                 0 = unchanged.
             num_dataset_repeats_per_epoch: Number of times to repeat the dataset per epoch.
@@ -244,6 +255,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.read_ahead = read_ahead
         self.worker_nice = worker_nice
         self.num_dataset_repeats_per_epoch = num_dataset_repeats_per_epoch
+        self.tile_reuse = tile_reuse
+        self.tile_pool_size = tile_pool_size
+        if tile_reuse > 1:
+            if num_dataset_repeats_per_epoch != 1:
+                raise ValueError("tile_reuse > 1 sets the epoch's repeats itself")
+            # Each file is used tile_reuse times per epoch (by the worker that read it).
+            self.num_dataset_repeats_per_epoch = tile_reuse
 
         # Dataloader-side masking configuration
         self.transform = transform
@@ -436,14 +454,17 @@ class OlmoEarthDataLoader(DataLoaderBase):
         """Get worker info."""
         return torch.utils.data.get_worker_info()
 
-    def _get_local_instance_indices(self, indices: np.ndarray) -> Iterable[int]:
-        """Get local instance indices."""
+    def _get_local_instance_indices(
+        self, indices: np.ndarray, skip_batches: int | None = None
+    ) -> Iterable[int]:
+        """Get local instance indices (after ``skip_batches``, default: processed)."""
         # NOTE:'indices' are global instance indices.
         instances_per_batch = self.global_batch_size
         indices = indices.reshape(-1, instances_per_batch)
 
-        if self.batches_processed > 0:  # type: ignore
-            indices = indices[self.batches_processed :]  # type: ignore
+        skip = self.batches_processed if skip_batches is None else skip_batches  # type: ignore
+        if skip > 0:
+            indices = indices[skip:]
 
         # Slice batches by data loader worker rank to avoid duplicates.
         if (worker_info := self.worker_info) is not None:
@@ -907,9 +928,18 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             self.data_loader.sampled_hw_p_list,
             self.data_loader.rank_batch_size,
         )
-        if self.data_loader.read_ahead > 0 and getattr(
-            self.dataset, "per_modality_timestamps", False
-        ):
+        per_capture = getattr(self.dataset, "per_modality_timestamps", False)
+        dl = self.data_loader
+        if dl.tile_reuse > 1 and per_capture:
+            # Files come from ONE permutation (this worker's share of it); the
+            # instance count follows the tile_reuse-times repeated epoch.
+            unique = global_indices[: dl.total_unique_size]
+            files = dl._get_local_instance_indices(
+                unique,
+                dl.batches_processed // dl.tile_reuse,  # type: ignore
+            )
+            return self._batches(self._tile_pool_items(params, files))
+        if dl.read_ahead > 0 and per_capture:
             return self._batches(self._read_ahead_items(params))
         instance_iterator = (
             self.data_loader._get_dataset_item(
@@ -940,6 +970,87 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 self.data_loader.drop_last,
             )
         )
+
+    def _tile_pool_items(
+        self,
+        params: Iterator[tuple[int, int, int, int, float | None, float | None]],
+        files: Iterable[int],
+    ) -> Iterator[tuple[int, OlmoEarthSample]]:
+        """Items drawn from a rolling pool of whole files held in memory.
+
+        Each pool slot holds one file's bytes and how many more samples it may give.
+        Counters start staggered over ``1..tile_reuse``, so files retire one at a
+        time and reads stay spread out. A retired slot is refilled from a few
+        files already fetched in the background, which then fetch the next. Each
+        sample takes the instance's shape (patch size, grid, time range, composite)
+        from ``params`` and a slot not yet used in the current batch, and draws its
+        own crop / captures from its seed, as with :meth:`_read_ahead_items`.
+        """
+        dl = self.data_loader
+        reuse, size = dl.tile_reuse, dl.tile_pool_size
+        if size < dl.rank_batch_size:
+            raise ValueError(
+                f"tile_pool_size {size} < rank batch size {dl.rank_batch_size}"
+            )
+        file_list = list(files)
+        if not file_list:
+            return
+        cursor = 0
+
+        def next_file() -> int:
+            nonlocal cursor
+            idx = int(file_list[cursor % len(file_list)])
+            cursor += 1
+            return idx
+
+        rng = np.random.default_rng(int(np.random.randint(2**31 - 1)))
+        executor = ThreadPoolExecutor(max_workers=4)
+        fetched: deque[tuple[int, Future]] = deque()
+
+        def fetch_more(n: int) -> None:
+            for _ in range(n):
+                idx = next_file()
+                fetched.append(
+                    (idx, executor.submit(self.dataset.read_tile_bytes, idx))
+                )
+
+        buffered = 8  # files fetched ahead of need, beyond the pool
+        try:
+            fetch_more(size + buffered)
+            pool: list[list] = []  # [file index, bytes, uses left]
+            for k in range(size):
+                idx, future = fetched.popleft()
+                pool.append([idx, future.result(), 1 + k % reuse])
+            rng.shuffle(pool)
+            used: set[int] = set()
+            for n, (_idx, patch_size, hw_p, target_t, days, composite) in enumerate(
+                params
+            ):
+                if n % dl.rank_batch_size == 0:
+                    used.clear()
+                free = [j for j in range(len(pool)) if j not in used]
+                j = free[int(rng.integers(len(free)))]
+                used.add(j)
+                slot = pool[j]
+                args = dl._get_item_args(
+                    slot[0],
+                    patch_size,
+                    hw_p,
+                    target_t,
+                    days,
+                    composite,
+                    seed=int(np.random.randint(2**31 - 1)),
+                )
+                yield self.dataset.finish_item(
+                    args, self.dataset.read_item(args, raw=slot[1])
+                )
+                slot[2] -= 1
+                if slot[2] == 0:
+                    idx, future = fetched.popleft()
+                    pool[j] = [idx, future.result(), reuse]
+                    fetch_more(1)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _read_ahead_items(
         self, params: Iterator[tuple[int, int, int, int, float | None, float | None]]
@@ -1010,6 +1121,10 @@ class OlmoEarthDataLoaderConfig(Config):
     # Per-modality-timestamps datasets: samples a thread in each worker reads ahead of
     # the one being computed (0 = off; see OlmoEarthDataLoader).
     read_ahead: int = 0
+    # Per-modality-timestamps datasets: reuse each whole h5 file this many times from a
+    # per-worker in-memory pool of tile_pool_size files (1 = off; see the loader).
+    tile_reuse: int = 1
+    tile_pool_size: int = 72
     # Lower loader workers' CPU priority by this much (os.nice); 0 = unchanged.
     worker_nice: int = 0
     # Send masks to the main process as uint8 instead of int64 (8x smaller; the
@@ -1109,6 +1224,8 @@ class OlmoEarthDataLoaderConfig(Config):
             in_order=self.in_order,
             multiprocessing_context=self.multiprocessing_context,
             read_ahead=self.read_ahead,
+            tile_reuse=self.tile_reuse,
+            tile_pool_size=self.tile_pool_size,
             worker_nice=self.worker_nice,
             min_patch_size=self.min_patch_size,
             max_patch_size=self.max_patch_size,
