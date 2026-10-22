@@ -22,9 +22,9 @@ S2_ONE_BANDSET = TokenizationConfig(
 T, PX, PS, D = 6, 8, 2, 32
 
 
-def _merge(**kwargs: int) -> SlotMerge:
+def _merge(**kwargs: float) -> SlotMerge:
     torch.manual_seed(0)
-    settings: dict[str, int] = {"ratio": 3, "min_slots": 4, "iters": 3, **kwargs}
+    settings: dict[str, float] = {"ratio": 3, "min_slots": 4, "iters": 3, **kwargs}
     cfg = SlotMergeConfig(**settings)  # type: ignore[arg-type]
     return cfg.build(D)
 
@@ -406,3 +406,18 @@ def test_narrow_front_end_requires_a_narrow_stage() -> None:
     """narrow_front_end without a narrow stage is rejected at validation."""
     with pytest.raises(ValueError, match="narrow_front_end"):
         SlotMergeConfig(merge_after=1, narrow_front_end=True).validate(depth=3)
+
+
+def test_one_slot_per_month() -> None:
+    """month_length: max(min(months, cap), min(n, min_slots)) slots per cell."""
+    merge = _merge(min_slots=12, max_slots_per_cell=24, month_length=30.0)
+    # _cells puts token j at time (j // 2) * 30: two tokens per month.
+    counts = [[24, 10, 40, 60]]
+    x, pos, valid, cell, mod = _cells(counts)
+    # Cell 4: 26 tokens inside two months (a short, dense span).
+    x2, pos2, valid2, cell2, mod2 = _cells([[26]])
+    pos2[..., 0] = pos2[..., 0] / 15.0
+    _, _, out_valid, _, _ = merge(x, pos, valid, cell, mod)
+    _, _, out_valid2, _, _ = merge(x2, pos2, valid2, cell2, mod2)
+    assert int(out_valid[0].sum()) == 12 + 10 + 20 + 24
+    assert int(out_valid2[0].sum()) == 12

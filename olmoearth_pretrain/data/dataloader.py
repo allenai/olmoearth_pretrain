@@ -175,8 +175,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             composite_days_choices: Per-modality-timestamps datasets only: the
                 composite bin length (days) drawn uniformly from this list once per
                 rank batch, with 0 = every capture (no compositing); e.g.
-                ``[0, 14, 30]`` mixes every-capture, biweekly and monthly batches.
-                None = always every capture.
+                ``[0, 14, 30]`` mixes every-capture, biweekly and monthly batches;
+                ``THIN_CAPTURES`` (dataset.py) = a random set of captures over the
+                whole series. None = always every capture.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.

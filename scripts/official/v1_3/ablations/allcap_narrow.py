@@ -3,15 +3,16 @@
 Model: the released v1.3 model with a narrow within-cell stage in front of its 12 ViT
 blocks (``SlotMergeConfig`` with ``narrow_depth`` / ``narrow_dim``): tokens are
 projected down, attend only within their patch cell over every timestep and
-modality, are merged per cell into ``max(ceil(n / 3), min(n, 4))`` slots capped at
-24, and projected back up (plus a slot-pooled encoder-width skip) before the 12
+modality, are merged per cell into one slot per calendar month (at least
+``min(n, 12)``, at most 24; cells of <= 12 tokens bypass), and projected back up (plus a slot-pooled encoder-width skip) before the 12
 encoder-width blocks and the 1-layer Perceiver. Built so every-capture inputs
 (100-300 tokens per cell) cost about what v1.3 costs on monthly ones.
 
 Data: joer's AllCaptures corpus (every S2 / S1 / Landsat C2 L2 capture over 360 days,
-per-modality timestamps, v1.3's 3072 real-token budget, random time-range lengths), and per
-rank batch a composite mode drawn from ``COMPOSITE_DAYS``: every capture, biweekly
-or monthly per-pixel medians (S2 over SCL-clear pixels).
+per-modality timestamps, v1.3's real-token budget, random time ranges of 180 / 365
+days), and per rank batch a mode drawn from ``COMPOSITE_DAYS``: a contiguous run of
+every capture, biweekly or monthly composites (one clear capture per bin), or a random
+set of captures over the whole year (``THIN_CAPTURES``).
 
 Evals (in-loop, every ``STUDENT_LOOP_EVAL_INTERVAL_STEPS``, d128 student, patch size
 2, one latent per pixel): m-eurosat; PASTIS monthly and every-capture (S1+S2); and
@@ -48,7 +49,10 @@ from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
-from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig  # noqa: E402
+from olmoearth_pretrain.data.dataset import (  # noqa: E402
+    THIN_CAPTURES,
+    OlmoEarthDatasetConfig,
+)
 from olmoearth_pretrain.internal.all_evals import EMBEDDING_EVAL_TASKS  # noqa: E402
 from olmoearth_pretrain.internal.experiment import (  # noqa: E402
     CommonComponents,
@@ -76,25 +80,35 @@ ALLCAP_H5PY_DIR = (
 # Real-token budget per sample = v1.3's (3072). joer's runs use 9000; at microbatch 32
 # that OOMed (the patch embedding, composite encodings and frozen target run over every
 # input token at width 768), and 4500 OOMed on one rank of eight at step 33 (Gabi,
-# 2026-10-16). Time-range menu is joer's (the corpus spans 360 days, so the last three
-# entries take the whole span).
+# 2026-10-16). Time ranges: >= 180 days. joer's menu (7 / 30 / 90 / 180 / 365 / 730 /
+# 1825 days) left the median sample spanning 2 calendar months in every mode (v1.3: 9;
+# measure_time_coverage.py, 2026-10-22). Every tile spans ~360 days.
 TOKEN_BUDGET = 3072
 # v1.3's training length in steps: 300 epochs of v1.3's corpus. AllCaptures is ~35% the
 # size, so v1.2's Duration.epochs(300) would stop at 231,600 steps; pinning the steps
 # keeps the samples seen (and the cosine schedule) the same as v1.3.
 MAX_STEPS = 667_200
-TIME_RANGE_DAYS = [7.0, 30.0, 90.0, 180.0, 365.0, 730.0, 1825.0]
-# Composite bin length per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly.
-COMPOSITE_DAYS = [0.0, 14.0, 30.0]
+TIME_RANGE_DAYS = [180.0, 365.0]
+# Mode per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly, THIN_CAPTURES =
+# random captures over the whole year (median 12 months; the others' runs stop when the
+# budget fills).
+COMPOSITE_DAYS = [0.0, 14.0, 30.0, THIN_CAPTURES]
 RANK_MICROBATCH_SIZE = 32
 # Decoder targets per sample are capped near v1.3's 90th percentile (simulated v1.3
 # sampler + masking: mean ~1.1k, median ~0.9k, p90 ~2.1k incl. maps), so the decoder
 # costs what it does in v1.3 while the encoder sees every capture.
 MAX_DECODE_TOKENS = 2048
 
+# Slots per cell: max(min(months, SLOT_CAP), min(n, SLOT_MIN)) -- one per calendar
+# month, never fewer than min(n, 12) (short dense spans), so the trunk sees one slot
+# per month on full-year inputs. SLOT_RATIO is unused with month_length set.
 SLOT_RATIO = 3
-SLOT_MIN = 4
+SLOT_MIN = 12
 SLOT_CAP = 24
+# Each worker reads whole h5 files into a pool and uses each one TILE_REUSE times
+# (fresh crop / time range / mode draws): few large reads instead of ~100 small ones
+# per sample, which capped a full node at ~600 samples/s (2026-10-21/22 benches).
+TILE_REUSE = 10
 
 S1_S2 = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
 S1_S2_L2 = [*S1_S2, Modality.LANDSAT_L2.name]
@@ -132,6 +146,7 @@ def build_narrow_model_config(
         ratio=SLOT_RATIO,
         min_slots=SLOT_MIN,
         max_slots_per_cell=SLOT_CAP,
+        month_length=30.4375 * config.encoder_config.rope_temporal_coordinate_scale,
         iters=3,
         narrow_depth=narrow_depth,
         narrow_dim=narrow_dim,
@@ -183,6 +198,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     # spawned worker importing them, every epoch: epoch-boundary stall 141 -> 66 s
     # (1-GPU test, 2026-10-21). An epoch here is only ~770 steps.
     config.multiprocessing_context = "forkserver"
+    config.tile_reuse = TILE_REUSE
     config.prefetch_factor = 1
     config.pin_memory = False
     config.uint8_masks = True

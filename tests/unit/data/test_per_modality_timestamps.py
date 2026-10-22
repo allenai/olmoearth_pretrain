@@ -13,6 +13,7 @@ from upath import UPath
 from olmoearth_pretrain.data.collate import collate_olmoearth_pretrain
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
 from olmoearth_pretrain.data.dataset import (
+    THIN_CAPTURES,
     GetItemArgs,
     OlmoEarthDataset,
     build_union_timeline,
@@ -235,6 +236,40 @@ def test_budget_counts_real_tokens_in_a_contiguous_run(
         for d in dense.values():
             any_present |= (d != MISSING_VALUE).any(axis=(0, 1, 3))
         assert any_present.all()
+
+
+def test_thin_captures_spread_over_the_series_within_budget(
+    allcap_h5py_dir: UPath,
+) -> None:
+    """THIN_CAPTURES: random steps over the whole series, under the budget."""
+    dataset = _dataset(allcap_h5py_dir)
+    np.random.seed(0)
+    full = dataset[GetItemArgs(idx=0, patch_size=2, sampled_hw_p=2)][1]
+    all_ordinals = timestamps_to_ordinals(_field(full, "timestamps"))
+    hw_p, budget, spans = 2, 40, []
+    for _ in range(20):
+        _, sample = dataset[
+            GetItemArgs(
+                idx=0,
+                patch_size=2,
+                sampled_hw_p=hw_p,
+                token_budget=budget,
+                tokenization_config=S2_SINGLE,
+                budget_exclude_modalities=frozenset({"srtm"}),
+                time_range_days=7,  # ignored when thinning
+                composite_days=THIN_CAPTURES,
+            )
+        ]
+        dense = _dense(sample)
+        real = sum(
+            int((d != MISSING_VALUE).any(axis=(0, 1, 3)).sum()) for d in dense.values()
+        )
+        assert real * hw_p * hw_p <= budget
+        ordinals = timestamps_to_ordinals(_field(sample, "timestamps"))
+        assert np.all(np.isin(ordinals, all_ordinals))
+        spans.append(ordinals[-1] - ordinals[0])
+    # Not one contiguous run: the kept steps reach across most of the series.
+    assert np.median(spans) > 0.5 * (all_ordinals[-1] - all_ordinals[0])
 
 
 def test_time_range_limits_the_span(allcap_h5py_dir: UPath) -> None:

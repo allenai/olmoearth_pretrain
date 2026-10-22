@@ -49,6 +49,9 @@ logger = logging.getLogger(__name__)
 # S2 capture) and the classes counted as cloudy: cloud shadow, cloud medium and
 # high probability, thin cirrus (the corpus's sentinel2_scl_cloud_fraction).
 S2_SCL_LAYER = "sentinel2_scl"
+# ``composite_days`` value for thinned samples: every capture over the whole series
+# (no time range), keeping a random set of steps that fits the token budget.
+THIN_CAPTURES = -1.0
 CLOUD_SCL_CLASSES = (3, 8, 9, 10)
 
 
@@ -517,6 +520,11 @@ def timestamps_to_ordinals(timestamps: np.ndarray) -> np.ndarray:
     )
 
 
+def _is_composite(args: GetItemArgs) -> bool:
+    """Whether the sample composites its captures into bins."""
+    return bool(args.composite_days) and args.composite_days != THIN_CAPTURES
+
+
 def build_union_timeline(
     timestamps_per_modality: dict[str, np.ndarray],
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
@@ -573,7 +581,7 @@ class GetItemArgs(NamedTuple):
     time_range_days: float | None = None
     # Per-modality-timestamps datasets only: composite the kept captures into
     # bins of this many days (per-pixel median; S2 over SCL-clear pixels).
-    # None or 0 = every capture.
+    # None or 0 = every capture; THIN_CAPTURES = a random set of captures.
     composite_days: float | None = None
     # Per-modality-timestamps datasets only: seed of this sample's own random draws
     # (crop, time range, budget run). None = numpy's global random state.
@@ -1258,18 +1266,13 @@ class OlmoEarthDataset(Dataset):
         )
 
     @staticmethod
-    def _budget_run(
+    def _step_tokens(
         args: GetItemArgs,
         modalities: list[str],
         n_steps: int,
         step_index: dict[str, np.ndarray],
-        rng: Any,
-    ) -> tuple[int, int]:
-        """The kept run of union steps under ``args.token_budget`` (real tokens).
-
-        The run starts at a random step and extends forward while it fits the
-        budget (always at least one step).
-        """
+    ) -> tuple[np.ndarray, int]:
+        """Real tokens of each union step, and of the non-temporal modalities."""
 
         def num_bandsets(modality: str) -> int:
             if args.tokenization_config is not None:
@@ -1286,6 +1289,51 @@ class OlmoEarthDataset(Dataset):
                 step_tokens[step_index[modality]] += hw_p_sq * num_bandsets(modality)
             else:
                 fixed_tokens += hw_p_sq * num_bandsets(modality)
+        return step_tokens, fixed_tokens
+
+    @staticmethod
+    def _budget_thin(
+        args: GetItemArgs,
+        modalities: list[str],
+        n_steps: int,
+        step_index: dict[str, np.ndarray],
+        rng: Any,
+    ) -> np.ndarray:
+        """A random set of union steps under ``args.token_budget`` (bool mask).
+
+        Steps are drawn without replacement until the next would exceed the budget
+        (always at least one), so the kept steps spread over the whole series.
+        """
+        keep = np.zeros(n_steps, dtype=bool)
+        if args.token_budget is None:
+            keep[:] = True
+            return keep
+        step_tokens, total = OlmoEarthDataset._step_tokens(
+            args, modalities, n_steps, step_index
+        )
+        for step in rng.permutation(n_steps):
+            if keep.any() and total + step_tokens[step] > args.token_budget:
+                break
+            keep[step] = True
+            total += step_tokens[step]
+        return keep
+
+    @staticmethod
+    def _budget_run(
+        args: GetItemArgs,
+        modalities: list[str],
+        n_steps: int,
+        step_index: dict[str, np.ndarray],
+        rng: Any,
+    ) -> tuple[int, int]:
+        """The kept run of union steps under ``args.token_budget`` (real tokens).
+
+        The run starts at a random step and extends forward while it fits the
+        budget (always at least one step).
+        """
+        step_tokens, fixed_tokens = OlmoEarthDataset._step_tokens(
+            args, modalities, n_steps, step_index
+        )
         first, last = 0, n_steps - 1
         if args.token_budget is not None and n_steps > 0:
             first = last = int(rng.randint(n_steps))
@@ -1330,23 +1378,29 @@ class OlmoEarthDataset(Dataset):
             start_w = rng.choice(tile_w - sampled_hw + 1)
             crop = np.s_[start_h : start_h + sampled_hw, start_w : start_w + sampled_hw]
             ordinals = {m: timestamps_to_ordinals(ts) for m, ts in timestamps.items()}
-            kept = self._select_time_range(ordinals, args.time_range_days, rng)
+            thin = args.composite_days == THIN_CAPTURES
+            kept = self._select_time_range(
+                ordinals, None if thin else args.time_range_days, rng
+            )
             origin = None
-            if args.composite_days and self.budget_before_read:
+            if _is_composite(args) and self.budget_before_read:
                 origin, kept = self._budget_bins(args, present, ordinals, kept, rng)
-            if not args.composite_days:
+            if not _is_composite(args):
                 union_ts, step_index = build_union_timeline(
                     {m: timestamps[m][kept[m]] for m in timestamps}
                 )
-                first_step, last_step = self._budget_run(
-                    args, present, len(union_ts), step_index, rng
-                )
+                if thin:
+                    keep_step = self._budget_thin(
+                        args, present, len(union_ts), step_index, rng
+                    )
+                else:
+                    first_step, last_step = self._budget_run(
+                        args, present, len(union_ts), step_index, rng
+                    )
+                    keep_step = np.zeros(len(union_ts), dtype=bool)
+                    keep_step[first_step : last_step + 1] = True
                 kept = {
-                    m: kept[m][
-                        (step_index[m] >= first_step) & (step_index[m] <= last_step)
-                    ]
-                    if m in step_index
-                    else kept[m]
+                    m: kept[m][keep_step[step_index[m]]] if m in step_index else kept[m]
                     for m in kept
                 }
             data: dict[str, np.ndarray] = {}
@@ -1447,13 +1501,13 @@ class OlmoEarthDataset(Dataset):
         )
         scl, scl_timestamps = read["scl"], read["scl_timestamps"]
 
-        if args.composite_days:
+        if _is_composite(args):
             data, timestamps, kept, s2_no_clear = self._composite(
                 data,
                 timestamps,
                 ordinals,
                 kept,
-                float(args.composite_days),
+                float(args.composite_days),  # type: ignore[arg-type]
                 scl,
                 scl_timestamps,
                 self.composite_selection,
@@ -1465,7 +1519,7 @@ class OlmoEarthDataset(Dataset):
         union_ts, step_index = build_union_timeline(
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
-        if args.composite_days and read["origin"] is None:
+        if _is_composite(args) and read["origin"] is None:
             first_step, last_step = self._budget_run(
                 args, list(data), len(union_ts), step_index, rng
             )

@@ -72,6 +72,13 @@ class SlotMergeConfig(Config):
         narrow_front_end: Embed straight to ``narrow_dim`` (patch embedding and
             composite encodings at the narrow width) and drop the encoder-width skip;
             requires the narrow stage.
+        month_length: One slot per calendar month instead of ``ceil(n / ratio)``:
+            the length of a month in the RoPE time coordinate (30.4375 days times
+            the encoder's ``rope_temporal_coordinate_scale``). A cell gets
+            ``max(min(months, cap), min(n, min_slots))`` slots, ``months`` the
+            calendar months its tokens fall in; with one slot per month, slot
+            ``k`` starts from the tokens of the cell's ``k``-th month, otherwise
+            (short spans) from ``t`` time-ordered chunks of its tokens.
     """
 
     merge_after: int = 4
@@ -84,6 +91,7 @@ class SlotMergeConfig(Config):
     narrow_depth: int = 0
     narrow_dim: int | None = None
     narrow_front_end: bool = False
+    month_length: float | None = None
 
     def validate(self, depth: int) -> None:
         """Check the merge point fits the encoder depth."""
@@ -121,6 +129,7 @@ class SlotMergeConfig(Config):
             max_slots=self.max_slots,
             mlp_ratio=self.mlp_ratio,
             max_slots_per_cell=self.max_slots_per_cell,
+            month_length=self.month_length,
         )
 
 
@@ -186,10 +195,12 @@ class SlotMerge(nn.Module):
         max_slots: int,
         mlp_ratio: float,
         max_slots_per_cell: int | None = None,
+        month_length: float | None = None,
     ) -> None:
         """Initialize the merge."""
         super().__init__()
         self.ratio = ratio
+        self.month_length = month_length
         self.min_slots = min_slots
         self.max_slots_per_cell = max_slots_per_cell
         self.iters = iters
@@ -208,9 +219,12 @@ class SlotMerge(nn.Module):
             nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim)
         )
 
-    def num_slots(self, n: Tensor) -> Tensor:
-        """Slots for a cell with ``n`` tokens (``n`` itself means bypass)."""
-        target = torch.ceil(n / self.ratio).long()
+    def num_slots(self, n: Tensor, months: Tensor | None = None) -> Tensor:
+        """Slots for a cell with ``n`` tokens (``n`` itself means bypass).
+
+        ``months``: the cell's calendar-month count, with ``month_length``.
+        """
+        target = torch.ceil(n / self.ratio).long() if months is None else months
         if self.max_slots_per_cell is not None:
             target = torch.clamp(target, max=self.max_slots_per_cell)
         return torch.maximum(target, torch.clamp(n, max=self.min_slots))
@@ -257,7 +271,21 @@ class SlotMerge(nn.Module):
 
         # Tokens per (sample, cell) and the slots each cell gets.
         n_group = torch.bincount(group[spatial], minlength=B * num_cells)
-        t_group = self.num_slots(n_group)
+        month = None
+        months_group = None
+        if self.month_length is not None and bool(spatial.any()):
+            month = torch.floor(
+                positions[b_idx, l_idx, 0].float() / self.month_length
+            ).long()
+            month = month - month.min()
+            # Distinct (cell, month) pairs, counted per cell.
+            pairs = torch.unique(
+                group[spatial] * (int(month.max()) + 1) + month[spatial]
+            )
+            months_group = torch.bincount(
+                pairs // (int(month.max()) + 1), minlength=B * num_cells
+            )
+        t_group = self.num_slots(n_group, months_group)
         merging_group = (t_group < n_group) & (n_group > 0)
         merges = spatial & merging_group[group.clamp(min=0)]
         keep = ~merges
@@ -276,10 +304,12 @@ class SlotMerge(nn.Module):
             raise ValueError(f"{S} slots exceed max_slots={self.max_slots}")
         # Order inside a cell by (modality, time) -> rank j; chunk-init slot floor(j t/n).
         # Lexicographic (cell, modality, time) by stable sorts, least significant first.
+        # Per month: by time alone (chunks are time spans, months are contiguous).
         t_coord = positions[m_b, m_l, 0].float()
-        mod = modality_ids[m_b, m_l]
         order = torch.argsort(t_coord, stable=True)
-        order = order[torch.argsort(mod[order], stable=True)]
+        if month is None:
+            mod = modality_ids[m_b, m_l]
+            order = order[torch.argsort(mod[order], stable=True)]
         order = order[torch.argsort(g_local[order], stable=True)]
         m_b, m_l, g_local, t_coord = (
             m_b[order],
@@ -290,6 +320,18 @@ class SlotMerge(nn.Module):
         start = torch.cumsum(n_g, 0) - n_g
         rank = torch.arange(m_b.numel(), device=device) - start[g_local]
         init_slot = (rank * t_g[g_local]) // n_g[g_local]
+        if month is not None:
+            # Cells with one slot per month start slot k from their k-th month.
+            m_month = month[merges][order]
+            new_month = torch.ones_like(m_month, dtype=torch.bool)
+            new_month[1:] = (m_month[1:] != m_month[:-1]) | (
+                g_local[1:] != g_local[:-1]
+            )
+            month_rank = torch.cumsum(new_month.long(), 0) - 1
+            month_rank = month_rank - month_rank[start][g_local]
+            assert months_group is not None
+            by_month = (t_g == months_group[groups])[g_local]
+            init_slot = torch.where(by_month, month_rank, init_slot)
 
         tokens = x.new_zeros(G, P, D)
         tokens[g_local, rank] = x[m_b, m_l]
