@@ -307,6 +307,25 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MIOU,
         ),
+        # PLANTEUR at the in-loop pastis settings: 64x64 tiles of the 128x128
+        # windows, default patch size. The paper protocol (patch size 1 on 16x16
+        # tiles) is the offline planteur_* task in all_evals.py.
+        "planteur": DownstreamTaskConfig(
+            dataset="planteur",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.steps(20000),
+            input_modalities=[Modality.SENTINEL2_L2A.name],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+            window_size=64,
+            tile_samples=True,
+        ),
         "yemen_crop": DownstreamTaskConfig(
             dataset="yemen_crop",
             embedding_batch_size=32,

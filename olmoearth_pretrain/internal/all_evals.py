@@ -1668,6 +1668,96 @@ FT_EVAL_TASKS = {
 }
 
 
+# PLANTEUR: crop-type segmentation over the French overseas territories (8
+# classes + void, 128x128 windows of twelve calendar-2019 monthly mosaics).
+# "planteur" is the default 1896/411/443 split; "planteur_loio_<island>" holds
+# out one territory as the test set. Tasks follow the PLANTEUR paper's protocols.
+def _planteur_probe_task(
+    input_modalities: list[str], dataset: str = "planteur"
+) -> DownstreamTaskConfig:
+    """Linear probe on per-pixel (patch_size=1) embeddings of 16x16 tiles.
+
+    Each 128x128 window is tiled into 64 16x16 windows, embeddings are int8
+    round-tripped like the released embedding products, and the probe is a
+    50-epoch linear head (mIoU over the 8 classes, void ignored).
+    """
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        # 64 tiles = one stored 128x128 window per batch.
+        embedding_batch_size=64,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=input_modalities,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=16,
+        patch_size=1,
+        tile_samples=True,
+        quantize_embeddings=True,
+    )
+
+
+def _planteur_ft_task(
+    input_modalities: list[str], dataset: str = "planteur"
+) -> DownstreamTaskConfig:
+    """Fine-tune on 64x64 tiles at patch size 4 (20 epochs, batch 8, lr 1e-4)."""
+    return DownstreamTaskConfig(
+        dataset=dataset,
+        ft_batch_size=8,
+        ft_lr=1e-4,
+        num_workers=8,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        input_modalities=input_modalities,
+        epochs=20,
+        primary_metric=EvalMetric.MIOU,
+        window_size=64,
+        patch_size=4,
+        tile_samples=True,
+    )
+
+
+_PLANTEUR_MODALITIES = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1": [Modality.SENTINEL1.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+}
+EVAL_TASKS.update(
+    {
+        f"planteur_{suffix}": _planteur_probe_task(modalities)
+        for suffix, modalities in _PLANTEUR_MODALITIES.items()
+    }
+)
+FT_EVAL_TASKS.update(
+    {
+        f"planteur_{suffix}": _planteur_ft_task(modalities)
+        for suffix, modalities in _PLANTEUR_MODALITIES.items()
+    }
+)
+_PLANTEUR_LOIO_ISLANDS = ("guadeloupe", "martinique", "guyane", "reunion", "mayotte")
+EVAL_TASKS.update(
+    {
+        f"planteur_loio_{island}_sentinel2": _planteur_probe_task(
+            [Modality.SENTINEL2_L2A.name], dataset=f"planteur_loio_{island}"
+        )
+        for island in _PLANTEUR_LOIO_ISLANDS
+    }
+)
+FT_EVAL_TASKS.update(
+    {
+        f"planteur_loio_{island}_sentinel2": _planteur_ft_task(
+            [Modality.SENTINEL2_L2A.name], dataset=f"planteur_loio_{island}"
+        )
+        for island in _PLANTEUR_LOIO_ISLANDS
+    }
+)
+
+
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     """Build the trainer config for an experiment."""
     MAX_DURATION = Duration.epochs(300)

@@ -145,3 +145,39 @@ def test_regression_allows_single_class(task_type: TaskType) -> None:
         supported_modalities=[],
     )
     assert config.num_classes == 1
+
+
+def test_planteur_config_and_tasks() -> None:
+    """PLANTEUR and its LOIO splits resolve; every planteur task points at one."""
+    from olmoearth_pretrain.evals.studio_ingest.provenance import (
+        packaged_model_yaml_path,
+    )
+    from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
+
+    cfg = dataset_to_config("planteur")
+    assert cfg.task_type == TaskType.SEGMENTATION
+    assert cfg.num_classes == 8
+    assert cfg.height_width == 128
+    assert set(cfg.supported_modalities) == {"sentinel2_l2a", "sentinel1"}
+    packaged_model_yaml_path("planteur")
+
+    islands = ("guadeloupe", "martinique", "guyane", "reunion", "mayotte")
+    for island in islands:
+        loio = dataset_to_config(f"planteur_loio_{island}")
+        assert loio.num_classes == 8 and loio.height_width == 128
+
+    for tasks in (EVAL_TASKS, FT_EVAL_TASKS):
+        planteur = {k: v for k, v in tasks.items() if k.startswith("planteur_")}
+        assert set(planteur) == {
+            "planteur_sentinel2",
+            "planteur_sentinel1",
+            "planteur_sentinel1_sentinel2",
+        } | {f"planteur_loio_{island}_sentinel2" for island in islands}
+        for name, task in planteur.items():
+            island = name.removeprefix("planteur_loio_").removesuffix("_sentinel2")
+            assert task.dataset == (
+                f"planteur_loio_{island}" if island in islands else "planteur"
+            )
+            assert task.tile_samples
+            assert task.window_size is not None and 128 % task.window_size == 0
+            assert set(task.input_modalities) <= set(cfg.supported_modalities)
