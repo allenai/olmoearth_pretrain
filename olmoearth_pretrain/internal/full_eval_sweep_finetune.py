@@ -96,7 +96,7 @@ def _format_task_specific_args(task_overrides: dict[str, dict[str, Any]]) -> lis
     return args
 
 
-FT_MODE_ARGS = _format_per_task_args({"eval_mode": "FINETUNE"})
+FT_MODE_ARGS = _format_per_task_args({"eval_mode": "finetune"})
 DATASET_STATS_ARGS = _format_per_task_args({"norm_stats_from_pretrained": "False"})
 
 
