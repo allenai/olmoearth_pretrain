@@ -119,6 +119,19 @@ def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
     return builder
 
 
+# PLANTEUR (crop-type segmentation over the French overseas territories, 8
+# classes + void, 128x128 windows of twelve calendar-2019 monthly mosaics):
+# the default 1896/411/443 split and the five leave-one-island-out splits.
+PLANTEUR_LOIO_DATASETS = tuple(
+    f"planteur_loio_{island}"
+    for island in ("guadeloupe", "martinique", "guyane", "reunion", "mayotte")
+)
+PLANTEUR_MODALITIES = {
+    "sentinel2": [Modality.SENTINEL2_L2A.name],
+    "sentinel1": [Modality.SENTINEL1.name],
+    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
+}
+
 EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
@@ -331,6 +344,45 @@ EVAL_TASKS = {
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
     ),
+    # PLANTEUR at the pastis settings: 64x64 tiles of the 128x128 windows.
+    **{
+        f"planteur_{suffix}": DownstreamTaskConfig(
+            dataset="planteur",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(20 if len(modalities) > 1 else 50),
+            input_modalities=modalities,
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+            window_size=64,
+            tile_samples=True,
+        )
+        for suffix, modalities in PLANTEUR_MODALITIES.items()
+    },
+    **{
+        f"{name}_sentinel2": DownstreamTaskConfig(
+            dataset=name,
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=PLANTEUR_MODALITIES["sentinel2"],
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+            window_size=64,
+            tile_samples=True,
+        )
+        for name in PLANTEUR_LOIO_DATASETS
+    },
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # Three split modes (random / by_city / by_continent), each with an S2-only,
     # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
@@ -1313,19 +1365,6 @@ AEF_SUPPLEMENTAL_DATASETS = (
     "us_trees",
 )
 
-# PLANTEUR (crop-type segmentation over the French overseas territories, 8
-# classes + void, 128x128 windows of twelve calendar-2019 monthly mosaics):
-# the default 1896/411/443 split and the five leave-one-island-out splits.
-PLANTEUR_LOIO_DATASETS = tuple(
-    f"planteur_loio_{island}"
-    for island in ("guadeloupe", "martinique", "guyane", "reunion", "mayotte")
-)
-PLANTEUR_MODALITIES = {
-    "sentinel2": [Modality.SENTINEL2_L2A.name],
-    "sentinel1": [Modality.SENTINEL1.name],
-    "sentinel1_sentinel2": [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name],
-}
-
 # Window size the embedding evals run at: the ws16 embedding-product convention
 # (a 16x16 window around the labeled pixel), shared with the precomputed baselines.
 EMBEDDING_EVAL_WINDOW_SIZES = (16,)
@@ -1561,20 +1600,18 @@ FT_EVAL_TASKS = {
         epochs=50,
         primary_metric=EvalMetric.MIOU,
     ),
-    # PLANTEUR: 64x64 tiles of the 128x128 windows at patch size 4.
+    # PLANTEUR at the pastis settings: 64x64 tiles of the 128x128 windows.
     **{
         f"planteur_{suffix}": DownstreamTaskConfig(
             dataset="planteur",
-            ft_batch_size=8,
-            ft_lr=1e-4,
-            num_workers=8,
+            ft_batch_size=16,
+            num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             input_modalities=modalities,
-            epochs=20,
+            epochs=50,
             primary_metric=EvalMetric.MIOU,
             window_size=64,
-            patch_size=4,
             tile_samples=True,
         )
         for suffix, modalities in PLANTEUR_MODALITIES.items()
@@ -1582,16 +1619,14 @@ FT_EVAL_TASKS = {
     **{
         f"{name}_sentinel2": DownstreamTaskConfig(
             dataset=name,
-            ft_batch_size=8,
-            ft_lr=1e-4,
-            num_workers=8,
+            ft_batch_size=16,
+            num_workers=2,
             pooling_type=PoolingType.MEAN,
             norm_stats_from_pretrained=True,
             input_modalities=PLANTEUR_MODALITIES["sentinel2"],
-            epochs=20,
+            epochs=50,
             primary_metric=EvalMetric.MIOU,
             window_size=64,
-            patch_size=4,
             tile_samples=True,
         )
         for name in PLANTEUR_LOIO_DATASETS

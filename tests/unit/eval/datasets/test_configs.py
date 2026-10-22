@@ -168,8 +168,8 @@ def test_planteur_config_and_tasks() -> None:
         assert set(cfg.supported_modalities) == {"sentinel2_l2a", "sentinel1"}
     packaged_model_yaml_path("planteur")
 
-    assert not any(task.dataset in datasets for task in EVAL_TASKS.values())
     for tasks, expected in (
+        (EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
         (EMBEDDING_EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
         (FT_EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
     ):
