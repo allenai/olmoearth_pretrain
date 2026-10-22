@@ -307,9 +307,6 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
             eval_mode=EvalMode.LINEAR_PROBE,
             primary_metric=EvalMetric.MIOU,
         ),
-        # PLANTEUR at the in-loop pastis settings: 64x64 tiles of the 128x128
-        # windows, default patch size. The paper protocol (patch size 1 on 16x16
-        # tiles) is the offline planteur_* task in all_evals.py.
         "planteur": DownstreamTaskConfig(
             dataset="planteur",
             embedding_batch_size=32,
