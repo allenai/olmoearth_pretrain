@@ -65,6 +65,7 @@ def _build(arm: str):  # type: ignore[no-untyped-def]
     config.target_device_type = "cpu"
     config.num_workers = 0
     loader = config.build(dataset)
+    loader.reshuffle(epoch=1)
     return dataset, loader
 
 
