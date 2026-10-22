@@ -238,6 +238,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         random_crop: bool = False,
+        labeled_crops: bool = False,
         sample_size: int | None = None,
         declared_bands: dict[str, list[str]] | None = None,
         scl_cloud_mask: bool = False,
@@ -292,6 +293,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             random_crop: With tile_samples, emit each window at a random offset
                 inside the stored sample instead of at its fixed tile position;
                 the number of windows per sample is unchanged.
+            labeled_crops: With random_crop, place each window so it covers a
+                randomly chosen labeled pixel (any random offset if the sample
+                has none), so sparse labels never yield an all-ignored window.
             sample_size: Stored sample height/width in pixels (required with
                 tile_samples; must be divisible by window_size).
             declared_bands: modality -> the band list model.yaml declares. When a
@@ -446,7 +450,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 )
         if random_crop and not tile_samples:
             raise ValueError("random_crop requires tile_samples")
+        if labeled_crops and not random_crop:
+            raise ValueError("labeled_crops requires random_crop")
         self.random_crop = random_crop
+        self.labeled_crops = labeled_crops
         self.sample_size = sample_size
         # Each stored sample yields _tiles_per_side^2 windows (1 = no tiling).
         self._tiles_per_side = (
@@ -495,6 +502,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         label_at_center_pixel: bool = False,
         tile_samples: bool = False,
         random_crop: bool = False,
+        labeled_crops: bool = False,
         sample_size: int | None = None,
         scl_cloud_mask: bool = False,
         scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
@@ -538,6 +546,8 @@ class RslearnToOlmoEarthDataset(Dataset):
                 windows instead of center-cropping (see
                 RslearnToOlmoEarthDataset).
             random_crop: Random window offsets instead of fixed tiles (see
+                RslearnToOlmoEarthDataset).
+            labeled_crops: Random windows always cover a labeled pixel (see
                 RslearnToOlmoEarthDataset).
             sample_size: Stored sample height/width, required with tile_samples.
             scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
@@ -668,6 +678,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             label_at_center_pixel=label_at_center_pixel,
             tile_samples=tile_samples,
             random_crop=random_crop,
+            labeled_crops=labeled_crops,
             sample_size=sample_size,
             scl_cloud_mask=scl_cloud_mask,
             scl_cloud_classes=scl_cloud_classes,
@@ -798,6 +809,20 @@ class RslearnToOlmoEarthDataset(Dataset):
             return rows, cols, classes[row, col]
         return rows, cols, classes
 
+    def _labeled_crop_offset(self, label: torch.Tensor, ws: int) -> tuple[int, int]:
+        """Top-left of a random ws x ws window covering a random labeled pixel."""
+        assert self.sample_size is not None
+        rows, cols = (label != SEGMENTATION_IGNORE_LABEL).nonzero(as_tuple=True)
+        if len(rows) == 0:
+            top, left = torch.randint(self.sample_size - ws + 1, (2,)).tolist()
+            return top, left
+        k = int(torch.randint(len(rows), (1,)))
+        offsets = []
+        for p in (int(rows[k]), int(cols[k])):
+            lo, hi = max(0, p - ws + 1), min(p, self.sample_size - ws)
+            offsets.append(int(torch.randint(lo, hi + 1, (1,))))
+        return offsets[0], offsets[1]
+
     def _transform_sample(
         self,
         input_dict: dict,
@@ -832,7 +857,9 @@ class RslearnToOlmoEarthDataset(Dataset):
                     f"label rasters, got {tuple(label.shape)}"
                 )
             ws = self.window_size
-            if self.random_crop:
+            if self.labeled_crops:
+                top, left = self._labeled_crop_offset(label, ws)
+            elif self.random_crop:
                 assert self.sample_size is not None
                 top, left = torch.randint(self.sample_size - ws + 1, (2,)).tolist()
             else:
@@ -1597,6 +1624,7 @@ def from_registry_entry(
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
     random_crop: bool = False,
+    labeled_crops: bool = False,
     scl_cloud_mask: bool = False,
     scl_cloud_classes: tuple[int, ...] | list[int] | None = None,
     landsat_cloud_cover_max: float | None = None,
@@ -1640,6 +1668,8 @@ def from_registry_entry(
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
         random_crop: Random window offsets instead of fixed tiles (see
             RslearnToOlmoEarthDataset); applied to the train split only.
+        labeled_crops: Random windows always cover a labeled pixel (see
+            RslearnToOlmoEarthDataset); train split only, with random_crop.
         scl_cloud_mask: Mask cloudy S2 pixel-timesteps MISSING using the
             optional "scl" input (see RslearnToOlmoEarthDataset).
         scl_cloud_classes: SCL classes to treat as cloud (None =
@@ -1769,6 +1799,7 @@ def from_registry_entry(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         random_crop=random_crop and normalized_split == "train",
+        labeled_crops=labeled_crops and normalized_split == "train",
         sample_size=entry.window_size if tile_samples else None,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,

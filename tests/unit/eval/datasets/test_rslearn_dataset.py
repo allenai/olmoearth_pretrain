@@ -31,6 +31,7 @@ def build_dataset(
     target_task_type: TaskType = TaskType.SEGMENTATION,
     tile_samples: bool = False,
     random_crop: bool = False,
+    labeled_crops: bool = False,
     sample_size: int | None = None,
     model_dataset: list | None = None,
     scl_cloud_mask: bool = False,
@@ -46,6 +47,7 @@ def build_dataset(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         random_crop=random_crop,
+        labeled_crops=labeled_crops,
         sample_size=sample_size,
         scl_cloud_mask=scl_cloud_mask,
         scl_cloud_classes=scl_cloud_classes,
@@ -384,6 +386,59 @@ class TestTileSamples:
         """random_crop only applies to tiled datasets."""
         with pytest.raises(ValueError, match="random_crop requires tile_samples"):
             build_dataset(window_size=16, random_crop=True)
+
+    def build_sparse(
+        self, labeled: list[tuple[int, int]], size: int = 32, ws: int = 16
+    ) -> RslearnToOlmoEarthDataset:
+        """Labeled-crop wrapper over one sample labeled only at `labeled` pixels."""
+        inputs, target = make_position_sample(size)
+        valid = np.zeros((1, size, size), dtype=np.int64)
+        for r, c in labeled:
+            valid[0, r, c] = 1
+        target["valid"] = SimpleNamespace(image=valid)
+        return build_dataset(
+            window_size=ws,
+            tile_samples=True,
+            random_crop=True,
+            labeled_crops=True,
+            sample_size=size,
+            model_dataset=[(inputs, target, None)],
+        )
+
+    def test_labeled_crops_always_cover_a_labeled_pixel(self) -> None:
+        """Every window holds the sample's single labeled pixel, at varying offsets."""
+        torch.manual_seed(0)
+        ds = self.build_sparse([(30, 2)])
+        offsets = set()
+        for _ in range(50):
+            _, label = ds[0]
+            hit = (label == 30 * 32 + 2).nonzero()
+            assert len(hit) == 1
+            offsets.add(tuple(hit[0].tolist()))
+        assert len(offsets) > 1
+
+    def test_labeled_crops_reach_every_labeled_pixel(self) -> None:
+        """With several labeled pixels, windows are drawn around each of them."""
+        torch.manual_seed(0)
+        ds = self.build_sparse([(0, 0), (31, 31)])
+        seen = set()
+        for _ in range(50):
+            _, label = ds[0]
+            seen |= {int(v) for v in label[label != SEGMENTATION_IGNORE_LABEL]}
+        assert seen == {0, 31 * 32 + 31}
+
+    def test_labeled_crops_without_labels_still_crop(self) -> None:
+        """A sample with no labeled pixel falls back to a plain random window."""
+        _, label = self.build_sparse([])[0]
+        assert label.shape == (16, 16)
+        assert (label == SEGMENTATION_IGNORE_LABEL).all()
+
+    def test_labeled_crops_requires_random_crop(self) -> None:
+        """labeled_crops only applies on top of random_crop."""
+        with pytest.raises(ValueError, match="labeled_crops requires random_crop"):
+            build_dataset(
+                window_size=16, tile_samples=True, sample_size=32, labeled_crops=True
+            )
 
     def test_window_size_must_divide_sample_size(self) -> None:
         """Non-divisible tilings are rejected up front."""

@@ -51,6 +51,7 @@ SENTINELS: dict[str, Any] = {
     "window_size": 8,
     "tile_samples": True,
     "random_crop": True,
+    "labeled_crops": True,
     "label_at_center_pixel": True,
     "scl_cloud_mask": True,
     "scl_cloud_classes": (8, 9),

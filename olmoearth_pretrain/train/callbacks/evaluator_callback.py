@@ -178,6 +178,10 @@ class DownstreamTaskConfig:
     # stored sample instead of at its fixed tile position. The number of windows
     # per sample is unchanged; val and test keep the fixed tiles.
     random_crop: bool = False
+    # With random_crop, place each training window so it covers a randomly chosen
+    # labeled pixel of the stored sample, so sparsely labeled (few-shot) samples
+    # never yield a window with nothing to learn from.
+    labeled_crops: bool = False
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -373,6 +377,9 @@ class DownstreamEvaluator:
         self.random_crop = task.random_crop
         if self.random_crop and not self.tile_samples:
             raise ValueError("random_crop requires tile_samples")
+        self.labeled_crops = task.labeled_crops
+        if self.labeled_crops and not self.random_crop:
+            raise ValueError("labeled_crops requires random_crop")
         if self.tile_samples:
             if not self._is_registry_dataset:
                 raise ValueError(
@@ -680,6 +687,8 @@ class DownstreamEvaluator:
                 extra_kwargs["tile_samples"] = True
             if self.random_crop:
                 extra_kwargs["random_crop"] = True
+            if self.labeled_crops:
+                extra_kwargs["labeled_crops"] = True
             if self.scl_cloud_mask:
                 extra_kwargs["scl_cloud_mask"] = True
                 if self.scl_cloud_classes is not None:

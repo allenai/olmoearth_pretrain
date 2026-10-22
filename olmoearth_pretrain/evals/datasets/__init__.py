@@ -208,6 +208,7 @@ def get_eval_dataset(
             label_at_center_pixel=kwargs.get("label_at_center_pixel", False),
             tile_samples=kwargs.get("tile_samples", False),
             random_crop=kwargs.get("random_crop", False),
+            labeled_crops=kwargs.get("labeled_crops", False),
             scl_cloud_mask=kwargs.get("scl_cloud_mask", False),
             scl_cloud_classes=kwargs.get("scl_cloud_classes"),
             landsat_cloud_cover_max=kwargs.get("landsat_cloud_cover_max"),
