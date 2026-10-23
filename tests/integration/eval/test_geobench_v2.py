@@ -88,6 +88,11 @@ _WRAPPER_SLUGS = [
     "spacenet2",
     "spacenet7",
     "flair2",
+    # Opt-in naip_10 variants (gb2-<slug>-naip10[-nominal]).
+    "flair2-naip10",
+    "spacenet2-naip10",
+    "spacenet7-naip10",
+    "flair2-naip10-nominal",
 ]
 
 

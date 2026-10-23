@@ -1,6 +1,6 @@
 """A common home for all eval dataset configs."""
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from enum import StrEnum
 from typing import Any
 
@@ -537,6 +537,24 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         source_imagery=[SourceImagery.SENTINEL2],
     ),
 }
+
+# Opt-in variants that feed the sub-10 m GeoBench v2 imagery through the
+# naip_10 slot (RGBN, 2.5 m nominal) instead of rescaling it into sentinel2_l2a.
+# ``gb2-<slug>-naip10`` keeps the native pixel grid; ``gb2-<slug>-naip10-nominal``
+# resamples the image to 2.5 m/px. Labels (and so height_width) are unchanged.
+# See GeobenchV2Dataset(highres_modality=..., highres_resample=...).
+GB2_NAIP10_SLUGS = ("flair2", "spacenet2", "spacenet7")
+GB2_NAIP10_SUFFIX = "naip10"
+GB2_NAIP10_NOMINAL_SUFFIX = "nominal"
+for _slug in GB2_NAIP10_SLUGS:
+    for _suffix in (
+        GB2_NAIP10_SUFFIX,
+        f"{GB2_NAIP10_SUFFIX}-{GB2_NAIP10_NOMINAL_SUFFIX}",
+    ):
+        _GB2_DATASET_TO_CONFIG[f"gb2-{_slug}-{_suffix}"] = replace(
+            _GB2_DATASET_TO_CONFIG[f"gb2-{_slug}"],
+            supported_modalities=[Modality.NAIP_10.name],
+        )
 DATASET_TO_CONFIG.update(_GB2_DATASET_TO_CONFIG)
 
 
