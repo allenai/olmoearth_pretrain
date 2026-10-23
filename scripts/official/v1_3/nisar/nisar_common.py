@@ -23,6 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claude_findings"))
 from common import build_common_components as _build_common_components  # noqa: E402
 from common import build_trainer_config as _build_trainer_config  # noqa: E402
 
+from olmo_core.train.common import Duration  # noqa: E402
+
 from olmoearth_pretrain.data.concat import OlmoEarthConcatDatasetConfig  # noqa: E402
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig  # noqa: E402
@@ -38,6 +40,9 @@ OSM_RECENT_H5_DIR = "/weka/dfive-default/helios/dataset/osm_recent/TODO"
 
 NISAR_MODALITIES = [Modality.NISAR_ASC.name, Modality.NISAR_DESC.name]
 WANDB_PROJECT = "2026_10_23_nisar_pretrain"
+# Same step count as the v1.3 control (667,200 steps). The default 300 epochs would be
+# only ~470k steps on this smaller ~800k-sample mix.
+MAX_STEPS = 667_200
 
 
 def build_common_components_fn(with_nisar: bool):
@@ -75,7 +80,8 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
 
 
 def build_trainer_config(common: CommonComponents, module_path: str):
-    """The v1.3 control trainer (in-loop evals re-import ``module_path``), own W&B project."""
+    """The v1.3 control trainer (in-loop evals re-import ``module_path``), own W&B project, 667,200 steps."""
     trainer_config = _build_trainer_config(common, module_path)
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    trainer_config.max_duration = Duration.steps(MAX_STEPS)
     return trainer_config
