@@ -28,8 +28,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
+import h5py
+import hdf5plugin
 import numpy as np
 from rslearn.dataset import Window
 from upath import UPath
@@ -55,6 +57,107 @@ LANDSAT_L2_BAND_SET = ["B1", "B2", "B3", "B4", "B5", "B6", "B7", "B10"]
 # Canonical S2 bands read from the fetch (B01 / B09 are not fetched).
 S2_FETCHED_BANDS = [b for bands in S2_BAND_SETS for b in bands]
 S1_NODATA = -32768.0
+
+# Per-window h5 copies of the twins (build_every_capture_cache.py): one file instead
+# of a few hundred GeoTIFFs per window. They hold each modality's same-day mosaics,
+# unfiltered -- the mostly-empty-capture filter depends on the crop, so it runs at
+# read time and cached reads equal GeoTIFF reads. A modality missing from a file
+# (e.g. Landsat fetched after the file was built) is read from the GeoTIFFs.
+CACHE_ROOT = "/weka/dfive-default/olmoearth_pretrain/every_capture_cache"
+
+
+def _s2_valid(a: np.ndarray) -> np.ndarray:
+    return (a > 0).any(axis=-1)
+
+
+def _s1_valid(a: np.ndarray) -> np.ndarray:
+    return (np.isfinite(a) & (a > 0) & (a != S1_NODATA)).all(axis=-1)
+
+
+def cache_path(source: EveryCaptureSource, window_name: str) -> UPath:
+    """The cached h5 of one twin window."""
+    return (
+        UPath(CACHE_ROOT) / UPath(source.root).name / source.group / f"{window_name}.h5"
+    )
+
+
+def _read_cached(
+    source: EveryCaptureSource,
+    window_name: str,
+    modality: str,
+    crop: tuple[slice, slice],
+) -> tuple[list[np.ndarray], list[np.ndarray], list[datetime]] | None:
+    """A modality's cropped same-day mosaics from the cache (None: not cached)."""
+    path = cache_path(source, window_name)
+    if not path.exists():
+        return None
+    with path.open("rb") as f, h5py.File(f, "r") as h5:
+        if modality not in h5:
+            return None
+        group = h5[modality]
+        days = [date.fromordinal(int(o)) for o in group["days"][()]]
+        if not days:
+            return [], [], []
+        values = group["values"][(slice(None), *crop)].astype(np.float32)
+        valid = group["valid"][(slice(None), *crop)].astype(bool)
+    keep = [t for t in range(len(days)) if valid[t].mean() >= source.min_valid_fraction]
+    return (
+        [values[t] for t in keep],
+        [valid[t] for t in keep],
+        [datetime(days[t].year, days[t].month, days[t].day) for t in keep],
+    )
+
+
+def write_cache(window: Window, source: EveryCaptureSource) -> UPath:
+    """Write one twin window's cache file (all modalities whose layers exist)."""
+    series: dict[str, tuple[list[np.ndarray], list[np.ndarray], list[datetime]]] = {}
+    s2_scenes, s2_times = _read_layer(window, S2_LAYER, S2_BAND_SETS)
+    series[Modality.SENTINEL2_L2A.name] = _merge_same_day(
+        s2_scenes, s2_times, _s2_valid, 0.0
+    )
+    s1_scenes, s1_times = [], []
+    for layer in S1_LAYERS:
+        scenes, times = _read_layer(window, layer, [S1_BAND_SET])
+        s1_scenes += scenes
+        s1_times += times
+    series[Modality.SENTINEL1.name] = _merge_same_day(
+        s1_scenes, s1_times, _s1_valid, 0.0
+    )
+    if any(name == LANDSAT_L2_LAYER for name, _ in window.list_completed_layers()):
+        scenes, times = _read_layer(window, LANDSAT_L2_LAYER, [LANDSAT_L2_BAND_SET])
+        series[Modality.LANDSAT_L2.name] = _merge_same_day(
+            scenes, times, _s2_valid, 0.0
+        )
+    path = cache_path(source, window.name)
+    write_series(path, series)
+    return path
+
+
+def write_series(
+    path: UPath,
+    series: dict[str, tuple[list[np.ndarray], list[np.ndarray], list[datetime]]],
+) -> None:
+    """Write modality -> unfiltered same-day mosaics to ``path`` (atomically)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as f, h5py.File(f, "w") as h5:
+        for modality, (values, valid, days) in series.items():
+            group = h5.create_group(modality)
+            group["days"] = np.array([d.toordinal() for d in days], dtype=np.int64)
+            if not values:
+                continue
+            stacked = np.stack(values)
+            chunks = (1, min(stacked.shape[1], 32), min(stacked.shape[2], 32))
+            group.create_dataset(
+                "values",
+                data=stacked,
+                chunks=(*chunks, stacked.shape[3]),
+                **hdf5plugin.Zstd(clevel=3),
+            )
+            group.create_dataset(
+                "valid", data=np.stack(valid), chunks=chunks, **hdf5plugin.Zstd()
+            )
+    tmp.rename(path)
 
 
 @dataclass
@@ -185,27 +288,33 @@ def read_every_capture(
     ``sentinel2_l2a`` in the canonical 12-band order (B01/B09 zero, flagged in
     :data:`S2_ABSENT_BANDS`), raw DN; ``sentinel1`` VV/VH, raw linear.
     """
-    window = reader.window(window_name)
     crop = (rows or slice(None), cols or slice(None))
     src = reader.source
 
-    s2_scenes, s2_times = _read_layer(window, S2_LAYER, S2_BAND_SETS)
-    s2_scenes = [s[crop] for s in s2_scenes]
-    s2, s2_valid, s2_days = _merge_same_day(
-        s2_scenes, s2_times, lambda a: (a > 0).any(axis=-1), src.min_valid_fraction
-    )
+    cached = _read_cached(src, window_name, Modality.SENTINEL2_L2A.name, crop)
+    if cached is not None:
+        s2, s2_valid, s2_days = cached
+    else:
+        window = reader.window(window_name)
+        s2_scenes, s2_times = _read_layer(window, S2_LAYER, S2_BAND_SETS)
+        s2_scenes = [s[crop] for s in s2_scenes]
+        s2, s2_valid, s2_days = _merge_same_day(
+            s2_scenes, s2_times, _s2_valid, src.min_valid_fraction
+        )
 
-    s1_scenes, s1_times = [], []
-    for layer in S1_LAYERS:
-        scenes, times = _read_layer(window, layer, [S1_BAND_SET])
-        s1_scenes += [s[crop] for s in scenes]
-        s1_times += times
-    s1, s1_valid, s1_days = _merge_same_day(
-        s1_scenes,
-        s1_times,
-        lambda a: (np.isfinite(a) & (a > 0) & (a != S1_NODATA)).all(axis=-1),
-        src.min_valid_fraction,
-    )
+    cached = _read_cached(src, window_name, Modality.SENTINEL1.name, crop)
+    if cached is not None:
+        s1, s1_valid, s1_days = cached
+    else:
+        window = reader.window(window_name)
+        s1_scenes, s1_times = [], []
+        for layer in S1_LAYERS:
+            scenes, times = _read_layer(window, layer, [S1_BAND_SET])
+            s1_scenes += [s[crop] for s in scenes]
+            s1_times += times
+        s1, s1_valid, s1_days = _merge_same_day(
+            s1_scenes, s1_times, _s1_valid, src.min_valid_fraction
+        )
 
     canonical = Modality.SENTINEL2_L2A.band_order
     out: dict[str, tuple[np.ndarray, np.ndarray, list[datetime]]] = {}
@@ -235,16 +344,17 @@ def read_landsat_l2(
     Returns ``(values [H, W, T, 8], valid [H, W, T], dates)`` (raw DN, same-day
     scenes merged, mostly-empty captures dropped) or None if the window has none.
     """
-    window = reader.window(window_name)
     crop = (rows or slice(None), cols or slice(None))
-    scenes, times = _read_layer(window, LANDSAT_L2_LAYER, [LANDSAT_L2_BAND_SET])
-    scenes = [s[crop] for s in scenes]
-    merged, valid, days = _merge_same_day(
-        scenes,
-        times,
-        lambda a: (a > 0).any(axis=-1),
-        reader.source.min_valid_fraction,
-    )
+    cached = _read_cached(reader.source, window_name, Modality.LANDSAT_L2.name, crop)
+    if cached is not None:
+        merged, valid, days = cached
+    else:
+        window = reader.window(window_name)
+        scenes, times = _read_layer(window, LANDSAT_L2_LAYER, [LANDSAT_L2_BAND_SET])
+        scenes = [s[crop] for s in scenes]
+        merged, valid, days = _merge_same_day(
+            scenes, times, _s2_valid, reader.source.min_valid_fraction
+        )
     if not merged:
         return None
     return np.stack(merged, axis=2), np.stack(valid, axis=2), days

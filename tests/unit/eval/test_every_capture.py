@@ -205,3 +205,40 @@ def test_variable_time_collate_pads_masks_by_their_own_width() -> None:
     assert masked.landsat_l2_mask is not None
     assert masked.landsat_l2_mask.shape == (2, 2, 2, 3, 1)
     assert (masked.landsat_l2_mask[0, :, :, 2] == MaskValue.MISSING.value).all()
+
+
+def test_cached_reads_equal_geotiff_path_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cached reads (crop, then filter) equal GeoTIFF-path reads (crop, mosaic)."""
+    from olmoearth_pretrain.evals.datasets import every_capture as ec
+
+    monkeypatch.setattr(ec, "CACHE_ROOT", str(tmp_path))
+    rng = np.random.default_rng(0)
+    scenes = []
+    for k in range(4):
+        a = rng.uniform(1, 100, (8, 8, 3)).astype(np.float32)
+        a[: 2 * k] = 0.0  # progressively emptier top rows
+        scenes.append(a)
+    times = [
+        datetime(2019, 1, 1, 10),
+        datetime(2019, 1, 1, 11),  # same day: mosaicked with the first
+        datetime(2019, 2, 1),
+        datetime(2019, 3, 1),
+    ]
+    source = ec.EveryCaptureSource(root="/x/ds", group="g", min_valid_fraction=0.5)
+    ec.write_series(
+        ec.cache_path(source, "w"),
+        {"sentinel2_l2a": ec._merge_same_day(scenes, times, ec._s2_valid, 0.0)},
+    )
+    crop = (slice(0, 4), slice(2, 6))
+    expected = ec._merge_same_day([s[crop] for s in scenes], times, ec._s2_valid, 0.5)
+    got = ec._read_cached(source, "w", "sentinel2_l2a", crop)
+    assert got is not None
+    assert got[2] == expected[2]
+    for a, b in zip(got[0], expected[0]):
+        np.testing.assert_array_equal(a, b)
+    for a, b in zip(got[1], expected[1]):
+        np.testing.assert_array_equal(a, b)
+    assert ec._read_cached(source, "w", "sentinel1", crop) is None  # not cached
+    assert ec._read_cached(source, "other", "sentinel2_l2a", crop) is None
