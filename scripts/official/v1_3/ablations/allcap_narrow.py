@@ -272,6 +272,12 @@ def build_allcap_trainer_config(common: CommonComponents, module_path: str):
         trainer_config, module_path, allcap_eval_tasks(catalog)
     )
     trainer_config.callbacks["wandb"].project = WANDB_PROJECT
+    # 1-GPU eval jobs also fit saturn, too slow for training but scheduled far sooner.
+    trainer_config.callbacks["downstream_evaluator"].beaker_eval_clusters = [
+        "ai2/jupiter",
+        "ai2/ceres",
+        "ai2/saturn",
+    ]
     # The eval jobs rebuild the model from MODULE_PATH: pass on this run's own
     # --model.* overrides (e.g. a sweep arm's depth / narrow width), or they build the
     # script's default model and fail to load the checkpoint (2026-10-21).
