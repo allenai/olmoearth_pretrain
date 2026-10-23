@@ -164,7 +164,12 @@ def _measure(item) -> list[dict]:  # type: ignore[no-untyped-def]
             **base,
             "mode": "monthly_v1_3"
             if arm == "v1_3"
-            else {0.0: "every_capture", 14.0: "biweekly", 30.0: "monthly"}[composite],
+            else {
+                0.0: "every_capture",
+                14.0: "biweekly",
+                30.0: "monthly",
+                -1.0: "thinned",
+            }[composite],
             "time_range_days": time_range,
             "target_t": target_t,
             "steps": len(timestamps),
