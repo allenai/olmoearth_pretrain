@@ -15,10 +15,11 @@ every capture, biweekly or monthly composites (one clear capture per bin), or a 
 set of captures over the whole year (``THIN_CAPTURES``).
 
 Evals (in-loop, every ``STUDENT_LOOP_EVAL_INTERVAL_STEPS``, d128 student, patch size
-2, one latent per pixel): m-eurosat; PASTIS monthly and every-capture (S1+S2); and
+2, one latent per pixel): PASTIS monthly and every-capture (S1+S2); and
 africa_crop_mask / ethiopia_crops (AEF trials) monthly S1+S2, every-capture S1+S2,
 monthly S1+S2+Landsat-L2 (monthly medians of the twins' every L2 capture) and
 every-capture S1+S2+Landsat-L2; PASTIS also monthly and every-capture S1+S2+L2.
+m-eurosat as in the v1.3 paper (patch size 4, d768 encoder).
 """
 
 import logging
@@ -281,7 +282,11 @@ def allcap_eval_tasks(catalog: dict) -> dict:
     # (these models train on real capture dates).
     for name in [n for n in tasks if "everycapture" not in n and "eurosat" not in n]:
         tasks[f"{name}_realdates"] = replace(tasks[name], real_capture_dates=True)
-    tasks["m-eurosat_ps2_proj128"] = _ps2_student(catalog["m-eurosat"])
+    # EuroSAT as in the v1.3 paper: patch size 4, the d768 encoder (not the student).
+    tasks["m-eurosat"] = replace(
+        catalog["m-eurosat"],
+        eval_interval=Duration.steps(STUDENT_LOOP_EVAL_INTERVAL_STEPS),
+    )
     return tasks
 
 
