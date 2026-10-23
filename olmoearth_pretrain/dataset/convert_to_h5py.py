@@ -394,8 +394,12 @@ class ConvertToH5py:
             sample_modality = sample.modalities[modality]
             image = self.load_sample(sample_modality, sample)
 
-            if modality == Modality.SENTINEL1:
-                # Convert Sentinel1 data to dB
+            if modality in (
+                Modality.SENTINEL1,
+                Modality.NISAR_ASC,
+                Modality.NISAR_DESC,
+            ):
+                # Convert Sentinel-1 / NISAR linear backscatter to dB
                 image = convert_to_db(image)
 
             if modality.is_spatial:

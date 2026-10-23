@@ -473,6 +473,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 (standard_hw, standard_hw, 12, 2), dtype=np.float32
             )
             output_dict[Modality.SENTINEL1.name] = mock_sentinel1
+        for nisar in (Modality.NISAR_ASC, Modality.NISAR_DESC):
+            if nisar.name in self.dataset.training_modalities:
+                output_dict[nisar.name] = rng.random(
+                    (standard_hw, standard_hw, 12, nisar.num_bands), dtype=np.float32
+                )
         if Modality.WORLDCOVER.name in self.dataset.training_modalities:
             mock_worldcover = rng.random(
                 (standard_hw, standard_hw, 1, 1), dtype=np.float32

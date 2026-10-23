@@ -1,0 +1,751 @@
+{
+  "layers": {
+    "nisar_asc_mo01": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-180d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo02": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-150d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo03": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-120d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo04": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-90d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo05": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-60d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo06": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-30d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo07": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "0d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo08": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "30d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo09": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "60d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo10": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "90d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo11": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "120d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_asc_mo12": {
+      "type": "raster",
+      "alias": "nisar_asc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "150d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "ASCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo01": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-180d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo02": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-150d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo03": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-120d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo04": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-90d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo05": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-60d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo06": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "-30d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo07": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "0d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo08": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "30d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo09": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "60d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo10": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "90d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo11": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "120d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    },
+    "nisar_desc_mo12": {
+      "type": "raster",
+      "alias": "nisar_desc",
+      "band_sets": [
+        {
+          "bands": [
+            "HHHH",
+            "HVHV"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "ingest": false,
+        "duration": "30d",
+        "time_offset": "150d",
+        "init_args": {
+          "query": {
+            "instrument": {
+              "eq": "L"
+            },
+            "orbit_direction": {
+              "eq": "DESCENDING"
+            }
+          },
+          "timeout": "0:2:0",
+          "cache_dir": "/tmp/nisar_gcov_cache"
+        }
+      }
+    }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
+  }
+}

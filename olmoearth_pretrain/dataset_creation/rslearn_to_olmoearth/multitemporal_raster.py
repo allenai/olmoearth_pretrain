@@ -28,6 +28,11 @@ EPSILON = 1e-6
 
 logger = logging.getLogger(__name__)
 
+# Modalities whose rasters mark pixels without data as NaN (NISAR GCOV outside the
+# swath). The H5 conversion drops a whole modality from a sample if it has any NaN,
+# so convert_monthly skips months with any NaN pixel instead.
+NAN_NODATA_MODALITIES = (Modality.NISAR_ASC, Modality.NISAR_DESC)
+
 
 def _is_blank_mosaic(modality: ModalitySpec, image: npt.NDArray) -> bool:
     """Return whether an image contains only a configured blank/nodata fill."""
@@ -327,6 +332,11 @@ def convert_monthly(
         # this example in the OlmoEarth Pretrain dataset.
         all_images_blank = all(image.max() == 0 for image in cur_images.values())
         if all_images_blank:
+            continue
+
+        if modality in NAN_NODATA_MODALITIES and any(
+            np.isnan(image).any() for image in cur_images.values()
+        ):
             continue
 
         time_ranges.append((start_time.isoformat(), end_time.isoformat()))
