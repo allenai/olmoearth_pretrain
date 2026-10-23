@@ -87,6 +87,7 @@ _WRAPPER_SLUGS = [
     "cloudsen12",
     "spacenet2",
     "spacenet7",
+    "flair2",
 ]
 
 
