@@ -70,8 +70,11 @@ def eval_collate_fn_variable_time(
 
             # Pad mask with MISSING
             if mask_val is not None and pad_size > 0:
+                # The mask's last dim need not be c (e.g. one per band set).
                 mask_pad = torch.full(
-                    (h, w, pad_size, c), MaskValue.MISSING.value, dtype=mask_val.dtype
+                    (h, w, pad_size, *mask_val.shape[3:]),
+                    MaskValue.MISSING.value,
+                    dtype=mask_val.dtype,
                 )
                 padded[mask_key] = torch.cat([mask_val, mask_pad], dim=2)
             elif mask_val is not None:

@@ -187,3 +187,21 @@ def test_real_capture_dates_move_monthly_steps_to_their_scenes(tmp_path: Path) -
     assert out.sentinel2_l2a[0, 0, 3, 0] == 1.0  # period 2's values moved with it
     s1_present = (out.sentinel1_mask[0, 0, :, 0] != missing).tolist()
     assert s1_present == [False, True, True, False]
+
+
+def test_variable_time_collate_pads_masks_by_their_own_width() -> None:
+    """A mask with one entry per band set (not per channel) pads to the batch T."""
+    from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
+
+    def sample(t: int) -> MaskedOlmoEarthSample:
+        return MaskedOlmoEarthSample(
+            landsat_l2=torch.zeros(2, 2, t, 8),
+            landsat_l2_mask=torch.zeros(2, 2, t, 1, dtype=torch.long),
+            timestamps=torch.ones(t, 3, dtype=torch.long),
+        )
+
+    batch = eval_collate_fn_variable_time([(sample(2), 0), (sample(3), 1)])
+    masked = batch[0]
+    assert masked.landsat_l2_mask is not None
+    assert masked.landsat_l2_mask.shape == (2, 2, 2, 3, 1)
+    assert (masked.landsat_l2_mask[0, :, :, 2] == MaskValue.MISSING.value).all()
