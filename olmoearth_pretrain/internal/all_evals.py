@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
@@ -1102,6 +1103,42 @@ EVAL_TASKS = {
     # ),
 }
 
+
+# Opt-in naip_10 variants of the sub-10 m GeoBench v2 segmentation tasks: the
+# RGBN imagery goes through the naip_10 slot (OlmoEarth NAIP_10 stats) instead
+# of being rescaled into sentinel2_l2a. Models without naip_10 skip them.
+#   gb2_<slug>_naip10          native pixel grid; 512 px -> 32x32 tokens at ps4.
+#   gb2_<slug>_naip10_nominal  image resampled to naip_10's 2.5 m/px (labels stay
+#                              512 px): flair2 40 px / spacenet2 80 px at ps1,
+#                              spacenet7 976 px (upsampled from ~4.8 m) at ps4.
+# Keys: gb2_flair2_naip10, gb2_flair2_naip10_nominal, gb2_spacenet2_naip10,
+# gb2_spacenet2_naip10_nominal, gb2_spacenet7_naip10, gb2_spacenet7_naip10_nominal.
+_GB2_NAIP10_NOMINAL_PATCH_SIZE = {"flair2": 1, "spacenet2": 1, "spacenet7": 4}
+
+
+def _gb2_naip10_tasks(
+    tasks: dict[str, DownstreamTaskConfig],
+) -> dict[str, DownstreamTaskConfig]:
+    """Build the gb2 naip_10 variants from the S2 task configs in ``tasks``."""
+    out: dict[str, DownstreamTaskConfig] = {}
+    for slug, nominal_patch_size in _GB2_NAIP10_NOMINAL_PATCH_SIZE.items():
+        base = tasks[f"gb2_{slug}"]
+        out[f"gb2_{slug}_naip10"] = replace(
+            base,
+            dataset=f"gb2-{slug}-naip10",
+            input_modalities=[Modality.NAIP_10.name],
+        )
+        out[f"gb2_{slug}_naip10_nominal"] = replace(
+            base,
+            dataset=f"gb2-{slug}-naip10-nominal",
+            input_modalities=[Modality.NAIP_10.name],
+            patch_size=nominal_patch_size,
+        )
+    return out
+
+
+EVAL_TASKS.update(_gb2_naip10_tasks(EVAL_TASKS))
+
 # Pretrain-subset evals read from frozen snapshots under presto_eval_sets, NOT
 # from the live pretraining datasets: the live datasets are periodically
 # cleaned up and are not reproducible to the sample when recreated, which both
@@ -1666,6 +1703,7 @@ FT_EVAL_TASKS = {
         primary_metric=EvalMetric.MICRO_MAP,
     ),
 }
+FT_EVAL_TASKS.update(_gb2_naip10_tasks(FT_EVAL_TASKS))
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
