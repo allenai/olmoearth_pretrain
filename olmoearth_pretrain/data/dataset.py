@@ -520,6 +520,13 @@ def timestamps_to_ordinals(timestamps: np.ndarray) -> np.ndarray:
     )
 
 
+def _months(timestamps: np.ndarray) -> np.ndarray:
+    """``(T, 3)`` ``[day, month-1, year]`` -> calendar month index per step."""
+    if len(timestamps) == 0:
+        return np.zeros(0, dtype=np.int64)
+    return timestamps[:, 2].astype(np.int64) * 12 + timestamps[:, 1].astype(np.int64)
+
+
 def _is_composite(args: GetItemArgs) -> bool:
     """Whether the sample composites its captures into bins."""
     return bool(args.composite_days) and args.composite_days != THIN_CAPTURES
@@ -586,6 +593,13 @@ class GetItemArgs(NamedTuple):
     # Per-modality-timestamps datasets only: seed of this sample's own random draws
     # (crop, time range, budget run). None = numpy's global random state.
     seed: int | None = None
+    # Per-modality-timestamps datasets only: a second budget on the tokens left
+    # after a per-cell slot merge (cells x max(min(months, cap), min(n, floor))
+    # slots, never more than n), so input budgets above it fill cells the merge
+    # trims instead of adding trunk tokens. None = input budget only.
+    trunk_token_budget: int | None = None
+    trunk_slot_floor: int = 12
+    trunk_slot_cap: int = 24
 
 
 # TODO should training modalities be str or modality_spec
@@ -1292,30 +1306,62 @@ class OlmoEarthDataset(Dataset):
         return step_tokens, fixed_tokens
 
     @staticmethod
+    def _trunk_tokens(args: GetItemArgs, tokens: int, months: set[int]) -> int:
+        """Tokens after the per-cell slot merge, for ``tokens`` spread over the grid."""
+        cells = args.sampled_hw_p**2
+        per_cell = tokens // cells
+        slots = max(
+            min(len(months), args.trunk_slot_cap), min(per_cell, args.trunk_slot_floor)
+        )
+        return cells * min(per_cell, slots)
+
+    @staticmethod
+    def _fits(
+        args: GetItemArgs,
+        tokens: int,
+        months: set[int],
+    ) -> bool:
+        """Whether ``tokens`` (over ``months``) fit the input and trunk budgets."""
+        if args.token_budget is not None and tokens > args.token_budget:
+            return False
+        return (
+            args.trunk_token_budget is None
+            or OlmoEarthDataset._trunk_tokens(args, tokens, months)
+            <= args.trunk_token_budget
+        )
+
+    @staticmethod
     def _budget_thin(
         args: GetItemArgs,
         modalities: list[str],
         n_steps: int,
         step_index: dict[str, np.ndarray],
         rng: Any,
+        step_months: np.ndarray,
     ) -> np.ndarray:
-        """A random set of union steps under ``args.token_budget`` (bool mask).
+        """A random set of union steps under the budgets (bool mask).
 
-        Steps are drawn without replacement until the next would exceed the budget
+        Steps are drawn without replacement until the next would exceed a budget
         (always at least one), so the kept steps spread over the whole series.
+        ``step_months``: each step's calendar month (for the trunk budget).
         """
         keep = np.zeros(n_steps, dtype=bool)
-        if args.token_budget is None:
+        if args.token_budget is None and args.trunk_token_budget is None:
             keep[:] = True
             return keep
         step_tokens, total = OlmoEarthDataset._step_tokens(
             args, modalities, n_steps, step_index
         )
+        months: set[int] = set()
         for step in rng.permutation(n_steps):
-            if keep.any() and total + step_tokens[step] > args.token_budget:
+            grown = months | {int(step_months[step])}
+            if keep.any() and not OlmoEarthDataset._fits(
+                args, total + step_tokens[step], grown
+            ):
                 break
             keep[step] = True
             total += step_tokens[step]
+            months = grown
         return keep
 
     @staticmethod
@@ -1325,25 +1371,32 @@ class OlmoEarthDataset(Dataset):
         n_steps: int,
         step_index: dict[str, np.ndarray],
         rng: Any,
+        step_months: np.ndarray,
     ) -> tuple[int, int]:
-        """The kept run of union steps under ``args.token_budget`` (real tokens).
+        """The kept run of union steps under the budgets (real tokens).
 
         The run starts at a random step and extends forward while it fits the
-        budget (always at least one step).
+        input and trunk budgets (always at least one step). ``step_months``: each
+        step's calendar month (for the trunk budget).
         """
         step_tokens, fixed_tokens = OlmoEarthDataset._step_tokens(
             args, modalities, n_steps, step_index
         )
         first, last = 0, n_steps - 1
-        if args.token_budget is not None and n_steps > 0:
+        budgeted = args.token_budget is not None or args.trunk_token_budget is not None
+        if budgeted and n_steps > 0:
             first = last = int(rng.randint(n_steps))
             total = fixed_tokens + step_tokens[first]
-            while (
-                last + 1 < n_steps
-                and total + step_tokens[last + 1] <= args.token_budget
-            ):
+            months = {int(step_months[first])}
+            while last + 1 < n_steps:
+                grown = months | {int(step_months[last + 1])}
+                if not OlmoEarthDataset._fits(
+                    args, total + step_tokens[last + 1], grown
+                ):
+                    break
                 last += 1
                 total += step_tokens[last]
+                months = grown
         return first, last
 
     def _read_per_capture(
@@ -1391,11 +1444,11 @@ class OlmoEarthDataset(Dataset):
                 )
                 if thin:
                     keep_step = self._budget_thin(
-                        args, present, len(union_ts), step_index, rng
+                        args, present, len(union_ts), step_index, rng, _months(union_ts)
                     )
                 else:
                     first_step, last_step = self._budget_run(
-                        args, present, len(union_ts), step_index, rng
+                        args, present, len(union_ts), step_index, rng, _months(union_ts)
                     )
                     keep_step = np.zeros(len(union_ts), dtype=bool)
                     keep_step[first_step : last_step + 1] = True
@@ -1473,7 +1526,15 @@ class OlmoEarthDataset(Dataset):
         step_index = {
             m: np.searchsorted(bins, np.unique(b)) for m, b in bin_of.items() if len(b)
         }
-        first, last = self._budget_run(args, present, len(bins), step_index, rng)
+        bin_months = np.array(
+            [
+                (d.year * 12 + d.month - 1)
+                for d in (date.fromordinal(int(origin + b * days)) for b in bins)
+            ]
+        )
+        first, last = self._budget_run(
+            args, present, len(bins), step_index, rng, bin_months
+        )
         lo, hi = bins[first], bins[last]
         return origin, {
             m: k[(bin_of[m] >= lo) & (bin_of[m] <= hi)] for m, k in kept.items()
@@ -1521,7 +1582,7 @@ class OlmoEarthDataset(Dataset):
         )
         if _is_composite(args) and read["origin"] is None:
             first_step, last_step = self._budget_run(
-                args, list(data), len(union_ts), step_index, rng
+                args, list(data), len(union_ts), step_index, rng, _months(union_ts)
             )
         else:
             # The captures were already cut to the budget run before reading.

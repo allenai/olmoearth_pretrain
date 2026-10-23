@@ -91,6 +91,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_patch_size: int,
         sampled_hw_p_list: list[int],
         token_budget: int | None = None,
+        trunk_token_budget: int | None = None,
+        trunk_slot_floor: int = 12,
+        trunk_slot_cap: int = 24,
         time_priority_prob: float = 0.0,
         temporal_bias: float = 0.0,
         min_tokens_per_instance: int = 0,
@@ -155,6 +158,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
             max_patch_size: Maximum patch size for training.
             sampled_hw_p_list: List of possible height/width in patches to sample.
             token_budget: Optional token budget per instance.
+            trunk_token_budget: Per-modality-timestamps datasets only: an extra budget
+                on the tokens left after a per-cell slot merge with
+                ``trunk_slot_floor`` / ``trunk_slot_cap`` (see GetItemArgs). With an
+                input budget above it, extra input tokens go where the merge trims
+                them. None = input budget only.
+            trunk_slot_floor: The merge's ``min_slots`` (for trunk_token_budget).
+            trunk_slot_cap: The merge's ``max_slots_per_cell``.
             time_priority_prob: Given a token burdget, we can either sample the a grid size
                 and then find timesteps that fit this budget , or vice versa.
                 time_priority_prob defines how often we sample a number of timesteps and
@@ -232,6 +242,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         if token_budget is None:
             logger.warning("No token budget provided ALL PIXELS WILL BE USED")
         self.token_budget = token_budget
+        self.trunk_token_budget = trunk_token_budget
+        self.trunk_slot_floor = trunk_slot_floor
+        self.trunk_slot_cap = trunk_slot_cap
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
         self.sampled_hw_p_list = sampled_hw_p_list
         self.time_priority_prob = time_priority_prob
@@ -506,6 +519,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
             token_budget=self.token_budget,
+            trunk_token_budget=self.trunk_token_budget,
+            trunk_slot_floor=self.trunk_slot_floor,
+            trunk_slot_cap=self.trunk_slot_cap,
             tokenization_config=self.tokenization_config,
             target_t=target_t,
             budget_exclude_modalities=self.budget_exclude_modalities,
@@ -776,6 +792,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         instances_processed = 0
 
         budget = dl.token_budget
+        if dl.trunk_token_budget is not None and budget is not None:
+            # Grids must fit the trunk: its first timestep is never trimmed (cells
+            # under the merge floor bypass it). Extra input tokens go into time.
+            budget = min(budget, dl.trunk_token_budget)
         max_t_data = dl.max_timesteps
         space_time_bandsets = dl._space_time_bandsets
         space_only_bandsets = dl._space_only_bandsets
@@ -1100,6 +1120,9 @@ class OlmoEarthDataLoaderConfig(Config):
     sampled_hw_p_list: list[int]
     seed: int
     token_budget: int | None = None  # No subsetting if None
+    trunk_token_budget: int | None = None
+    trunk_slot_floor: int = 12
+    trunk_slot_cap: int = 24
     time_priority_prob: float = 0.0
     temporal_bias: float = 0.0
     min_tokens_per_instance: int = 0
@@ -1232,6 +1255,9 @@ class OlmoEarthDataLoaderConfig(Config):
             max_patch_size=self.max_patch_size,
             sampled_hw_p_list=self.sampled_hw_p_list,
             token_budget=self.token_budget,
+            trunk_token_budget=self.trunk_token_budget,
+            trunk_slot_floor=self.trunk_slot_floor,
+            trunk_slot_cap=self.trunk_slot_cap,
             time_priority_prob=self.time_priority_prob,
             temporal_bias=self.temporal_bias,
             min_tokens_per_instance=self.min_tokens_per_instance,

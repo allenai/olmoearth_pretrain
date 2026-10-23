@@ -950,6 +950,9 @@ def test_read_ahead_matches_sequential_items(allcap_h5py_dir: UPath) -> None:
 
     loader = SimpleNamespace(
         token_budget=200,
+        trunk_token_budget=None,
+        trunk_slot_floor=12,
+        trunk_slot_cap=24,
         tokenization_config=S2_SINGLE,
         budget_exclude_modalities=frozenset(),
     )
@@ -1141,3 +1144,42 @@ def test_tile_pool_reuses_files_and_keeps_batches_distinct() -> None:
         assert items[b][1][0] != items[b + 1][1][0]
     # ~1 read per 3 samples once the pool is full (plus the pool and its buffer)
     assert len(reads) <= 60 // 3 + 4 + 8
+
+
+@pytest.mark.parametrize("thin", [False, True])
+def test_trunk_budget_counts_tokens_after_the_merge(thin: bool) -> None:
+    """Dense steps the merge trims fill past the trunk budget; spread steps don't."""
+    args = GetItemArgs(
+        idx=0,
+        patch_size=1,
+        sampled_hw_p=4,  # 16 cells; one sentinel1 token per cell per step
+        token_budget=6000,
+        trunk_token_budget=200,
+        trunk_slot_floor=12,
+        trunk_slot_cap=24,
+    )
+    n = 60
+    step_index = {"sentinel1": np.arange(n)}
+
+    def kept(months: np.ndarray) -> int:
+        rng = np.random.RandomState(0)
+        if thin:
+            return int(
+                OlmoEarthDataset._budget_thin(
+                    args, ["sentinel1"], n, step_index, rng, months
+                ).sum()
+            )
+        first, last = OlmoEarthDataset._budget_run(
+            args, ["sentinel1"], n, step_index, rng, months
+        )
+        return last - first + 1
+
+    # 60 steps in 2 months: 12 slots per cell (the floor), 16 x 12 = 192 <= 200.
+    dense = kept(np.repeat([0, 1], n // 2))
+    # 60 steps in 60 months: slots = steps up to the cap, so 16 x steps <= 200.
+    spread = kept(np.arange(n))
+    assert spread == 12
+    if thin:
+        assert dense == n
+    else:
+        assert dense == n - int(np.random.RandomState(0).randint(n))
