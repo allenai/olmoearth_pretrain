@@ -593,13 +593,15 @@ class GetItemArgs(NamedTuple):
     # Per-modality-timestamps datasets only: seed of this sample's own random draws
     # (crop, time range, budget run). None = numpy's global random state.
     seed: int | None = None
-    # Per-modality-timestamps datasets only: a second budget on the tokens left
-    # after a per-cell slot merge (cells x max(min(months, cap), min(n, floor))
-    # slots, never more than n), so input budgets above it fill cells the merge
+    # Per-modality-timestamps datasets only: a second budget on the VISIBLE tokens
+    # left after a per-cell slot merge (cells x max(min(months, cap), min(v, floor))
+    # slots, never more than v, for v = the cell's tokens x trunk_visible_fraction:
+    # the merge runs after masking), so input budgets above it fill cells the merge
     # trims instead of adding trunk tokens. None = input budget only.
     trunk_token_budget: int | None = None
     trunk_slot_floor: int = 12
     trunk_slot_cap: int = 24
+    trunk_visible_fraction: float = 0.5
 
 
 # TODO should training modalities be str or modality_spec
@@ -1307,9 +1309,9 @@ class OlmoEarthDataset(Dataset):
 
     @staticmethod
     def _trunk_tokens(args: GetItemArgs, tokens: int, months: set[int]) -> int:
-        """Tokens after the per-cell slot merge, for ``tokens`` spread over the grid."""
+        """Visible tokens after the per-cell slot merge, ``tokens`` over the grid."""
         cells = args.sampled_hw_p**2
-        per_cell = tokens // cells
+        per_cell = int(tokens * args.trunk_visible_fraction) // cells
         slots = max(
             min(len(months), args.trunk_slot_cap), min(per_cell, args.trunk_slot_floor)
         )

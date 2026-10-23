@@ -953,6 +953,7 @@ def test_read_ahead_matches_sequential_items(allcap_h5py_dir: UPath) -> None:
         trunk_token_budget=None,
         trunk_slot_floor=12,
         trunk_slot_cap=24,
+        trunk_visible_fraction=0.5,
         tokenization_config=S2_SINGLE,
         budget_exclude_modalities=frozenset(),
     )
@@ -1157,6 +1158,7 @@ def test_trunk_budget_counts_tokens_after_the_merge(thin: bool) -> None:
         trunk_token_budget=200,
         trunk_slot_floor=12,
         trunk_slot_cap=24,
+        trunk_visible_fraction=1.0,  # no masking: counts as written below
     )
     n = 60
     step_index = {"sentinel1": np.arange(n)}

@@ -16,7 +16,9 @@ FILE...`` prints the per-mode distributions.
 
 import importlib
 import json
+import os
 import sys
+import tempfile
 from collections import defaultdict
 from multiprocessing import get_context
 from pathlib import Path
@@ -61,7 +63,11 @@ def _build(arm: str):  # type: ignore[no-untyped-def]
     dataset = dataset_config.build()
     dataset.prepare()
     config = module.build_dataloader_config(common)
-    config.work_dir = "/tmp/coverage_work"
+    # COVERAGE_* env vars override the arm's budgets (e.g. to compare samplers).
+    for key in ("token_budget", "trunk_token_budget", "trunk_slot_floor"):
+        if os.environ.get(f"COVERAGE_{key.upper()}"):
+            setattr(config, key, int(os.environ[f"COVERAGE_{key.upper()}"]))
+    config.work_dir = tempfile.mkdtemp(prefix="coverage_work_")
     config.target_device_type = "cpu"
     config.num_workers = 0
     loader = config.build(dataset)
@@ -166,6 +172,7 @@ def _measure(item) -> list[dict]:  # type: ignore[no-untyped-def]
             "distinct_months": distinct,
             "span_days": days,
             "tokens_per_cell": tokens,
+            "input_tokens": tokens * hw_p * hw_p,
         }
     ]
     if arm != "v1_3":
