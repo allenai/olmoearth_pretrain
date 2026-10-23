@@ -36,6 +36,21 @@ _S2_ORDER = list(Modality.SENTINEL2_L2A.band_order)
 _S2_DN_MAX = 10000.0
 # Max value of a uint8 image, used when rescaling [0–255] inputs to DN scale.
 _UINT8_MAX = 255.0
+# SpaceNet2's WorldView-3 multispectral bands are 11-bit DNs stored as uint16.
+_WORLDVIEW_DN_MAX = 2047.0
+
+# Generic RGBN band names used by the GeoBench v2 loaders -> S2 names.
+_RGBN_TO_S2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+# SpaceNet2 WorldView-3 MS bands -> closest S2 bands. yellow (585–625 nm) and
+# nir2 (860–1040 nm) have no S2 counterpart and are dropped, as is pan.
+_WORLDVIEW_TO_S2 = {
+    "coastal": "B01",  # 400–450 nm vs S2 B01 443 nm
+    "blue": "B02",
+    "green": "B03",
+    "red": "B04",
+    "red_edge": "B05",  # 705–745 nm vs S2 B05 705 nm
+    "nir1": "B08",  # 770–895 nm vs S2 B08 842 nm
+}
 
 
 class Slug(StrEnum):
@@ -55,6 +70,14 @@ class Slug(StrEnum):
     SPACENET2 = "spacenet2"
     SPACENET7 = "spacenet7"
     TREESATAI = "treesatai"
+
+
+def _flat_names(band_order: Any, key: str | None = None) -> list[str]:
+    if isinstance(band_order, dict):
+        if key is None:
+            raise ValueError(f"band_order is a dict; need a key ({list(band_order)})")
+        return [str(b) for b in band_order[key]]
+    return [str(b) for b in band_order]
 
 
 def _s2_names(band_order: Any) -> list[str]:
@@ -188,37 +211,27 @@ def _sample_to_olmoearth(
         if slug == Slug.SPACENET7:
             # PlanetScope uint8 [0–255]; rescale to S2 DN range.
             image = image * (_S2_DN_MAX / _UINT8_MAX)
-            rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
-            src = [rgbn_to_s2.get(s, s) for s in src]
+            # The 4th channel GeoBench-2 labels "nir" is an alpha/no-data mask (255
+            # almost everywhere), not NIR. Leave it unmapped so B08 is zero-filled
+            # and re-zeroed like any other missing band.
+            rgb_to_s2 = {k: v for k, v in _RGBN_TO_S2.items() if k != "nir"}
+            src = [rgb_to_s2.get(s, s) for s in src]
         return _s2_sample(image, src, device)
 
     if slug == Slug.FOTW:
         # 4-band RGBN Sentinel-2 (uint16, already in S2 DN scale); map to S2 band
         # names and pad remaining channels to 0.
-        rgbn_to_s2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
-        src = [rgbn_to_s2[b] for b in ("red", "green", "blue", "nir")]
+        src = [_RGBN_TO_S2[b] for b in ("red", "green", "blue", "nir")]
         return _s2_sample(sample["image"].float(), src, device)
 
     if slug == Slug.FLAIR2:
-        # 5-band aerial uint8 [0–255] (RGBN + elevation); rescale to S2 DN range
-        # and pad to 12 channels, treating the result as sentinel2_l2a.
+        # 5-band 0.2 m aerial uint8 [0–255] (red, green, blue, nir, elevation).
+        # Rescale to S2 DN range and map RGBN to their S2 bands by name. The
+        # elevation channel (a DSM-derived height, not a spectral band) is dropped:
+        # gb2-flair2 only supports sentinel2_l2a, so it has no srtm slot to go to.
         x = sample["image"].float() * (_S2_DN_MAX / _UINT8_MAX)
-        n = len(_S2_ORDER)
-        if x.shape[0] < n:
-            x = torch.cat(
-                [
-                    x,
-                    torch.zeros(
-                        n - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype
-                    ),
-                ]
-            )
-        else:
-            x = x[:n]
-        hwtc = _bchw_to_hwtc(x)
-        return OlmoEarthSample(
-            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
-        )
+        src = [_RGBN_TO_S2.get(n, n) for n in _flat_names(band_order)]
+        return _s2_sample(x, src, device)
 
     if slug == Slug.TREESATAI:
         return _s2_sample(sample["image_s2"].float(), _s2_names(band_order), device)
@@ -265,25 +278,12 @@ def _sample_to_olmoearth(
         )
 
     if slug == Slug.SPACENET2:
-        # spacenet2: worldview (8-band) + pan (1-band) stacked into the S2 slot.
-        parts = [v.float() for k, v in sorted(sample.items()) if k.startswith("image_")]
-        x = torch.cat(parts, dim=0)
-        n = len(_S2_ORDER)
-        if x.shape[0] < n:
-            x = torch.cat(
-                [
-                    x,
-                    torch.zeros(
-                        n - x.shape[0], *x.shape[1:], device=x.device, dtype=x.dtype
-                    ),
-                ]
-            )
-        else:
-            x = x[:n]
-        hwtc = _bchw_to_hwtc(x)
-        return OlmoEarthSample(
-            sentinel2_l2a=hwtc, timestamps=_timestamps(hwtc.shape[2], device)
-        )
+        # Pan-sharpened WorldView-3 8-band MS, 11-bit DN in uint16. Rescale to the
+        # S2 DN range and map the bands with an S2 counterpart by name (see
+        # _WORLDVIEW_TO_S2); yellow, nir2 and the panchromatic band are dropped.
+        x = sample["image_worldview"].float() * (_S2_DN_MAX / _WORLDVIEW_DN_MAX)
+        src = [_WORLDVIEW_TO_S2.get(n, n) for n in _flat_names(band_order, "worldview")]
+        return _s2_sample(x, src, device)
 
     if slug == Slug.BENV2:
         s2 = _bchw_to_hwtc(
