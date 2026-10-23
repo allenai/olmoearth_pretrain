@@ -1543,7 +1543,7 @@ class DownstreamEvaluatorCallback(Callback):
             module_path=module_path,
             checkpoint_dir=save_folder,
             step=step,
-            cluster=clusters[0],
+            clusters=clusters,
             run_name=eval_run_name,
             priority=priority,
             tasks_to_run=task_names,
