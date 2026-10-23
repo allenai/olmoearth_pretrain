@@ -228,6 +228,19 @@ class Modality:
         image_tile_size_factor=4,
     )
 
+    # Frozen DINOv3-sat (ViT-L/16, SAT-493M) features of 0.625 m NAIP RGB, one 64-d
+    # PCA-whitened vector per 10 m pixel. Not stored in the H5s: read from a side
+    # directory of ``sample_{i}.npy`` files (``OlmoEarthDatasetConfig.aux_npy_dirs``).
+    # A training target only (NAIP training arm N4).
+    NAIP_DINO = ModalitySpec(
+        name="naip_dino",
+        tile_resolution_factor=16,
+        band_sets=[BandSet([f"D{idx:02d}" for idx in range(64)], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+        skip_normalization=True,
+    )
+
     SENTINEL1 = ModalitySpec(
         name="sentinel1",
         tile_resolution_factor=16,

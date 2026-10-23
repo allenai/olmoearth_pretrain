@@ -404,6 +404,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        aux_npy_dirs: dict[str, str] | None = None,
     ):
         """Initialize the dataset.
 
@@ -429,6 +430,9 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            aux_npy_dirs: ``{modality: dir}`` for modalities stored outside the H5s,
+                one ``sample_{i}.npy`` per sample (same index and pixel grid as the
+                H5). A sample without a file has that modality missing.
 
         Returns:
             None
@@ -460,6 +464,9 @@ class OlmoEarthDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.apply_cutmix = apply_cutmix
+        self.aux_npy_dirs = {
+            name: UPath(path) for name, path in (aux_npy_dirs or {}).items()
+        }
         self.filter_idx_file = filter_idx_file
         if filter_idx_file is not None:
             self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
@@ -856,6 +863,16 @@ class OlmoEarthDataset(Dataset):
                         h5file[Modality.WORLDCOVER.name][()], self.dtype
                     )
 
+                # Modalities kept outside the H5s (e.g. naip_dino): sample_{i}.npy in a
+                # side directory, named like the H5 file.
+                for aux_name, aux_dir in self.aux_npy_dirs.items():
+                    if aux_name not in self.training_modalities:
+                        continue
+                    aux_path = aux_dir / (UPath(h5_file_path).stem + ".npy")
+                    if aux_path.exists():
+                        with aux_path.open("rb") as aux_f:
+                            sample_dict[aux_name] = np.load(aux_f)
+
                 if (
                     missing_mask_group_name
                     := ConvertToH5py.missing_timesteps_mask_group_name
@@ -994,6 +1011,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    aux_npy_dirs: dict[str, str] | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

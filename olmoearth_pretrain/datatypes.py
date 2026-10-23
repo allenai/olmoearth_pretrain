@@ -96,6 +96,8 @@ class OlmoEarthSample(NamedTuple):
     naip: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
     # naip_10 is currently 4x the height/width of sentinel2_l2a.
     naip_10: ArrayTensor | None = None  # [B, H, W, T, len(NAIP_bands)]
+    # naip_dino: precomputed DINOv3 features of NAIP, read from a side directory.
+    naip_dino: ArrayTensor | None = None  # [B, H, W, 1, 64]
     gse: ArrayTensor | None = None  # [B, H, W, 1, len(GSE_bands)]
     tessera_v2: ArrayTensor | None = None  # [B, H, W, 1, len(TESSERA_bands)]
     cdl: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
@@ -376,6 +378,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None
     naip_10_mask: Tensor | None = None
+    naip_dino: Tensor | None = None
+    naip_dino_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
     tessera_v2: Tensor | None = None
@@ -518,6 +522,8 @@ class TokensAndMasks(NamedTuple):
     naip_mask: Tensor | None = None
     naip_10: Tensor | None = None
     naip_10_mask: Tensor | None = None
+    naip_dino: Tensor | None = None
+    naip_dino_mask: Tensor | None = None
     gse: Tensor | None = None
     gse_mask: Tensor | None = None
     tessera_v2: Tensor | None = None

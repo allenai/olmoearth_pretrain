@@ -60,7 +60,17 @@ class SupervisionModalityConfig(Config):
             F.mse_loss; "l1" uses F.l1_loss. L1 is more robust to long-tail
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
-            across all continuous reconstruction targets.
+            across all continuous reconstruction targets. "cosine" scores
+            1 - cos(pred, target) over the channels of each valid pixel (for
+            feature-map targets such as ``naip_dino``).
+        target_transform: Optional transform of the raw target before the loss
+            (and before the head output is resized to it). ``"subpixel_stats"``
+            (for a modality on a finer grid, ``image_tile_size_factor = f``, e.g.
+            ``naip_10`` with f = 4): the per-band mean over ``f/2 x f/2`` blocks
+            (the target at 2x the base resolution) concatenated with the per-band
+            std over each ``f x f`` block (one base pixel), repeated to that 2x grid.
+            ``num_output_channels`` is then ``2 * num_bands``. A block with any
+            missing pixel is missing.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -70,6 +80,7 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    target_transform: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -80,10 +91,15 @@ class SupervisionModalityConfig(Config):
             and self.class_values is None
         ):
             raise ValueError("class_values must be provided for classification tasks")
-        if self.regression_loss_type not in ("mse", "l1"):
+        if self.regression_loss_type not in ("mse", "l1", "cosine"):
             raise ValueError(
-                f"regression_loss_type must be 'mse' or 'l1', got "
+                f"regression_loss_type must be 'mse', 'l1' or 'cosine', got "
                 f"{self.regression_loss_type!r}"
+            )
+        if self.target_transform not in (None, "subpixel_stats"):
+            raise ValueError(
+                f"target_transform must be None or 'subpixel_stats', got "
+                f"{self.target_transform!r}"
             )
 
 
@@ -130,6 +146,55 @@ class SupervisionHeadConfig(Config):
                 else max_patch_size
             ),
         )
+
+
+def _subpixel_stats(raw_target: Tensor, factor: int) -> Tensor:
+    """``[B, H*f, W*f, T, C]`` -> ``[B, 2H, 2W, T, 2C]``: f/2-block means + f-block stds.
+
+    See ``SupervisionModalityConfig.target_transform``. Blocks touching a missing pixel
+    are set to ``MISSING_VALUE`` in every channel.
+    """
+    if factor < 2 or factor % 2:
+        raise ValueError(f"subpixel_stats needs an even factor >= 2, got {factor}")
+    b, hf, wf, t, c = raw_target.shape
+    h, w = hf // factor, wf // factor
+    half = factor // 2
+    x = raw_target.float()
+    missing = (raw_target == MISSING_VALUE).any(dim=-1)  # [B, Hf, Wf, T]
+    x = torch.where(missing.unsqueeze(-1), torch.zeros_like(x), x)
+    blocks = rearrange(
+        x, "b (h i) (w j) t c -> b h w t c (i j)", i=factor, j=factor
+    )  # one base pixel per block
+    std = blocks.std(dim=-1, unbiased=False)  # [B, H, W, T, C]
+    halves = rearrange(
+        x, "b (h i) (w j) t c -> b h w t c (i j)", i=half, j=half
+    )  # [B, 2H, 2W, T, C, half^2]
+    mean = halves.mean(dim=-1)
+    std_up = std.repeat_interleave(2, dim=1).repeat_interleave(2, dim=2)
+    out = torch.cat([mean, std_up], dim=-1)
+    block_missing = rearrange(
+        missing, "b (h i) (w j) t -> b h w t (i j)", i=factor, j=factor
+    ).any(dim=-1)
+    block_missing = block_missing.repeat_interleave(2, dim=1).repeat_interleave(
+        2, dim=2
+    )
+    out = torch.where(
+        block_missing.unsqueeze(-1), torch.full_like(out, MISSING_VALUE), out
+    )
+    assert out.shape == (b, 2 * h, 2 * w, t, 2 * c)
+    return out.to(raw_target.dtype)
+
+
+def supervision_target(
+    name: str, cfg: SupervisionModalityConfig, batch: MaskedOlmoEarthSample
+) -> Tensor | None:
+    """The (possibly transformed) target of supervised modality ``name``."""
+    raw_target = getattr(batch, name, None)
+    if raw_target is None or cfg.target_transform is None:
+        return raw_target
+    if cfg.target_transform == "subpixel_stats":
+        return _subpixel_stats(raw_target, Modality.get(name).image_tile_size_factor)
+    raise ValueError(f"unknown target_transform {cfg.target_transform!r}")
 
 
 class SupervisionHead(nn.Module):
@@ -235,7 +300,10 @@ class SupervisionHead(nn.Module):
                 )  # [B, n_h*mps, n_w*mps, 1, C]
 
                 output = self._maybe_interpolate_to_target(
-                    output, getattr(batch, sup_name, None)
+                    output,
+                    supervision_target(
+                        sup_name, self.modality_configs[sup_name], batch
+                    ),
                 )
 
             predictions[sup_name] = output
@@ -266,7 +334,7 @@ def _compute_per_modality_losses(
 
     for name, pred in predictions.items():
         cfg = modality_configs[name]
-        raw_target = getattr(batch, name, None)
+        raw_target = supervision_target(name, cfg, batch)
 
         if raw_target is None:
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
@@ -441,6 +509,19 @@ def _regression_loss(
     patch, mean and variance are pooled over the (max_patch_size^2 * C) values
     (across valid pixels only) and used to normalize that patch's target.
     """
+    if regression_loss_type == "cosine":
+        if norm_pix_loss:
+            raise ValueError("norm_pix_loss does not apply to the cosine loss")
+        safe_target = torch.where(
+            valid_mask.unsqueeze(-1),
+            raw_target.float(),
+            torch.zeros_like(raw_target, dtype=torch.float32),
+        )
+        per_pixel = 1.0 - F.cosine_similarity(
+            pred.float(), safe_target, dim=-1, eps=1e-6
+        )  # [B, H, W, T]
+        return _masked_mean(per_pixel, valid_mask).to(pred.dtype)
+
     if not norm_pix_loss:
         valid_expanded = valid_mask.unsqueeze(-1).expand_as(pred)
         safe_target = torch.where(

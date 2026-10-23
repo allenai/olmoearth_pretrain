@@ -454,8 +454,14 @@ class OlmoEarthDataLoader(DataLoaderBase):
             )
             output_dict[Modality.SENTINEL2_L2A.name] = mock_sentinel2_l2a
         if Modality.NAIP_10.name in self.dataset.training_modalities:
-            mock_naip_10 = rng.random((1024, 1024, 1, 4), dtype=np.float32)
+            mock_naip_10 = rng.random(
+                (standard_hw * 4, standard_hw * 4, 1, 4), dtype=np.float32
+            )
             output_dict[Modality.NAIP_10.name] = mock_naip_10
+        if Modality.NAIP_DINO.name in self.dataset.training_modalities:
+            output_dict[Modality.NAIP_DINO.name] = rng.standard_normal(
+                (standard_hw, standard_hw, 1, Modality.NAIP_DINO.num_bands)
+            ).astype(np.float32)
         if Modality.SENTINEL1.name in self.dataset.training_modalities:
             mock_sentinel1 = rng.random(
                 (standard_hw, standard_hw, 12, 2), dtype=np.float32
