@@ -245,6 +245,82 @@ def get_month_encoding_table(encoding_dim: int) -> torch.Tensor:
     return month_table  # (M, D)
 
 
+# Time codes for the Wildcat / Q10 A/C/B test (2026-10-23): "month" is v1.3's single
+# frozen 1/yr circle, "doy" a frozen multi-harmonic day-of-year code, "doy_sun" the same
+# plus a learned (zero-init) projection of a latitude-aware sun clock.
+TIME_CODES = ("month", "doy", "doy_sun")
+DOY_HARMONICS = 6  # 1..6 cycles/yr: the finest real dates resolve (Gandalf Q10 05:38Z)
+SUN_CLOCK_FEATURES = 3
+
+
+def timestamps_to_day_of_year(timestamps: torch.Tensor) -> torch.Tensor:
+    """0-based day of year (non-leap offsets) from ``(day, month - 1, year)`` stamps."""
+    day = timestamps[..., 0].to(torch.float32)
+    month = timestamps[..., 1].to(torch.long).clamp(0, 11)
+    return _days_before_month(timestamps.device)[month] + (day - 1.0)
+
+
+def get_doy_harmonic_code(
+    doy: torch.Tensor, encoding_dim: int, harmonics: int = DOY_HARMONICS
+) -> torch.Tensor:
+    """Frozen day-of-year code: sin/cos at 1..``harmonics`` cycles/yr.
+
+    Like the month table, each component is repeated so the code fills
+    ``encoding_dim`` with per-dimension magnitude <= 1. Returns ``doy.shape + (D,)``.
+    """
+    assert encoding_dim % (2 * harmonics) == 0, (encoding_dim, harmonics)
+    reps = encoding_dim // (2 * harmonics)
+    k = torch.arange(1, harmonics + 1, device=doy.device, dtype=torch.float32)
+    phase = (2 * math.pi / 365.25) * doy.to(torch.float32)[..., None] * k  # (..., K)
+    code = torch.cat([torch.sin(phase), torch.cos(phase)], dim=-1)  # (..., 2K)
+    return code.repeat_interleave(reps, dim=-1)
+
+
+def _toa_daily_insolation(
+    doy: torch.Tensor, lat_rad: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Daily-mean TOA insolation (W/m^2) and day length (h); Spencer (1971) terms."""
+    g = (2 * math.pi / 365.0) * doy
+    decl = (
+        0.006918
+        - 0.399912 * torch.cos(g)
+        + 0.070257 * torch.sin(g)
+        - 0.006758 * torch.cos(2 * g)
+        + 0.000907 * torch.sin(2 * g)
+        - 0.002697 * torch.cos(3 * g)
+        + 0.00148 * torch.sin(3 * g)
+    )
+    e0 = (
+        1.000110
+        + 0.034221 * torch.cos(g)
+        + 0.001280 * torch.sin(g)
+        + 0.000719 * torch.cos(2 * g)
+        + 0.000077 * torch.sin(2 * g)
+    )
+    ws = torch.arccos((-torch.tan(lat_rad) * torch.tan(decl)).clamp(-1.0, 1.0))
+    q = (1361.0 / math.pi) * e0 * (
+        ws * torch.sin(lat_rad) * torch.sin(decl)
+        + torch.cos(lat_rad) * torch.cos(decl) * torch.sin(ws)
+    )
+    return q, 24.0 * ws / math.pi
+
+
+def sun_clock_features(doy: torch.Tensor, lat_deg: torch.Tensor) -> torch.Tensor:
+    """Per-timestep sun clock: [TOA/500, (day length - 12)/12, d(TOA)/dt / 4].
+
+    ``doy`` (B, T) 0-based day of year, ``lat_deg`` (B,) latitude. Returns (B, T, 3).
+    Hemisphere-aware by construction (July at -21 deg is winter); d/dt in W/m^2/day
+    separates spring from autumn.
+    """
+    doy = doy.to(torch.float32)
+    lat = torch.deg2rad(lat_deg.to(torch.float32).clamp(-89.9, 89.9))[:, None]
+    q, day_len = _toa_daily_insolation(doy, lat)
+    q_next, _ = _toa_daily_insolation(doy + 1.0, lat)
+    q_prev, _ = _toa_daily_insolation(doy - 1.0, lat)
+    dq = (q_next - q_prev) / 2.0
+    return torch.stack([q / 500.0, (day_len - 12.0) / 12.0, dq / 4.0], dim=-1)
+
+
 def rotate_half(x: torch.Tensor) -> torch.Tensor:
     """Rotate adjacent feature pairs for rotary position embeddings."""
     x_even = x[..., 0::2]

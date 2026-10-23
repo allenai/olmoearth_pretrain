@@ -25,12 +25,17 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.nn.attention import Block
 from olmoearth_pretrain.nn.encodings import (
+    SUN_CLOCK_FEATURES,
+    TIME_CODES,
     PositionEncoding,
     axial_3d_dim_split,
     get_1d_sincos_pos_encoding,
     get_2d_sincos_pos_encoding_with_resolution,
+    get_doy_harmonic_code,
     get_month_encoding_table,
     resolve_position_encoding,
+    sun_clock_features,
+    timestamps_to_day_of_year,
     timestamps_to_days,
 )
 from olmoearth_pretrain.nn.flexi_patch_embed import (
@@ -730,6 +735,10 @@ class CompositeEncodings(nn.Module):
         # Month encodings
         month_tab = get_month_encoding_table(self.embedding_dim_per_embedding_type)
         self.month_embed = nn.Embedding.from_pretrained(month_tab, freeze=True)
+        # Calendar code (Wildcat A/C/B, 2026-10-23); see configure_time_code.
+        self.time_code = "month"
+        self.time_code_dropout = 0.0
+        self._latlon: Tensor | None = None  # transient (B, 2) [lat, lon], set per forward
         if not learnable_channel_embeddings and not random_channel_embeddings:
             self.per_modality_channel_embeddings = nn.ParameterDict()
             for modality in self.supported_modalities:
@@ -768,6 +777,52 @@ class CompositeEncodings(nn.Module):
                 # TODO: fix the dtype here
                 nn.init.constant_(m.bias, 0).to(torch.float32)
 
+    def configure_time_code(self, time_code: str, dropout: float = 0.0) -> None:
+        """Choose the calendar code added to dims [2n, 3n) of multitemporal tokens.
+
+        ``month``: v1.3's frozen 1/yr month table (default; unchanged behaviour).
+        ``doy``: frozen day-of-year sin/cos at 1..6 cycles/yr.
+        ``doy_sun``: ``doy`` plus a zero-init linear projection of the sun clock
+        (TOA insolation, day length, d/dt), which needs ``_latlon``.
+        ``dropout``: per-sample probability (training only) of zeroing the whole code.
+        """
+        if time_code not in TIME_CODES:
+            raise ValueError(f"time_code must be one of {TIME_CODES}, got {time_code}")
+        self.time_code = time_code
+        self.time_code_dropout = dropout
+        if time_code == "doy_sun":
+            self.sun_proj = nn.Linear(
+                SUN_CLOCK_FEATURES, self.embedding_dim_per_embedding_type
+            )
+            nn.init.zeros_(self.sun_proj.weight)
+            nn.init.zeros_(self.sun_proj.bias)
+            self.sun_proj._skip_custom_init = True  # type: ignore[assignment]
+
+    def compute_time_code(self, timestamps: Tensor) -> Tensor:
+        """(B, T, n) calendar code for ``timestamps`` (B, T, 3), incl. dropout."""
+        n = self.embedding_dim_per_embedding_type
+        if self.time_code == "month":
+            code = self.month_embed(timestamps[:, :, 1]).to(torch.float32)
+        else:
+            doy = timestamps_to_day_of_year(timestamps)
+            code = get_doy_harmonic_code(doy, n)
+            if self.time_code == "doy_sun":
+                latlon = self._latlon
+                if latlon is not None:
+                    feats = sun_clock_features(doy, latlon[:, 0].to(doy.device))
+                    w = self.sun_proj.weight
+                    code = code + self.sun_proj(feats.to(w.dtype)).to(torch.float32)
+                else:
+                    # keep sun_proj in the graph (DDP/FSDP unused-param safety)
+                    code = code + 0.0 * self.sun_proj.weight.sum()
+        if self.training and self.time_code_dropout > 0:
+            keep = (
+                torch.rand(code.shape[0], 1, 1, device=code.device)
+                >= self.time_code_dropout
+            )
+            code = code * keep.to(code.dtype)
+        return code
+
     @staticmethod
     def _drop_pos_embed_hook(
         state_dict: dict, prefix: str, *args: object, **kwargs: object
@@ -791,6 +846,7 @@ class CompositeEncodings(nn.Module):
         input_res: int | None = None,
         use_modality_encodings: bool = True,
         use_temporal_encodings: bool = True,
+        time_code: Tensor | None = None,
     ) -> Tensor:
         """Apply the encodings to the patchified data based on modality type.
 
@@ -885,9 +941,9 @@ class CompositeEncodings(nn.Module):
             # Month encodings stay additive in all modes (calendar/seasonal
             # signal is orthogonal to slot-index).
             assert timestamps is not None
-            months = timestamps[:, :, 1]
-            month_embed = self.month_embed(months)
-            month_embed = repeat(month_embed, f"b t d -> {ein_string}", **ein_dict)
+            if time_code is None:
+                time_code = self.compute_time_code(timestamps)
+            month_embed = repeat(time_code, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
         if modality.is_spatial and self.position_encoding == PositionEncoding.ABSOLUTE:
             # Spatial encodings
@@ -930,6 +986,10 @@ class CompositeEncodings(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
+        # One calendar code per forward so time-code dropout agrees across modalities.
+        time_code = (
+            self.compute_time_code(timestamps) if timestamps is not None else None
+        )
         for modality_name in modalities_to_process:
             output_dict[modality_name] = self._apply_encodings_per_modality(
                 modality_name,
@@ -937,6 +997,7 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
+                time_code=time_code,
             )
         return output_dict
 
@@ -3149,6 +3210,8 @@ class Encoder(FlexiVitBase):
         if fast_pass and token_exit_cfg is not None:
             raise ValueError("token_exit_cfg cannot be set when fast_pass is True")
 
+        # transient per-forward latitude for the sun-clock time code
+        self.composite_encodings._latlon = getattr(x, "latlon", None)
         patchified_tokens_and_masks = self.patch_embeddings.forward(x, patch_size)
 
         register_output: dict[str, Any] | None = None
@@ -3888,6 +3951,11 @@ class EncoderConfig(Config):
 
     supported_modality_names: list[str]
 
+    # Wildcat A/C/B calendar code ("month" | "doy" | "doy_sun") and its per-sample
+    # training dropout (encoder only); see CompositeEncodings.configure_time_code.
+    time_code: str = "month"
+    time_code_dropout: float = 0.0
+
     embedding_size: int = 16
     # This is the base patch size for the patch embedder
     max_patch_size: int = 8
@@ -4022,8 +4090,12 @@ class EncoderConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        time_code = kwargs.pop("time_code")
+        time_code_dropout = kwargs.pop("time_code_dropout")
         logger.info(f"Encoder kwargs: {kwargs}")
-        return Encoder(**kwargs)
+        encoder = Encoder(**kwargs)
+        encoder.composite_encodings.configure_time_code(time_code, time_code_dropout)
+        return encoder
 
 
 @dataclass
@@ -4031,6 +4103,11 @@ class PredictorConfig(Config):
     """Configuration for the Predictor."""
 
     supported_modality_names: list[str]
+
+    # Wildcat A/C/B calendar code ("month" | "doy" | "doy_sun") and its per-sample
+    # training dropout (encoder only); see CompositeEncodings.configure_time_code.
+    time_code: str = "month"
+    time_code_dropout: float = 0.0
     encoder_embedding_size: int = 16
     decoder_embedding_size: int = 16
     depth: int = 2
@@ -4128,5 +4205,9 @@ class PredictorConfig(Config):
         # supported_modality_names is replaced by supported_modalities
         kwargs.pop("supported_modality_names")
         kwargs["supported_modalities"] = self.supported_modalities
+        time_code = kwargs.pop("time_code")
+        kwargs.pop("time_code_dropout")  # encoder only
         logger.info(f"Predictor kwargs: {kwargs}")
-        return Predictor(**kwargs)
+        predictor = Predictor(**kwargs)
+        predictor.composite_encodings.configure_time_code(time_code, 0.0)
+        return predictor

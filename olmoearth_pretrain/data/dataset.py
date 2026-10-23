@@ -476,6 +476,7 @@ class OlmoEarthDataset(Dataset):
         allcap_selection: str | None = None,
         allcap_cloud_tau: float = 1.0,
         allcap_two_draws: bool = False,
+        include_latlon: bool = False,
     ):
         """Initialize the dataset.
 
@@ -548,6 +549,9 @@ class OlmoEarthDataset(Dataset):
             )
         self.allcap_selection = allcap_selection
         self.allcap_cloud_tau = allcap_cloud_tau
+        # Wildcat sun clock: pass each sample's stored [lat, lon] through as the
+        # ``latlon`` field (not a training modality, so it is never encoded).
+        self.include_latlon = include_latlon
         if allcap_two_draws and allcap_selection is None:
             raise ValueError("allcap_two_draws requires allcap_selection")
         if allcap_two_draws and allcap_selection != ALLCAP_RANDOM_CLEAR:
@@ -968,12 +972,15 @@ class OlmoEarthDataset(Dataset):
                 if self.allcap_selection is not None:
                     # Every-capture corpus: select <=12 slots and return the same
                     # (compact sample, missing-timestep masks) pair a v1.3 H5 gives.
-                    return read_allcap_sample(
+                    sample, masks = read_allcap_sample(
                         h5file,
                         self.training_modalities,
                         self.allcap_selection,
                         self.allcap_cloud_tau,
                     )
+                    if self.include_latlon:
+                        sample["latlon"] = h5file["latlon"][()]
+                    return sample, masks
                 # timestamps should not be a floating string
                 sample_dict = {
                     k: v[()]
@@ -982,6 +989,8 @@ class OlmoEarthDataset(Dataset):
                     # TODO: Fix the floating string issue
                     or k in ["timestamps"]
                 }
+                if self.include_latlon and "latlon" in h5file:
+                    sample_dict["latlon"] = h5file["latlon"][()]
 
                 # worldcover_onehot is derived from the raw worldcover band: it is not
                 # stored on disk, so read the worldcover dataset and one-hot encode it.
@@ -1116,6 +1125,16 @@ class OlmoEarthDataset(Dataset):
             for modality_name in sample_dict.keys():
                 if modality_name == "timestamps":
                     continue
+                if (
+                    modality_name == "latlon"
+                    and self.include_latlon
+                    and "latlon" not in self.training_modalities
+                ):
+                    # raw degrees for the sun clock
+                    sample_dict["latlon"] = np.asarray(
+                        sample_dict["latlon"], dtype=np.float32
+                    )
+                    continue
                 # DO NOT NORMALIZE MISSING MODALITIES otherwise the MISSING_VALUE will be normalized
                 if modality_name in missing_modalities:
                     logger.debug(
@@ -1226,6 +1245,8 @@ class OlmoEarthDatasetConfig(Config):
     allcap_cloud_tau: float = 1.0
     # E5 arm C: two independent date-draws per sample (pairs; see OlmoEarthDataset).
     allcap_two_draws: bool = False
+    # Pass the stored [lat, lon] through as ``latlon`` (sun-clock time code).
+    include_latlon: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

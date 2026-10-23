@@ -17,7 +17,7 @@ from torch.distributed.fsdp import (
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
-from olmoearth_pretrain.nn.flexi_vit import TokensAndMasks
+from olmoearth_pretrain.nn.flexi_vit import CompositeEncodings, TokensAndMasks
 from olmoearth_pretrain.nn.register_distillation_head import (
     RegisterDistillationHead,
     RegisterDistillationHeadConfig,
@@ -164,6 +164,10 @@ class LatentMIM(nn.Module, DistributedMixins):
                 takes a token sequence.
         """
         # TODO: Input And outputs here are not consistent between encoder and decoder need a tokensandmaks++
+        # the decoder's sun-clock code needs latitude too (encoder sets its own)
+        for module in self.modules():
+            if isinstance(module, CompositeEncodings):
+                module._latlon = getattr(x, "latlon", None)
         output_dict = self.encoder(x, patch_size=patch_size)
         token_norm_stats = output_dict.pop("token_norm_stats", None)
         latent, latent_projected_and_pooled, decoder_kwargs = unpack_encoder_output(
