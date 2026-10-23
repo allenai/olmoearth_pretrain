@@ -17,7 +17,8 @@ set of captures over the whole year (``THIN_CAPTURES``).
 Evals (in-loop, every ``STUDENT_LOOP_EVAL_INTERVAL_STEPS``, d128 student, patch size
 2, one latent per pixel): m-eurosat; PASTIS monthly and every-capture (S1+S2); and
 africa_crop_mask / ethiopia_crops (AEF trials) monthly S1+S2, every-capture S1+S2,
-and monthly S1+S2+Landsat-L2 (monthly medians of the twins' every L2 capture).
+monthly S1+S2+Landsat-L2 (monthly medians of the twins' every L2 capture) and
+every-capture S1+S2+Landsat-L2; PASTIS also monthly and every-capture S1+S2+L2.
 """
 
 import logging
@@ -245,6 +246,15 @@ def allcap_eval_tasks(catalog: dict) -> dict:
     tasks["pastis_year_aligned_ws16_ps2_sentinel1_sentinel2_everycapture_proj128"] = (
         _ps2_student(pastis, input_modalities=S1_S2, every_capture=True)
     )
+    # Landsat C2 L2 from the twin (the corpus's Landsat; the monthly layers carry L1).
+    tasks["pastis_year_aligned_ws16_ps2_sentinel1_sentinel2_landsatl2_proj128"] = (
+        _ps2_student(pastis, input_modalities=S1_S2_L2, twin_landsat_l2=True)
+    )
+    tasks[
+        "pastis_year_aligned_ws16_ps2_sentinel1_sentinel2_landsatl2_everycapture_proj128"
+    ] = _ps2_student(
+        pastis, input_modalities=S1_S2_L2, every_capture=True, twin_landsat_l2=True
+    )
     for ds in AEF_DATASETS:
         base = EMBEDDING_EVAL_TASKS[
             f"{ds}_year_aligned_ws16_ps1_sentinel1_sentinel2_landsat_knn"
@@ -258,6 +268,14 @@ def allcap_eval_tasks(catalog: dict) -> dict:
         )
         tasks[f"{prefix}_sentinel1_sentinel2_landsatl2_knn_proj128"] = _ps2_student(
             base, input_modalities=S1_S2_L2, twin_landsat_l2=True
+        )
+        tasks[f"{prefix}_sentinel1_sentinel2_landsatl2_everycapture_knn_proj128"] = (
+            _ps2_student(
+                base,
+                input_modalities=S1_S2_L2,
+                every_capture=True,
+                twin_landsat_l2=True,
+            )
         )
     tasks["m-eurosat_ps2_proj128"] = _ps2_student(catalog["m-eurosat"])
     return tasks

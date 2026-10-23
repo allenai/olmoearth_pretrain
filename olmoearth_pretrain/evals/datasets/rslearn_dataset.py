@@ -246,6 +246,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             twin_landsat_l2: If set, add ``landsat_l2`` (in ``input_modalities``)
                 as per-pixel monthly medians of the twin's every Landsat C2 L2
                 capture, on the sample's monthly slots (the S1/S2 monthlies).
+                With ``every_capture``, every L2 capture instead, on the S1/S2
+                day timeline.
         """
         if (
             not norm_stats_from_pretrained
@@ -850,7 +852,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         cols: slice | None,
         label: torch.Tensor,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
-        """S1/S2 from the window's every-capture twin, on one day timeline."""
+        """S1/S2 (and L2) from the window's every-capture twin, on one day timeline."""
         assert self.every_capture_reader is not None
         # Tiled datasets (PASTIS) read a window once and crop each tile from it.
         tiled = self._tiles_per_side > 1
@@ -870,6 +872,15 @@ class RslearnToOlmoEarthDataset(Dataset):
                 None if tiled else rows,
                 None if tiled else cols,
             )
+            if self.twin_landsat_l2_reader is not None:
+                landsat = read_landsat_l2(
+                    self.twin_landsat_l2_reader,
+                    window_name,
+                    None if tiled else rows,
+                    None if tiled else cols,
+                )
+                if landsat is not None:
+                    series[Modality.LANDSAT_L2.name] = landsat
             self._every_capture_cache = (key, series)
         series = self._every_capture_cache[1]
         if tiled and rows is not None and cols is not None:

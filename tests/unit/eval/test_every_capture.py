@@ -3,8 +3,11 @@
 from datetime import datetime
 
 import numpy as np
+import pytest
+import torch
 
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.datasets.every_capture import (
     S2_ABSENT_BANDS,
     _merge_same_day,
@@ -64,3 +67,54 @@ def test_absent_modality_and_mapping() -> None:
     assert (
         every_capture_source("pastis_year_aligned", None).group == "pastis_tessera_v2"
     )
+
+
+def test_every_capture_sample_puts_landsat_l2_captures_on_the_day_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """every_capture + twin_landsat_l2: each L2 capture gets its own day step."""
+    from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+    from olmoearth_pretrain.evals.datasets import rslearn_dataset
+
+    s2_days = [datetime(2019, 1, 5), datetime(2019, 3, 1)]
+    l2_days = [datetime(2019, 1, 5), datetime(2019, 2, 10)]
+    n_s2 = len(Modality.SENTINEL2_L2A.band_order)
+    n_l2 = len(Modality.LANDSAT_L2.band_order)
+    s2 = np.full((2, 2, 2, n_s2), 1000.0, np.float32)
+    l2 = np.full((2, 2, 2, n_l2), 9000.0, np.float32)
+    l2_valid = np.ones((2, 2, 2), dtype=bool)
+    l2_valid[0, 0, 1] = False  # one missing pixel on 2019-02-10
+    monkeypatch.setattr(
+        rslearn_dataset,
+        "read_every_capture",
+        lambda *a: {
+            Modality.SENTINEL2_L2A.name: (s2, np.ones((2, 2, 2), bool), s2_days)
+        },
+    )
+    monkeypatch.setattr(
+        rslearn_dataset, "read_landsat_l2", lambda *a: (l2, l2_valid, l2_days)
+    )
+    ds = rslearn_dataset.RslearnToOlmoEarthDataset.__new__(
+        rslearn_dataset.RslearnToOlmoEarthDataset
+    )
+    ds.every_capture_reader = object()  # type: ignore[assignment]
+    ds.twin_landsat_l2_reader = object()  # type: ignore[assignment]
+    ds._tiles_per_side = 1
+    ds._every_capture_cache = None
+    ds.input_modalities = [Modality.SENTINEL2_L2A.name, Modality.LANDSAT_L2.name]
+    ds.norm_stats_from_pretrained = True
+    ds.normalizer_computed = Normalizer(Strategy.COMPUTED)
+
+    sample, _ = ds._every_capture_sample("w", None, None, torch.zeros(2, 2))
+
+    # Union of days: 01-05 (both), 02-10 (L2 only), 03-01 (S2 only).
+    assert sample.timestamps.tolist() == [[5, 0, 2019], [10, 1, 2019], [1, 2, 2019]]
+    missing = MaskValue.MISSING.value
+    assert sample.landsat_l2_mask is not None
+    assert sample.sentinel2_l2a_mask is not None
+    l2_mask = sample.landsat_l2_mask[..., 0]
+    assert (l2_mask[:, :, 0] != missing).all()
+    assert l2_mask[0, 0, 1] == missing and (l2_mask[1, 1, 1] != missing)
+    assert (l2_mask[:, :, 2] == missing).all()
+    s2_mask = sample.sentinel2_l2a_mask[..., 0]
+    assert (s2_mask[:, :, 1] == missing).all()
