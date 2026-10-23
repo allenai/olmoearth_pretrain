@@ -177,4 +177,5 @@ def get_eval_dataset(
             tile_samples=kwargs.get("tile_samples", False),
             every_capture=kwargs.get("every_capture", False),
             twin_landsat_l2=kwargs.get("twin_landsat_l2", False),
+            real_capture_dates=kwargs.get("real_capture_dates", False),
         )

@@ -277,6 +277,10 @@ def allcap_eval_tasks(catalog: dict) -> dict:
                 twin_landsat_l2=True,
             )
         )
+    # Monthly tasks dated by each scene's real acquisition, not the period start
+    # (these models train on real capture dates).
+    for name in [n for n in tasks if "everycapture" not in n and "eurosat" not in n]:
+        tasks[f"{name}_realdates"] = replace(tasks[name], real_capture_dates=True)
     tasks["m-eurosat_ps2_proj128"] = _ps2_student(catalog["m-eurosat"])
     return tasks
 

@@ -169,6 +169,10 @@ class DownstreamTaskConfig:
     # in input_modalities) as monthly per-pixel medians of the twin's every Landsat
     # C2 L2 capture, on the sample's monthly S1/S2 slots.
     twin_landsat_l2: bool = False
+    # For registry datasets with monthly layers: date each timestep by its scene's
+    # real acquisition (rslearn items.json) instead of the period start, per
+    # modality on one day timeline. For models trained on real capture dates.
+    real_capture_dates: bool = False
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -289,6 +293,7 @@ class DownstreamEvaluator:
         self.tile_samples = task.tile_samples
         self.every_capture = task.every_capture
         self.twin_landsat_l2 = task.twin_landsat_l2
+        self.real_capture_dates = task.real_capture_dates
         if self.every_capture and not self._is_registry_dataset:
             raise ValueError(
                 f"every_capture is only supported for registry datasets, "
@@ -557,6 +562,8 @@ class DownstreamEvaluator:
                 extra_kwargs["every_capture"] = True
             if self.twin_landsat_l2:
                 extra_kwargs["twin_landsat_l2"] = True
+            if self.real_capture_dates:
+                extra_kwargs["real_capture_dates"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

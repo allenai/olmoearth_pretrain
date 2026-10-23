@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterator
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,7 @@ from einops import rearrange
 from rslearn.train.dataset import ModelDataset as RsModelDataset
 from rslearn.train.model_context import RasterImage
 from torch.utils.data import Dataset, IterableDataset, Subset
+from upath import UPath
 
 from olmoearth_pretrain.data.constants import (
     EMBEDDING_PRODUCT_MODALITIES,
@@ -140,6 +142,34 @@ def timestamps_from_time_ranges(
     )
 
 
+@dataclass
+class CaptureDateSource:
+    """Where a dataset's real acquisition dates live (rslearn ``items.json``).
+
+    Args:
+        root: the rslearn dataset root (``windows/<group>/<name>/items.json``).
+        layers: modality -> its model.yaml input layers (one per timestep).
+    """
+
+    root: str
+    layers: dict[str, list[str]]
+
+
+def _item_start_times(items_json: list[dict[str, Any]]) -> dict[str, list[datetime]]:
+    """Layer -> acquisition start of each item group's first item (from items.json)."""
+    out: dict[str, list[datetime]] = {}
+    for layer_data in items_json:
+        times = []
+        for group in layer_data.get("serialized_item_groups") or []:
+            time_range = (
+                group[0].get("geometry", {}).get("time_range") if group else None
+            )
+            if time_range:
+                times.append(datetime.fromisoformat(time_range[0]).replace(tzinfo=None))
+        out[layer_data["layer_name"]] = times
+    return out
+
+
 def _window_key(metadata: Any) -> str | None:
     """Rslearn SampleMetadata -> the "group/name" key used by sidecars."""
     group = getattr(metadata, "window_group", None)
@@ -194,6 +224,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         declared_bands: dict[str, list[str]] | None = None,
         every_capture: EveryCaptureSource | None = None,
         twin_landsat_l2: EveryCaptureSource | None = None,
+        real_capture_dates: CaptureDateSource | None = None,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -248,6 +279,10 @@ class RslearnToOlmoEarthDataset(Dataset):
                 capture, on the sample's monthly slots (the S1/S2 monthlies).
                 With ``every_capture``, every L2 capture instead, on the S1/S2
                 day timeline.
+            real_capture_dates: If set, date each monthly timestep by its scene's
+                real acquisition (``items.json``) instead of the period start, per
+                modality, on one day timeline (S1 and S2 of a month get their own
+                days; Landsat-L2 medians the median date of their captures).
         """
         if (
             not norm_stats_from_pretrained
@@ -329,6 +364,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         self._every_capture_cache: tuple[Any, Any] | None = None
 
         self._init_band_scatter(declared_bands)
+        if real_capture_dates is not None and every_capture is not None:
+            raise ValueError("every_capture samples already carry real dates")
+        self.real_capture_dates = real_capture_dates
+        # Last window's items.json start times (tiles of one window reuse it).
+        self._capture_dates_cache: tuple[str, dict[str, list[datetime]]] | None = None
         self.twin_landsat_l2_reader = (
             EveryCaptureReader(twin_landsat_l2) if twin_landsat_l2 is not None else None
         )
@@ -385,6 +425,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_size: int | None = None,
         every_capture: EveryCaptureSource | None = None,
         twin_landsat_l2: EveryCaptureSource | None = None,
+        real_capture_dates: bool = False,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -423,6 +464,9 @@ class RslearnToOlmoEarthDataset(Dataset):
             every_capture: Every-capture twin source for S1/S2 (see
                 RslearnToOlmoEarthDataset).
             twin_landsat_l2: Twin source for monthly Landsat-L2 medians (see
+                RslearnToOlmoEarthDataset).
+            real_capture_dates: Date monthly timesteps by their scenes' real
+                acquisitions from ``source_path``'s items.json (see
                 RslearnToOlmoEarthDataset).
         """
         if not 0 < label_fraction <= 1:
@@ -498,6 +542,24 @@ class RslearnToOlmoEarthDataset(Dataset):
             tile_samples=tile_samples,
             sample_size=sample_size,
             every_capture=every_capture,
+            real_capture_dates=(
+                CaptureDateSource(
+                    root=source_path,
+                    layers={
+                        RSLEARN_TO_OLMOEARTH[resolved].name: list(cfg["layers"])
+                        for cfg in model_config.get("data", {})
+                        .get("init_args", {})
+                        .get("inputs", {})
+                        .values()
+                        if not cfg.get("is_target")
+                        and cfg.get("layers")
+                        and (resolved := resolve_rslearn_layer_name(cfg["layers"][0]))
+                        is not None
+                    },
+                )
+                if real_capture_dates
+                else None
+            ),
         )
 
     @staticmethod
@@ -786,11 +848,18 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             mask[:, :, slots, :] = MaskValue.MISSING.value
 
+        l2_dates: list[datetime | None] = []
         if self.twin_landsat_l2_reader is not None:
             if window_key is None:
                 raise ValueError("twin_landsat_l2 needs the sample's window name")
-            masked_sample = self._add_twin_landsat_l2(
+            masked_sample, l2_dates = self._add_twin_landsat_l2(
                 masked_sample, window_key.split("/")[-1], crop_rows, crop_cols
+            )
+        if self.real_capture_dates is not None:
+            if window_key is None:
+                raise ValueError("real_capture_dates needs the sample's window key")
+            masked_sample = self._retime_to_capture_dates(
+                masked_sample, window_key, l2_dates
             )
         return masked_sample, label
 
@@ -800,8 +869,11 @@ class RslearnToOlmoEarthDataset(Dataset):
         window_name: str,
         rows: slice | None,
         cols: slice | None,
-    ) -> MaskedOlmoEarthSample:
-        """Attach ``landsat_l2`` monthly medians on the sample's monthly slots."""
+    ) -> tuple[MaskedOlmoEarthSample, list[datetime | None]]:
+        """Attach ``landsat_l2`` monthly medians on the sample's monthly slots.
+
+        Also returns each slot's median capture date (None: no capture).
+        """
         assert self.twin_landsat_l2_reader is not None
         timestamps = sample.timestamps
         assert timestamps is not None
@@ -812,11 +884,16 @@ class RslearnToOlmoEarthDataset(Dataset):
         height, width = int(ref.shape[0]), int(ref.shape[1])
         n_bands = len(Modality.LANDSAT_L2.band_order)
         series = read_landsat_l2(self.twin_landsat_l2_reader, window_name, rows, cols)
+        slot_dates: list[datetime | None] = [None] * len(slot_starts)
         if series is None:
             values = np.zeros((height, width, len(slot_starts), n_bands), np.float32)
             valid = np.zeros((height, width, len(slot_starts)), dtype=bool)
         else:
             values, valid = slot_medians(*series, slot_starts)
+            for k, start in enumerate(slot_starts):
+                members = sorted(d for d in series[2] if 0 <= (d - start).days < 30)
+                if members:
+                    slot_dates[k] = members[len(members) // 2]
         if self.norm_stats_from_pretrained:
             x = self.normalizer_computed.normalize(Modality.LANDSAT_L2, values)
         else:
@@ -840,10 +917,87 @@ class RslearnToOlmoEarthDataset(Dataset):
             sample,
             MaskedOlmoEarthSample.get_masked_modality_name(self._yaml_modalities[0]),
         )
-        return sample._replace(
-            landsat_l2=torch.as_tensor(x, dtype=torch.float32),
-            landsat_l2_mask=mask.to(ref_mask.dtype),
+        return (
+            sample._replace(
+                landsat_l2=torch.as_tensor(x, dtype=torch.float32),
+                landsat_l2_mask=mask.to(ref_mask.dtype),
+            ),
+            slot_dates,
         )
+
+    def _retime_to_capture_dates(
+        self,
+        sample: MaskedOlmoEarthSample,
+        window_key: str,
+        l2_dates: list[datetime | None],
+    ) -> MaskedOlmoEarthSample:
+        """Move each modality's monthly timesteps to their real acquisition days.
+
+        Timestep ``t`` of a modality takes the earliest of its scenes acquired in
+        ``[start_t, start_t + 30 d)`` (the year-aligned sets' 30-day periods,
+        from the period-start stamps the sample carries); a timestep without
+        one keeps its period start. All modalities share one chronological day timeline (zeros and
+        MISSING where a modality has no timestep that day), the every-capture
+        layout.
+        """
+        assert self.real_capture_dates is not None
+        assert sample.timestamps is not None
+        if (
+            self._capture_dates_cache is None
+            or self._capture_dates_cache[0] != window_key
+        ):
+            path = (
+                UPath(self.real_capture_dates.root) / "windows" / window_key
+            ) / "items.json"
+            with path.open() as f:
+                self._capture_dates_cache = (
+                    window_key,
+                    _item_start_times(json.load(f)),
+                )
+        layer_times = self._capture_dates_cache[1]
+        starts = [
+            datetime(int(y), int(m) + 1, int(d))
+            for d, m, y in sample.timestamps.tolist()
+        ]
+        ends = [start + timedelta(days=30) for start in starts]
+
+        dates: dict[str, list[datetime]] = {}
+        for modality in self.input_modalities:
+            if modality == Modality.LANDSAT_L2.name:
+                dates[modality] = [
+                    d if d is not None else s for d, s in zip(l2_dates, starts)
+                ]
+                continue
+            captures = sorted(
+                t
+                for layer in self.real_capture_dates.layers.get(modality, [])
+                for t in layer_times.get(layer, [])
+            )
+            dates[modality] = [
+                next((c for c in captures if s <= c < e), s)
+                for s, e in zip(starts, ends)
+            ]
+        days = sorted({d.date() for per in dates.values() for d in per})
+        step = {d: i for i, d in enumerate(days)}
+        updates: dict[str, Any] = {
+            "timestamps": torch.tensor(
+                [[d.day, d.month - 1, d.year] for d in days], dtype=torch.long
+            )
+        }
+        for modality, per in dates.items():
+            name = MaskedOlmoEarthSample.get_masked_modality_name(modality)
+            x, mask = getattr(sample, modality), getattr(sample, name)
+            idx = torch.tensor([step[d.date()] for d in per])
+            new_x = x.new_zeros((*x.shape[:2], len(days), *x.shape[3:]))
+            new_mask = torch.full(
+                (*mask.shape[:2], len(days), *mask.shape[3:]),
+                MaskValue.MISSING.value,
+                dtype=mask.dtype,
+            )
+            new_x[:, :, idx] = x
+            new_mask[:, :, idx] = mask
+            updates[modality], updates[name] = new_x, new_mask
+        return sample._replace(**updates)
 
     def _every_capture_sample(
         self,
@@ -1238,6 +1392,7 @@ def from_registry_entry(
     tile_samples: bool = False,
     every_capture: bool = False,
     twin_landsat_l2: bool = False,
+    real_capture_dates: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1277,6 +1432,8 @@ def from_registry_entry(
             ``evals/datasets/every_capture.py``).
         twin_landsat_l2: Add ``landsat_l2`` as monthly medians of the twin's every
             Landsat C2 L2 capture (see RslearnToOlmoEarthDataset).
+        real_capture_dates: Date monthly timesteps by their scenes' real
+            acquisitions instead of the period start (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1401,4 +1558,5 @@ def from_registry_entry(
             if twin_landsat_l2
             else None
         ),
+        real_capture_dates=real_capture_dates,
     )

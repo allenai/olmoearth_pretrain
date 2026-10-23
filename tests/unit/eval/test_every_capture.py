@@ -1,13 +1,19 @@
 """Every-capture eval inputs (``evals/datasets/every_capture.py``), pure parts."""
 
+import json
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
 
 from olmoearth_pretrain.data.constants import Modality
-from olmoearth_pretrain.datatypes import MaskValue
+from olmoearth_pretrain.datatypes import (
+    MaskedOlmoEarthSample,
+    MaskValue,
+    OlmoEarthSample,
+)
 from olmoearth_pretrain.evals.datasets.every_capture import (
     S2_ABSENT_BANDS,
     _merge_same_day,
@@ -118,3 +124,66 @@ def test_every_capture_sample_puts_landsat_l2_captures_on_the_day_timeline(
     assert (l2_mask[:, :, 2] == missing).all()
     s2_mask = sample.sentinel2_l2a_mask[..., 0]
     assert (s2_mask[:, :, 1] == missing).all()
+
+
+def test_real_capture_dates_move_monthly_steps_to_their_scenes(tmp_path: Path) -> None:
+    """Each modality's monthly timestep lands on its own scene's acquisition day."""
+    from olmoearth_pretrain.evals.datasets import rslearn_dataset
+
+    window = tmp_path / "windows" / "g" / "w"
+    window.mkdir(parents=True)
+
+    def layer(name: str, times: list[str]) -> dict:
+        groups = [[{"geometry": {"time_range": [t, t]}}] for t in times]
+        return {"layer_name": name, "serialized_item_groups": groups}
+
+    (window / "items.json").write_text(
+        json.dumps(
+            [
+                layer("sentinel2_l2a_mo01", ["2019-01-18T10:44:31+00:00"]),
+                layer("sentinel2_l2a_mo02", ["2019-02-20T10:44:31+00:00"]),
+                layer("sentinel1_mo01", ["2019-01-28T05:00:00+00:00"]),
+                layer("sentinel1_mo02", []),  # no S1 scene in period 2
+            ]
+        )
+    )
+    ds = rslearn_dataset.RslearnToOlmoEarthDataset.__new__(
+        rslearn_dataset.RslearnToOlmoEarthDataset
+    )
+    ds.input_modalities = [Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name]
+    ds.real_capture_dates = rslearn_dataset.CaptureDateSource(
+        root=str(tmp_path),
+        layers={
+            Modality.SENTINEL2_L2A.name: ["sentinel2_l2a_mo01", "sentinel2_l2a_mo02"],
+            Modality.SENTINEL1.name: ["sentinel1_mo01", "sentinel1_mo02"],
+        },
+    )
+    ds._capture_dates_cache = None
+    n_s2, n_s1 = (len(Modality.get(m).band_order) for m in ds.input_modalities)
+    s2 = torch.arange(2, dtype=torch.float32).view(1, 1, 2, 1).expand(2, 2, 2, n_s2)
+    s1 = torch.full((2, 2, 2, n_s1), 7.0)
+    sample = MaskedOlmoEarthSample.from_olmoearthsample(
+        OlmoEarthSample(
+            sentinel2_l2a=s2.clone(),
+            sentinel1=s1,
+            timestamps=torch.tensor([[1, 0, 2019], [31, 0, 2019]]),
+        )
+    )
+    out = ds._retime_to_capture_dates(sample, "g/w", [])
+
+    assert out.timestamps is not None
+    # Days: S2 01-18, S1 01-28, S2 02-20 (S1 period 2 keeps its start, 01-31).
+    assert out.timestamps.tolist() == [
+        [18, 0, 2019],
+        [28, 0, 2019],
+        [31, 0, 2019],
+        [20, 1, 2019],
+    ]
+    missing = MaskValue.MISSING.value
+    assert out.sentinel2_l2a_mask is not None and out.sentinel1_mask is not None
+    s2_present = (out.sentinel2_l2a_mask[0, 0, :, 0] != missing).tolist()
+    assert s2_present == [True, False, False, True]
+    assert out.sentinel2_l2a is not None
+    assert out.sentinel2_l2a[0, 0, 3, 0] == 1.0  # period 2's values moved with it
+    s1_present = (out.sentinel1_mask[0, 0, :, 0] != missing).tolist()
+    assert s1_present == [False, True, True, False]
