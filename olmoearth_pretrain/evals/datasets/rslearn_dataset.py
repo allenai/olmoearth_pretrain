@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from collections.abc import Iterator
 from datetime import datetime
 from importlib.resources import files
@@ -137,6 +138,20 @@ def _window_key(metadata: Any) -> str | None:
     if name is None:
         return None
     return f"{group}/{name}" if group else str(name)
+
+
+def _window_latlon(metadata: Any) -> np.ndarray | None:
+    """Window centre as raw [lat, lon] degrees (for the sun-clock time code); None unless OE_EVAL_LATLON=1."""
+    if os.environ.get("OE_EVAL_LATLON") != "1" or metadata is None:
+        return None
+    import shapely
+    from rslearn.const import WGS84_PROJECTION
+    from rslearn.utils.geometry import STGeometry
+
+    b = metadata.window_bounds
+    pt = shapely.Point((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+    g = STGeometry(metadata.projection, pt, None).to_projection(WGS84_PROJECTION)
+    return np.array([g.shp.y, g.shp.x], dtype=np.float32)
 
 
 class RslearnToOlmoEarthDataset(Dataset):
@@ -570,6 +585,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         target: dict,
         tile: tuple[int, int] | None = None,
         window_key: str | None = None,
+        latlon: np.ndarray | None = None,
     ) -> tuple[MaskedOlmoEarthSample, torch.Tensor]:
         """Transform a raw rslearn sample into (MaskedOlmoEarthSample, label).
 
@@ -725,6 +741,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
             mask[:, :, slots, :] = MaskValue.MISSING.value
 
+        if latlon is not None:
+            masked_sample = masked_sample._replace(latlon=torch.as_tensor(latlon))
         return masked_sample, label
 
     def _warn_ragged_once(self, reason: str) -> None:
@@ -979,18 +997,22 @@ class RslearnToOlmoEarthDataset(Dataset):
                 input_dict, target, metadata = self.dataset[base_idx]
                 self._cached_base = (
                     base_idx,
-                    (input_dict, target, _window_key(metadata)),
+                    (input_dict, target, _window_key(metadata), _window_latlon(metadata)),
                 )
-            input_dict, target, window_key = self._cached_base[1]
+            input_dict, target, window_key, latlon = self._cached_base[1]
             return self._transform_sample(
                 input_dict,
                 target,
                 tile=divmod(tile, self._tiles_per_side),
                 window_key=window_key,
+                latlon=latlon,
             )
         input_dict, target, metadata = self.dataset[idx]
         return self._transform_sample(
-            input_dict, target, window_key=_window_key(metadata)
+            input_dict,
+            target,
+            window_key=_window_key(metadata),
+            latlon=_window_latlon(metadata),
         )
 
 
@@ -1001,6 +1023,7 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
         """Iterate over the dataset."""
         for input_dict, target, metadata in self.dataset:
             window_key = _window_key(metadata)
+            latlon = _window_latlon(metadata)
             if self._tiles_per_side > 1:
                 for tile in range(self._tiles_per_side**2):
                     yield self._transform_sample(
@@ -1008,9 +1031,12 @@ class IterableRslearnToOlmoEarthDataset(IterableDataset, RslearnToOlmoEarthDatas
                         target,
                         tile=divmod(tile, self._tiles_per_side),
                         window_key=window_key,
+                        latlon=latlon,
                     )
             else:
-                yield self._transform_sample(input_dict, target, window_key=window_key)
+                yield self._transform_sample(
+                    input_dict, target, window_key=window_key, latlon=latlon
+                )
 
 
 def wrap_rslearn_dataset(**kwargs: Any) -> RslearnToOlmoEarthDataset:
