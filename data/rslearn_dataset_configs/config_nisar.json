@@ -13,7 +13,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-180d",
@@ -44,7 +44,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-150d",
@@ -75,7 +75,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-120d",
@@ -106,7 +106,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-90d",
@@ -137,7 +137,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-60d",
@@ -168,7 +168,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-30d",
@@ -199,7 +199,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "0d",
@@ -230,7 +230,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "30d",
@@ -261,7 +261,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "60d",
@@ -292,7 +292,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "90d",
@@ -323,7 +323,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "120d",
@@ -354,7 +354,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "150d",
@@ -385,7 +385,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-180d",
@@ -416,7 +416,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-150d",
@@ -447,7 +447,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-120d",
@@ -478,7 +478,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-90d",
@@ -509,7 +509,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-60d",
@@ -540,7 +540,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "-30d",
@@ -571,7 +571,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "0d",
@@ -602,7 +602,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "30d",
@@ -633,7 +633,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "60d",
@@ -664,7 +664,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "90d",
@@ -695,7 +695,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "120d",
@@ -726,7 +726,7 @@
         }
       ],
       "data_source": {
-        "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+        "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
         "ingest": false,
         "duration": "30d",
         "time_offset": "150d",

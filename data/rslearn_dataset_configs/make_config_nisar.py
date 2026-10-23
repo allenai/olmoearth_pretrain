@@ -2,8 +2,9 @@
 
 Layers nisar_asc_mo01..12 and nisar_desc_mo01..12 use the same monthly offsets as
 config_sentinel1.json (month m covers time_range[0] + (m - 7) * 30 days for 30 days).
-Data comes from the olmoearth_run NisarL2Gcov source (OEDatasets search + ranged reads
-from ASF, needs OEDATASETS_API_URL, DATASETS_API_TOKEN and EARTHDATA_CREDENTIALS).
+Data comes from NisarL2GcovNoBeta, the olmoearth_run NisarL2Gcov source minus BETA
+(pre-calibration) granules: OEDatasets search + ranged reads from ASF, needs
+OEDATASETS_API_URL, DATASETS_API_TOKEN and EARTHDATA_CREDENTIALS.
 Only HH+HV scenes are used (skip_items_missing_assets drops VV-only and HH-only ones).
 
 Run from this directory: python make_config_nisar.py
@@ -20,7 +21,7 @@ for direction, prefix in [("ASCENDING", "nisar_asc"), ("DESCENDING", "nisar_desc
             "alias": prefix,
             "band_sets": [{"bands": ["HHHH", "HVHV"], "dtype": "float32"}],
             "data_source": {
-                "class_path": "olmoearth_run.runner.tools.rslearn_data_sources.olmoearth_datasets.nisar.l2_gcov.NisarL2Gcov",
+                "class_path": "olmoearth_pretrain.dataset_creation.nisar_data_source.NisarL2GcovNoBeta",
                 "ingest": False,
                 "duration": "30d",
                 "time_offset": f"{(month - 7) * 30}d",
