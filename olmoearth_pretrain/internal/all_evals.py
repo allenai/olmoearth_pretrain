@@ -121,6 +121,12 @@ def build_model_config_from_checkpoint(fallback_builder: Any) -> Any:
     return builder
 
 
+# gb2 flair2/spacenet2/spacenet7 feed 512 px imagery through the S2 slot. The LP
+# keeps every (H/ps, W/ps, D) embedding of a split in RAM: at ps4 that is
+# 128x128x768 per image, ~25 MB bf16 / ~50 MB fp32, so spacenet2 train alone
+# (5,186 images) needs 130-260 GB and the job stalls. ps8 (64x64 tokens) is 4x less.
+_GB2_HIGHRES_S2_PATCH_SIZE = 8
+
 EVAL_TASKS = {
     "m_eurosat": DownstreamTaskConfig(
         dataset="m-eurosat",
@@ -952,7 +958,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
-        patch_size=4,
+        patch_size=_GB2_HIGHRES_S2_PATCH_SIZE,
     ),
     "gb2_spacenet7": DownstreamTaskConfig(
         dataset="gb2-spacenet7",
@@ -968,7 +974,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
-        patch_size=4,
+        patch_size=_GB2_HIGHRES_S2_PATCH_SIZE,
     ),
     "gb2_flair2": DownstreamTaskConfig(
         dataset="gb2-flair2",
@@ -984,7 +990,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
-        patch_size=4,
+        patch_size=_GB2_HIGHRES_S2_PATCH_SIZE,
     ),
     "gb2_fotw": DownstreamTaskConfig(
         dataset="gb2-fotw",
@@ -1108,7 +1114,8 @@ EVAL_TASKS = {
 # Opt-in naip_10 variants of the sub-10 m GeoBench v2 segmentation tasks: the
 # RGBN imagery goes through the naip_10 slot (OlmoEarth NAIP_10 stats) instead
 # of being rescaled into sentinel2_l2a. Models without naip_10 skip them.
-#   gb2_<slug>_naip10          native pixel grid; 512 px -> 32x32 tokens at ps4.
+#   gb2_<slug>_naip10          native pixel grid; 512 px -> 32x32 tokens at ps4
+#                              (the S2 versions use ps8, see _GB2_HIGHRES_S2_PATCH_SIZE).
 #   gb2_<slug>_naip10_nominal  image resampled to naip_10's 2.5 m/px (labels stay
 #                              512 px): flair2 40 px / spacenet2 80 px at ps1,
 #                              spacenet7 976 px (upsampled from ~4.8 m) at ps4.
@@ -1128,6 +1135,8 @@ def _gb2_naip10_tasks(
             base,
             dataset=f"gb2-{slug}-naip10",
             input_modalities=[Modality.NAIP_10.name],
+            # A naip_10 token covers 4*ps pixels, so ps4 is already 32x32 tokens.
+            patch_size=4,
         )
         out[f"gb2_{slug}_naip10_nominal"] = replace(
             base,
