@@ -44,6 +44,7 @@ from open_set_eval import (  # noqa: E402
     SINGLE_CLASS_SKIP,
     Context,
     cap_per_class,
+    fixed_threshold,
     scores_for,
 )
 
@@ -196,7 +197,9 @@ def main() -> None:
             f = scores_for(m, ctx)
             sv, _ = f(x[vak])
             # *_argmax: plain softmax argmax over the K+1 outputs (threshold 0)
-            thr = 0.0 if m.endswith("_argmax") else float(np.quantile(sv, 1 - args.tpr))
+            thr = fixed_threshold(m)
+            if thr is None:
+                thr = float(np.quantile(sv, 1 - args.tpr))
             fitted[m] = (f, thr)
         stats[scen] = {"known": list(ks), "windows": {}}
 

@@ -41,6 +41,7 @@ from open_set_eval import (  # noqa: E402
     SINGLE_CLASS_SKIP,
     Context,
     cap_per_class,
+    fixed_threshold,
     scores_for,
 )
 
@@ -227,8 +228,9 @@ def main() -> None:
             s, pred = f(ev["x"])
             if method == "none":
                 y_pred = pred  # closed-set: every pixel gets a known class
-            elif method.endswith("_argmax"):
-                y_pred = np.where(s >= 0, pred, UNKNOWN)  # plain softmax argmax
+            elif fixed_threshold(method) is not None:
+                # argmax / Elkan-Noto: the score already encodes the decision
+                y_pred = np.where(s >= fixed_threshold(method), pred, UNKNOWN)
             else:
                 sv, _ = f(xca[cak])
                 thr = np.quantile(sv, 1 - args.tpr)

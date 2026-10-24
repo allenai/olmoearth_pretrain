@@ -225,29 +225,66 @@ def mahalanobis_sq(x: np.ndarray, mean: np.ndarray, prec: np.ndarray) -> np.ndar
     return np.einsum("nd,de,ne->n", diff, prec, diff)
 
 
-def negatives_probe(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Scorer:
-    """(K+1)-class probe with xneg as "other"; score = 1 - p(other)."""
-    xx = np.concatenate([ctx.xtr, xneg])
-    yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
-    logits, classes, _, _ = fit_probe(xx, yy, ctx.c)
+def pu_decision(predict_proba, classes: np.ndarray, ctx: Context, mode: str) -> Scorer:
+    """Turn a (K+1)-class "known crops + other" model into a scorer.
+
+    mode "score": 1 - p(other), to be thresholded by calibration.
+    The rest are thresholded at 0 (see fixed_threshold):
+    "argmax": best known class minus p(other), >= 0 exactly when the softmax
+      argmax over all K+1 outputs is a known class.
+    "en": Elkan & Noto (2008). Under "labelled = random sample of the known
+      class", 1 - p(other) = c * P(known | x); c is estimated as its mean on
+      the held-out known pixels (ctx.xval), and the score is
+      (1 - p(other)) / c - 0.5, i.e. known when the corrected P(known) >= 0.5.
+    "enc": the same with one c per known class (c_k = mean p_k on held-out
+      class-k pixels); score = max_k p_k / c_k - 0.5, prediction = its argmax.
+    """
     o = int(np.nonzero(classes == OTHER)[0][0])
+    known = np.array([i for i in range(len(classes)) if i != o])
+    c_all = c_k = None
+    if mode in ("en", "enc"):
+        pv = predict_proba(ctx.xval)
+        c_all = float(np.clip(1 - pv[:, o], 1e-6, None).mean())
+        c_k = np.array(
+            [
+                max(float(pv[ctx.yval == classes[i], i].mean()), 1e-6)
+                if (ctx.yval == classes[i]).any()
+                else 1.0
+                for i in known
+            ]
+        )
 
     def f(x: np.ndarray):
         """Score and closed-set prediction among the known classes."""
-        p = softmax(logits(x), axis=1)
-        p_known = p.copy()
-        p_known[:, o] = -1
-        pred = classes[p_known.argmax(axis=1)]
-        if margin:
-            # best known class minus "other": >= 0 exactly when the softmax
-            # argmax over all K+1 outputs is a known class
-            return p_known.max(axis=1) - p[:, o], pred
+        p = predict_proba(x)
+        pk = p[:, known]
+        pred = classes[known[pk.argmax(axis=1)]]
+        if mode == "argmax":
+            return pk.max(axis=1) - p[:, o], pred
+        if mode == "en":
+            return (1 - p[:, o]) / c_all - 0.5, pred
+        if mode == "enc":
+            corr = pk / c_k
+            return corr.max(axis=1) - 0.5, classes[known[corr.argmax(axis=1)]]
         return 1 - p[:, o], pred
 
     return f
 
 
-def negatives_mlp(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Scorer:
+def fixed_threshold(method: str) -> float | None:
+    """0 for methods whose score already encodes the decision, else None (calibrate)."""
+    return 0.0 if method.endswith(("_argmax", "_en", "_enc")) else None
+
+
+def negatives_probe(ctx: Context, xneg: np.ndarray, mode: str = "score") -> Scorer:
+    """(K+1)-class linear probe with xneg as "other"; see pu_decision for modes."""
+    xx = np.concatenate([ctx.xtr, xneg])
+    yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
+    logits, classes, _, _ = fit_probe(xx, yy, ctx.c)
+    return pu_decision(lambda x: softmax(logits(x), axis=1), classes, ctx, mode)
+
+
+def negatives_mlp(ctx: Context, xneg: np.ndarray, mode: str = "score") -> Scorer:
     """negatives_probe with a one-hidden-layer MLP instead of a linear readout."""
     xx = np.concatenate([ctx.xtr, xneg])
     yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
@@ -257,22 +294,7 @@ def negatives_mlp(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Score
         max_iter=200,
         random_state=ctx.seed,
     ).fit(xx, yy)
-    classes = clf.classes_
-    o = int(np.nonzero(classes == OTHER)[0][0])
-
-    def f(x: np.ndarray):
-        """Score and closed-set prediction among the known classes."""
-        p = clf.predict_proba(x)
-        p_known = p.copy()
-        p_known[:, o] = -1
-        pred = classes[p_known.argmax(axis=1)]
-        if margin:
-            # best known class minus "other": >= 0 exactly when the softmax
-            # argmax over all K+1 outputs is a known class
-            return p_known.max(axis=1) - p[:, o], pred
-        return 1 - p[:, o], pred
-
-    return f
+    return pu_decision(clf.predict_proba, clf.classes_, ctx, mode)
 
 
 def max_cosine(a: np.ndarray, b: np.ndarray, chunk: int = 4096):
@@ -288,11 +310,13 @@ def max_cosine(a: np.ndarray, b: np.ndarray, chunk: int = 4096):
 
 
 def unlab_neg_scorer(ctx: Context, method: str) -> Scorer:
-    """unlab_neg[_mlp][_filt{NN}|_pl{NN}][_argmax].
+    """unlab_neg[_mlp][_filt{NN}|_pl{NN}][_r{N}][_argmax|_en|_enc].
 
     filt{NN}: drop unlabeled pool rows whose cosine similarity to any labelled
     positive is >= NN/100 (they are probably positives, not "other").
     pl{NN}: pseudo-label those rows with their nearest positive's class instead.
+    r{N}: then subsample the pool to N times the number of labelled pixels.
+    argmax / en / enc: decision rule, see pu_decision.
     """
     parts = method.split("_")[2:]
     xtr, ytr, pool = ctx.xtr, ctx.ytr, ctx.x_unlab
@@ -308,9 +332,17 @@ def unlab_neg_scorer(ctx: Context, method: str) -> Scorer:
             logger.debug(
                 f"{method}: {near.sum()} of {len(near)} pool rows within {cut}"
             )
+        elif p.startswith("r") and p[1:].isdigit():
+            n = int(p[1:]) * len(xtr)
+            if len(pool) > n:
+                pick = np.random.default_rng(ctx.seed).choice(
+                    len(pool), n, replace=False
+                )
+                pool = pool[pick]
     sub = dataclasses.replace(ctx, xtr=xtr, ytr=ytr)
     fit = negatives_mlp if "mlp" in parts else negatives_probe
-    return fit(sub, pool, margin="argmax" in parts)
+    mode = next((m for m in ("argmax", "enc", "en") if m in parts), "score")
+    return fit(sub, pool, mode=mode)
 
 
 def probe_scorer(ctx: Context, method: str) -> Scorer:

@@ -37,6 +37,7 @@ from open_set_eval import (  # noqa: E402
     Context,
     auroc,
     cap_per_class,
+    fixed_threshold,
     fpr_at_tpr,
     scores_for,
 )
@@ -162,7 +163,9 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
             w1, c1 = time.perf_counter(), time.process_time()
             sv, _ = f(xv[vk])
             # *_argmax: plain softmax argmax over the K+1 outputs, no calibration
-            thr = 0.0 if method.endswith("_argmax") else np.quantile(sv, 1 - args.tpr)
+            thr = fixed_threshold(method)
+            if thr is None:
+                thr = np.quantile(sv, 1 - args.tpr)
             w2, c2 = time.perf_counter(), time.process_time()
             st, pred = f(xt)
             w3, c3 = time.perf_counter(), time.process_time()
