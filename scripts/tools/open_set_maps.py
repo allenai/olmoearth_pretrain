@@ -27,6 +27,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
+import rasterio  # noqa: E402
 from matplotlib.colors import ListedColormap  # noqa: E402
 from matplotlib.patches import Patch  # noqa: E402
 from rslearn.dataset import Dataset  # noqa: E402
@@ -97,7 +98,9 @@ def s2_rgb(window, month: int) -> np.ndarray | None:
     for band_dir in Path(str(window.get_layer_dir(layer))).iterdir():
         bands = band_dir.name.split("_")
         if {"B02", "B03", "B04"} <= set(bands):
-            arr = read_layer(window, layer)
+            # S2 layers hold several band-set geotiffs; read this one directly
+            with rasterio.open(band_dir / "geotiff.tif") as src:
+                arr = src.read()
             rgb = np.stack([arr[bands.index(b)] for b in ("B04", "B03", "B02")], -1)
             return np.clip(rgb.astype(np.float32) / 3000.0, 0, 1) ** 0.8
     return None
