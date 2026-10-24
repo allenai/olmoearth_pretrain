@@ -160,12 +160,25 @@ class Context:
     c: float
 
 
-def load(npz_path: str, product: str, prefix: str) -> tuple[np.ndarray, ...]:
-    """(embeddings, labels, split) of one npz table, dropping invalid rows."""
+def load(
+    npz_path: str, product: str, prefix: str, report_split: str = "test"
+) -> tuple[np.ndarray, ...]:
+    """(embeddings, labels, split) of one npz table, dropping invalid rows.
+
+    With ``report_split="val"`` the test split is dropped and val windows are
+    split by window index: even windows become "val" (threshold calibration)
+    and odd windows "test" (reported), so no test pixel is read.
+    """
     d = np.load(npz_path)
     x = d[f"{prefix}_{product}"].astype(np.float32)
     y = d[f"{prefix}_label"]
-    split = d["window_split"][d[f"{prefix}_window"]]
+    window = d[f"{prefix}_window"]
+    split = d["window_split"][window].astype(object)
+    if report_split == "val":
+        split[split == "test"] = "unused"
+        val = split == "val"
+        split[val & (window % 2 == 1)] = "test"
+        split = split.astype(str)
     ok = np.isfinite(x).all(axis=1)
     logger.info(f"{product}/{prefix}: {ok.sum()}/{len(ok)} valid rows")
     return x[ok], y[ok], split[ok]
@@ -512,13 +525,17 @@ def auroc(s_known: np.ndarray, s_unknown: np.ndarray) -> float:
 
 
 def known_sets(args: argparse.Namespace, rng: np.random.Generator) -> list[tuple]:
-    """Every crop for K=1, every pair for K=2; random draws for larger K."""
+    """Every crop for K=1, every (or --max_pairs random) pair for K=2; draws for larger K."""
     sets = []
     for k in args.ks:
         if k == 1:
             sets += [(c,) for c in CROPS]
         elif k == 2:
-            sets += list(itertools.combinations(CROPS, 2))
+            pairs = list(itertools.combinations(CROPS, 2))
+            if args.max_pairs and args.max_pairs < len(pairs):
+                take = rng.choice(len(pairs), args.max_pairs, replace=False)
+                pairs = [pairs[i] for i in sorted(take)]
+            sets += pairs
         else:
             sets += [
                 tuple(int(c) for c in sorted(rng.choice(CROPS, k, replace=False)))
@@ -539,6 +556,9 @@ def main() -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--ks", type=int, nargs="+", default=[2, 5, 10])
     parser.add_argument("--draws", type=int, default=30)
+    parser.add_argument(
+        "--max_pairs", type=int, default=None, help="random subset of the K=2 pairs"
+    )
     parser.add_argument("--train_cap", type=int, default=2000)
     parser.add_argument("--eval_cap", type=int, default=3000)
     parser.add_argument("--min_train", type=int, default=50)
@@ -549,12 +569,21 @@ def main() -> None:
         "--unlab_pool", choices=["natural", "balanced"], default="natural"
     )
     parser.add_argument("--unlab_size", type=int, default=20000)
+    parser.add_argument(
+        "--report_split",
+        choices=["test", "val"],
+        default="test",
+        help="val: calibrate on even val windows, report on odd ones; test untouched",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
 
     x, y, split = load(
-        args.npz, args.product, "pix" if args.level == "pixel" else "seg"
+        args.npz,
+        args.product,
+        "pix" if args.level == "pixel" else "seg",
+        args.report_split,
     )
     parts = {}
     for s, cap in (
@@ -578,7 +607,7 @@ def main() -> None:
         pool = x_unlab = balanced
     else:
         if args.level == "pixel":
-            xu, _, su = load(args.npz, args.product, "uni")
+            xu, _, su = load(args.npz, args.product, "uni", args.report_split)
             pool = xu[su == "train"]
         else:
             pool = x[split == "train"]
@@ -653,6 +682,7 @@ def main() -> None:
                 "method": method,
                 "neg_classes": "-".join(map(str, neg_classes)),
                 "unlab_pool": args.unlab_pool,
+                "report_split": args.report_split,
                 "closed_acc": float((pred[kn] == yt[kn]).mean()),
                 "known_kept_test": float((st[kn] >= thr).mean()),
                 "auroc_crop": auroc(st[kn], st[crop_unk]),
