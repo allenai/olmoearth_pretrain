@@ -34,9 +34,8 @@ from olmoearth_pretrain.internal.experiment import (  # noqa: E402
 )
 
 OSM_SAMPLING_H5_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
-OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/agent/favyen/2026-10-23-favyen-nisar-pretrain/selection/osm_sampling_random_time_100k_sample_idx.npy"
-# Set once the osm_recent H5 is built.
-OSM_RECENT_H5_DIR = "/weka/dfive-default/helios/dataset/osm_recent/TODO"
+OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/helios/dataset/osm_recent/filters/osm_sampling_random_time_100k_sample_idx.npy"
+OSM_RECENT_H5_DIR = "/weka/dfive-default/helios/dataset/osm_recent/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_nisar_asc_nisar_desc_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/399848"
 
 NISAR_MODALITIES = [Modality.NISAR_ASC.name, Modality.NISAR_DESC.name]
 WANDB_PROJECT = "2026_10_23_nisar_pretrain"
