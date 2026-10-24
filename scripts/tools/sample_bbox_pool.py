@@ -59,6 +59,13 @@ def main() -> None:
     parser.add_argument("--block", type=int, default=64)
     parser.add_argument("--per_block", type=int, default=16)
     parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument(
+        "--buffer_km",
+        type=float,
+        default=None,
+        help="sample uniformly within this distance (Chebyshev) of a train tile "
+        "instead of the whole bounding box; 0 = inside train tiles only",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
@@ -95,15 +102,27 @@ def main() -> None:
         np.ceil(args.n_pixels / args.per_block * 1.3)
     )  # headroom for nodata / held-out
     plan = []
-    for epsg, z in zones.items():
-        x0, y0, x1, y1 = z["bbox"]
-        n = int(round(n_blocks * areas[epsg] / total))
-        cols = rng.integers(x0, x1 - args.block, n)
-        rows = rng.integers(y0, y1 - args.block, n)
-        plan += [
-            (epsg, int(c), int(r), int(rng.integers(1 << 31)))
-            for c, r in zip(cols, rows)
-        ]
+    if args.buffer_km is None:
+        for epsg, z in zones.items():
+            x0, y0, x1, y1 = z["bbox"]
+            n = int(round(n_blocks * areas[epsg] / total))
+            cols = rng.integers(x0, x1 - args.block, n)
+            rows = rng.integers(y0, y1 - args.block, n)
+            plan += [
+                (epsg, int(c), int(r), int(rng.integers(1 << 31)))
+                for c, r in zip(cols, rows)
+            ]
+    else:
+        # a block centred on a uniform point in a random train tile grown by the
+        # buffer; pixels further than the buffer are dropped in read_block
+        buf = int(round(args.buffer_km * 1000 / RESOLUTION))
+        tiles = [(e, t) for e, z in zones.items() for t in z["train"]]
+        for i in rng.integers(0, len(tiles), n_blocks):
+            epsg, (left, top, right, bottom) = tiles[i]
+            c = int(rng.integers(left - buf, right + buf))
+            r = int(rng.integers(top - buf, bottom + buf))
+            half = args.block // 2
+            plan.append((epsg, c - half, r - half, int(rng.integers(1 << 31))))
     logger.info(f"year {year}: reading {len(plan)} blocks of {args.block} px")
 
     reader = ZarrReader(args.zarr_url)
@@ -120,6 +139,13 @@ def main() -> None:
             & (r < boxes[:, 3])
         ).any(axis=1)
 
+    def dist_km(boxes: np.ndarray, col: np.ndarray, row: np.ndarray) -> np.ndarray:
+        """Chebyshev distance (km) from each pixel to the nearest box; 0 inside one."""
+        c, r = col[:, None], row[:, None]
+        dx = np.maximum(np.maximum(boxes[:, 0] - c, c - (boxes[:, 2] - 1)), 0)
+        dy = np.maximum(np.maximum(boxes[:, 1] - r, r - (boxes[:, 3] - 1)), 0)
+        return np.maximum(dx, dy).min(axis=1) * RESOLUTION / 1000
+
     def read_block(item: tuple) -> tuple | None:
         """Up to per_block valid, non-held-out pixels from one block."""
         epsg, col0, row0, seed = item
@@ -135,7 +161,10 @@ def main() -> None:
             return None
         col, row = cc + col0, rr + row0
         keep = ~inside(zones[epsg]["held_out"], col, row)
-        rr, cc, col, row = rr[keep], cc[keep], col[keep], row[keep]
+        dist = dist_km(zones[epsg]["train"], col, row)
+        if args.buffer_km is not None:
+            keep &= dist <= args.buffer_km
+        rr, cc, col, row, dist = rr[keep], cc[keep], col[keep], row[keep], dist[keep]
         if len(rr) == 0:
             return None
         take = np.random.default_rng(seed).choice(
@@ -148,6 +177,7 @@ def main() -> None:
             col[take],
             row[take],
             inside(zones[epsg]["train"], col[take], row[take]),
+            dist[take],
         )
 
     parts = []
@@ -159,7 +189,7 @@ def main() -> None:
                 logger.info(
                     f"{i}/{len(plan)} blocks, {sum(len(p[0]) for p in parts)} pixels"
                 )
-    cat = [np.concatenate([p[k] for p in parts]) for k in range(5)]
+    cat = [np.concatenate([p[k] for p in parts]) for k in range(6)]
     n = min(args.n_pixels, len(cat[0]))
     sel = rng.choice(len(cat[0]), n, replace=False)
     np.savez_compressed(
@@ -169,10 +199,13 @@ def main() -> None:
         box_col=cat[2][sel],
         box_row=cat[3][sel],
         box_in_train_tile=cat[4][sel],
+        box_dist_km=cat[5][sel],
         year=np.array(year),
     )
     logger.info(
         f"wrote {args.out}: {n} pixels, {cat[4][sel].mean():.1%} inside train tiles, "
+        f"distance to a train tile (km) p50 {np.median(cat[5][sel]):.1f} "
+        f"p90 {np.quantile(cat[5][sel], 0.9):.1f}, "
         f"zones {sorted(set(cat[1][sel].tolist()))}"
     )
 
