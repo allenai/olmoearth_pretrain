@@ -554,6 +554,17 @@ class OlmoEarthDataset(Dataset):
             if Modality.get(modality).is_spacetime_varying
             and not Modality.get(modality).ignore_when_parsing
         ]
+        # A sub-dataset of a concat dataset may lack some training modalities entirely
+        # (e.g. NISAR in osm_sampling); those samples are filled with missing values at
+        # read time, so just leave the absent modalities out of the filter.
+        absent = [
+            m for m in spacetime_varying_training_modalities if m not in metadata_df
+        ]
+        if absent:
+            logger.info(f"Modalities not in metadata CSV, not used for filter: {absent}")
+            spacetime_varying_training_modalities = [
+                m for m in spacetime_varying_training_modalities if m not in absent
+            ]
         if len(spacetime_varying_training_modalities) == 0:
             # Allowed for label-only reads (e.g. PretrainSubsetDataset reading
             # a static raster like worldcover/srtm/openstreetmap_raster). Without
