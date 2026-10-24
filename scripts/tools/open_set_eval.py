@@ -42,6 +42,13 @@ per-class-capped train rows and so over-represented rare unknown classes.)
   with no labelled member score 0 ("novel class discovery" as rejection).
 - unlab_neg: a (K+1)-class probe with unlabeled train pixels as "other"
   (positive-unlabeled: the pool also contains the known classes).
+- unlab_neg_mlp: the same with a one-hidden-layer MLP. A linear softmax can
+  only reject a convex region (log p(other) is concave in x), so it cannot
+  reject unknowns lying on several sides of the known classes; this can.
+
+K=1 (``--ks 1``: each crop alone as the known class) is the positives-only
+setting. Methods that need two known classes (SINGLE_CLASS_SKIP) are skipped
+there, and closed_acc is trivially 1.
 
 Ensembles
 - mlp_ens / mlp_ens_mi: 5 small MLPs (different seeds); max mean probability,
@@ -113,12 +120,25 @@ METHODS = [
     "cluster50",
     "cluster200",
     "unlab_neg",
+    "unlab_neg_mlp",
     "mlp_ens",
     "mlp_ens_mi",
     "bg0",
     "bghalf",
     "oracle",
 ]
+
+# need >= 2 known classes (a softmax over the known classes)
+SINGLE_CLASS_SKIP = {
+    "msp",
+    "maxlogit",
+    "energy",
+    "react_energy",
+    "conformal",
+    "vim",
+    "mlp_ens",
+    "mlp_ens_mi",
+}
 
 Scorer = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
@@ -195,6 +215,29 @@ def negatives_probe(ctx: Context, xneg: np.ndarray) -> Scorer:
     def f(x: np.ndarray):
         """Score and closed-set prediction among the known classes."""
         p = softmax(logits(x), axis=1)
+        p_known = p.copy()
+        p_known[:, o] = -1
+        return 1 - p[:, o], classes[p_known.argmax(axis=1)]
+
+    return f
+
+
+def negatives_mlp(ctx: Context, xneg: np.ndarray) -> Scorer:
+    """negatives_probe with a one-hidden-layer MLP instead of a linear readout."""
+    xx = np.concatenate([ctx.xtr, xneg])
+    yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
+    clf = MLPClassifier(
+        hidden_layer_sizes=(256,),
+        early_stopping=True,
+        max_iter=200,
+        random_state=ctx.seed,
+    ).fit(xx, yy)
+    classes = clf.classes_
+    o = int(np.nonzero(classes == OTHER)[0][0])
+
+    def f(x: np.ndarray):
+        """Score and closed-set prediction among the known classes."""
+        p = clf.predict_proba(x)
         p_known = p.copy()
         p_known[:, o] = -1
         return 1 - p[:, o], classes[p_known.argmax(axis=1)]
@@ -314,7 +357,8 @@ def density_scorer(ctx: Context, method: str) -> Scorer:
         return f
 
     # residual / iforest: class-agnostic scores; predict with a probe
-    logits, classes, _, _ = fit_probe(xtr, ytr, ctx.c)
+    if len(known) > 1:
+        logits, classes, _, _ = fit_probe(xtr, ytr, ctx.c)
     if method == "residual":
         pca = PCA(n_components=max(1, xtr.shape[1] // 4)).fit(xtr)
 
@@ -327,7 +371,9 @@ def density_scorer(ctx: Context, method: str) -> Scorer:
         score = forest.score_samples
 
     def f(x: np.ndarray):
-        """Score and probe prediction."""
+        """Score and probe prediction (the one class when K=1)."""
+        if len(known) == 1:
+            return score(x), np.full(len(x), known[0])
         return score(x), classes[logits(x).argmax(axis=1)]
 
     return f
@@ -438,6 +484,8 @@ def scores_for(method: str, ctx: Context) -> Scorer:
         return mlp_scorer(ctx, method)
     if method == "unlab_neg":
         return negatives_probe(ctx, ctx.x_unlab)
+    if method == "unlab_neg_mlp":
+        return negatives_mlp(ctx, ctx.x_unlab)
     if method in ("bg0", "bghalf", "oracle"):
         return negatives_probe(ctx, ctx.xneg)
     raise ValueError(method)
@@ -464,10 +512,12 @@ def auroc(s_known: np.ndarray, s_unknown: np.ndarray) -> float:
 
 
 def known_sets(args: argparse.Namespace, rng: np.random.Generator) -> list[tuple]:
-    """Every pair of crop classes for K=2; random draws for larger K."""
+    """Every crop for K=1, every pair for K=2; random draws for larger K."""
     sets = []
     for k in args.ks:
-        if k == 2:
+        if k == 1:
+            sets += [(c,) for c in CROPS]
+        elif k == 2:
             sets += list(itertools.combinations(CROPS, 2))
         else:
             sets += [
@@ -568,6 +618,8 @@ def main() -> None:
             "oracle": [BACKGROUND, *unknown_crops],
         }
         for method in args.methods:
+            if len(ks) == 1 and method in SINGLE_CLASS_SKIP:
+                continue
             neg_classes = negs.get(method, [])
             ctx = Context(
                 xtr=xtr_all[tr],
