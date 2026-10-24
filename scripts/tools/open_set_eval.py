@@ -32,7 +32,11 @@ Feature-space density / distance (no classifier)
 - ocsvm: max over classes of a per-class one-class RBF SVM.
 - iforest: isolation forest on the known train data.
 
-Unlabeled data
+Unlabeled data (``--unlab_pool natural``, the default: at pixel level the
+dump's uniform per-window sample of train windows, void included; at segment
+level every train segment, uncapped. Both follow the natural class mix.
+``balanced`` reproduces the first runs, which drew the pool from the
+per-class-capped train rows and so over-represented rare unknown classes.)
 - cluster{50,200}: k-means on unlabeled train pixels; score = labelled known
   train pixels per unlabeled pixel in the test point's cluster, so clusters
   with no labelled member score 0 ("novel class discovery" as rejection).
@@ -136,15 +140,14 @@ class Context:
     c: float
 
 
-def load(npz_path: str, product: str, level: str) -> tuple[np.ndarray, ...]:
-    """(embeddings, labels, split) for one product, dropping invalid rows."""
+def load(npz_path: str, product: str, prefix: str) -> tuple[np.ndarray, ...]:
+    """(embeddings, labels, split) of one npz table, dropping invalid rows."""
     d = np.load(npz_path)
-    prefix = "pix" if level == "pixel" else "seg"
     x = d[f"{prefix}_{product}"].astype(np.float32)
     y = d[f"{prefix}_label"]
     split = d["window_split"][d[f"{prefix}_window"]]
     ok = np.isfinite(x).all(axis=1)
-    logger.info(f"{product}/{level}: {ok.sum()}/{len(ok)} valid rows")
+    logger.info(f"{product}/{prefix}: {ok.sum()}/{len(ok)} valid rows")
     return x[ok], y[ok], split[ok]
 
 
@@ -492,11 +495,17 @@ def main() -> None:
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
     parser.add_argument("--methods", nargs="+", default=METHODS)
+    parser.add_argument(
+        "--unlab_pool", choices=["natural", "balanced"], default="natural"
+    )
+    parser.add_argument("--unlab_size", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
 
-    x, y, split = load(args.npz, args.product, args.level)
+    x, y, split = load(
+        args.npz, args.product, "pix" if args.level == "pixel" else "seg"
+    )
     parts = {}
     for s, cap in (
         ("train", args.train_cap),
@@ -510,7 +519,24 @@ def main() -> None:
     xtr_all, ytr_all = parts["train"]
     xv, yv = parts["val"]
     xt, yt = parts["test"]
-    x_unlab = xtr_all[rng.choice(len(xtr_all), min(20000, len(xtr_all)), replace=False)]
+    # the balanced draw always consumes the main generator, so the K>2 known
+    # sets drawn after it are the same whichever pool is used
+    balanced = xtr_all[
+        rng.choice(len(xtr_all), min(args.unlab_size, len(xtr_all)), replace=False)
+    ]
+    if args.unlab_pool == "balanced":
+        pool = x_unlab = balanced
+    else:
+        if args.level == "pixel":
+            xu, _, su = load(args.npz, args.product, "uni")
+            pool = xu[su == "train"]
+        else:
+            pool = x[split == "train"]
+        pool_rng = np.random.default_rng(args.seed + 1)
+        x_unlab = pool[
+            pool_rng.choice(len(pool), min(args.unlab_size, len(pool)), replace=False)
+        ]
+    logger.info(f"unlabeled pool ({args.unlab_pool}): {len(x_unlab)}/{len(pool)} rows")
     train_counts = np.bincount(ytr_all, minlength=19)
     # k-means does not depend on the known set: fit once, time it separately
     kmeans = {}
@@ -574,6 +600,7 @@ def main() -> None:
                 "known": "-".join(map(str, ks)),
                 "method": method,
                 "neg_classes": "-".join(map(str, neg_classes)),
+                "unlab_pool": args.unlab_pool,
                 "closed_acc": float((pred[kn] == yt[kn]).mean()),
                 "known_kept_test": float((st[kn] >= thr).mean()),
                 "auroc_crop": auroc(st[kn], st[crop_unk]),

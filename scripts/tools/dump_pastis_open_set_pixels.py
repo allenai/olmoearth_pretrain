@@ -6,7 +6,7 @@ same windows, the ``gse`` (AEF) and ``tessera_v2`` layers of the source
 pastis_year_aligned dataset. Every product is on the window's 10 m grid, so a
 pixel index means the same location in all three.
 
-Two tables are written to one .npz:
+Three tables are written to one .npz:
 
 - pixels: per window, up to ``--pixels_per_class`` random pixels of every class
   present (labels 0..18; 19 is void), restricted to pixels where OlmoEarth and
@@ -16,6 +16,11 @@ Two tables are written to one .npz:
   (4-connectivity, at least ``--min_segment_px`` valid pixels). PASTIS parcels
   are not in the dataset, so these stand in for parcels; adjacent parcels of
   the same crop merge into one segment.
+- uniform: per window, ``--uniform_per_window`` pixels drawn uniformly from
+  every pixel where OlmoEarth and AEF are valid, void (19) included. Unlike
+  the per-class pixels this follows the natural class mix, so it is the
+  stand-in for an unlabeled pool. It is drawn after the per-class pixels from
+  the same per-window generator, so those are unchanged from earlier dumps.
 
 Embeddings are stored as float16. Run on a Weka-mounted machine::
 
@@ -75,6 +80,7 @@ def main() -> None:
     parser.add_argument("--src_ds_path", default=SRC_DS)
     parser.add_argument("--pixels_per_class", type=int, default=32)
     parser.add_argument("--min_segment_px", type=int, default=10)
+    parser.add_argument("--uniform_per_window", type=int, default=64)
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
@@ -129,12 +135,21 @@ def main() -> None:
                         else None,
                     }
                 )
-        out["pix_emb"] = {
-            k: np.stack([arrays[k][:, r, c] for (_, _, r, c, _) in out["pix"]])
-            if out["pix"] and arrays[k] is not None
-            else None
-            for k in PRODUCTS
-        }
+        rows, cols = np.nonzero(valid["olmoearth"] & valid["aef"])
+        take = rng.choice(
+            len(rows), min(args.uniform_per_window, len(rows)), replace=False
+        )
+        out["uni"] = [
+            (idx, int(label[r, c]), int(r), int(c), bool(valid["tessera_v2"][r, c]))
+            for r, c in zip(rows[take], cols[take])
+        ]
+        for table in ("pix", "uni"):
+            out[f"{table}_emb"] = {
+                k: np.stack([arrays[k][:, r, c] for (_, _, r, c, _) in out[table]])
+                if out[table] and arrays[k] is not None
+                else None
+                for k in PRODUCTS
+            }
         return out
 
     windows_meta = [
@@ -147,29 +162,49 @@ def main() -> None:
         for w in oe_windows
     ]
     dims = {"olmoearth": 128, "aef": 64, "tessera_v2": 128}
-    pix_rows: list[tuple] = []
-    pix_emb: dict[str, list[np.ndarray]] = {k: [] for k in PRODUCTS}
+    point_rows: dict[str, list[tuple]] = {"pix": [], "uni": []}
+    point_emb = {t: {k: [] for k in PRODUCTS} for t in point_rows}
     seg_rows: list[dict] = []
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         for done, out in enumerate(
             executor.map(handle, enumerate(oe_windows)), start=1
         ):
-            n = len(out["pix"])
-            pix_rows.extend(out["pix"])
-            for k in PRODUCTS:
-                e = out["pix_emb"][k]
-                pix_emb[k].append(
-                    e if e is not None else np.full((n, dims[k]), np.nan, np.float32)
-                )
+            for t in point_rows:
+                n = len(out[t])
+                point_rows[t].extend(out[t])
+                for k in PRODUCTS:
+                    e = out[f"{t}_emb"][k]
+                    point_emb[t][k].append(
+                        e
+                        if e is not None
+                        else np.full((n, dims[k]), np.nan, np.float32)
+                    )
             seg_rows.extend(out["seg"])
             if done % 200 == 0 or done == len(oe_windows):
                 logger.info(
                     f"{done}/{len(oe_windows)} windows, "
-                    f"{len(pix_rows)} pixels, {len(seg_rows)} segments"
+                    f"{len(point_rows['pix'])} pixels, {len(seg_rows)} segments, "
+                    f"{len(point_rows['uni'])} uniform pixels"
                 )
 
-    pix = np.array([r[:4] for r in pix_rows], dtype=np.int32)
-    tess_valid = np.array([r[4] for r in pix_rows], dtype=bool)
+    points = {}
+    for t, rows_t in point_rows.items():
+        a = np.array([r[:4] for r in rows_t], dtype=np.int32)
+        points.update(
+            {
+                f"{t}_window": a[:, 0],
+                f"{t}_label": a[:, 1],
+                f"{t}_row": a[:, 2],
+                f"{t}_col": a[:, 3],
+                f"{t}_tessera_valid": np.array([r[4] for r in rows_t], dtype=bool),
+                **{
+                    f"{t}_{k}": np.concatenate(point_emb[t][k]).astype(np.float16)
+                    for k in PRODUCTS
+                },
+            }
+        )
+    pix = np.stack([points["pix_window"], points["pix_label"]], axis=1)
+    tess_valid = points["pix_tessera_valid"]
     seg_emb = {
         k: np.stack(
             [
@@ -181,12 +216,7 @@ def main() -> None:
     }
     np.savez_compressed(
         args.out,
-        pix_window=pix[:, 0],
-        pix_label=pix[:, 1],
-        pix_row=pix[:, 2],
-        pix_col=pix[:, 3],
-        pix_tessera_valid=tess_valid,
-        **{f"pix_{k}": np.concatenate(pix_emb[k]).astype(np.float16) for k in PRODUCTS},
+        **points,
         seg_window=np.array([s["window"] for s in seg_rows], dtype=np.int32),
         seg_label=np.array([s["label"] for s in seg_rows], dtype=np.int32),
         seg_size=np.array([s["size"] for s in seg_rows], dtype=np.int32),
@@ -196,12 +226,14 @@ def main() -> None:
         args_json=np.array(json.dumps(vars(args))),
     )
     counts = np.bincount(pix[:, 1], minlength=NUM_CLASSES)
+    uni_counts = np.bincount(points["uni_label"], minlength=NUM_CLASSES + 1)
     splits = {
         s: int((np.array([m["split"] for m in windows_meta]) == s).sum())
         for s in {str(m["split"]) for m in windows_meta}
     }
     logger.info(
         f"wrote {args.out}: pixels per class {counts.tolist()}, "
+        f"uniform pixels per class (incl. void) {uni_counts.tolist()}, "
         f"window splits {splits}, tessera-valid {tess_valid.mean():.3f}"
     )
 
