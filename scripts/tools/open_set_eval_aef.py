@@ -52,6 +52,8 @@ METHODS = [
     "cluster200",
     "unlab_neg",
     "unlab_neg_mlp",
+    "unlab_neg_argmax",
+    "unlab_neg_mlp_argmax",
     "oracle",
 ]
 
@@ -159,7 +161,8 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
             f = scores_for(method, ctx)
             w1, c1 = time.perf_counter(), time.process_time()
             sv, _ = f(xv[vk])
-            thr = np.quantile(sv, 1 - args.tpr)
+            # *_argmax: plain softmax argmax over the K+1 outputs, no calibration
+            thr = 0.0 if method.endswith("_argmax") else np.quantile(sv, 1 - args.tpr)
             w2, c2 = time.perf_counter(), time.process_time()
             st, pred = f(xt)
             w3, c3 = time.perf_counter(), time.process_time()
@@ -169,6 +172,7 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
                 "task": npz.stem,
                 "n_classes": len(classes),
                 "regime": regime,
+                "unlab_size": len(x_unlab),
                 "report_split": args.report_split,
                 "K": len(ks),
                 "known": "-".join(map(str, ks)),
