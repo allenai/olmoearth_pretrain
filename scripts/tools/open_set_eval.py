@@ -42,6 +42,9 @@ per-class-capped train rows and so over-represented rare unknown classes.)
   with no labelled member score 0 ("novel class discovery" as rejection).
 - unlab_neg: a (K+1)-class probe with unlabeled train pixels as "other"
   (positive-unlabeled: the pool also contains the known classes).
+- unlab_neg_argmax / unlab_neg_mlp_argmax: the same probes scored as "best
+  known class minus other"; open_set_map_metrics.py thresholds them at 0, i.e.
+  the plain softmax argmax over the K+1 outputs with no calibration.
 - unlab_neg_mlp: the same with a one-hidden-layer MLP. A linear softmax can
   only reject a convex region (log p(other) is concave in x), so it cannot
   reject unknowns lying on several sides of the known classes; this can.
@@ -218,7 +221,7 @@ def mahalanobis_sq(x: np.ndarray, mean: np.ndarray, prec: np.ndarray) -> np.ndar
     return np.einsum("nd,de,ne->n", diff, prec, diff)
 
 
-def negatives_probe(ctx: Context, xneg: np.ndarray) -> Scorer:
+def negatives_probe(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Scorer:
     """(K+1)-class probe with xneg as "other"; score = 1 - p(other)."""
     xx = np.concatenate([ctx.xtr, xneg])
     yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
@@ -230,12 +233,17 @@ def negatives_probe(ctx: Context, xneg: np.ndarray) -> Scorer:
         p = softmax(logits(x), axis=1)
         p_known = p.copy()
         p_known[:, o] = -1
-        return 1 - p[:, o], classes[p_known.argmax(axis=1)]
+        pred = classes[p_known.argmax(axis=1)]
+        if margin:
+            # best known class minus "other": >= 0 exactly when the softmax
+            # argmax over all K+1 outputs is a known class
+            return p_known.max(axis=1) - p[:, o], pred
+        return 1 - p[:, o], pred
 
     return f
 
 
-def negatives_mlp(ctx: Context, xneg: np.ndarray) -> Scorer:
+def negatives_mlp(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Scorer:
     """negatives_probe with a one-hidden-layer MLP instead of a linear readout."""
     xx = np.concatenate([ctx.xtr, xneg])
     yy = np.concatenate([ctx.ytr, np.full(len(xneg), OTHER)])
@@ -253,7 +261,12 @@ def negatives_mlp(ctx: Context, xneg: np.ndarray) -> Scorer:
         p = clf.predict_proba(x)
         p_known = p.copy()
         p_known[:, o] = -1
-        return 1 - p[:, o], classes[p_known.argmax(axis=1)]
+        pred = classes[p_known.argmax(axis=1)]
+        if margin:
+            # best known class minus "other": >= 0 exactly when the softmax
+            # argmax over all K+1 outputs is a known class
+            return p_known.max(axis=1) - p[:, o], pred
+        return 1 - p[:, o], pred
 
     return f
 
@@ -499,6 +512,10 @@ def scores_for(method: str, ctx: Context) -> Scorer:
         return negatives_probe(ctx, ctx.x_unlab)
     if method == "unlab_neg_mlp":
         return negatives_mlp(ctx, ctx.x_unlab)
+    if method == "unlab_neg_argmax":
+        return negatives_probe(ctx, ctx.x_unlab, margin=True)
+    if method == "unlab_neg_mlp_argmax":
+        return negatives_mlp(ctx, ctx.x_unlab, margin=True)
     if method in ("bg0", "bghalf", "oracle"):
         return negatives_probe(ctx, ctx.xneg)
     raise ValueError(method)

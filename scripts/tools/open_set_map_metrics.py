@@ -18,6 +18,8 @@ K+1 classes, and the error split into: unknown accepted as a known class,
 known rejected as unknown, known accepted with the wrong known class. Two
 references: ``none`` (the linear probe with no rejection, i.e. a closed-set
 map) and ``oracle`` (a probe that saw every unknown class as a negative).
+``*_argmax`` methods skip calibration and take the plain softmax argmax over
+the K+1 outputs (known if the best known class beats "other").
 
     python scripts/tools/open_set_map_metrics.py --npz pastis_open_set_v2.npz \
         --product olmoearth --level pixel --ks 1 --out map_metrics.csv
@@ -50,6 +52,8 @@ METHODS = [
     "none",
     "unlab_neg",
     "unlab_neg_mlp",
+    "unlab_neg_argmax",
+    "unlab_neg_mlp_argmax",
     "rmaha_unlab",
     "knn1",
     "knn10",
@@ -212,6 +216,8 @@ def main() -> None:
             s, pred = f(ev["x"])
             if method == "none":
                 y_pred = pred  # closed-set: every pixel gets a known class
+            elif method.endswith("_argmax"):
+                y_pred = np.where(s >= 0, pred, UNKNOWN)  # plain softmax argmax
             else:
                 sv, _ = f(xca[cak])
                 thr = np.quantile(sv, 1 - args.tpr)
