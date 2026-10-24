@@ -155,6 +155,12 @@ def main() -> None:
     parser.add_argument("--eval_cap", type=int, default=3000)
     parser.add_argument("--min_train", type=int, default=50)
     parser.add_argument("--unlab_size", type=int, default=20000)
+    parser.add_argument(
+        "--pool_npz",
+        default=None,
+        help="pixel level: take the unlabeled pool from this npz's box_<product> "
+        "(sample_bbox_pool.py) instead of the dump's per-tile uniform sample",
+    )
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=0)
@@ -170,6 +176,11 @@ def main() -> None:
     else:
         ev = {k: v[fit["split"] == "report"] for k, v in fit.items()}
         pool = fit["x"][fit["split"] == "train"]
+    if args.pool_npz:
+        if args.level != "pixel":
+            raise ValueError("--pool_npz is a pixel-level pool")
+        box = np.load(args.pool_npz)[f"box_{args.product}"].astype(np.float32)
+        pool = box[np.isfinite(box).all(axis=1)]
     keep = ev["y"] != VOID
     ev = {k: v[keep] for k, v in ev.items()}
     x_unlab = pool[
@@ -228,6 +239,8 @@ def main() -> None:
                 "K": len(ks),
                 "known": "-".join(map(str, ks)),
                 "method": method,
+                "pool": "bbox" if args.pool_npz else "tiles",
+                "unlab_size": len(x_unlab),
                 **map_metrics(y_true, y_pred, ev["w"], ks),
             }
             rows.append(row)
