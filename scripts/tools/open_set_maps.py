@@ -195,7 +195,9 @@ def main() -> None:
             )
             f = scores_for(m, ctx)
             sv, _ = f(x[vak])
-            fitted[m] = (f, float(np.quantile(sv, 1 - args.tpr)))
+            # *_argmax: plain softmax argmax over the K+1 outputs (threshold 0)
+            thr = 0.0 if m.endswith("_argmax") else float(np.quantile(sv, 1 - args.tpr))
+            fitted[m] = (f, thr)
         stats[scen] = {"known": list(ks), "windows": {}}
 
         for i in chosen:
