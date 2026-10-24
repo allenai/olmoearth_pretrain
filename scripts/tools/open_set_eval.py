@@ -512,17 +512,20 @@ def main() -> None:
     xt, yt = parts["test"]
     x_unlab = xtr_all[rng.choice(len(xtr_all), min(20000, len(xtr_all)), replace=False)]
     train_counts = np.bincount(ytr_all, minlength=19)
+    # k-means does not depend on the known set: fit once, time it separately
     kmeans = {}
+    shared_fit_s: dict[str, float] = {}
     for n in sorted(
         {int(m[len("cluster") :]) for m in args.methods if m.startswith("cluster")}
     ):
+        t0 = time.perf_counter()
         model = MiniBatchKMeans(n_clusters=n, random_state=args.seed, n_init=3).fit(
             x_unlab
         )
         kmeans[n] = (model, model.predict(x_unlab))
+        shared_fit_s[f"cluster{n}"] = time.perf_counter() - t0
 
     rows = []
-    elapsed: dict[str, float] = {m: 0.0 for m in args.methods}
     for ks in known_sets(args, rng):
         if min(train_counts[list(ks)]) < args.min_train:
             continue
@@ -539,7 +542,6 @@ def main() -> None:
             "oracle": [BACKGROUND, *unknown_crops],
         }
         for method in args.methods:
-            t0 = time.time()
             neg_classes = negs.get(method, [])
             ctx = Context(
                 xtr=xtr_all[tr],
@@ -552,10 +554,15 @@ def main() -> None:
                 seed=args.seed,
                 c=args.c,
             )
+            # wall time is inflated when parallel runs share CPUs; CPU time is not
+            w0, c0 = time.perf_counter(), time.process_time()
             f = scores_for(method, ctx)
+            w1, c1 = time.perf_counter(), time.process_time()
             sv, _ = f(xv[vk])
             thr = np.quantile(sv, 1 - args.tpr)
+            w2, c2 = time.perf_counter(), time.process_time()
             st, pred = f(xt)
+            w3, c3 = time.perf_counter(), time.process_time()
             kn = np.isin(yt, ks)
             crop_unk = ~kn & (yt != BACKGROUND)
             crop_unseen = crop_unk & ~np.isin(yt, neg_classes)
@@ -579,23 +586,25 @@ def main() -> None:
                 "open_acc": float(
                     np.r_[(st[kn] >= thr) & (pred[kn] == yt[kn]), st[~kn] < thr].mean()
                 ),
+                "n_train": len(ctx.xtr) + len(ctx.xneg),
+                "fit_s": w1 - w0,
+                "fit_cpu_s": c1 - c0,
+                # one-off fit shared by every known set (k-means), not in fit_s
+                "shared_fit_s": shared_fit_s.get(method, 0.0),
+                "calib_s": w2 - w1,
+                "score_us_per_sample": 1e6 * (w3 - w2) / len(xt),
+                "score_cpu_us_per_sample": 1e6 * (c3 - c2) / len(xt),
             }
             for c in range(19):
                 if c not in ks and (yt == c).any():
                     row[f"rej_{c}"] = float((st[yt == c] < thr).mean())
             rows.append(row)
-            elapsed[method] += time.time() - t0
         logger.info(f"known {ks} done")
         pd.DataFrame(rows).to_csv(args.out, index=False)
 
     df = pd.DataFrame(rows)
     df.to_csv(args.out, index=False)
-    logger.info(
-        "seconds per method: "
-        + ", ".join(
-            f"{m}={t:.0f}" for m, t in sorted(elapsed.items(), key=lambda kv: -kv[1])
-        )
-    )
+    logger.info(f"shared one-off fits (s): {shared_fit_s}")
     summary = df.groupby(["K", "method"], sort=False)[
         [
             "closed_acc",
@@ -606,6 +615,8 @@ def main() -> None:
             "auroc_bg",
             "fpr_bg",
             "open_acc",
+            "fit_cpu_s",
+            "score_cpu_us_per_sample",
         ]
     ].mean()
     pd.set_option("display.width", 220)
