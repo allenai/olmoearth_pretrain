@@ -1,10 +1,12 @@
 """OlmoEarth Pretrain DataLoader."""
 
+import faulthandler
 import functools
 import logging
 import math
 import multiprocessing as mp
 import signal
+import sys
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,8 +58,12 @@ def _worker_ignore_sigterm(worker_id: int) -> None:
     asymmetrically mid-NCCL-collective and prevents olmo-core's graceful cancel
     from running (stuck ranks then get SIGKILLed, which can leave GPUs in a bad
     state). Workers must instead stay alive until the parent shuts them down.
+
+    Also dump the worker's Python stacks to stderr on SIGUSR1, which the eval
+    hang watchdog sends when a loader stops making progress.
     """
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
 
 
 class OlmoEarthDataLoader(DataLoaderBase):

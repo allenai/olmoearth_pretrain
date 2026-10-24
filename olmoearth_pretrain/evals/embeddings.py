@@ -20,6 +20,7 @@ from olmoearth_pretrain.evals.embedding_transforms import (
     roundtrip_embeddings_tessera,
 )
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
+from olmoearth_pretrain.evals.hang_watchdog import HangWatchdog, mem_summary
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -175,6 +176,45 @@ def get_embeddings(
     embeddings_list: list[torch.Tensor] = []
     labels_list: list[torch.Tensor] = []
     model.eval()
+    watchdog = HangWatchdog("get_embeddings").start()
+    try:
+        _embed_batches(
+            data_loader,
+            model,
+            is_train,
+            sample_transform,
+            embeddings_list,
+            labels_list,
+            watchdog,
+        )
+    finally:
+        watchdog.stop()
+
+    embeddings = torch.cat(embeddings_list, dim=0)  # (N, dim)
+    labels = torch.cat(labels_list, dim=0)  # (N)
+
+    embeddings = normalize_and_quantize(
+        embeddings,
+        normalizer=normalizer,
+        quantize=quantize,
+        quantize_bits=quantize_bits,
+        quantile_config=quantile_config,
+        diagnostics_out=diagnostics_out,
+        quantization_scheme=quantization_scheme,
+    )
+    return embeddings, labels
+
+
+def _embed_batches(
+    data_loader: Iterable,
+    model: EvalWrapper,
+    is_train: bool,
+    sample_transform: Callable[[MaskedOlmoEarthSample], MaskedOlmoEarthSample] | None,
+    embeddings_list: list[torch.Tensor],
+    labels_list: list[torch.Tensor],
+    watchdog: HangWatchdog,
+) -> None:
+    """Run the model over ``data_loader``, appending outputs to the lists."""
     device = model.device
     with torch.no_grad():
         for i, (masked_olmoearth_sample, label) in enumerate(data_loader):
@@ -201,18 +241,8 @@ def get_embeddings(
 
             embeddings_list.append(batch_embeddings.cpu())
             labels_list.append(label)
-            logger.info("Processed batch %d", i)
-
-    embeddings = torch.cat(embeddings_list, dim=0)  # (N, dim)
-    labels = torch.cat(labels_list, dim=0)  # (N)
-
-    embeddings = normalize_and_quantize(
-        embeddings,
-        normalizer=normalizer,
-        quantize=quantize,
-        quantize_bits=quantize_bits,
-        quantile_config=quantile_config,
-        diagnostics_out=diagnostics_out,
-        quantization_scheme=quantization_scheme,
-    )
-    return embeddings, labels
+            watchdog.beat(f"batch {i}")
+            if i % 25 == 0:
+                logger.info("Processed batch %d (%s)", i, mem_summary())
+            else:
+                logger.info("Processed batch %d", i)
