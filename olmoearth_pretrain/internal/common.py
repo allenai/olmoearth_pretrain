@@ -210,6 +210,10 @@ def build_launch_config(
     embedding_evals = os.environ.get("EMBEDDING_EVALS")
     if embedding_evals is not None:
         env_vars.append(BeakerEnvVar(name="EMBEDDING_EVALS", value=embedding_evals))
+    # Propagate the embedding dump directory (evaluator_callback) if set
+    dump_dir = os.environ.get("OE_DUMP_EMBEDDINGS_DIR")
+    if dump_dir is not None:
+        env_vars.append(BeakerEnvVar(name="OE_DUMP_EMBEDDINGS_DIR", value=dump_dir))
     # Propagate the CUDA allocator config if set (e.g. expandable_segments:True to
     # reduce fragmentation OOMs at large token budgets).
     cuda_alloc_conf = os.environ.get("PYTORCH_CUDA_ALLOC_CONF")
