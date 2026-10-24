@@ -45,7 +45,10 @@ per-class-capped train rows and so over-represented rare unknown classes.)
 - unlab_neg_argmax / unlab_neg_mlp_argmax: the same probes scored as "best
   known class minus other"; open_set_map_metrics.py thresholds them at 0, i.e.
   the plain softmax argmax over the K+1 outputs with no calibration.
-- unlab_neg_mlp: the same with a one-hidden-layer MLP. A linear softmax can
+- unlab_neg_mlp: the same with a one-hidden-layer MLP.
+- unlab_neg[_mlp]_filt{NN} / _pl{NN}: before fitting, drop (filt) or
+  pseudo-label as the nearest positive's class (pl) every pool row whose cosine
+  similarity to a labelled positive is >= NN/100. Combine with _argmax. A linear softmax can
   only reject a convex region (log p(other) is concave in x), so it cannot
   reject unknowns lying on several sides of the known classes; this can.
 
@@ -76,6 +79,7 @@ unknowns (classes 1-18) and background (class 0).
 """
 
 import argparse
+import dataclasses
 import itertools
 import logging
 import time
@@ -269,6 +273,44 @@ def negatives_mlp(ctx: Context, xneg: np.ndarray, margin: bool = False) -> Score
         return 1 - p[:, o], pred
 
     return f
+
+
+def max_cosine(a: np.ndarray, b: np.ndarray, chunk: int = 4096):
+    """For each row of a, its highest cosine similarity to b and that row's index."""
+    an, bn = l2n(a), l2n(b)
+    best = np.empty(len(a), dtype=np.float32)
+    idx = np.empty(len(a), dtype=np.int64)
+    for s in range(0, len(a), chunk):
+        sim = an[s : s + chunk] @ bn.T
+        idx[s : s + chunk] = sim.argmax(axis=1)
+        best[s : s + chunk] = sim.max(axis=1)
+    return best, idx
+
+
+def unlab_neg_scorer(ctx: Context, method: str) -> Scorer:
+    """unlab_neg[_mlp][_filt{NN}|_pl{NN}][_argmax].
+
+    filt{NN}: drop unlabeled pool rows whose cosine similarity to any labelled
+    positive is >= NN/100 (they are probably positives, not "other").
+    pl{NN}: pseudo-label those rows with their nearest positive's class instead.
+    """
+    parts = method.split("_")[2:]
+    xtr, ytr, pool = ctx.xtr, ctx.ytr, ctx.x_unlab
+    for p in parts:
+        if p.startswith(("filt", "pl")):
+            cut = int(p.lstrip("filtpl")) / 100
+            sim, nearest = max_cosine(pool, xtr)
+            near = sim >= cut
+            if p.startswith("pl"):
+                xtr = np.concatenate([xtr, pool[near]])
+                ytr = np.concatenate([ytr, ytr[nearest[near]]])
+            pool = pool[~near]
+            logger.debug(
+                f"{method}: {near.sum()} of {len(near)} pool rows within {cut}"
+            )
+    sub = dataclasses.replace(ctx, xtr=xtr, ytr=ytr)
+    fit = negatives_mlp if "mlp" in parts else negatives_probe
+    return fit(sub, pool, margin="argmax" in parts)
 
 
 def probe_scorer(ctx: Context, method: str) -> Scorer:
@@ -508,14 +550,8 @@ def scores_for(method: str, ctx: Context) -> Scorer:
         return cluster_scorer(ctx, method)
     if method.startswith("mlp_ens"):
         return mlp_scorer(ctx, method)
-    if method == "unlab_neg":
-        return negatives_probe(ctx, ctx.x_unlab)
-    if method == "unlab_neg_mlp":
-        return negatives_mlp(ctx, ctx.x_unlab)
-    if method == "unlab_neg_argmax":
-        return negatives_probe(ctx, ctx.x_unlab, margin=True)
-    if method == "unlab_neg_mlp_argmax":
-        return negatives_mlp(ctx, ctx.x_unlab, margin=True)
+    if method.startswith("unlab_neg"):
+        return unlab_neg_scorer(ctx, method)
     if method in ("bg0", "bghalf", "oracle"):
         return negatives_probe(ctx, ctx.xneg)
     raise ValueError(method)

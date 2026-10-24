@@ -179,6 +179,8 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
                 "method": method,
                 "closed_acc": float((pred[kn] == yt[kn]).mean()),
                 "known_kept_test": float((st[kn] >= thr).mean()),
+                # at the threshold actually used (0 for *_argmax); "fpr" is at 95% kept
+                "unknown_accepted_op": float((st[~kn] >= thr).mean()),
                 "auroc": auroc(st[kn], st[~kn]),
                 "fpr": fpr_at_tpr(st[kn], st[~kn], args.tpr),
                 "open_acc": float(
