@@ -3292,6 +3292,100 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nigeria_settlement",
       "window_size": 64
     },
+    "nisar_land_eval": {
+      "classes": [
+        "tree",
+        "shrubland",
+        "grassland",
+        "cropland",
+        "built_up",
+        "bare",
+        "snow_ice",
+        "water",
+        "wetland",
+        "mangroves",
+        "moss_lichen"
+      ],
+      "config_json_sha256": "d9669c3127a325e2201f05bf601f9f33b6b66616601fc52f203780f622601ef5",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_land_eval",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1"
+      ],
+      "name": "nisar_land_eval",
+      "norm_stats": {},
+      "num_classes": 11,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_land_eval",
+      "split_stats": {
+        "test": {
+          "count": 205
+        },
+        "train": {
+          "count": 840
+        },
+        "val": {
+          "count": 210
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_land_eval",
+      "window_size": 64
+    },
+    "nisar_land_eval_as_s1": {
+      "classes": [
+        "tree",
+        "shrubland",
+        "grassland",
+        "cropland",
+        "built_up",
+        "bare",
+        "snow_ice",
+        "water",
+        "wetland",
+        "mangroves",
+        "moss_lichen"
+      ],
+      "config_json_sha256": "d9669c3127a325e2201f05bf601f9f33b6b66616601fc52f203780f622601ef5",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_land_eval_as_s1",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_land_eval_as_s1",
+      "norm_stats": {},
+      "num_classes": 11,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_land_eval",
+      "split_stats": {
+        "test": {
+          "count": 205
+        },
+        "train": {
+          "count": 840
+        },
+        "val": {
+          "count": 210
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_land_eval",
+      "window_size": 64
+    },
     "oil_spill_detection": {
       "classes": [
         "0",
