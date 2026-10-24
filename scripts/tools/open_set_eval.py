@@ -19,6 +19,10 @@ higher means "more likely known":
   "other" class (outlier exposure); score = 1 - p(other). Class 0 is then a
   seen negative, so bg0's background columns are not open-set numbers; only
   its crop columns are.
+- oracle: the same probe with every non-known train class as "other", i.e. the
+  test-time unknowns were seen as negatives. Not an open-set method: it is the
+  upper bound on how separable known vs unknown is in the embedding with a
+  linear readout, and the reference for how much each method leaves behind.
 
 Thresholds are set on val so that ``--tpr`` of known val samples are kept; the
 fraction of each unknown class rejected at that threshold is then measured on
@@ -54,6 +58,7 @@ METHODS = [
     "rmaha_unlab",
     "knn",
     "bg0",
+    "oracle",
 ]
 
 
@@ -102,7 +107,7 @@ def scores_for(
     xtr: np.ndarray,
     ytr: np.ndarray,
     x_unlab: np.ndarray,
-    xbg: np.ndarray,
+    xneg: np.ndarray,
     args: argparse.Namespace,
 ):
     """Fit a method; returns score(x) -> (higher = known, closed-set prediction)."""
@@ -120,7 +125,7 @@ def scores_for(
             return logsumexp(z, axis=1), pred
 
         return f
-    if method.startswith("maha") or method.startswith("rmaha"):
+    if method.startswith(("maha", "rmaha")):
         means = np.stack([xtr[ytr == c].mean(axis=0) for c in known])
         centred = xtr - means[np.searchsorted(known, ytr)]
         prec = LedoitWolf().fit(centred).precision_
@@ -138,7 +143,10 @@ def scores_for(
 
         return f
     if method == "knn":
-        norm = lambda a: a / np.linalg.norm(a, axis=1, keepdims=True).clip(1e-8)  # noqa: E731
+
+        def norm(a: np.ndarray) -> np.ndarray:
+            return a / np.linalg.norm(a, axis=1, keepdims=True).clip(1e-8)
+
         nn = NearestNeighbors(n_neighbors=args.k).fit(norm(xtr))
 
         def f(x: np.ndarray):
@@ -148,10 +156,10 @@ def scores_for(
             return -dist[:, -1], pred
 
         return f
-    if method == "bg0":
+    if method in ("bg0", "oracle"):
         other = -1
-        xx = np.concatenate([xtr, xbg])
-        yy = np.concatenate([ytr, np.full(len(xbg), other)])
+        xx = np.concatenate([xtr, xneg])
+        yy = np.concatenate([ytr, np.full(len(xneg), other)])
         logits, classes = fit_logits(xx, yy, args.c)
         o = int(np.nonzero(classes == other)[0][0])
 
@@ -232,7 +240,8 @@ def main() -> None:
         xv, yv = parts["val"]
         xt, yt = parts["test"]
         for method in args.methods:
-            f = scores_for(method, xtr_all[tr], ytr_all[tr], x_unlab, xbg, args)
+            xneg = xtr_all[~tr] if method == "oracle" else xbg
+            f = scores_for(method, xtr_all[tr], ytr_all[tr], x_unlab, xneg, args)
             sv, _ = f(xv[np.isin(yv, ks)])
             thr = np.quantile(sv, 1 - args.tpr)
             st, pred = f(xt)
