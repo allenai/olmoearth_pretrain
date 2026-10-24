@@ -12,7 +12,10 @@ since these datasets have no background class:
 
 The unlabeled pool is a sample of the train split over every class, in the
 dataset's own class mix; oracle uses every non-known train class as
-negatives. Thresholds keep ``--tpr`` of known val samples; metrics are on test.
+negatives. With ``--report_split val`` (the default) the val split is halved
+at random: one half sets the threshold (``--tpr`` of known samples kept), the
+other is reported, and test is never read. ``test`` thresholds on val and
+reports on test.
 
     python scripts/tools/open_set_eval_aef.py --dump_root /weka/.../aef_evals \
         --out_dir /weka/.../aef_evals/results
@@ -74,16 +77,29 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
     """Every method over every known set of one dumped task."""
     rng = np.random.default_rng(args.seed)
     d = np.load(npz)
+    splits = (
+        ("train", "val") if args.report_split == "val" else ("train", "val", "test")
+    )
+    raw = {}
+    for s in splits:
+        x = d[f"{s}_embeddings"].astype(np.float32)
+        y = d[f"{s}_labels"].astype(np.int64)
+        if x.size == 0:
+            raise ValueError(f"{npz}: no {s} split")
+        raw[s] = (x, y)
+    if args.report_split == "val":
+        # threshold on one random half of val, report on the other
+        x, y = raw["val"]
+        perm = np.random.default_rng(args.seed + 2).permutation(len(x))
+        calib, report = perm[: len(x) // 2], perm[len(x) // 2 :]
+        raw["val"], raw["test"] = (x[calib], y[calib]), (x[report], y[report])
     parts = {}
     for s, cap in (
         ("train", args.train_cap),
         ("val", args.eval_cap),
         ("test", args.eval_cap),
     ):
-        x = d[f"{s}_embeddings"].astype(np.float32)
-        y = d[f"{s}_labels"].astype(np.int64)
-        if x.size == 0:
-            raise ValueError(f"{npz}: no {s} split")
+        x, y = raw[s]
         idx = cap_per_class(y, cap, rng)
         parts[s] = (x[idx], y[idx])
     xtr_all, ytr_all = parts["train"]
@@ -153,6 +169,7 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
                 "task": npz.stem,
                 "n_classes": len(classes),
                 "regime": regime,
+                "report_split": args.report_split,
                 "K": len(ks),
                 "known": "-".join(map(str, ks)),
                 "method": method,
@@ -197,6 +214,7 @@ def main() -> None:
     parser.add_argument("--unlab_size", type=int, default=20000)
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
+    parser.add_argument("--report_split", choices=["val", "test"], default="val")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
