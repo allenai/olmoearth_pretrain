@@ -190,7 +190,9 @@ def main() -> None:
             raise ValueError("--pool_npz is a pixel-level pool")
         box = np.load(args.pool_npz)[f"box_{args.product}"].astype(np.float32)
         pool = box[np.isfinite(box).all(axis=1)]
-    keep = ev["y"] != args.void
+    # void: the given id, or anything outside the class range (eval pipelines
+    # may encode ignore as -1 or 255)
+    keep = (ev["y"] != args.void) & (ev["y"] >= 0) & (ev["y"] < args.num_classes)
     ev = {k: v[keep] for k, v in ev.items()}
     x_unlab = pool[
         np.random.default_rng(args.seed + 1).choice(
