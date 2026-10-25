@@ -47,6 +47,7 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_embedding_diagnostics,
     compute_spatial_embedding_diagnostics,
 )
+from olmoearth_pretrain.evals.embedding_dump import dump_probe_embeddings
 from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalization,
     EmbeddingNormalizer,
@@ -768,28 +769,17 @@ class DownstreamEvaluator:
         if dump_dir and get_rank() == 0:
             # Exactly what the probe sees (post round-trip, post PCA), for
             # offline analyses such as scripts/tools/open_set_eval.py.
-            def as_np(t: torch.Tensor | None) -> np.ndarray:
-                """CPU numpy copy; empty when the split was not computed."""
-                return np.zeros(0) if t is None else t.detach().float().cpu().numpy()
-
-            path = UPath(dump_dir) / f"{self.evaluation_name}.npz"
-            path.parent.mkdir(parents=True, exist_ok=True)
-            with path.open("wb") as f:
-                np.savez(
-                    f,
-                    dataset=np.array(self.dataset),
-                    evaluation_name=np.array(self.evaluation_name),
-                    **{
-                        f"{split}_{kind}": as_np(t)
-                        for split, emb, lab in (
-                            ("train", train_embeddings, train_labels),
-                            ("val", val_embeddings, val_labels),
-                            ("test", test_embeddings, test_labels),
-                        )
-                        for kind, t in (("embeddings", emb), ("labels", lab))
-                    },
-                )
-            logger.info(f"Dumped {self.evaluation_name} embeddings to {path}")
+            dump_probe_embeddings(
+                dump_dir,
+                self.dataset,
+                self.evaluation_name,
+                {
+                    "train": (train_embeddings, train_labels),
+                    "val": (val_embeddings, val_labels),
+                    "test": (test_embeddings, test_labels),
+                },
+                self.config.num_classes,
+            )
 
         kwargs = {
             "config": self.config,
