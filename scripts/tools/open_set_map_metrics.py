@@ -90,19 +90,19 @@ def known_sets(args: argparse.Namespace, rng: np.random.Generator) -> list[tuple
     sets = []
     for k in args.ks:
         if k == 1:
-            sets += [(c,) for c in CROPS]
+            sets += [(c,) for c in args.crops]
         elif k == 2:
-            pairs = list(itertools.combinations(CROPS, 2))
+            pairs = list(itertools.combinations(args.crops, 2))
             take = rng.choice(
                 len(pairs), min(args.max_pairs, len(pairs)), replace=False
             )
             sets += [pairs[i] for i in sorted(take)]
         else:
             sets += [
-                tuple(int(c) for c in sorted(rng.choice(CROPS, k, replace=False)))
+                tuple(int(c) for c in sorted(rng.choice(args.crops, k, replace=False)))
                 for _ in range(args.draws)
             ]
-            if k == 5:
+            if k == 5 and set(MAIN5) <= set(args.crops):
                 sets.append(MAIN5)
     return list(dict.fromkeys(sets))
 
@@ -164,6 +164,14 @@ def main() -> None:
     )
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
+    parser.add_argument(
+        "--crops",
+        type=lambda v: [int(c) for c in v.split(",")],
+        default=CROPS,
+        help="comma-separated class ids that can be known (default: PASTIS crops 1-18)",
+    )
+    parser.add_argument("--void", type=int, default=VOID)
+    parser.add_argument("--num_classes", type=int, default=19)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
@@ -182,7 +190,7 @@ def main() -> None:
             raise ValueError("--pool_npz is a pixel-level pool")
         box = np.load(args.pool_npz)[f"box_{args.product}"].astype(np.float32)
         pool = box[np.isfinite(box).all(axis=1)]
-    keep = ev["y"] != VOID
+    keep = ev["y"] != args.void
     ev = {k: v[keep] for k, v in ev.items()}
     x_unlab = pool[
         np.random.default_rng(args.seed + 1).choice(
@@ -195,7 +203,7 @@ def main() -> None:
     ca = ca[cap_per_class(fit["y"][ca], args.eval_cap, rng)]
     xtr_all, ytr_all = fit["x"][tr], fit["y"][tr]
     xca, yca = fit["x"][ca], fit["y"][ca]
-    counts = np.bincount(ytr_all, minlength=19)
+    counts = np.bincount(ytr_all, minlength=args.num_classes)
     logger.info(
         f"{args.product}/{args.level}: train {len(tr)}, calib {len(ca)}, "
         f"map rows {len(ev['y'])} (weight {ev['w'].sum():.0f}), pool {len(x_unlab)}"
@@ -212,7 +220,10 @@ def main() -> None:
             if len(ks) == 1 and method in SINGLE_CLASS_SKIP:
                 continue
             base = "unlab_neg" if method == "none" else method
-            neg = {"bg0": [BACKGROUND], "oracle": [c for c in range(19) if c not in ks]}
+            neg = {
+                "bg0": [BACKGROUND],
+                "oracle": [c for c in range(args.num_classes) if c not in ks],
+            }
             ctx = Context(
                 xtr=xtr_all[trk],
                 ytr=ytr_all[trk],
