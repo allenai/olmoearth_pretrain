@@ -1490,6 +1490,34 @@ def _pastis_ps1_task(
 # pastis_rslearn pretraining-mirror export, distinguishing their metrics from
 # earlier pastis_ws16_ps1_* runs on the benchmark-shipped imagery. One task
 # set per window size in EMBEDDING_EVAL_WINDOW_SIZES, ws16 first.
+def _planteur_ps1_task(
+    name: str, input_modalities: list[str], window_size: int = 16
+) -> DownstreamTaskConfig:
+    """PLANTEUR under the per-pixel embedding-product convention.
+
+    French overseas territories, 8 classes; from allenai/olmoearth_pretrain#635.
+    """
+    scale = _embedding_eval_batch_scale(window_size)
+    return DownstreamTaskConfig(
+        dataset=name,
+        embedding_batch_size=64 * scale,
+        probe_batch_size=8 * scale,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=input_modalities,
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=window_size,
+        patch_size=1,
+        tile_samples=True,
+        quantize_embeddings=True,
+    )
+
+
 EMBEDDING_EVAL_TASKS = {}
 for _ws in EMBEDDING_EVAL_WINDOW_SIZES:
     EMBEDDING_EVAL_TASKS.update(
@@ -1944,3 +1972,8 @@ if __name__ == "__main__":
         trainer_config_builder=build_trainer_config,
         train_module_config_builder=build_train_module_config,
     )
+
+# PLANTEUR, S1+S2 (the modalities the dataset carries), for open-set embedding dumps.
+EMBEDDING_EVAL_TASKS["planteur_ws16_ps1_sentinel1_sentinel2"] = _planteur_ps1_task(
+    "planteur", [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+)
