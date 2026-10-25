@@ -22,6 +22,7 @@ reports on test.
 """
 
 import argparse
+import itertools
 import logging
 import sys
 import time
@@ -59,9 +60,17 @@ METHODS = [
 ]
 
 
-def known_sets(classes: list[int], draws: int, rng: np.random.Generator) -> list[tuple]:
-    """(regime, known classes) pairs: K=1, leave-one-out, random halves."""
+def known_sets(
+    classes: list[int], draws: int, rng: np.random.Generator, max_pairs: int = 30
+) -> list[tuple]:
+    """(regime, known classes) pairs: K=1, K=2 (up to max_pairs), leave-one-out, halves."""
     sets = [("K1", (c,)) for c in classes]
+    pairs = list(itertools.combinations(classes, 2))
+    if len(pairs) > max_pairs:
+        pairs = [
+            pairs[i] for i in sorted(rng.choice(len(pairs), max_pairs, replace=False))
+        ]
+    sets += [("K2", tuple(p)) for p in pairs]
     if len(classes) >= 3:
         sets += [("loo", tuple(x for x in classes if x != c)) for c in classes]
     if len(classes) >= 4:
@@ -200,6 +209,14 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
             for c in classes:
                 if c not in ks and (yt == c).any():
                     row[f"rej_{c}"] = float((st[yt == c] < thr).mean())
+                    # which known class the accepted points of unknown class c went to
+                    took = pred[(yt == c) & (st >= thr)]
+                    if len(took):
+                        vals, cnt = np.unique(took, return_counts=True)
+                        row[f"absorbed_{c}"] = ";".join(
+                            f"{int(v)}:{n / (yt == c).sum():.3f}"
+                            for v, n in sorted(zip(vals, cnt), key=lambda t: -t[1])
+                        )
             rows.append(row)
     return rows
 
