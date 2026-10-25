@@ -45,8 +45,19 @@ logger = logging.getLogger(__name__)
 
 def read_label(window: Window, layer: str, band: str) -> np.ndarray:
     """The (H, W) label raster of a window."""
-    path = Path(str(window.get_layer_dir(layer))) / band / "geotiff.tif"
-    with rasterio.open(path) as src:
+    # the band directory may hold several bands (e.g. "class_id" alongside others)
+    # and need not be named after the band, so search the layer directory
+    tifs = sorted(Path(str(window.get_layer_dir(layer))).glob("*/*.tif"))
+    if not tifs:
+        raise FileNotFoundError(f"no geotiff under {window.get_layer_dir(layer)}")
+    for tif in tifs:
+        names = tif.parent.name.split("_")
+        with rasterio.open(tif) as src:
+            if band in names:
+                return src.read(names.index(band) + 1)
+            if src.descriptions and band in src.descriptions:
+                return src.read(src.descriptions.index(band) + 1)
+    with rasterio.open(tifs[0]) as src:
         return src.read(1)
 
 
