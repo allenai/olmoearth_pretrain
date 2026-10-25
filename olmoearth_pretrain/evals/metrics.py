@@ -66,6 +66,10 @@ def metric_higher_is_better(metric: EvalMetric) -> bool:
 # Label value used to mark invalid/ignored pixels in segmentation targets.
 # Pixels with this label are excluded from loss and metric calculations.
 SEGMENTATION_IGNORE_LABEL = -1
+# Per-pixel AUROC/PR-AUC use sklearn over every pixel, which takes hours on high-res
+# sets (e.g. FLAIR2 test: ~800M pixels) and pushes evals past Beaker's preemption window.
+# Above this many pixels they are estimated on a fixed-seed uniform pixel sample instead.
+SEGMENTATION_SCORE_MAX_PIXELS = 4_000_000
 
 
 @dataclass
@@ -369,12 +373,26 @@ def segmentation_metrics(
     """
     confusion = _build_confusion_matrix(predictions, labels, num_classes, ignore_label)
 
-    # Flatten to (M, C) / (M,) over valid pixels, then macro OVR AUROC / PR-AUC.
-    scores_np = scores.detach().cpu().float().numpy()
-    scores_np = scores_np.transpose(0, 2, 3, 1).reshape(-1, num_classes)
-    labels_np = labels.detach().cpu().numpy().reshape(-1)
+    # Flatten to (M, C) / (M,) over valid pixels (a fixed-seed sample of pixels when
+    # there are more than SEGMENTATION_SCORE_MAX_PIXELS), then macro OVR AUROC / PR-AUC.
+    labels_flat = labels.detach().cpu().reshape(-1)
+    scores_cpu = scores.detach().cpu().float()
+    if labels_flat.numel() > SEGMENTATION_SCORE_MAX_PIXELS:
+        gen = torch.Generator().manual_seed(0)
+        idx = torch.randint(
+            labels_flat.numel(), (SEGMENTATION_SCORE_MAX_PIXELS,), generator=gen
+        )
+        n, c, h, w = scores_cpu.shape
+        sampled_scores = scores_cpu.reshape(n, c, h * w)[
+            idx // (h * w), :, idx % (h * w)
+        ]
+        sampled_labels = labels_flat[idx]
+    else:
+        sampled_scores = scores_cpu.permute(0, 2, 3, 1).reshape(-1, num_classes)
+        sampled_labels = labels_flat
+    labels_np = sampled_labels.numpy()
     valid_mask = labels_np != ignore_label
-    valid_scores = scores_np[valid_mask]
+    valid_scores = sampled_scores.numpy()[valid_mask]
     one_hot = _indices_to_one_hot(labels_np[valid_mask], num_classes)
     auroc = _macro_binary_score(valid_scores, one_hot, roc_auc_score)
     prauc = _macro_binary_score(valid_scores, one_hot, average_precision_score)

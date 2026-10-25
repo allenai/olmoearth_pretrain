@@ -192,6 +192,32 @@ class TestBuildConfusionMatrix:
 class TestSegmentationMetrics:
     """Tests for segmentation_metrics function."""
 
+    def test_auroc_sampled_above_pixel_cap(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Above the pixel cap, AUROC/PR-AUC come from a pixel sample close to the exact value."""
+        import olmoearth_pretrain.evals.metrics as metrics_module
+
+        gen = torch.Generator().manual_seed(1)
+        labels = torch.randint(0, 3, (4, 64, 64), generator=gen)
+        labels[:, :8] = metrics_module.SEGMENTATION_IGNORE_LABEL
+        logits = torch.randn(4, 3, 64, 64, generator=gen)
+        logits += 1.5 * torch.nn.functional.one_hot(labels.clamp(min=0), 3).permute(
+            0, 3, 1, 2
+        )
+        scores = torch.softmax(logits, dim=1)
+        preds = scores.argmax(dim=1)
+        exact = segmentation_metrics(preds, labels, num_classes=3, scores=scores)
+        monkeypatch.setattr(metrics_module, "SEGMENTATION_SCORE_MAX_PIXELS", 5000)
+        sampled = segmentation_metrics(preds, labels, num_classes=3, scores=scores)
+        assert sampled.metrics["miou"] == exact.metrics["miou"]
+        assert sampled.metrics["auroc"] == pytest.approx(
+            exact.metrics["auroc"], abs=0.02
+        )
+        assert sampled.metrics["prauc"] == pytest.approx(
+            exact.metrics["prauc"], abs=0.03
+        )
+
     def test_perfect_prediction(self) -> None:
         """Perfect predictions should give all metrics = 1.0."""
         preds = torch.tensor([[[0, 1], [0, 1]]], dtype=torch.long)
