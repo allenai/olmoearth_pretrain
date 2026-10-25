@@ -66,6 +66,10 @@ SN2_RAW = {
     "nir2": 800,
 }
 SN2_PAN = 999
+RGB_RAW = {"red": 12, "green": 24, "blue": 36}  # isaid, loveda
+CHES_RAW = {"red": 13, "green": 26, "blue": 39, "nir": 52}
+# Slugs whose imagery has no IR, so naip_10 IR stays zero (re-zeroed).
+NO_IR_SLUGS = ("spacenet7", "isaid", "loveda")
 
 
 def _fake_raw(slug: str, h: int = H) -> dict[str, torch.Tensor]:
@@ -85,6 +89,11 @@ def _fake_raw(slug: str, h: int = H) -> dict[str, torch.Tensor]:
             "image_pan": _const_bands([SN2_PAN], h, torch.int32),
             "mask": torch.zeros(h, h, dtype=torch.long),
         }
+    if slug in ("isaid", "loveda", "chesapeake"):
+        raw = CHES_RAW if slug == "chesapeake" else RGB_RAW
+        assert list(band_order) == list(raw)
+        image = _const_bands(list(raw.values()), h, torch.uint8)
+        return {"image": image, "mask": torch.zeros(h, h, dtype=torch.long)}
     raise ValueError(slug)
 
 
@@ -172,7 +181,9 @@ def test_dataset_stats_are_keyed_to_new_layout() -> None:
     assert stats["flair2"]["sentinel2_l2a"]["B05"] == zero  # was elevation
     assert stats["spacenet7"]["sentinel2_l2a"]["B08"] == zero  # was alpha
     assert stats["spacenet2"]["sentinel2_l2a"]["B11"] == zero  # was nir2
-    for slug in GB2_NAIP10_SLUGS:
+    # The extra chip sets (isaid/loveda/chesapeake) have no dataset stats; their
+    # tasks normalize with the pretraining stats.
+    for slug in ("flair2", "spacenet2", "spacenet7"):
         s2 = stats[slug]["sentinel2_l2a"]
         assert set(s2) == set(S2)
         assert set(stats[slug]["naip_10"]) == set(NAIP)
@@ -189,6 +200,9 @@ def test_dataset_stats_are_keyed_to_new_layout() -> None:
         ("flair2", [10, 20, 30, 40]),
         ("spacenet7", [11, 22, 33, 0]),  # IR left empty (alpha)
         ("spacenet2", [v * 255 / 2047 for v in (500, 300, 200, 700)]),
+        ("isaid", [12, 24, 36, 0]),
+        ("loveda", [12, 24, 36, 0]),
+        ("chesapeake", [13, 26, 39, 52]),
     ],
 )
 def test_naip10_mapping(slug: str, expected: list[float]) -> None:
@@ -203,6 +217,40 @@ def test_naip10_mapping(slug: str, expected: list[float]) -> None:
     vals = _channel_values(olmo.naip_10, NAIP)
     for name, exp in zip(NAIP, expected):
         assert vals[name] == pytest.approx(exp, rel=1e-5), name
+
+
+@pytest.mark.parametrize("slug", ["isaid", "loveda", "chesapeake"])
+def test_extra_highres_s2_mapping(slug: str) -> None:
+    """Extra high-res chips: uint8 RGB(N) -> S2 B04/B03/B02(/B08) in DN scale."""
+    olmo = gb2._sample_to_olmoearth(
+        _fake_raw(slug), SLUG_TO_DATASET[slug].band_order, slug
+    )
+    assert olmo.sentinel2_l2a is not None
+    vals = _channel_values(olmo.sentinel2_l2a, S2)
+    raw = CHES_RAW if slug == "chesapeake" else RGB_RAW
+    k = 10000.0 / 255.0
+    names = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+    for band, v in raw.items():
+        assert vals[names[band]] == pytest.approx(v * k, rel=1e-5)
+    for band in set(S2) - {names[b] for b in raw}:
+        assert vals[band] == 0.0, band
+
+
+def test_chip_seg_loader_reads_npy(tmp_path: Any) -> None:
+    """_ChipSegDataset memory-maps <split>_image/_mask.npy and maps val -> valid."""
+    loader_cls = SLUG_TO_DATASET["chesapeake"]
+    image = np.arange(2 * 4 * 8 * 8, dtype=np.uint8).reshape(2, 4, 8, 8)
+    mask = np.full((2, 8, 8), -1, dtype=np.int16)
+    mask[1, :4] = 5
+    np.save(tmp_path / "valid_image.npy", image)
+    np.save(tmp_path / "valid_mask.npy", mask)
+    ds = loader_cls(root=str(tmp_path), split="val")
+    assert len(ds) == 2
+    sample = ds[1]
+    assert sample["image"].dtype == torch.float32
+    np.testing.assert_array_equal(sample["image"].numpy(), image[1])
+    assert sample["mask"].dtype == torch.int64
+    assert (sample["mask"][:4] == 5).all() and (sample["mask"][4:] == -1).all()
 
 
 def test_naip10_unsupported_slug_raises() -> None:
@@ -319,10 +367,10 @@ def test_dataset_naip10_native(slug: str, pretrained: bool, fake_loaders: Any) -
         expected = Normalizer(Strategy.COMPUTED).normalize(
             Modality.NAIP_10, raw.naip_10.numpy()
         )
-        if slug == "spacenet7":
+        if slug in NO_IR_SLUGS:
             expected[..., 3] = 0.0  # empty IR is re-zeroed
         np.testing.assert_allclose(masked.naip_10.numpy(), expected, rtol=1e-5)
-    if slug == "spacenet7":
+    if slug in NO_IR_SLUGS:
         assert (masked.naip_10[..., 3] == 0).all()
     else:
         assert (masked.naip_10 != 0).all()
