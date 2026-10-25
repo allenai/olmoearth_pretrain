@@ -88,23 +88,34 @@ class ZarrReader:
         import zarr
 
         self.root = zarr.open_group(url, mode="r")
-        self._zones: dict[str, tuple[Any, list[int], float, float]] = {}
+        self._zones: dict[int, tuple[Any, list[int], float, float]] = {}
         self._lock = threading.Lock()
 
     def _zone(self, epsg: int) -> tuple[Any, list[int], float, float]:
-        """(embeddings array, years, x origin, y origin) for a UTM EPSG code."""
-        if not (32601 <= epsg <= 32660):
-            raise ValueError(f"EPSG:{epsg} is not a northern UTM zone")
-        name = f"utm{epsg - 32600:02d}"
+        """(embeddings array, years, x origin, y origin) for a UTM EPSG code.
+
+        Every zone is stored once, in its northern CRS (EPSG:326NN); southern
+        locations have negative northings there (store README). A southern
+        window (EPSG:327NN, 10,000 km false northing) maps to the same group
+        with its northings shifted down by 10,000 km, which is folded into the
+        returned y origin so callers' pixel arithmetic is unchanged.
+        """
+        if 32601 <= epsg <= 32660:
+            zone, shift = epsg - 32600, 0.0
+        elif 32701 <= epsg <= 32760:
+            zone, shift = epsg - 32700, 10_000_000.0
+        else:
+            raise ValueError(f"EPSG:{epsg} is not a UTM zone")
+        name = f"utm{zone:02d}"
         with self._lock:
-            if name not in self._zones:
+            if epsg not in self._zones:
                 group = self.root[name]
                 a, b, x0, d, e, y0 = group.attrs["spatial:transform"]
                 if (a, b, d, e) != (RESOLUTION, 0, 0, -RESOLUTION):
                     raise ValueError(f"{name}: unexpected transform {(a, b, d, e)}")
                 years = [int(y) for y in group["time"][:]]
-                self._zones[name] = (group["embeddings"], years, x0, y0)
-        return self._zones[name]
+                self._zones[epsg] = (group["embeddings"], years, x0, y0 + shift)
+        return self._zones[epsg]
 
     def read(self, window: Window, year: int) -> np.ndarray:
         """The (128, H, W) int8 slab covering a window's bounds."""
