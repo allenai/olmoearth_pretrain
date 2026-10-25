@@ -12,6 +12,13 @@ OlmoEarthDataLoader's max_t_for/min_t_for), so S2/S1/Landsat see the same shapes
 in no_nisar and NISAR tokens come on top. MISSING tokens (NISAR covers ~3-4 of 12
 months, half the samples) are removed before the encoder, so the extra compute is
 only the NISAR months actually present.
+
+Memory: the patch-discrimination loss builds a (batch, T, T) score matrix over each
+sample's decoder tokens, so 5/3 more tokens per sample is ~2.8x more memory there. At
+rank_microbatch_size 64 (no accumulation: 512 / 8 GPUs) the first launch OOMed at
+step ~9 (72 GiB allocated). This arm uses rank microbatch 32 (2 microbatches per step).
+The global batch is unchanged and the loss is per sample and divided by the number of
+microbatches (pred2unit off), so the optimization is the same.
 """
 
 import logging
@@ -31,12 +38,15 @@ from nisar_common import build_trainer_config as _build_trainer_config  # noqa: 
 from with_nisar import (  # noqa: E402
     WITH_NISAR,
     build_model_config,
-    build_train_module_config,
     build_visualize_config,
 )
+from with_nisar import build_train_module_config as _build_train_module_config  # noqa: E402
 
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
+from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
+    LatentMIMTrainModuleConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +58,7 @@ assert (TOKEN_BUDGET * NISAR_BANDSETS) % CONTROL_BANDSETS == 0
 assert (MIN_TOKENS_PER_INSTANCE * NISAR_BANDSETS) % CONTROL_BANDSETS == 0
 SCALED_TOKEN_BUDGET = TOKEN_BUDGET * NISAR_BANDSETS // CONTROL_BANDSETS  # 5120
 SCALED_MIN_TOKENS = MIN_TOKENS_PER_INSTANCE * NISAR_BANDSETS // CONTROL_BANDSETS  # 380
+RANK_MICROBATCH_SIZE = 32
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
@@ -55,6 +66,13 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config = _build_dataloader_config(common)
     config.token_budget = SCALED_TOKEN_BUDGET
     config.min_tokens_per_instance = SCALED_MIN_TOKENS
+    return config
+
+
+def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:
+    """with_nisar's train module with rank microbatch 32 (see module docstring)."""
+    config = _build_train_module_config(common)
+    config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     return config
 
 
