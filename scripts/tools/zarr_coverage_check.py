@@ -66,7 +66,7 @@ def main() -> None:
             (w.projection.x_resolution, w.projection.y_resolution) for w in pick
         )
         years = Counter(get_target_year(w) for w in pick)
-        ok = bad = err = 0
+        ok = bad = err = ok23 = 0
         errors: Counter = Counter()
         zone_years = {}
         for w in pick:
@@ -85,11 +85,15 @@ def main() -> None:
                     bad += 1
                 else:
                     ok += 1
+                # 2023-2025 are global; 2017-2022 cover selected countries only
+                if not (np.asarray(emb[yrs.index(2023), :, r, c]) == ZARR_NODATA).all():
+                    ok23 += 1
             except Exception as e:  # report, keep going
                 err += 1
                 errors[f"{type(e).__name__}: {str(e)[:80]}"] += 1
         logger.info(
             f"{name}: {len(windows)} windows; sampled {len(pick)}: valid {ok}, nodata {bad}, "
+            f"valid in 2023 {ok23}, "
             f"error {err}; CRS {dict(crs)}; res {dict(res)}; years {dict(years)}; "
             f"store years by zone {zone_years}; errors {dict(errors)}"
         )
