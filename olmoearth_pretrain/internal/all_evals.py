@@ -1943,6 +1943,11 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return trainer_config
 
 
+# PLANTEUR, S1+S2 (the modalities the dataset carries), for open-set embedding dumps.
+EMBEDDING_EVAL_TASKS["planteur_ws16_ps1_sentinel1_sentinel2"] = _planteur_ps1_task(
+    "planteur", [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
+)
+
 if __name__ == "__main__":
     module_path = os.environ.get("TRAIN_SCRIPT_PATH")
     if module_path is None:
@@ -1972,8 +1977,3 @@ if __name__ == "__main__":
         trainer_config_builder=build_trainer_config,
         train_module_config_builder=build_train_module_config,
     )
-
-# PLANTEUR, S1+S2 (the modalities the dataset carries), for open-set embedding dumps.
-EMBEDDING_EVAL_TASKS["planteur_ws16_ps1_sentinel1_sentinel2"] = _planteur_ps1_task(
-    "planteur", [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name]
-)
