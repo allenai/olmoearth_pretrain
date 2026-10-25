@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 MODULE_PATH = "scripts/official/v1_3/nisar/with_nisar.py"
 WITH_NISAR = True
+# checkpoint_sweep_evals.py (in-loop evals) looks up a module-level
+# build_common_components; without it the eval model falls back to the default
+# multi-bandset tokenization and checkpoint loading fails.
+build_common_components = build_common_components_fn(WITH_NISAR)
 
 
 def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:

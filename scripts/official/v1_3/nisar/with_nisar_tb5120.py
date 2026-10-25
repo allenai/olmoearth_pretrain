@@ -59,6 +59,10 @@ assert (MIN_TOKENS_PER_INSTANCE * NISAR_BANDSETS) % CONTROL_BANDSETS == 0
 SCALED_TOKEN_BUDGET = TOKEN_BUDGET * NISAR_BANDSETS // CONTROL_BANDSETS  # 5120
 SCALED_MIN_TOKENS = MIN_TOKENS_PER_INSTANCE * NISAR_BANDSETS // CONTROL_BANDSETS  # 380
 RANK_MICROBATCH_SIZE = 32
+# checkpoint_sweep_evals.py (in-loop evals) looks up a module-level
+# build_common_components; without it the eval model falls back to the default
+# multi-bandset tokenization and checkpoint loading fails.
+build_common_components = build_common_components_fn(WITH_NISAR)
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
