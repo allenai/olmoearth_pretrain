@@ -82,6 +82,7 @@ import argparse
 import dataclasses
 import itertools
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -272,7 +273,14 @@ def pu_decision(predict_proba, classes: np.ndarray, ctx: Context, mode: str) -> 
 
 
 def fixed_threshold(method: str) -> float | None:
-    """0 for methods whose score already encodes the decision, else None (calibrate)."""
+    """Threshold for methods whose score already encodes the decision, else None.
+
+    ``_argmax`` / ``_en`` / ``_enc`` decide at 0 (corrected score 0.5);
+    ``..._enc_t{NN}`` raises the corrected-score cut-off to NN/100.
+    """
+    m = re.search(r"_enc_t(\d+)$", method)
+    if m:
+        return int(m.group(1)) / 100 - 0.5
     return 0.0 if method.endswith(("_argmax", "_en", "_enc")) else None
 
 
