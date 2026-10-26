@@ -15,8 +15,10 @@ from olmoearth_pretrain.data.constants import (
     Modality,
 )
 from olmoearth_pretrain.data.dataset import (
+    SDB_FILL_DEPTH,
     OlmoEarthDataset,
     OlmoEarthSample,
+    compute_sdb,
     get_valid_start_ts,
     subset_sample_default,
 )
@@ -435,3 +437,75 @@ def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
             h5py_dir=str(tmp_path),
             training_modalities=[Modality.SENTINEL2_L2A.name],
         )
+
+
+class TestComputeSDB:
+    """Tests for the satellite-derived bathymetry target."""
+
+    @staticmethod
+    def _clear_water(h: int, w: int, t: int, b2: float, b3: float) -> np.ndarray:
+        """S2 L2A series that passes every clean-water mask."""
+        s2 = np.zeros((h, w, t, Modality.SENTINEL2_L2A.num_bands), dtype=np.float32)
+        s2[..., 0] = b2  # B02
+        s2[..., 1] = b3  # B03
+        s2[..., 3] = 100  # B08
+        s2[..., 4] = 200  # B05
+        s2[..., 11] = 150  # B09
+        return s2
+
+    @staticmethod
+    def _reference_depth(b2: float, b3: float) -> float:
+        """Depth from the published Earth Engine script, before its clipping."""
+        chla = 0.5
+        m0 = 52.073 * np.exp(0.957 * chla)
+        m1 = 50.156 * np.exp(0.957 * chla)
+        rrs = [v / 31415.926 for v in (b2, b3)]
+        ln = [np.log(1000 * r / (0.52 + 1.7 * r)) for r in rrs]
+        return m0 * ln[0] / ln[1] - m1
+
+    def test_matches_reference_formula(self) -> None:
+        """Clear water gives the published formula's depth."""
+        depth, valid_fraction = compute_sdb(self._clear_water(4, 4, 3, 600, 500))
+        assert depth.shape == (4, 4, 1, 1)
+        assert valid_fraction == 1.0
+        expected = self._reference_depth(600, 500)
+        assert 0 < expected < 20
+        np.testing.assert_allclose(depth[..., 0, 0], expected, rtol=1e-5)
+
+    def test_composite_is_median_of_clean_timesteps(self) -> None:
+        """Cloudy and missing timesteps are excluded from the composite."""
+        s2 = self._clear_water(2, 2, 4, 600, 500)
+        s2[:, :, 0] = MISSING_VALUE
+        s2[:, :, 1, 11] = 2000  # B09 haze/cloud
+        s2[:, :, 1, 0] = 5000
+        depth, _ = compute_sdb(s2)
+        np.testing.assert_allclose(
+            depth[..., 0, 0], self._reference_depth(600, 500), rtol=1e-5
+        )
+
+    def test_land_is_filled(self) -> None:
+        """Pixels that never pass the water masks get the fill depth."""
+        s2 = self._clear_water(2, 2, 2, 600, 500)
+        s2[0, 0, :, 3] = 3000  # bright NIR: land
+        depth, valid_fraction = compute_sdb(s2)
+        assert depth[0, 0, 0, 0] == SDB_FILL_DEPTH
+        assert depth[1, 1, 0, 0] != SDB_FILL_DEPTH
+        assert valid_fraction == 0.75
+
+    def test_out_of_range_depth_is_filled(self) -> None:
+        """Negative (turbid) depths are invalid rather than clipped to 0."""
+        b2, b3 = 400, 900
+        assert self._reference_depth(b2, b3) < 0
+        depth, valid_fraction = compute_sdb(self._clear_water(2, 2, 2, b2, b3))
+        assert np.all(depth == SDB_FILL_DEPTH)
+        assert valid_fraction == 0.0
+
+    def test_deep_water_is_filled(self) -> None:
+        """Pixels flagged as optically deep water get the fill depth."""
+        deep = np.zeros((2, 2), dtype=bool)
+        deep[0, 1] = True
+        depth, valid_fraction = compute_sdb(
+            self._clear_water(2, 2, 2, 600, 500), deep_water=deep
+        )
+        assert depth[0, 1, 0, 0] == SDB_FILL_DEPTH
+        assert valid_fraction == 0.75

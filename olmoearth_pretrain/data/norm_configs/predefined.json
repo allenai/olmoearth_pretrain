@@ -553,6 +553,12 @@
       "min": 0
     }
   },
+  "sdb": {
+    "depth": {
+      "max": 20,
+      "min": -5
+    }
+  },
   "sentinel1": {
     "vh": {
       "max": 0,
