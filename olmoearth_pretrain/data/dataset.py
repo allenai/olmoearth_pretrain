@@ -626,6 +626,8 @@ class OlmoEarthDataset(Dataset):
         composite_selection: str = "median",
         budget_before_read: bool = False,
         max_s2_cloud_fraction: float | None = None,
+        landsat_cloud_cover_path: str | None = None,
+        max_landsat_cloud_cover: float | None = None,
     ):
         """Initialize the dataset.
 
@@ -672,6 +674,13 @@ class OlmoEarthDataset(Dataset):
                 S2 captures whose crop is more than this fraction cloudy (SCL, needs
                 ``load_s2_cloud_mask``) before the budget run is chosen. Composites
                 already pick a clear capture per bin. None = keep every capture.
+            landsat_cloud_cover_path: Sidecar h5 of scene-level Landsat cloud cover
+                per capture (``build_landsat_cloud_sidecar.py``: ``offsets`` [N + 1],
+                ``cloud_cover`` percent, NaN = unknown), aligned with each sample's
+                ``timestamps_landsat_l2``.
+            max_landsat_cloud_cover: With the sidecar, drop Landsat captures whose
+                scene is more than this percent cloudy, in every mode, before the
+                budget run (unknown cloud cover is kept). None = keep every capture.
 
         Returns:
             None
@@ -725,6 +734,14 @@ class OlmoEarthDataset(Dataset):
         if max_s2_cloud_fraction is not None and not load_s2_cloud_mask:
             raise ValueError("max_s2_cloud_fraction needs load_s2_cloud_mask")
         self.max_s2_cloud_fraction = max_s2_cloud_fraction
+        if (max_landsat_cloud_cover is None) != (landsat_cloud_cover_path is None):
+            raise ValueError(
+                "max_landsat_cloud_cover and landsat_cloud_cover_path go together"
+            )
+        self.landsat_cloud_cover_path = landsat_cloud_cover_path
+        self.max_landsat_cloud_cover = max_landsat_cloud_cover
+        # (offsets, cloud cover) loaded on first use, per worker.
+        self._landsat_cloud: tuple[np.ndarray, np.ndarray] | None = None
 
     @property
     def fingerprint_version(self) -> str:
@@ -1466,6 +1483,16 @@ class OlmoEarthDataset(Dataset):
                 kept[s2_name] = self._clear_s2(
                     h5file, crop, timestamps[s2_name], kept[s2_name]
                 )
+            landsat_name = Modality.LANDSAT_L2.name
+            if (
+                self.max_landsat_cloud_cover is not None
+                and len(kept.get(landsat_name, ())) > 0
+            ):
+                cover = self._landsat_cloud_cover(index)
+                if len(cover) == len(timestamps[landsat_name]):
+                    captures = kept[landsat_name]
+                    keep = ~(cover[captures] > self.max_landsat_cloud_cover)
+                    kept[landsat_name] = captures[keep]
             origin = None
             if _is_composite(args) and self.budget_before_read:
                 origin, kept = self._budget_bins(args, present, ordinals, kept, rng)
@@ -1529,6 +1556,23 @@ class OlmoEarthDataset(Dataset):
             "scl_timestamps": scl_timestamps,
             "origin": origin,
         }
+
+    def _landsat_cloud_cover(self, index: int) -> np.ndarray:
+        """Scene cloud cover (percent, NaN = unknown) of sample ``index``'s captures."""
+        if self._landsat_cloud is None:
+            assert self.landsat_cloud_cover_path is not None
+            with (
+                UPath(self.landsat_cloud_cover_path).open("rb") as f,
+                h5py.File(f, "r") as h5,
+            ):
+                self._landsat_cloud = (
+                    h5["offsets"][()],
+                    h5["cloud_cover"][()].astype(np.float32),
+                )
+        offsets, cover = self._landsat_cloud
+        if index + 1 >= len(offsets):
+            return np.zeros(0, np.float32)
+        return cover[offsets[index] : offsets[index + 1]]
 
     def _clear_s2(
         self,
@@ -1839,6 +1883,8 @@ class OlmoEarthDatasetConfig(Config):
     composite_selection: str = "median"
     budget_before_read: bool = False
     max_s2_cloud_fraction: float | None = None
+    landsat_cloud_cover_path: str | None = None
+    max_landsat_cloud_cover: float | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

@@ -1215,3 +1215,50 @@ def test_cloudy_s2_captures_are_dropped(
         kept_before += _field(before, "sentinel2_l2a").shape[2]
         kept_after += cloud.shape[2]
     assert kept_after < kept_before  # the fixture has cloudy captures to drop
+
+
+@pytest.mark.parametrize("composite_days", [None, 30.0, THIN_CAPTURES])
+def test_cloudy_landsat_scenes_are_dropped(
+    allcap_h5py_dir: UPath, tmp_path: Path, composite_days: float | None
+) -> None:
+    """max_landsat_cloud_cover: only captures of scenes under it are kept."""
+    import h5py
+
+    offsets, cover, clear_days = [0], [], {}
+    for idx in (0, 1):
+        with h5py.File(allcap_h5py_dir / f"sample_{idx}.h5", "r") as f:
+            key = "timestamps_landsat_l2"
+            ts = f[key][()] if key in f else np.zeros((0, 3), dtype=np.int64)
+        cc = np.where(np.arange(len(ts)) % 2 == 0, 90.0, 10.0)
+        cover.append(cc)
+        offsets.append(offsets[-1] + len(ts))
+        clear_days[idx] = {tuple(t) for t, c in zip(ts.tolist(), cc) if c < 50}
+    sidecar = tmp_path / "landsat_cloud.h5"
+    with h5py.File(sidecar, "w") as f:
+        f["offsets"] = np.array(offsets)
+        f["cloud_cover"] = np.concatenate(cover).astype(np.float16)
+    dataset = _dataset(
+        allcap_h5py_dir,
+        landsat_cloud_cover_path=str(sidecar),
+        max_landsat_cloud_cover=50.0,
+        composite_selection="random_clear",  # composites dated by their capture
+    )
+    seen = 0
+    for seed in range(6):
+        idx = seed % 2
+        _, sample = dataset[
+            GetItemArgs(
+                idx=idx,
+                patch_size=2,
+                sampled_hw_p=4,
+                composite_days=composite_days,
+                seed=seed,
+            )
+        ]
+        steps = _field(sample, "landsat_l2_time_index")
+        steps = steps[steps >= 0]
+        kept = {tuple(t) for t in _field(sample, "timestamps")[steps].tolist()}
+        # Composites pick one of the bin's kept captures and keep its date.
+        assert kept <= clear_days[idx], kept - clear_days[idx]
+        seen += len(kept)
+    assert seen > 0
