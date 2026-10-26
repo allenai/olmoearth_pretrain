@@ -19,6 +19,7 @@ from olmo_core.train import (
     teardown_training_environment,
 )
 from olmo_core.train.callbacks import ConfigSaverCallback, WandBCallback
+from olmo_core.train.trainer import Trainer
 from olmo_core.utils import get_default_device, prepare_cli_environment, seed_all
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
@@ -37,9 +38,6 @@ from olmoearth_pretrain.internal.utils import (
     MockOlmoEarthDataLoader,
 )
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
-from olmoearth_pretrain.train.olmo_core_patches import (
-    drop_async_checkpoint_duration_metric,
-)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
@@ -309,11 +307,28 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
     config.launch.launch(follow=False, torchrun=False)
 
 
+def _drop_async_checkpoint_duration_metric() -> None:
+    """Patch olmo_core's Trainer to drop the checkpoint/save_async_duration_s metric.
+
+    olmo_core (through at least 3.0.0) records it from the async-save done-callback, so
+    each rank records it at whatever step it's on when its save finishes. If ranks flush
+    it in different reduce_metrics calls, the gloo bookkeeping all-reduce gets mismatched
+    shapes and hangs, and the next checkpoint save blocks forever.
+
+    This simply drops the metric to avoid the potential hang bug.
+    """
+    original = Trainer.record_metric
+
+    def record_metric(self, name, value, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if name != "checkpoint/save_async_duration_s":
+            original(self, name, value, *args, **kwargs)
+
+    Trainer.record_metric = record_metric  # type: ignore[method-assign]
+
+
 def train(config: OlmoEarthExperimentConfig) -> None:
     """Train an experiment."""
-    # The async-save duration metric is recorded at a rank-dependent step and can hang the
-    # gloo bookkeeping all-reduce; see olmo_core_patches.
-    drop_async_checkpoint_duration_metric()
+    _drop_async_checkpoint_duration_metric()
 
     # Set RNG states on all devices. Also, done in prepare_training_environment
     seed_all(config.init_seed)
