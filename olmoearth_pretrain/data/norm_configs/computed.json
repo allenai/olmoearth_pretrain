@@ -559,6 +559,26 @@
       "var": 178051124770.29294
     }
   },
+  "open_buildings": {
+    "building_fractional_count": {
+      "count": 100,
+      "mean": 0.02,
+      "std": 0.05,
+      "var": 0.0025
+    },
+    "building_height": {
+      "count": 100,
+      "mean": 1.0,
+      "std": 2.0,
+      "var": 4.0
+    },
+    "building_presence": {
+      "count": 100,
+      "mean": 0.1,
+      "std": 0.2,
+      "var": 0.04
+    }
+  },
   "sampled_n": 103896,
   "sentinel1": {
     "vh": {
@@ -658,6 +678,14 @@
   },
   "tile_path": "/weka/dfive-default/helios/dataset/presto/h5py_data",
   "total_n": 103896,
+  "viirs": {
+    "log1p_average_masked": {
+      "count": 100,
+      "mean": 0.5,
+      "std": 1.0,
+      "var": 1.0
+    }
+  },
   "worldcover": {
     "B1": {
       "count": 6730657536,

@@ -1,0 +1,37 @@
+{
+  "layers": {
+    "open_buildings": {
+      "band_sets": [
+        {
+          "bands": [
+            "building_presence",
+            "building_height",
+            "building_fractional_count"
+          ],
+          "dtype": "float32",
+          "nodata_value": -99999
+        }
+      ],
+      "data_source": {
+        "class_path": "olmoearth_pretrain.dataset_creation.gee_data_sources.OpenBuildingsTemporal",
+        "duration": "365d",
+        "ingest": false,
+        "init_args": {
+          "gcs_bucket_name": "rslearn-gee-ingest-bucket",
+          "index_cache_dir": "cache/open_buildings",
+          "service_account_credentials": "/etc/credentials/gee_credentials.json",
+          "service_account_name": "rslearn-gee-account2"
+        },
+        "query_config": {
+          "max_matches": 1
+        },
+        "time_offset": "-182d"
+      },
+      "resampling_method": "nearest",
+      "type": "raster"
+    }
+  },
+  "window_data_storage": {
+    "class_path": "rslearn.dataset.window_data_storage.per_layer.PerLayerStorageFactory"
+  }
+}

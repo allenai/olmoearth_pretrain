@@ -530,6 +530,18 @@ class OlmoEarthDataLoader(DataLoaderBase):
             output_dict[Modality.WRI_CANOPY_HEIGHT_MAP.name] = (
                 mock_wri_canopy_height_map
             )
+        if Modality.VIIRS.name in self.dataset.training_modalities:
+            mock_viirs = rng.random(
+                (standard_hw, standard_hw, 1, Modality.VIIRS.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.VIIRS.name] = mock_viirs
+        if Modality.OPEN_BUILDINGS.name in self.dataset.training_modalities:
+            mock_open_buildings = rng.random(
+                (standard_hw, standard_hw, 1, Modality.OPEN_BUILDINGS.num_bands),
+                dtype=np.float32,
+            )
+            output_dict[Modality.OPEN_BUILDINGS.name] = mock_open_buildings
         if Modality.ERA5_10.name in self.dataset.training_modalities:
             mock_era5_10 = rng.random(
                 (12, Modality.ERA5_10.num_bands), dtype=np.float32

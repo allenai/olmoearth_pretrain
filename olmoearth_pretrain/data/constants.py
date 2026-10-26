@@ -566,6 +566,36 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Annual VIIRS night lights (EOG VNL v2), stored as log1p of the masked average
+    # radiance. Native ~460 m/pixel, nearest-resampled to 10 m/pixel.
+    VIIRS = ModalitySpec(
+        name="viirs",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["log1p_average_masked"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # Google Open Buildings 2.5D Temporal (Global South only), aggregated from ~4 m
+    # to 10 m/pixel: mean presence confidence, mean height including non-building
+    # area, and summed building count.
+    OPEN_BUILDINGS = ModalitySpec(
+        name="open_buildings",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet(
+                [
+                    "building_presence",
+                    "building_height",
+                    "building_fractional_count",
+                ],
+                16,
+            )
+        ],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
     NDVI = ModalitySpec(
         name="ndvi",
         tile_resolution_factor=16,
