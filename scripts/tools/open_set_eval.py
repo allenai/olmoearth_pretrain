@@ -317,6 +317,10 @@ def max_cosine(a: np.ndarray, b: np.ndarray, chunk: int = 4096):
     return best, idx
 
 
+# the similarity filter never removes more than this share of the unlabeled pool
+MAX_FILTER_FRAC = 0.5
+
+
 def unlab_neg_scorer(ctx: Context, method: str) -> Scorer:
     """unlab_neg[_mlp][_filt{NN}|_pl{NN}][_r{N}][_argmax|_en|_enc].
 
@@ -333,6 +337,16 @@ def unlab_neg_scorer(ctx: Context, method: str) -> Scorer:
             cut = int(p.lstrip("filtpl")) / 100
             sim, nearest = max_cosine(pool, xtr)
             near = sim >= cut
+            if near.sum() > MAX_FILTER_FRAC * len(pool):
+                # never let the filter empty the pool: drop at most this share,
+                # the most similar rows first
+                keep_n = int(np.ceil((1 - MAX_FILTER_FRAC) * len(pool)))
+                near = np.ones(len(pool), dtype=bool)
+                near[np.argsort(sim)[:keep_n]] = False
+                logger.warning(
+                    f"{method}: filter at {cut} would drop {int((sim >= cut).sum())} of "
+                    f"{len(pool)} pool rows; dropping only the {near.sum()} most similar"
+                )
             if p.startswith("pl"):
                 xtr = np.concatenate([xtr, pool[near]])
                 ytr = np.concatenate([ytr, ytr[nearest[near]]])
