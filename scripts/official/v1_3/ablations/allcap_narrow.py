@@ -82,15 +82,17 @@ ALLCAP_H5PY_DIR = (
 # Real-token budget per sample = v1.3's (3072). joer's runs use 9000; at microbatch 32
 # that OOMed (the patch embedding, composite encodings and frozen target run over every
 # input token at width 768), and 4500 OOMed on one rank of eight at step 33 (Gabi,
-# 2026-10-16). Time ranges: >= 180 days. joer's menu (7 / 30 / 90 / 180 / 365 / 730 /
-# 1825 days) left the median sample spanning 2 calendar months in every mode (v1.3: 9;
-# measure_time_coverage.py, 2026-10-22). Every tile spans ~360 days.
+# 2026-10-16). Time range: the whole series (every tile spans ~360 days). joer's menu
+# (7 / 30 / 90 / 180 / 365 / 730 / 1825 days) left the median sample spanning 2 calendar
+# months in every mode (v1.3: 9; measure_time_coverage.py, 2026-10-22); 180-day draws
+# still capped half the monthly samples at 6 bins.
 TOKEN_BUDGET = 3072
 # v1.3's training length in steps: 300 epochs of v1.3's corpus. AllCaptures is ~35% the
 # size, so v1.2's Duration.epochs(300) would stop at 231,600 steps; pinning the steps
 # keeps the samples seen (and the cosine schedule) the same as v1.3.
 MAX_STEPS = 667_200
-TIME_RANGE_DAYS = [180.0, 365.0]
+TIME_RANGE_DAYS = [365.0]
+TIME_BLOCK_DAYS = 30.0
 # Mode per rank batch: 0 = every capture, 14 = biweekly, 30 = monthly, THIN_CAPTURES =
 # random captures over the whole year (median 12 months; the others' runs stop when the
 # budget fills).
@@ -221,6 +223,13 @@ def build_train_module_config(common: CommonComponents):
     config = _pixtgt_train_module_config(common)
     config.rank_microbatch_size = RANK_MICROBATCH_SIZE
     config.subpatch_offset_loss_weight = 1.0
+    # Time masking by 30-day blocks: modalities rarely share a capture date, so
+    # single-step time masking left each target next to another modality's visible
+    # capture a few days away (v1.3's monthly steps hide every modality at once).
+    config.masking_config.strategy_config = {
+        **config.masking_config.strategy_config,
+        "time_block_days": TIME_BLOCK_DAYS,
+    }
     return config
 
 

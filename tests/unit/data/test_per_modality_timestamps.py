@@ -1181,7 +1181,5 @@ def test_trunk_budget_counts_tokens_after_the_merge(thin: bool) -> None:
     # 60 steps in 60 months: slots = steps up to the cap, so 16 x steps <= 200.
     spread = kept(np.arange(n))
     assert spread == 12
-    if thin:
-        assert dense == n
-    else:
-        assert dense == n - int(np.random.RandomState(0).randint(n))
+    # Runs that reach the series end extend backward, so both modes take all 60.
+    assert dense == n

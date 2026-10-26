@@ -1378,7 +1378,9 @@ class OlmoEarthDataset(Dataset):
         """The kept run of union steps under the budgets (real tokens).
 
         The run starts at a random step and extends forward while it fits the
-        input and trunk budgets (always at least one step). ``step_months``: each
+        input and trunk budgets (always at least one step); if it reaches the last
+        step with budget left, it extends backward from its start, so a run is only
+        short when the budget (not the series end) stops it. ``step_months``: each
         step's calendar month (for the trunk budget).
         """
         step_tokens, fixed_tokens = OlmoEarthDataset._step_tokens(
@@ -1398,6 +1400,15 @@ class OlmoEarthDataset(Dataset):
                     break
                 last += 1
                 total += step_tokens[last]
+                months = grown
+            while last + 1 == n_steps and first > 0:
+                grown = months | {int(step_months[first - 1])}
+                if not OlmoEarthDataset._fits(
+                    args, total + step_tokens[first - 1], grown
+                ):
+                    break
+                first -= 1
+                total += step_tokens[first]
                 months = grown
         return first, last
 

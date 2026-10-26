@@ -3,6 +3,7 @@
 import logging
 import random
 
+import numpy as np
 import torch
 
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
@@ -1694,3 +1695,42 @@ def test_random_decode_masking_with_missing_modality_mask_in_instance() -> None:
             assert total_encoded_bandsets >= 1, (
                 f"Instance {idx} has no encoded bandsets across all modalities"
             )
+
+
+def test_time_blocks_keep_nearby_dates_on_one_side() -> None:
+    """time_block_days: steps within a block are all encoded or all decoded."""
+    from olmoearth_pretrain.train.masking import RandomTimeWithDecodeMaskingStrategy
+
+    strategy = RandomTimeWithDecodeMaskingStrategy(time_block_days=30.0)
+    # Four clusters of captures 60 days apart, each cluster within two days
+    # (e.g. S2 on the 10th, S1 on the 11th, Landsat on the 12th).
+    dates = []
+    for month in (0, 2, 4, 6):
+        dates += [[10, month, 2020], [11, month, 2020], [12, month, 2020]]
+    timestamps = torch.tensor(dates)
+    steps = torch.arange(len(dates))
+    for seed in range(20):
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        split = strategy._block_split(steps, timestamps)
+        assert split is not None
+        encode, decode = split
+        assert len(encode) and len(decode)
+        assert sorted(torch.cat([encode, decode]).tolist()) == steps.tolist()
+        # No cluster is split across encode / decode (block boundaries fall
+        # between clusters unless the offset lands inside a 2-day cluster).
+        sides = {int(s): 0 for s in encode} | {int(s): 1 for s in decode}
+        split_clusters = sum(
+            len({sides[c * 3 + k] for k in range(3)}) > 1 for c in range(4)
+        )
+        assert split_clusters <= 1
+
+
+def test_time_blocks_fall_back_when_everything_is_one_block() -> None:
+    """All steps inside one block: no block split (single timesteps are used)."""
+    from olmoearth_pretrain.train.masking import RandomTimeWithDecodeMaskingStrategy
+
+    strategy = RandomTimeWithDecodeMaskingStrategy(time_block_days=365.0)
+    timestamps = torch.tensor([[1, 0, 2020], [5, 0, 2020], [9, 0, 2020]])
+    np.random.seed(0)
+    assert strategy._block_split(torch.arange(3), timestamps) is None

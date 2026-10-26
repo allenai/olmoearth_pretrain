@@ -20,6 +20,7 @@ from olmoearth_pretrain.datatypes import (
     time_index_field,
 )
 from olmoearth_pretrain.decorators import experimental
+from olmoearth_pretrain.nn.encodings import timestamps_to_days
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.types import ArrayTensor
 
@@ -1790,6 +1791,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        time_block_days: float | None = None,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1798,11 +1800,17 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        time_block_days: time masking assigns whole blocks of this many days (randomly
+                      offset) to encode or decode instead of single timesteps, so a
+                      target has no visible capture of another modality within its
+                      block. For per-capture samples, where modalities rarely share a
+                      date. None = single timesteps.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
         self.random_ratio = random_ratio
+        self.time_block_days = time_block_days
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
 
@@ -1819,6 +1827,33 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         valid = time_index >= 0
         out = per_slot.new_zeros(num_steps)
         return out.index_add_(0, time_index[valid].long(), per_slot[valid])
+
+    def _block_split(
+        self, steps: torch.Tensor, timestamps: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor] | None:
+        """Split union ``steps`` into encode / decode by whole time blocks.
+
+        Blocks are ``time_block_days`` long from a random offset; shuffled blocks go
+        to encode until it holds ``encode_ratio`` of the steps, and at least one block
+        is left to decode. None when the steps fall in a single block.
+        """
+        assert self.time_block_days is not None
+        days = timestamps_to_days(timestamps[steps]).float()
+        offset = float(np.random.random()) * self.time_block_days
+        block = torch.floor((days - days.min() + offset) / self.time_block_days).long()
+        ids = torch.unique(block)
+        if len(ids) < 2:
+            return None
+        ids = ids[torch.randperm(len(ids), device=ids.device)]
+        target = math.ceil(len(steps) * self.encode_ratio)
+        chosen, count = [], 0
+        for block_id in ids[:-1]:  # the last block is always decoded
+            if count >= target:
+                break
+            chosen.append(block_id)
+            count += int((block == block_id).sum())
+        encode = torch.isin(block, torch.stack(chosen))
+        return steps[encode], steps[~encode]
 
     @staticmethod
     def _union_steps_to_slots(
@@ -1971,12 +2006,23 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 else:
                     use_random_masking = False
                     not_missing_t = torch.argwhere(missing_per_time)[:, 0]
-                    not_missing_t = not_missing_t[
-                        torch.randperm(len(not_missing_t), device=not_missing_t.device)
-                    ]
-                    num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
-                    encode_timestamps = not_missing_t[:num_encode]
-                    decode_timestamps = not_missing_t[num_encode:]
+                    blocks = (
+                        self._block_split(not_missing_t, batch.timestamps[i])
+                        if self.time_block_days is not None
+                        and batch.timestamps is not None
+                        else None
+                    )
+                    if blocks is not None:
+                        encode_timestamps, decode_timestamps = blocks
+                    else:
+                        not_missing_t = not_missing_t[
+                            torch.randperm(
+                                len(not_missing_t), device=not_missing_t.device
+                            )
+                        ]
+                        num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
+                        encode_timestamps = not_missing_t[:num_encode]
+                        decode_timestamps = not_missing_t[num_encode:]
 
             if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
                 # this branch should barely ever trigger
