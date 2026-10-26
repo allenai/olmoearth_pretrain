@@ -179,6 +179,25 @@ rslearn dataset ingest --root $DATASET_PATH --group res_10 --workers 64 --no-use
 rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --no-use-initial-job
 ```
 
+Google Open Buildings 2.5D Temporal (Africa, South/Southeast Asia, Latin America and
+the Caribbean, yearly 2016-2023) is exported from Google Earth Engine in the same way as
+Google Satellite Embedding below. Each window gets the yearly raster closest to its
+start time, aggregated from ~4 m to 10 m/pixel by Earth Engine:
+
+```
+cp data/rslearn_dataset_configs/config_open_buildings.json $DATASET_PATH/config.json
+rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
+rslearn dataset materialize --root $DATASET_PATH --workers 32 --load-workers 128 --group res_10 --no-use-initial-job --ignore-errors
+```
+
+Annual VIIRS night lights (VNL v2) are not materialized with rslearn. Export the global
+annual composites from Google Earth Engine once (one export per band per year, stitched
+into one GeoTIFF each), and the converter below reads them directly:
+
+```
+python -m olmoearth_pretrain.dataset_creation.viirs.export_viirs --out_dir source_data/viirs/ --gcs_bucket rslearn-gee-ingest-bucket
+```
+
 For Google Satellite Embedding v1, use the commands below. It will start Google Earth
 Engine export tasks which should take ~20 seconds each, and can be monitored from the
 GCP console. The prepare step will download a CSV containing the geometry of all of the
@@ -258,7 +277,9 @@ python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.wri_canopy_he
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.era5 --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.gse --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.naip --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.open_buildings --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.sentinel2 --ds_path $GCS_DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
+python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.viirs --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH --viirs_dir source_data/viirs/
 python -m olmoearth_pretrain.dataset_creation.rslearn_to_olmoearth.worldpop --ds_path $DATASET_PATH --olmoearth_path $OLMOEARTH_PATH
 ```
 
@@ -283,7 +304,9 @@ python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality gse
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality worldpop
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality naip
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality open_buildings
 python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality sentinel2 --time_span year
+python -m olmoearth_pretrain.dataset_creation.make_meta_summary --olmoearth_path $OLMOEARTH_PATH --modality viirs
 ```
 
 We use a rasterized version of the OpenStreetMap vector data for pre-training, produced
