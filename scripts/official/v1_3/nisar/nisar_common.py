@@ -32,6 +32,13 @@ from olmoearth_pretrain.internal.experiment import (  # noqa: E402
     CommonComponents,
     SubCmd,
 )
+from olmoearth_pretrain.train.olmo_core_patches import (  # noqa: E402
+    drop_async_checkpoint_duration_metric,
+)
+
+# The async-save duration metric is recorded at a rank-dependent step and hangs the gloo
+# bookkeeping all-reduce (5 hangs/crashes in these runs); see olmo_core_patches.
+drop_async_checkpoint_duration_metric()
 
 OSM_SAMPLING_H5_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
 OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/helios/dataset/osm_recent/filters/osm_sampling_random_time_100k_sample_idx.npy"
