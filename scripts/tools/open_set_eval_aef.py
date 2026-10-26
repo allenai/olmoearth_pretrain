@@ -118,6 +118,11 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
     xv, yv = parts["val"]
     xt, yt = parts["test"]
     x_full = d["train_embeddings"].astype(np.float32)
+    if args.pool_template:
+        # unlabeled pool from a separate file (e.g. aef_zarr_distance_dump.py pools)
+        box = np.load(args.pool_template.format(task=npz.stem))["box_olmoearth"]
+        x_full = box.astype(np.float32)
+        x_full = x_full[np.isfinite(x_full).all(axis=1)]
     x_unlab = x_full[
         np.random.default_rng(args.seed + 1).choice(
             len(x_full), min(args.unlab_size, len(x_full)), replace=False
@@ -185,6 +190,7 @@ def run_task(npz: Path, product: str, args: argparse.Namespace) -> list[dict]:
                 "n_classes": len(classes),
                 "regime": regime,
                 "unlab_size": len(x_unlab),
+                "pool": args.pool_template or "train split",
                 "report_split": args.report_split,
                 "K": len(ks),
                 "known": "-".join(map(str, ks)),
@@ -241,6 +247,11 @@ def main() -> None:
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
     parser.add_argument("--report_split", choices=["val", "test"], default="val")
+    parser.add_argument(
+        "--pool_template",
+        default=None,
+        help="unlabeled pool npz per task, e.g. /x/pools/{task}_d5.npz (box_olmoearth)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
