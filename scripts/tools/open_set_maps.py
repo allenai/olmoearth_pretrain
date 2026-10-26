@@ -124,6 +124,13 @@ def main() -> None:
     parser.add_argument("--unlab_size", type=int, default=20000)
     parser.add_argument("--tpr", type=float, default=0.95)
     parser.add_argument("--c", type=float, default=1.0)
+    parser.add_argument(
+        "--export_method",
+        default=None,
+        help="also save, per tile, this method's best class and corrected score "
+        "(score + 0.5 for the Elkan-Noto methods), the labels and the S2 RGB, "
+        "for an interactive cut-off slider (<out_dir>/export_<scenario>_<tile>.npz)",
+    )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     out_dir = Path(args.out_dir)
@@ -219,6 +226,8 @@ def main() -> None:
             for m, (f, thr) in fitted.items():
                 s, pred = f(flat)
                 s, pred = s.reshape(lab.shape), pred.reshape(lab.shape)
+                if m == args.export_method:
+                    export = {"score": s + 0.5, "pred": pred}
                 mp = np.where(s >= thr, pred, REJECT)
                 mp[~valid] = VOID
                 maps[m] = mp
@@ -241,6 +250,17 @@ def main() -> None:
             stats[scen]["windows"][meta[i]["name"]] = wstats
 
             rgb = s2_rgb(src_windows[key], args.month)
+            if args.export_method and args.export_method in fitted:
+                np.savez_compressed(
+                    out_dir / f"export_{scen}_{meta[i]['name']}.npz",
+                    score=np.where(valid, export["score"], np.nan).astype(np.float16),
+                    pred=export["pred"].astype(np.uint8),
+                    label=lab.astype(np.uint8),
+                    rgb=(
+                        np.zeros((*lab.shape, 3)) if rgb is None else rgb * 255
+                    ).astype(np.uint8),
+                    known=np.array(ks),
+                )
             n_panels = 3 + len(maps) + 1
             fig, axes = plt.subplots(1, n_panels, figsize=(3.1 * n_panels, 3.6))
             panels = [(f"Sentinel-2 RGB (mo{args.month:02d})", rgb, None)]
