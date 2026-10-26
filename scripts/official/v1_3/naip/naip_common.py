@@ -41,11 +41,18 @@ from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents  # noqa: E402
 from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
+from olmoearth_pretrain.train.olmo_core_patches import (  # noqa: E402
+    drop_async_checkpoint_duration_metric,
+)
 from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
     LatentMIMTrainModuleConfig,
 )
 
 WANDB_PROJECT = "2026_10_23_naip_v13"
+
+# The async-save duration metric is recorded at a rank-dependent step and hangs the gloo
+# bookkeeping all-reduce (N2 hung twice on 10-26); see olmo_core_patches.
+drop_async_checkpoint_duration_metric()
 
 # The control's H5 plus naip_10 (minus gse/worldpop, unused by v1.3).
 NAIP_H5_DIR = (
