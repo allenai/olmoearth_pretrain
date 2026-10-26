@@ -37,6 +37,9 @@ from olmoearth_pretrain.internal.utils import (
     MockOlmoEarthDataLoader,
 )
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
+from olmoearth_pretrain.train.olmo_core_patches import (
+    drop_async_checkpoint_duration_metric,
+)
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
@@ -308,6 +311,10 @@ def launch_benchmark(config: BenchmarkExperimentConfig) -> None:
 
 def train(config: OlmoEarthExperimentConfig) -> None:
     """Train an experiment."""
+    # The async-save duration metric is recorded at a rank-dependent step and can hang the
+    # gloo bookkeeping all-reduce; see olmo_core_patches.
+    drop_async_checkpoint_duration_metric()
+
     # Set RNG states on all devices. Also, done in prepare_training_environment
     seed_all(config.init_seed)
 
