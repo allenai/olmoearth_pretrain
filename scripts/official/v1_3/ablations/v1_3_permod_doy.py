@@ -8,10 +8,9 @@ so the DOY code of an S1 token is its S1 capture's day of year instead of the sl
 The captures, the slot grid, the slot-index encoding and the shared stamp are unchanged. The
 dropout draw is shared by all modalities of a sample, as before.
 
-Pilot length: ``E5_MAX_STEPS`` sets the schedule (667200, the slot-DOY run's length, so LR and
-EMA match it step for step) and ``PERMOD_HARD_STOP_STEPS`` stops training early (90000 for the
-pilot), so the 90k checkpoint is directly comparable with the slot-DOY run's 90k checkpoint.
-Unset = no hard stop.
+Length: ``E5_MAX_STEPS`` sets the schedule (667200, the slot-DOY run's length, so LR and EMA
+match it step for step). favyen 2026-10-26: run the full schedule (FT evals at 300k and final).
+``PERMOD_HARD_STOP_STEPS`` optionally stops training early; unset (the default) = no hard stop.
 """
 
 import os
@@ -27,6 +26,14 @@ from olmo_core.train.common import Duration  # noqa: E402
 from olmoearth_pretrain.data.allcap import ALLCAP_LEAST_CLOUDY_SLOT_REAL_DATES  # noqa: E402
 from olmoearth_pretrain.data.dataset import OlmoEarthDatasetConfig  # noqa: E402
 from olmoearth_pretrain.internal.experiment import CommonComponents, main  # noqa: E402
+from olmoearth_pretrain.train.olmo_core_patches import (  # noqa: E402
+    drop_async_checkpoint_duration_metric,
+)
+
+# The async-save duration metric is recorded at a rank-dependent step and hangs the gloo
+# bookkeeping all-reduce (the slot-DOY run crashed once this way at its 190k save; the NISAR
+# runs 5 times); see olmo_core_patches (cherry-picked from 0e2992055, favyen OK 2026-10-26).
+drop_async_checkpoint_duration_metric()
 
 HARD_STOP_STEPS = os.environ.get("PERMOD_HARD_STOP_STEPS")
 
