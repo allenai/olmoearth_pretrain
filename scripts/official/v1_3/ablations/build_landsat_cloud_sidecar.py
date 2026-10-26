@@ -150,7 +150,9 @@ def main() -> None:
 
     _TILES.update(tiles)
     _CLOUD.update(cloud)
-    n = len([f for f in os.listdir(H5_DIR) if f.startswith("sample_")])
+    n = len(
+        [f for f in os.listdir(H5_DIR) if f.startswith("sample_") and f.endswith(".h5")]
+    )
     n = min(n, args.limit) if args.limit else n
     values, offsets, matched, with_value = [], [0], 0, 0
     with get_context("fork").Pool(args.workers) as pool:
