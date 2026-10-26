@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import gc
+import json
 import logging
 import re
 import time
@@ -295,6 +296,19 @@ def _log_to_wandb(
         wandb_callback.wandb.log(eval_result_log_dict(prefix, name, result), step=step)
 
 
+def _append_results_jsonl(path: str, record: dict[str, Any]) -> None:
+    """Append one eval record as a JSON line (created with its parent dirs).
+
+    Args:
+        path: The JSONL file.
+        record: JSON-serializable record.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+
+
 class Era5DownstreamEvaluatorCallback(Callback):
     """Runs linear-probe evaluations on the ERA5 encoder at a configured cadence."""
 
@@ -307,6 +321,8 @@ class Era5DownstreamEvaluatorCallback(Callback):
         num_workers: int = 4,
         checkpoint_sweep_dir: str | None = None,
         checkpoint_sweep_interval: int = 0,
+        results_jsonl: str | None = None,
+        run_name: str | None = None,
     ) -> None:
         """Initialize the ERA5 downstream evaluator callback.
 
@@ -328,6 +344,11 @@ class Era5DownstreamEvaluatorCallback(Callback):
                 a multiple of this value (e.g. 5000 -> step0, step5000, ...).
                 The last (highest-step) checkpoint is always included. 0 means
                 every saved checkpoint.
+            results_jsonl: When set, every eval also appends one JSON line
+                (run, step, task, val/test metrics, per-LR sweep results and
+                embedding geometry) to this file, for reading results without
+                W&B access.
+            run_name: Run name recorded in each JSON line.
         """
         super().__init__()
         self.tasks = tasks
@@ -337,6 +358,8 @@ class Era5DownstreamEvaluatorCallback(Callback):
         self.num_workers = num_workers
         self.checkpoint_sweep_dir = checkpoint_sweep_dir
         self.checkpoint_sweep_interval = checkpoint_sweep_interval
+        self.results_jsonl = results_jsonl
+        self.run_name = run_name
         # Step at which we last evaluated, so the end-of-training eval doesn't
         # redundantly re-run when training happens to stop on an interval.
         self._last_eval_step = -1
@@ -613,11 +636,12 @@ class Era5DownstreamEvaluatorCallback(Callback):
         result = self._train_probe(task, task.probe_lr, eval_config, probe_inputs)
         # Optional probe-LR sweep on the same embeddings (same pinned probe
         # seed at every LR), logged next to the registry-LR result.
-        if task.probe_lr_grid:
-            sweep = {
-                lr: self._train_probe(task, lr, eval_config, probe_inputs).val_result
-                for lr in task.probe_lr_grid
-            }
+        sweep_results = {
+            lr: self._train_probe(task, lr, eval_config, probe_inputs)
+            for lr in task.probe_lr_grid
+        }
+        if sweep_results:
+            sweep = {lr: r.val_result for lr, r in sweep_results.items()}
             geometry.update(_lr_sweep_log_dict(task.name, sweep))
 
         eval_time = time.monotonic() - start_time
@@ -657,6 +681,28 @@ class Era5DownstreamEvaluatorCallback(Callback):
                 result.test_result.primary,
             )
 
+        if self.results_jsonl is not None:
+            _append_results_jsonl(
+                self.results_jsonl,
+                {
+                    "run": self.run_name,
+                    "step": step,
+                    "task": task.name,
+                    "probe_lr": task.probe_lr,
+                    "val": result.val_result.metrics if result.val_result else None,
+                    "test": result.test_result.metrics if result.test_result else None,
+                    "lrsweep": {
+                        f"{lr:.0e}": {
+                            "val": r.val_result.metrics if r.val_result else None,
+                            "test": r.test_result.metrics if r.test_result else None,
+                        }
+                        for lr, r in sweep_results.items()
+                    },
+                    "geometry": geometry,
+                    "eval_time": eval_time,
+                },
+            )
+
         # Log eval time and embedding geometry to wandb at the same explicit
         # step as the eval metrics.
         wandb_callback = _get_wandb_callback(self.trainer)
@@ -683,6 +729,8 @@ class Era5DownstreamEvaluatorCallbackConfig(CallbackConfig):
     max_sequence_length: int = ERA5_INPUT_SEQUENCE_LENGTH
     checkpoint_sweep_dir: str | None = None
     checkpoint_sweep_interval: int = 0
+    results_jsonl: str | None = None
+    run_name: str | None = None
 
     def build(self, trainer: Trainer) -> Callback | None:
         """Build the callback, or return None if disabled."""
@@ -697,4 +745,6 @@ class Era5DownstreamEvaluatorCallbackConfig(CallbackConfig):
             num_workers=self.num_workers,
             checkpoint_sweep_dir=self.checkpoint_sweep_dir,
             checkpoint_sweep_interval=self.checkpoint_sweep_interval,
+            results_jsonl=self.results_jsonl,
+            run_name=self.run_name,
         )

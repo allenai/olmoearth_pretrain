@@ -215,6 +215,183 @@
       "ssl": true,
       "weka_path": "/weka/dfive-default/helios/dataset/era5enc_pretrain/rslearn_dataset"
     },
+    "fluxnet_gpp": {
+      "groups": [
+        "all"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_gpp_era5d.yaml",
+      "notes": "FLUXNET 8-day GPP, full 'all' group (every site-anchor on a 16-day grid) for supervised training; val/test are the spatially held-out sites of the same group.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "all"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "all"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_gpp_anom_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_gpp_anom_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day GPP minus the site's leave-one-year-out day-of-year climatology (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "has_anom": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "has_anom": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "has_anom": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_gpp_dt_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_gpp_dt_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP_DT_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_gpp_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_gpp_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP_NT_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_le_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_le_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean LE_F_MDS (W m-2); partly circular with the ERA5-Land evaporation input, from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_nee_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_nee_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean NEE_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
     "landslide_era5_eval": {
       "groups": [
         "sen12_landslides",

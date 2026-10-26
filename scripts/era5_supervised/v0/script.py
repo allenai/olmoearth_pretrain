@@ -312,6 +312,9 @@ class Era5SupervisedCommonComponents(CommonComponents):
     # Only evaluate checkpoints whose step is a multiple of this (e.g. 5000
     # -last checkpoint is always included. 0 = every saved checkpoint.
     eval_checkpoint_sweep_interval: int = 5000
+    # When set, every probe eval also appends a JSON line (run, step, task,
+    # val/test metrics, per-LR sweep, geometry) to this file.
+    eval_results_jsonl: str | None = None
 
 
 def build_common_components(
@@ -927,6 +930,8 @@ def build_trainer_config(common: Era5SupervisedCommonComponents) -> TrainerConfi
                 max_sequence_length=ERA5_INPUT_SEQUENCE_LENGTH,
                 checkpoint_sweep_dir=common.eval_checkpoint_sweep_dir,
                 checkpoint_sweep_interval=common.eval_checkpoint_sweep_interval,
+                results_jsonl=common.eval_results_jsonl,
+                run_name=common.run_name,
             ),
         )
 

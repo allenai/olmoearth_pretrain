@@ -51,7 +51,7 @@ MAX_ATTEMPTS = 5
 ICOS_SPARQL_QUERY = """
 prefix cpmeta: <http://meta.icos-cp.eu/ontologies/cpmeta/>
 prefix prov: <http://www.w3.org/ns/prov#>
-select ?dobj ?fileName ?size ?lat ?lon ?citationString
+select ?dobj ?fileName ?size ?lat ?lon ?ecosystemType ?citationString
 where {
     VALUES ?spec {<http://meta.icos-cp.eu/resources/cpmeta/miscFluxnetArchiveProduct>}
     ?dobj cpmeta:hasObjectSpec ?spec .
@@ -59,6 +59,7 @@ where {
     ?dobj cpmeta:hasName ?fileName .
     ?dobj cpmeta:wasAcquiredBy/prov:wasAssociatedWith ?station .
     OPTIONAL { ?station cpmeta:hasLatitude ?lat . ?station cpmeta:hasLongitude ?lon . }
+    OPTIONAL { ?station cpmeta:hasEcosystemType ?ecosystemType . }
     OPTIONAL { ?dobj cpmeta:hasCitationString ?citationString . }
     FILTER NOT EXISTS {[] cpmeta:isNextVersionOf ?dobj}
 }
@@ -73,8 +74,12 @@ CATALOG_COLUMNS = [
     "md5",
     "lat",
     "lon",
+    "igbp",
     "citation",
 ]
+# Daily-file markers: ONEFlux v1.3+ archives and the older FLUXNET2015-style
+# FULLSET archives some sites are still published as.
+DAILY_MARKERS = ("_FLUXMET_DD_", "_FULLSET_DD_")
 
 
 # --- catalogue ----------------------------------------------------------------
@@ -135,6 +140,7 @@ def list_ameriflux(session: requests.Session) -> list[dict[str, Any]]:
     for link in links:
         site_id = link["site_id"]
         location = sites.get(site_id, {}).get("grp_location", {})
+        igbp = sites.get(site_id, {}).get("grp_igbp", {}).get("igbp", "")
         rows.append(
             dict(
                 hub="ameriflux",
@@ -145,6 +151,7 @@ def list_ameriflux(session: requests.Session) -> list[dict[str, Any]]:
                 md5=link.get("download_checksum", ""),
                 lat=float(location.get("location_lat") or "nan"),
                 lon=float(location.get("location_long") or "nan"),
+                igbp=igbp or "",
                 citation=citations.get(site_id, ""),
             )
         )
@@ -181,6 +188,10 @@ def list_icos(session: requests.Session) -> list[dict[str, Any]]:
                 md5="",
                 lat=float(value.get("lat", "nan")),
                 lon=float(value.get("lon", "nan")),
+                # .../cpmeta/igbp_ENF -> ENF
+                igbp=value.get("ecosystemType", "").rsplit("igbp_", 1)[-1]
+                if "igbp_" in value.get("ecosystemType", "")
+                else "",
                 citation=value.get("citationString", ""),
             )
         )
@@ -216,6 +227,7 @@ def list_tern(session: requests.Session) -> list[dict[str, Any]]:
                 md5="",
                 lat=float("nan"),
                 lon=float("nan"),
+                igbp="",
                 citation=record.get("PRODUCT_CITATION", "").strip(),
             )
         )
@@ -293,7 +305,11 @@ def _is_valid_archive(path: Path, row: dict[str, Any]) -> bool:
             return False
     try:
         with zipfile.ZipFile(path) as archive:
-            return any("_FLUXMET_DD_" in name for name in archive.namelist())
+            return any(
+                marker in name
+                for name in archive.namelist()
+                for marker in DAILY_MARKERS
+            )
     except zipfile.BadZipFile:
         return False
 
