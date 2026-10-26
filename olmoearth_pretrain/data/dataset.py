@@ -625,6 +625,7 @@ class OlmoEarthDataset(Dataset):
         load_s2_cloud_mask: bool = False,
         composite_selection: str = "median",
         budget_before_read: bool = False,
+        max_s2_cloud_fraction: float | None = None,
     ):
         """Initialize the dataset.
 
@@ -667,6 +668,10 @@ class OlmoEarthDataset(Dataset):
                 from the timestamps before reading, and read only those bins'
                 captures (without composites the run is always chosen first). Same
                 binning and budget rule; reads only what the sample keeps.
+            max_s2_cloud_fraction: Without composites (every capture, thinned), drop
+                S2 captures whose crop is more than this fraction cloudy (SCL, needs
+                ``load_s2_cloud_mask``) before the budget run is chosen. Composites
+                already pick a clear capture per bin. None = keep every capture.
 
         Returns:
             None
@@ -717,6 +722,9 @@ class OlmoEarthDataset(Dataset):
             )
         self.composite_selection = composite_selection
         self.budget_before_read = budget_before_read
+        if max_s2_cloud_fraction is not None and not load_s2_cloud_mask:
+            raise ValueError("max_s2_cloud_fraction needs load_s2_cloud_mask")
+        self.max_s2_cloud_fraction = max_s2_cloud_fraction
 
     @property
     def fingerprint_version(self) -> str:
@@ -1448,6 +1456,16 @@ class OlmoEarthDataset(Dataset):
             kept = self._select_time_range(
                 ordinals, None if thin else args.time_range_days, rng
             )
+            s2_name = Modality.SENTINEL2_L2A.name
+            if (
+                self.max_s2_cloud_fraction is not None
+                and not _is_composite(args)
+                and has_scl
+                and len(kept.get(s2_name, ())) > 0
+            ):
+                kept[s2_name] = self._clear_s2(
+                    h5file, crop, timestamps[s2_name], kept[s2_name]
+                )
             origin = None
             if _is_composite(args) and self.budget_before_read:
                 origin, kept = self._budget_bins(args, present, ordinals, kept, rng)
@@ -1511,6 +1529,22 @@ class OlmoEarthDataset(Dataset):
             "scl_timestamps": scl_timestamps,
             "origin": origin,
         }
+
+    def _clear_s2(
+        self,
+        h5file: Any,
+        crop: tuple[slice, slice],
+        s2_timestamps: np.ndarray,
+        captures: np.ndarray,
+    ) -> np.ndarray:
+        """``captures`` (S2 indices) whose crop is at most max_s2_cloud_fraction cloudy."""
+        assert self.max_s2_cloud_fraction is not None
+        scl = h5file[S2_SCL_LAYER][crop]
+        flags = s2_cloud_flags(
+            scl, h5file[f"timestamps_{S2_SCL_LAYER}"][()], s2_timestamps
+        )
+        fraction = flags[:, :, captures].mean(axis=(0, 1))
+        return captures[fraction <= self.max_s2_cloud_fraction]
 
     def _budget_bins(
         self,
@@ -1804,6 +1838,7 @@ class OlmoEarthDatasetConfig(Config):
     load_s2_cloud_mask: bool = False
     composite_selection: str = "median"
     budget_before_read: bool = False
+    max_s2_cloud_fraction: float | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

@@ -117,7 +117,10 @@ def allcap_h5py_dir(tmp_path: Path) -> UPath:
 
 
 def _dataset(
-    h5py_dir: UPath, normalize: bool = False, load_s2_cloud_mask: bool = False
+    h5py_dir: UPath,
+    normalize: bool = False,
+    load_s2_cloud_mask: bool = False,
+    **kwargs: Any,
 ) -> OlmoEarthDataset:
     dataset = OlmoEarthDataset(
         h5py_dir=h5py_dir,
@@ -126,6 +129,7 @@ def _dataset(
         normalize=normalize,
         per_modality_timestamps=True,
         load_s2_cloud_mask=load_s2_cloud_mask,
+        **kwargs,
     )
     dataset.prepare()
     return dataset
@@ -1183,3 +1187,31 @@ def test_trunk_budget_counts_tokens_after_the_merge(thin: bool) -> None:
     assert spread == 12
     # Runs that reach the series end extend backward, so both modes take all 60.
     assert dense == n
+
+
+@pytest.mark.parametrize("composite_days", [None, THIN_CAPTURES])
+def test_cloudy_s2_captures_are_dropped(
+    allcap_h5py_dir: UPath, composite_days: float | None
+) -> None:
+    """max_s2_cloud_fraction: kept S2 captures are at most that cloudy over the crop."""
+    unfiltered = _dataset(allcap_h5py_dir, load_s2_cloud_mask=True)
+    filtered = _dataset(
+        allcap_h5py_dir, load_s2_cloud_mask=True, max_s2_cloud_fraction=0.2
+    )
+    kept_before = kept_after = 0
+    for seed in range(6):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=2,
+            sampled_hw_p=4,
+            composite_days=composite_days,
+            seed=seed,
+        )
+        _, before = unfiltered[args]
+        _, after = filtered[args]
+        cloud = _field(after, "sentinel2_l2a_cloud")
+        if cloud.shape[2]:
+            assert (cloud.mean(axis=(0, 1)) <= 0.2).all()
+        kept_before += _field(before, "sentinel2_l2a").shape[2]
+        kept_after += cloud.shape[2]
+    assert kept_after < kept_before  # the fixture has cloudy captures to drop
