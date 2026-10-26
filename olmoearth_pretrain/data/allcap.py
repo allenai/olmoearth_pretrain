@@ -42,6 +42,13 @@ differ both in whether captures are redrawn each read and in real vs slot-start 
 Arm C (``read_allcap_sample_two_draws``) reads the H5 once and applies the arm B rule
 twice with two independent generators, giving two "views" of the same pixel-year that
 differ only in which captures (and dates) were drawn.
+
+``per_modality_timestamps`` (v1.3 + per-modality DOY, 2026-10-26)
+    Any rule above, plus each modality's own capture date per slot packed into extra
+    columns of ``timestamps`` (see ``olmoearth_pretrain.data.per_modality_timestamps``).
+    Columns 0..2 keep the rule's shared slot stamp, so the selection is unchanged; e.g.
+    under A_real an S1 capture in a slot that also has S2 now carries its own date
+    instead of the S2 date.
 """
 
 from __future__ import annotations
@@ -52,6 +59,9 @@ from typing import Any
 import numpy as np
 
 from olmoearth_pretrain.data.constants import MAX_SEQUENCE_LENGTH, Modality
+from olmoearth_pretrain.data.per_modality_timestamps import (
+    pack_per_modality_timestamps,
+)
 
 ALLCAP_LEAST_CLOUDY_SLOT = "least_cloudy_slot"
 ALLCAP_RANDOM_CLEAR = "random_clear"
@@ -347,9 +357,28 @@ def select_slots(
     raise ValueError(f"unknown allcap selection {selection!r}; use {ALLCAP_SELECTIONS}")
 
 
+def per_modality_slot_days(
+    sel: SlotSelection, capture_days: dict[str, np.ndarray]
+) -> dict[str, np.ndarray]:
+    """Each modality's own capture date per slot (the slot's date where it is missing).
+
+    ``capture_days`` maps ``sentinel2_l2a`` / ``sentinel1`` to the epoch days of every
+    capture (the arrays the selection indices point into).
+    """
+    out = {}
+    for name, idx in ((S2, sel.s2_idx), (S1, sel.s1_idx)):
+        days = sel.days.copy()
+        present = idx >= 0
+        if name in capture_days and present.any():
+            days[present] = np.asarray(capture_days[name], dtype=np.int64)[idx[present]]
+        out[name] = days
+    return out
+
+
 def selection_to_sample(
     sel: SlotSelection,
     series: dict[str, Any],
+    capture_days: dict[str, np.ndarray] | None = None,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Build the v1.3 ``(sample_dict, missing_timesteps_masks)`` from a selection.
 
@@ -357,8 +386,18 @@ def selection_to_sample(
     capture stacks (absent keys are treated as having no captures). Modality arrays are
     stored compactly (present slots only, in slot order) exactly like the v1.3 H5s; a
     modality with no present slot is left out so the dataset fills it as missing.
+
+    With ``capture_days`` (see :func:`per_modality_slot_days`), ``timestamps`` also
+    carries each modality's own capture dates in packed per-modality columns.
     """
-    sample: dict[str, Any] = {"timestamps": epoch_days_to_timestamps(sel.days)}
+    shared = epoch_days_to_timestamps(sel.days)
+    if capture_days is not None:
+        per_mod = {
+            name: epoch_days_to_timestamps(days)
+            for name, days in per_modality_slot_days(sel, capture_days).items()
+        }
+        shared = pack_per_modality_timestamps(shared, per_mod)
+    sample: dict[str, Any] = {"timestamps": shared}
     masks: dict[str, np.ndarray] = {}
     for name, idx in ((S2, sel.s2_idx), (S1, sel.s1_idx)):
         if name not in series:
@@ -468,12 +507,21 @@ def _read_static(h5file: Any, training_modalities: list[str]) -> dict[str, Any]:
     return out
 
 
+def _capture_days(
+    s2_ts: np.ndarray, s1_ts: np.ndarray, per_modality_timestamps: bool
+) -> dict[str, np.ndarray] | None:
+    if not per_modality_timestamps:
+        return None
+    return {S2: timestamps_to_epoch_days(s2_ts), S1: timestamps_to_epoch_days(s1_ts)}
+
+
 def read_allcap_sample(
     h5file: Any,
     training_modalities: list[str],
     selection: str,
     tau: float,
     rng: np.random.Generator | Any = np.random,
+    per_modality_timestamps: bool = False,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     """Read one allcap H5 (an open ``h5py.File``) as a 12-slot v1.3 sample.
 
@@ -487,13 +535,17 @@ def read_allcap_sample(
     B fills at most 12 clear S2 captures; arm A's per-slot S2 choice is unchanged).
     The S1 *timestamps* (a few hundred bytes) still enter the span start, so arm A's
     slot grid is identical to the S1+S2 variant.
+
+    ``per_modality_timestamps``: also pack each modality's own capture dates into
+    ``timestamps`` (see :func:`selection_to_sample`).
     """
     s2_ts, s2_cloud, s1_ts, span_start = _read_selection_inputs(
         h5file, training_modalities
     )
     sel = select_slots(selection, s2_ts, s2_cloud, s1_ts, span_start, tau, rng)
     series = _read_series(h5file, training_modalities, [sel])
-    sample, masks = selection_to_sample(sel, series)
+    capture_days = _capture_days(s2_ts, s1_ts, per_modality_timestamps)
+    sample, masks = selection_to_sample(sel, series, capture_days)
     sample.update(_read_static(h5file, training_modalities))
     return sample, masks
 
@@ -504,6 +556,7 @@ def read_allcap_sample_two_draws(
     selection: str,
     tau: float,
     rngs: tuple[np.random.Generator, np.random.Generator],
+    per_modality_timestamps: bool = False,
 ) -> list[tuple[dict[str, Any], dict[str, np.ndarray]]]:
     """Arm C: ONE read of an allcap H5, two independent slot selections ("views").
 
@@ -521,9 +574,10 @@ def read_allcap_sample_two_draws(
     ]
     series = _read_series(h5file, training_modalities, sels)
     static = _read_static(h5file, training_modalities)
+    capture_days = _capture_days(s2_ts, s1_ts, per_modality_timestamps)
     views = []
     for sel in sels:
-        sample, masks = selection_to_sample(sel, series)
+        sample, masks = selection_to_sample(sel, series, capture_days)
         sample.update(static)
         views.append((sample, masks))
     return views

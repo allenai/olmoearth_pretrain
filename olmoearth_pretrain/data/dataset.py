@@ -477,6 +477,7 @@ class OlmoEarthDataset(Dataset):
         allcap_cloud_tau: float = 1.0,
         allcap_two_draws: bool = False,
         include_latlon: bool = False,
+        allcap_per_modality_timestamps: bool = False,
     ):
         """Initialize the dataset.
 
@@ -511,6 +512,10 @@ class OlmoEarthDataset(Dataset):
                 read, two independent ``allcap_selection`` draws, one shared spatial
                 crop and timestep count; ``__getitem__`` then returns
                 ``(patch_size, (sample_a, sample_b))``. Needs ``allcap_selection``.
+            allcap_per_modality_timestamps: Also pack each modality's own capture
+                dates into extra ``timestamps`` columns (v1.3 + per-modality DOY; see
+                ``olmoearth_pretrain.data.per_modality_timestamps``). Needs
+                ``allcap_selection``.
 
         Returns:
             None
@@ -560,6 +565,9 @@ class OlmoEarthDataset(Dataset):
                 "get the same captures"
             )
         self.allcap_two_draws = allcap_two_draws
+        if allcap_per_modality_timestamps and allcap_selection is None:
+            raise ValueError("allcap_per_modality_timestamps requires allcap_selection")
+        self.allcap_per_modality_timestamps = allcap_per_modality_timestamps
         # Optional per-capture-chunked copy of the allcap sample files (Marek's _tchunk,
         # exact-verified per file). Read from it when a sample exists there, else from
         # h5py_dir; metadata and latlon files always come from h5py_dir.
@@ -955,6 +963,7 @@ class OlmoEarthDataset(Dataset):
                     self.allcap_selection,
                     self.allcap_cloud_tau,
                     (rng_a, rng_b),
+                    per_modality_timestamps=self.allcap_per_modality_timestamps,
                 )
 
     def read_h5_file(
@@ -977,6 +986,7 @@ class OlmoEarthDataset(Dataset):
                         self.training_modalities,
                         self.allcap_selection,
                         self.allcap_cloud_tau,
+                        per_modality_timestamps=self.allcap_per_modality_timestamps,
                     )
                     if self.include_latlon:
                         sample["latlon"] = h5file["latlon"][()]
@@ -1247,6 +1257,8 @@ class OlmoEarthDatasetConfig(Config):
     allcap_two_draws: bool = False
     # Pass the stored [lat, lon] through as ``latlon`` (sun-clock time code).
     include_latlon: bool = False
+    # v1.3 + per-modality DOY: pack each modality's capture dates into ``timestamps``.
+    allcap_per_modality_timestamps: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

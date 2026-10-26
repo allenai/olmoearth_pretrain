@@ -18,6 +18,12 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
     get_modality_specs_from_names,
 )
+from olmoearth_pretrain.data.per_modality_timestamps import (
+    PER_MODALITY_TIMESTAMP_MODALITIES,
+    has_per_modality_timestamps,
+    modality_timestamps,
+    shared_timestamps,
+)
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
     MaskValue,
@@ -799,7 +805,52 @@ class CompositeEncodings(nn.Module):
             self.sun_proj._skip_custom_init = True  # type: ignore[assignment]
 
     def compute_time_code(self, timestamps: Tensor) -> Tensor:
-        """(B, T, n) calendar code for ``timestamps`` (B, T, 3), incl. dropout."""
+        """(B, T, n) calendar code for ``timestamps`` (B, T, 3), incl. dropout.
+
+        Packed per-modality timestamps (B, T, 3 + 3K) use the shared slot stamp here;
+        see :meth:`compute_time_codes` for per-modality codes.
+        """
+        code = self._raw_time_code(shared_timestamps(timestamps))
+        keep = self._time_code_keep(code)
+        return code if keep is None else code * keep
+
+    def compute_time_codes(
+        self, timestamps: Tensor, modality_names: list[str]
+    ) -> dict[str, Tensor]:
+        """Per-modality (B, T, n) calendar codes, incl. one dropout draw for all.
+
+        With packed per-modality timestamps (last dim > 3; see
+        ``olmoearth_pretrain.data.per_modality_timestamps``) each modality of the
+        layout gets the code of its own capture dates; every other modality, and every
+        modality when ``timestamps`` is (B, T, 3), gets the shared slot code. The
+        per-sample dropout mask is drawn once and applied to all codes, as before.
+        """
+        shared = self._raw_time_code(shared_timestamps(timestamps))
+        codes: dict[str, Tensor] = {}
+        if has_per_modality_timestamps(timestamps):
+            for name in modality_names:
+                if name in PER_MODALITY_TIMESTAMP_MODALITIES:
+                    codes[name] = self._raw_time_code(
+                        modality_timestamps(timestamps, name)
+                    )
+        keep = self._time_code_keep(shared)
+        if keep is not None:
+            shared = shared * keep
+            codes = {name: code * keep for name, code in codes.items()}
+        return {name: codes.get(name, shared) for name in modality_names}
+
+    def _time_code_keep(self, code: Tensor) -> Tensor | None:
+        """Per-sample (B, 1, 1) time-code dropout keep mask, or None (no dropout)."""
+        if self.training and self.time_code_dropout > 0:
+            keep = (
+                torch.rand(code.shape[0], 1, 1, device=code.device)
+                >= self.time_code_dropout
+            )
+            return keep.to(code.dtype)
+        return None
+
+    def _raw_time_code(self, timestamps: Tensor) -> Tensor:
+        """(B, T, n) calendar code for (B, T, 3) stamps, without dropout."""
         n = self.embedding_dim_per_embedding_type
         if self.time_code == "month":
             code = self.month_embed(timestamps[:, :, 1]).to(torch.float32)
@@ -815,12 +866,6 @@ class CompositeEncodings(nn.Module):
                 else:
                     # keep sun_proj in the graph (DDP/FSDP unused-param safety)
                     code = code + 0.0 * self.sun_proj.weight.sum()
-        if self.training and self.time_code_dropout > 0:
-            keep = (
-                torch.rand(code.shape[0], 1, 1, device=code.device)
-                >= self.time_code_dropout
-            )
-            code = code * keep.to(code.dtype)
         return code
 
     @staticmethod
@@ -942,7 +987,9 @@ class CompositeEncodings(nn.Module):
             # signal is orthogonal to slot-index).
             assert timestamps is not None
             if time_code is None:
-                time_code = self.compute_time_code(timestamps)
+                time_code = self.compute_time_code(
+                    modality_timestamps(timestamps, modality_name)
+                )
             month_embed = repeat(time_code, f"b t d -> {ein_string}", **ein_dict)
             modality_embed[..., n * 2 : n * 3] += month_embed.to(device)
         if modality.is_spatial and self.position_encoding == PositionEncoding.ABSOLUTE:
@@ -986,9 +1033,12 @@ class CompositeEncodings(nn.Module):
         modalities_to_process = get_modalities_to_process(
             available_modalities, self.supported_modality_names
         )
-        # One calendar code per forward so time-code dropout agrees across modalities.
-        time_code = (
-            self.compute_time_code(timestamps) if timestamps is not None else None
+        # One dropout draw per forward so time-code dropout agrees across modalities;
+        # each modality's code uses its own capture dates when timestamps are packed.
+        time_codes = (
+            self.compute_time_codes(timestamps, modalities_to_process)
+            if timestamps is not None
+            else None
         )
         for modality_name in modalities_to_process:
             output_dict[modality_name] = self._apply_encodings_per_modality(
@@ -997,7 +1047,9 @@ class CompositeEncodings(nn.Module):
                 timestamps=timestamps,
                 patch_size=patch_size,
                 input_res=input_res,
-                time_code=time_code,
+                time_code=(
+                    time_codes[modality_name] if time_codes is not None else None
+                ),
             )
         return output_dict
 
@@ -1204,10 +1256,11 @@ class FlexiVitBase(nn.Module):
             * self.rope_coordinate_scale
         )
 
-        # For 3D RoPE, convert timestamps -> days-since-anchor once. Shape
+        # For 3D RoPE, convert timestamps -> days-since-anchor. Shape
         # (B, T_max). Each multitemporal modality indexes into this with its
         # own slot count (we assume the first T entries align across modalities,
-        # matching how additive temporal encodings already work).
+        # matching how additive temporal encodings already work). Packed
+        # per-modality timestamps give each modality its own days.
         days_per_timestep: Tensor | None = None
         if is_3d:
             if timestamps is None:
@@ -1217,14 +1270,20 @@ class FlexiVitBase(nn.Module):
                     "calendar days since the anchor year and cannot be derived "
                     "from slot indices; pass timestamps on the input sample."
                 )
-            days_per_timestep = timestamps_to_days(timestamps).to(torch.float32) * (
-                self.rope_temporal_coordinate_scale
-            )
+            days_per_timestep = timestamps_to_days(
+                shared_timestamps(timestamps)
+            ).to(torch.float32) * (self.rope_temporal_coordinate_scale)
 
         position_dict = {}
         for modality_name in modalities_to_process:
             tokens = tokens_only_dict[modality_name]
             modality = Modality.get(modality_name)
+            if is_3d and timestamps is not None and has_per_modality_timestamps(
+                timestamps
+            ):
+                days_per_timestep = timestamps_to_days(
+                    modality_timestamps(timestamps, modality_name)
+                ).to(torch.float32) * (self.rope_temporal_coordinate_scale)
             if is_3d:
                 positions = self._build_3d_rope_positions_for_modality(
                     modality_name=modality_name,

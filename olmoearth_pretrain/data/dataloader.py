@@ -41,6 +41,7 @@ from olmoearth_pretrain.data.dataset import (
     compute_bandset_rates,
     subset_sample_default,
 )
+from olmoearth_pretrain.data.per_modality_timestamps import pack_per_modality_timestamps
 from olmoearth_pretrain.data.transform import Transform, TransformConfig
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
@@ -535,6 +536,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         months = rng.integers(0, 12, (12, 1))
         years = rng.integers(2018, 2020, (12, 1))
         timestamps = np.concatenate([days, months, years], axis=1)  # shape: (12, 3)
+        if getattr(self.dataset, "allcap_per_modality_timestamps", False):
+            # Same width as the real batches (shared stamp repeated per modality).
+            timestamps = pack_per_modality_timestamps(timestamps, {})
 
         output_dict["timestamps"] = timestamps
         return OlmoEarthSample(**output_dict)
