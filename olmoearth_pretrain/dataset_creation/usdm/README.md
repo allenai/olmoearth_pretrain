@@ -46,8 +46,16 @@ cell's DSCI / 100 (USDM's Drought Severity and Coverage Index weights the
 cumulative D0-D4 areas equally, which is category + 1 per unit area). Cells
 with fewer than 12 of 16 sub-cells inside CONUS are outside the domain.
 
-Check against the official CONUS DSCI (USDM data services API): 2012-08-14
-214.6 vs 215, 2000-01-04 83.6 vs 84, 2023-08-08 95.6 vs 96.
+Check against the official CONUS DSCI (USDM data services API, integer
+values): over all 1,399 weekly maps (2000-01-04 to 2026-10-20, no missing
+week) r = 0.99997, mean difference -0.42, max |difference| 1.43 (e.g.
+2012-08-14: 214.6 vs 215).
+
+Check against in-situ fluxes: at the FLUXNET eval's 266 CONUS towers
+(`fluxnet_labels`), the mean May-September 8-day GPP anomaly (FLUXNET
+`gpp_anom`, gC m-2 d-1) falls monotonically with the USDM class of the week:
+none +0.19, D0 +0.07, D1 -0.07, D2 -0.26, D3-D4 -0.53 (SE 0.03-0.06, n 1,213
+to 7,381 tower-anchors per class).
 
 ### Cells and ERA5-Land series (stage 3)
 
