@@ -42,7 +42,7 @@ WINDOW_DAYS = 448
 SPANS = (8, 30, 90, 365)
 # The same periods one year earlier (the window holds 83 days before that).
 LAST_YEAR_SPANS = (8, 30, 83)
-TARGETS = ("gpp", "le", "nee", "gpp_anom")
+TARGETS = ("gpp", "rgpp", "le", "nee", "gpp_anom")
 
 
 def window_features(series: np.ndarray, t0: int, anchor: int) -> np.ndarray:

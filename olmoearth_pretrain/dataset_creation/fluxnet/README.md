@@ -75,6 +75,7 @@ least 6 valid days:
 | Property | Target |
 |---|---|
 | `gpp` | GPP, gC m-2 d-1: per day the mean of the night- and day-time partitionings (`GPP_NT_VUT_REF`, `GPP_DT_VUT_REF`), or the one that exists (about 115 sites have no night-time GPP) |
+| `rgpp` | relative GPP: `gpp` divided by the tower's 95th percentile of `gpp` (undefined below 0.5 gC m-2 d-1); the headline eval target |
 | `le` | latent heat `LE_F_MDS`, W m-2 |
 | `nee` | `NEE_VUT_REF` on the GPP days |
 | `gpp_anom` | `gpp` minus the site's leave-one-year-out climatology at the same day of year (8-day GPP within +-7 days in every other year; >= 2 other years) |

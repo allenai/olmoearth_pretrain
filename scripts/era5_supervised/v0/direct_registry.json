@@ -441,6 +441,70 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
     },
+    "fluxnet_rgpp": {
+      "groups": [
+        "all"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_rgpp_era5d.yaml",
+      "notes": "FLUXNET relative GPP, full 'all' group (tag has_rgpp) for supervised training; val/test are the held-out towers.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "has_rgpp": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "all"
+      ],
+      "test_tags": {
+        "has_rgpp": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "all"
+      ],
+      "val_tags": {
+        "has_rgpp": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_rgpp_eval": {
+      "groups": [
+        "eval"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_rgpp_era5d.yaml",
+      "notes": "FLUXNET flux-tower eval, headline target: relative GPP (8-day mean GPP divided by the tower's 95th percentile of it), from the 448-day ERA5-Land history ending on the target period's last day. Same 'eval' windows as the other fluxnet tasks (tag has_rgpp: towers with a 95th percentile >= 0.5 gC m-2 d-1). Built by olmoearth_pretrain/dataset_creation/fluxnet; target stats filled after the relabel.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "has_rgpp": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "eval"
+      ],
+      "test_tags": {
+        "has_rgpp": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "eval"
+      ],
+      "val_tags": {
+        "has_rgpp": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
     "landslide_era5_eval": {
       "groups": [
         "sen12_landslides",

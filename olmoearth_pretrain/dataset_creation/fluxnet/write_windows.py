@@ -10,6 +10,10 @@ last 8 days ``[d - 8, d)``:
   exists) over days with NEE daily QC >= 0.5; at least 6 such days.
 * ``le``: mean latent heat (``LE_F_MDS``, W m-2), LE daily QC >= 0.5, >= 6 days.
 * ``nee``: mean ``NEE_VUT_REF`` on the GPP days.
+* ``rgpp``: ``gpp`` divided by the site's 95th percentile of ``gpp`` (relative
+  GPP; undefined when that percentile is below 0.5 gC m-2 d-1). The headline
+  target: dividing out the site's productivity level, which the weather does not
+  determine, leaves the phenological / stress state.
 * ``gpp_anom``: ``gpp`` minus the site's leave-one-year-out climatology at the
   same day of year (8-day GPP within +-7 days in every other year), when at
   least two other years contribute.
@@ -31,8 +35,8 @@ never straddle splits.
   group so the evaluator does not scan the full set.
 
 Tags: ``split``, ``site_id``, ``igbp``, ``region``, ``hub``, ``site_group``,
-``anchor_date``, and ``has_anom`` / ``has_le`` (present when ``gpp_anom`` /
-``le`` is defined, for tasks on the ``all`` group).
+``anchor_date``, and ``has_anom`` / ``has_le`` / ``has_rgpp`` (present when
+``gpp_anom`` / ``le`` / ``rgpp`` is defined).
 
 Usage::
 
@@ -82,9 +86,11 @@ CLIM_HALF_WIDTH_DAYS = 7
 MIN_CLIM_YEARS = 2
 GROUP_KM = 50.0
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
-TARGETS = ("gpp", "le", "nee", "gpp_anom")
+TARGETS = ("gpp", "rgpp", "le", "nee", "gpp_anom")
 # Targets every eval window carries; gpp_anom is optional (has_anom tag).
 EVAL_REQUIRED = ("gpp", "le", "nee")
+RGPP_QUANTILE = 0.95
+MIN_RGPP_SCALE = 0.5  # gC m-2 d-1; below that a site has no growing season to scale by
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -236,6 +242,11 @@ def site_targets(daily: pd.DataFrame) -> pd.DataFrame:
     le_valid = daily["LE_F_MDS"].notna() & (daily["LE_F_MDS_QC"] >= MIN_DAILY_QC)
     out = pd.DataFrame(index=daily.index)
     out["gpp"] = _rolling_target(daily_gpp(daily), gpp_valid)
+    # Relative GPP: the site's 8-day GPP over its 95th percentile, so the
+    # vegetation's productivity level (not inferable from weather) drops out
+    # and the target is the phenological / stress state.
+    scale = out["gpp"].quantile(RGPP_QUANTILE)
+    out["rgpp"] = out["gpp"] / scale if scale > MIN_RGPP_SCALE else np.nan
     out["le"] = _rolling_target(daily["LE_F_MDS"], le_valid)
     out["nee"] = _rolling_target(daily["NEE_VUT_REF"], gpp_valid)
     out["gpp_anom"] = out["gpp"] - loo_climatology(out["gpp"])
@@ -414,6 +425,8 @@ class WindowWriter:
             options["has_anom"] = "1"
         if "le" in targets:
             options["has_le"] = "1"
+        if "rgpp" in targets:
+            options["has_rgpp"] = "1"
         window = Window(
             storage=self.dataset.storage, group=group,
             name=f"{row['site_id']}_{end:%Y%m%d}", projection=self.projection,

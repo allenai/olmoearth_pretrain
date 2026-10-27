@@ -15,7 +15,7 @@
 #   GPUS=0 HOST=<jupiter host> QUEUE=... bash ...   # CPU-only job on one node
 #     (no GPU, no --cpus/--memory, eval loader workers off: common.num_workers=0)
 #
-# TASKS: flux (the four FLUXNET evals), flux_lfmc (+ LFMC as an anchor to the
+# TASKS: flux (the five FLUXNET evals), flux_lfmc (+ LFMC as an anchor to the
 # earlier sweeps), all (+ the six existing evals). LR_GRID overrides the probe
 # LR grid (default: the 8-value grid of the earlier probe-LR sweeps).
 
@@ -30,7 +30,7 @@ NAME="${NAME:-fluxnet_probe_${QUEUE}}"
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
 REF=$(git rev-parse HEAD)
 
-FLUX="fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval"
+FLUX="fluxnet_rgpp_eval,fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval"
 OLD="dfmc1000h_grav_eval,lfmc_woody_eval,cybench_wheat_eval,cybench_maize_eval,burnrisk_canada_nbac_eval,landslide_era5_eval"
 case "${TASKS}" in
   flux) TASK_LIST="[${FLUX}]" ;;
