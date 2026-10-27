@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
 HTTP_TIMEOUT = (30, 180)
 MAX_ATTEMPTS = 10
 TOKEN_CACHE = Path(tempfile.gettempdir()) / "snow_modis_sas_token.json"
+TOKEN_WAIT_S = 3600
 FIRST_YEAR = 2000
 SLOTS_PER_YEAR = 46
 NH_ROWS = range(1, 7)
@@ -97,20 +98,45 @@ BLOB_RE = re.compile(
 class SasToken:
     """Planetary Computer SAS token for the MODIS COG container, refreshed before expiry.
 
-    The token endpoint is rate-limited, so the worker processes of one job share
-    a single token through a file cache under a lock: only the first process to
-    find it stale fetches a new one.
+    The token endpoint rate-limits per client IP, and every Beaker job leaves
+    through the same address, so tokens come first from a relay file that a
+    process outside the cluster refreshes (``--token-file``, written by
+    ``scripts/era5_supervised/v0/snow/token_relay.py``), then from a per-job
+    cache, and only then from the endpoint. The job's worker processes share
+    one token under a lock.
     """
 
-    def __init__(self, cache: Path = TOKEN_CACHE) -> None:
+    def __init__(self, relay: Path | None = None, cache: Path = TOKEN_CACHE) -> None:
         """Start without a token.
 
         Args:
+            relay: Token file refreshed from outside the cluster (optional).
             cache: Token cache file shared by the job's processes.
         """
+        self.relay = relay
         self.cache = cache
         self.token = ""
         self.expiry = 0.0
+
+    def _load(self, path: Path | None) -> bool:
+        """Take the token stored in ``path`` when it is valid for ten more minutes.
+
+        Args:
+            path: Token file (``token``, ``expiry`` in epoch seconds).
+
+        Returns:
+            Whether a valid token was loaded.
+        """
+        if path is None or not path.exists():
+            return False
+        try:
+            body = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return False
+        if float(body["expiry"]) < time.time() + 600:
+            return False
+        self.token, self.expiry = body["token"], float(body["expiry"])
+        return True
 
     def get(self) -> str:
         """A token valid for at least ten more minutes.
@@ -122,16 +148,22 @@ class SasToken:
             return self.token
         with open(self.cache.with_suffix(".lock"), "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            if self.cache.exists():
-                body = json.loads(self.cache.read_text())
-                self.token, self.expiry = body["token"], float(body["expiry"])
-            if time.time() > self.expiry - 600:
-                body = http_get(SAS_URL).json()
-                self.token = body["token"]
-                self.expiry = datetime.fromisoformat(
+            deadline = time.time() + TOKEN_WAIT_S
+            while not (self._load(self.relay) or self._load(self.cache)):
+                try:
+                    response = requests.get(SAS_URL, timeout=HTTP_TIMEOUT)
+                    response.raise_for_status()
+                except requests.RequestException as exc:
+                    if time.time() > deadline:
+                        raise
+                    logger.warning("SAS token unavailable (%s); waiting for the relay", exc)
+                    time.sleep(30 * random.uniform(0.8, 1.2))
+                    continue
+                body = response.json()
+                expiry = datetime.fromisoformat(
                     body["msft:expiry"].replace("Z", "+00:00")
                 ).timestamp()
-                self.cache.write_text(json.dumps(dict(token=self.token, expiry=self.expiry)))
+                self.cache.write_text(json.dumps(dict(token=body["token"], expiry=expiry)))
         return self.token
 
 
@@ -279,10 +311,14 @@ def year_slots(year: int) -> tuple[np.ndarray, np.ndarray]:
 _SAS: SasToken | None = None
 
 
-def _init_worker() -> None:
-    """One token cache per worker process."""
+def _init_worker(relay: str) -> None:
+    """One token source per worker process.
+
+    Args:
+        relay: Relay token file.
+    """
     global _SAS
-    _SAS = SasToken()
+    _SAS = SasToken(Path(relay))
 
 
 def screen_tile(job: tuple[int, int]) -> dict[str, Any]:
@@ -315,12 +351,13 @@ def screen_tile(job: tuple[int, int]) -> dict[str, Any]:
     return dict(h=h, v=v, land=land, snow_cells=best)
 
 
-def screen(root: Path, workers: int) -> pd.DataFrame:
+def screen(root: Path, workers: int, relay: str) -> pd.DataFrame:
     """Screen every candidate tile; writes ``raw/modis/tiles.csv``.
 
     Args:
         root: Dataset root.
         workers: Processes.
+        relay: Relay token file.
 
     Returns:
         The tile table (``kept`` column).
@@ -328,7 +365,9 @@ def screen(root: Path, workers: int) -> pd.DataFrame:
     out = root / "raw" / "modis" / "tiles.csv"
     out.parent.mkdir(parents=True, exist_ok=True)
     jobs = [(h, v) for v in (*NH_ROWS, *SH_ROWS) for h in range(36)]
-    with multiprocessing.get_context("spawn").Pool(workers, initializer=_init_worker) as pool:
+    with multiprocessing.get_context("spawn").Pool(
+        workers, initializer=_init_worker, initargs=(relay,)
+    ) as pool:
         rows = list(pool.imap_unordered(screen_tile, jobs))
     tiles = pd.DataFrame(rows).sort_values(["v", "h"]).reset_index(drop=True)
     tiles["kept"] = tiles["snow_cells"] >= MIN_SNOW_CELLS
@@ -386,7 +425,9 @@ def count_year(job: tuple[int, int, int, str]) -> tuple[str, int]:
     return out.name, len(blobs)
 
 
-def count_all(root: Path, workers: int, last_year: int, tiles_arg: str | None) -> None:
+def count_all(
+    root: Path, workers: int, last_year: int, tiles_arg: str | None, relay: str
+) -> None:
     """Every (kept tile, year) part that is not on disk yet.
 
     Args:
@@ -394,6 +435,7 @@ def count_all(root: Path, workers: int, last_year: int, tiles_arg: str | None) -
         workers: Processes.
         last_year: Last calendar year read.
         tiles_arg: Optional comma-separated ``hHHvVV`` list overriding the screening.
+        relay: Relay token file.
     """
     if tiles_arg:
         tiles = [(int(t[1:3]), int(t[4:6])) for t in tiles_arg.split(",")]
@@ -406,7 +448,9 @@ def count_all(root: Path, workers: int, last_year: int, tiles_arg: str | None) -
     logger.info("%d tiles, %d (tile, year) parts to read", len(tiles), len(jobs))
     started = time.time()
     total = 0
-    with multiprocessing.get_context("spawn").Pool(workers, initializer=_init_worker) as pool:
+    with multiprocessing.get_context("spawn").Pool(
+        workers, initializer=_init_worker, initargs=(relay,)
+    ) as pool:
         for k, (name, n) in enumerate(pool.imap_unordered(count_year, jobs), start=1):
             total += n
             if k % 50 == 0 or k == len(jobs):
@@ -425,11 +469,16 @@ def main() -> None:
     ap.add_argument("--workers", type=int, default=48)
     ap.add_argument("--last-year", type=int, default=2026)
     ap.add_argument("--tiles", default=None, help="hHHvVV list (counts; default: screened)")
+    ap.add_argument(
+        "--token-file", default=None, help="relay token file (default <root>/raw/modis/sas_token.json)"
+    )
     args = ap.parse_args()
+    root = Path(args.root)
+    relay = args.token_file or str(root / "raw" / "modis" / "sas_token.json")
     if args.step == "screen":
-        screen(Path(args.root), args.workers)
+        screen(root, args.workers, relay)
     else:
-        count_all(Path(args.root), args.workers, args.last_year, args.tiles)
+        count_all(root, args.workers, args.last_year, args.tiles, relay)
 
 
 if __name__ == "__main__":
