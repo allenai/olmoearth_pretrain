@@ -10,9 +10,11 @@ numbers can be read against them. Feature sets (per window family table):
 * ``snow``: snow-physics summaries of the water year so far: cold-season
   precipitation (``tp`` on days with ``t2m`` < 0 C, i.e. snowfall), positive
   degree-days, mean ``t2m`` over the last 30 / 60 days, ERA5-Land's modelled
-  albedo (``ssr`` / ``ssrd``) over the last 8 / 30 days, the day the albedo
-  last fell below 0.4 (its own melt-out, days before the anchor) and the
-  runoff of the last 30 days; plus the day of year.
+  albedo (``1 - ssr / ssrd``) over the last 8 / 30 days, the days since its own
+  melt-out and the runoff of the last 30 days; plus the day of year. ERA5-Land's
+  snow albedo under forest stays below 0.4 (0.36 in the Colorado Rockies), so
+  its melt-out is the last day above the midpoint of the window's own 5th / 95th
+  albedo percentiles.
 * ``snow_clim``: the ``snow`` features as anomalies against the cell's own
   other water years (leave-one-year-out, same anchor offset). The encoder
   never sees the cell's climatology (no location input, one season of
@@ -56,7 +58,6 @@ SPANS = (8, 30, 90, 365)
 LAST_YEAR_SPANS = (8, 30, 83)
 BAND = {b: i for i, b in enumerate(ERA5L_BANDS)}
 ALPHAS = np.logspace(-2, 4, 13)
-MELT_ALBEDO = 0.4
 FREEZING_K = 273.15
 
 
@@ -103,7 +104,8 @@ def snow_features(block: np.ndarray, season_days: int) -> np.ndarray:
     t2m, tp = season[:, BAND["t2m"]], season[:, BAND["tp"]]
     with np.errstate(invalid="ignore", divide="ignore"):
         albedo = 1.0 - block[:, BAND["ssr"]] / block[:, BAND["ssrd"]]
-    snowy = np.flatnonzero(albedo >= MELT_ALBEDO)
+    low, high = np.nanpercentile(albedo, [5, 95])
+    snowy = np.flatnonzero(albedo >= (low + high) / 2)
     since_snow = WINDOW_DAYS - 1 - snowy[-1] if len(snowy) else WINDOW_DAYS
     return np.array([
         np.nansum(np.where(t2m < FREEZING_K, tp, 0.0)),
