@@ -29,8 +29,8 @@ data:
       init_args:
         property_name: drought
         classes:
-        - no
-        - yes
+        - "no"
+        - "yes"
         enable_f1_metric: true
         metric_kwargs:
           average: macro

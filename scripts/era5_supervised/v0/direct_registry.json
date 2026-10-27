@@ -618,6 +618,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.136157,
+      "target_std": 1.030909,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -647,6 +649,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.049291,
+      "target_std": 0.608807,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -676,6 +680,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.004025,
+      "target_std": 0.851234,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -705,6 +711,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.084976,
+      "target_std": 0.838316,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -734,6 +742,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.14714,
+      "target_std": 1.094158,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -763,6 +773,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.226012,
+      "target_std": 1.398837,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -792,6 +804,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.040905,
+      "target_std": 0.626974,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -821,6 +835,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.00814,
+      "target_std": 0.851084,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -850,6 +866,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 0.101852,
+      "target_std": 0.863691,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -907,6 +925,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 1.049795,
+      "target_std": 1.33558,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -936,6 +956,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 1.458196,
+      "target_std": 1.381813,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -965,6 +987,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 1.37322,
+      "target_std": 1.420328,
       "task_type": "regression",
       "test_groups": [
         "eval"

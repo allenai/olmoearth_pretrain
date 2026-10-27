@@ -29,9 +29,9 @@ data:
       init_args:
         property_name: tpast8
         classes:
-        - improve
-        - stable
-        - worsen
+        - "improve"
+        - "stable"
+        - "worsen"
         enable_f1_metric: true
         metric_kwargs:
           average: macro

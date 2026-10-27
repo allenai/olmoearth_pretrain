@@ -172,7 +172,8 @@ def main() -> None:
             YAML.format(what=what, weka_path=WEKA_PATH, task=task)
         )
     for target, (classes, what) in CLASSIFICATION.items():
-        listed = "\n".join(f"        - {c}" for c in classes)
+        # Quoted: YAML 1.1 reads bare yes / no as booleans.
+        listed = "\n".join(f'        - "{c}"' for c in classes)
         task = CLASSIFICATION_TASK.format(prop=target, classes=listed)
         (V0_DIR / "configs" / f"usdm_{target}_era5d.yaml").write_text(
             YAML.format(what=what, weka_path=WEKA_PATH, task=task)
