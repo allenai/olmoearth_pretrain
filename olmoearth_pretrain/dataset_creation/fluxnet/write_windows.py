@@ -28,7 +28,9 @@ never straddle splits.
 
 * ``all``: every candidate with ``gpp`` on a ``--spacing``-day grid, for
   supervised training;
-* ``eval``: a site-balanced subset (``--n-train/--n-val/--n-test``) of the
+* ``eval``: a fixed subset recorded in ``meta/eval_keys.parquet`` (reused on
+  every rebuild; delete it to draw a new one), originally a site-balanced draw
+  (``--n-train/--n-val/--n-test``) of the
   candidates where ``gpp``, ``le`` and ``nee`` are all defined, for
   the in-loop linear probes (the task configs use ``allow_invalid: false``, so a
   missing property fails loudly instead of reading as 0). It is a separate
@@ -314,7 +316,8 @@ def build_candidates(
     jobs = [(row, str(meta)) for row in sites.to_dict("records")]
     with multiprocessing.get_context("spawn").Pool(workers) as pool:
         parts = list(pool.imap_unordered(site_candidates, jobs))
-    candidates = pd.concat(parts, ignore_index=True)
+    # Sorted, so the seeded eval selection does not depend on worker order.
+    candidates = pd.concat(parts).sort_values(["site_id", "anchor"], ignore_index=True)
     candidates = candidates.merge(
         sites[["site_id", "split", "igbp", "region", "hub", "site_group"]], on="site_id"
     )
@@ -355,7 +358,11 @@ def balanced_subset(frame: pd.DataFrame, n: int, seed: int) -> pd.DataFrame:
 
 
 def select_windows(
-    candidates: pd.DataFrame, spacing: int, quotas: dict[str, int], seed: int
+    candidates: pd.DataFrame,
+    spacing: int,
+    quotas: dict[str, int],
+    seed: int,
+    eval_keys: pd.DataFrame | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Rows of the ``all`` and ``eval`` groups.
 
@@ -364,11 +371,22 @@ def select_windows(
         spacing: Anchor spacing (days, multiple of 8) of the ``all`` group.
         quotas: Eval subset size per split.
         seed: Sampling seed.
+        eval_keys: ``site_id, anchor`` of a fixed eval subset (``meta/eval_keys.parquet``);
+            when given, it replaces the seeded selection.
 
     Returns:
         ``{"all": rows, "eval": rows}``.
     """
     full = candidates[candidates["anchor"] % spacing == 0]
+    if eval_keys is not None:
+        eval_rows = candidates.merge(
+            eval_keys[["site_id", "anchor"]], on=["site_id", "anchor"]
+        )
+        if len(eval_rows) != len(eval_keys):
+            raise ValueError(
+                f"{len(eval_keys) - len(eval_rows)} eval keys are not candidates"
+            )
+        return {"all": full, "eval": eval_rows}
     eligible = candidates[candidates[list(EVAL_REQUIRED)].notna().all(axis=1)]
     eval_rows = pd.concat(
         [
@@ -562,6 +580,11 @@ def main() -> None:
     ap.add_argument("--n-train", type=int, default=4000)
     ap.add_argument("--n-val", type=int, default=1500)
     ap.add_argument("--n-test", type=int, default=1500)
+    ap.add_argument(
+        "--eval-keys",
+        default=None,
+        help="parquet of site_id, anchor fixing the eval subset (default: <root>/meta/eval_keys.parquet if it exists)",
+    )
     args = ap.parse_args()
     root = Path(args.root)
     if args.step in ("candidates", "all"):
@@ -571,7 +594,18 @@ def main() -> None:
         candidates = pd.read_parquet(root / "meta" / "candidates.parquet")
     if args.step in ("windows", "all"):
         quotas = {"train": args.n_train, "val": args.n_val, "test": args.n_test}
-        selected = select_windows(candidates, args.spacing, quotas, args.seed)
+        keys_path = (
+            Path(args.eval_keys)
+            if args.eval_keys
+            else root / "meta" / "eval_keys.parquet"
+        )
+        eval_keys = pd.read_parquet(keys_path) if keys_path.exists() else None
+        selected = select_windows(
+            candidates, args.spacing, quotas, args.seed, eval_keys
+        )
+        selected["eval"][["site_id", "anchor", "split"]].to_parquet(
+            root / "meta" / "eval_keys.parquet"
+        )
         write_all(root, selected, sites, args.workers)
 
 
