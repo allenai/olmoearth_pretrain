@@ -117,7 +117,11 @@ def main() -> None:
         model = config.build()
         if not entry.get("random_init", False):
             load_weights(model, run_dir / f"step{int(entry['step'])}")
-        np.savez(target, **embed(model.encoder, era5, stamps, valid, args.batch))
+        # Written to a side file, then renamed: readers glob *.npz while dumps run.
+        part = target.with_suffix(".npz.part")
+        with open(part, "wb") as f:
+            np.savez(f, **embed(model.encoder, era5, stamps, valid, args.batch))
+        part.rename(target)
         logger.info("wrote %s", target)
 
 
