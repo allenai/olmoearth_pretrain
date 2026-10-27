@@ -100,17 +100,18 @@ def probe_set(job: tuple[str, list[Any], str, str, int]) -> str:
     """Worker: probe every task on one embedding set.
 
     Args:
-        job: ``(npz path, task configs, windows parquet, results dir, threads)``.
+        job: ``(npz path, task configs, windows parquet, results dir, threads,
+            pooling)``.
 
     Returns:
         The set name.
     """
-    path, tasks, windows_path, results_dir, threads = job
+    path, tasks, windows_path, results_dir, threads, pooling = job
     torch.set_num_threads(threads)
     name = Path(path).stem
     run, step = run_and_step(name)
     windows = pd.read_parquet(windows_path)
-    emb = torch.from_numpy(np.load(path)["mean"].astype(np.float32))
+    emb = torch.from_numpy(np.load(path)[pooling].astype(np.float32))
     split = windows["split"].to_numpy()
     rows = {
         s: torch.from_numpy(np.flatnonzero(split == s))
@@ -182,7 +183,12 @@ def main() -> None:
     ap.add_argument("--lr-grid", default="[1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1]")
     ap.add_argument("--root", default=str(USDM_ROOT))
     ap.add_argument("--emb-dir", default="embeddings")
-    ap.add_argument("--results-dir", default=None, help="default <root>/probe_results")
+    ap.add_argument(
+        "--results-dir", default=None, help="default <root>/probe_results[_<pooling>]"
+    )
+    ap.add_argument(
+        "--pooling", default="mean", help="mean (what the evaluator probes) or last4"
+    )
     ap.add_argument("--sets", default=None, help="regex on embedding set names")
     ap.add_argument("--shard", default="0/1")
     ap.add_argument("--workers", type=int, default=14)
@@ -190,7 +196,8 @@ def main() -> None:
     args = ap.parse_args()
     root = Path(args.root)
     emb_dir = root / args.emb_dir
-    results_dir = Path(args.results_dir or root / "probe_results")
+    suffix = "" if args.pooling == "mean" else f"_{args.pooling}"
+    results_dir = Path(args.results_dir or root / f"probe_results{suffix}")
     results_dir.mkdir(parents=True, exist_ok=True)
     tasks = task_configs(args.tasks, args.lr_grid)
     order = pd.read_parquet(emb_dir / "windows.parquet")
@@ -204,7 +211,8 @@ def main() -> None:
     paths = sorted(emb_dir.glob("*.npz"))[index::count]
     todo = [p for p in paths if not args.sets or re.search(args.sets, p.stem)]
     jobs = [
-        (str(p), tasks, str(windows_path), str(results_dir), args.threads) for p in todo
+        (str(p), tasks, str(windows_path), str(results_dir), args.threads, args.pooling)
+        for p in todo
     ]
     logger.info("%d embedding sets to probe on %d tasks", len(jobs), len(tasks))
     with multiprocessing.get_context("spawn").Pool(args.workers) as pool:
