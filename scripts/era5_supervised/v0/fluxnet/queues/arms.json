@@ -39,85 +39,73 @@
   "name": "era5enc_1501_ln_d128_flux",
   "source": "era5enc_1501_ln_d128",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1501_ln_d128_seed1_flux",
   "source": "era5enc_1501_ln_d128_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1501_ln_d128_seed2_flux",
   "source": "era5enc_1501_ln_d128_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1502_ln_d256_flux",
   "source": "era5enc_1502_ln_d256",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1502_ln_d256_seed1_flux",
   "source": "era5enc_1502_ln_d256_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1502_ln_d256_seed2_flux",
   "source": "era5enc_1502_ln_d256_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1504_ln_shd1536_flux",
   "source": "era5enc_1504_ln_shd1536",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1504_ln_shd1536_seed1_flux",
   "source": "era5enc_1504_ln_shd1536_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1504_ln_shd1536_seed2_flux",
   "source": "era5enc_1504_ln_shd1536_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1407_halo75_nogate_ln_flux",
   "source": "era5enc_1407_halo75_nogate_ln",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1407_halo75_nogate_ln_seed1_flux",
   "source": "era5enc_1407_halo75_nogate_ln_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1407_halo75_nogate_ln_seed2_flux",
   "source": "era5enc_1407_halo75_nogate_ln_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1602_doyc_pe_flux",
@@ -231,196 +219,168 @@
   "name": "era5enc_1503_ln_shd768_flux",
   "source": "era5enc_1503_ln_shd768",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1503_ln_shd768_seed1_flux",
   "source": "era5enc_1503_ln_shd768_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1503_ln_shd768_seed2_flux",
   "source": "era5enc_1503_ln_shd768_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1505_ln_shd768_sd2_flux",
   "source": "era5enc_1505_ln_shd768_sd2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1505_ln_shd768_sd2_seed1_flux",
   "source": "era5enc_1505_ln_shd768_sd2_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1505_ln_shd768_sd2_seed2_flux",
   "source": "era5enc_1505_ln_shd768_sd2_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1506_ln_k8s8_flux",
   "source": "era5enc_1506_ln_k8s8",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1506_ln_k8s8_seed1_flux",
   "source": "era5enc_1506_ln_k8s8_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1506_ln_k8s8_seed2_flux",
   "source": "era5enc_1506_ln_k8s8_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1507_ln_k8s4_flux",
   "source": "era5enc_1507_ln_k8s4",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1507_ln_k8s4_seed1_flux",
   "source": "era5enc_1507_ln_k8s4_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1507_ln_k8s4_seed2_flux",
   "source": "era5enc_1507_ln_k8s4_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1508_ln_k4s4_flux",
   "source": "era5enc_1508_ln_k4s4",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1508_ln_k4s4_seed1_flux",
   "source": "era5enc_1508_ln_k4s4_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1508_ln_k4s4_seed2_flux",
   "source": "era5enc_1508_ln_k4s4_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_flux",
   "source": "era5enc_1406_halo75_nogate",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_seed1_flux",
   "source": "era5enc_1406_halo75_nogate_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_seed2_flux",
   "source": "era5enc_1406_halo75_nogate_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_maskbuff_flux",
   "source": "era5enc_1406_halo75_nogate_maskbuff",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_maskbuff_seed1_flux",
   "source": "era5enc_1406_halo75_nogate_maskbuff_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1406_halo75_nogate_maskbuff_seed2_flux",
   "source": "era5enc_1406_halo75_nogate_maskbuff_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1408_halo75_nogate_pe_flux",
   "source": "era5enc_1408_halo75_nogate_pe",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1408_halo75_nogate_pe_seed1_flux",
   "source": "era5enc_1408_halo75_nogate_pe_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1408_halo75_nogate_pe_seed2_flux",
   "source": "era5enc_1408_halo75_nogate_pe_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1409_halo75_nogate_ln_pe_flux",
   "source": "era5enc_1409_halo75_nogate_ln_pe",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1409_halo75_nogate_ln_pe_seed1_flux",
   "source": "era5enc_1409_halo75_nogate_ln_pe_seed1",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1409_halo75_nogate_ln_pe_seed2_flux",
   "source": "era5enc_1409_halo75_nogate_ln_pe_seed2",
   "interval": 50000,
-  "load_step": 50000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 50000
  },
  {
   "name": "era5enc_1509_ln_150k_flux",
   "source": "era5enc_1509_ln_150k",
   "interval": 150000,
-  "load_step": 150000,
-  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval]"
+  "load_step": 150000
  }
 ]

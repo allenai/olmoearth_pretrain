@@ -1,0 +1,134 @@
+[
+ {
+  "name": "era5enc_1306_halo75_nogate_flux_a",
+  "run": "era5enc_1306_halo75_nogate_flux",
+  "source": "era5enc_1306_halo75_nogate",
+  "load_step": 50000,
+  "steps": [
+   0,
+   4000,
+   8000,
+   12000,
+   16000,
+   20000,
+   24000,
+   28000,
+   32000,
+   36000,
+   40000,
+   44000,
+   48000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate_flux_b",
+  "run": "era5enc_1306_halo75_nogate_flux",
+  "source": "era5enc_1306_halo75_nogate",
+  "load_step": 50000,
+  "steps": [
+   2000,
+   6000,
+   10000,
+   14000,
+   18000,
+   22000,
+   26000,
+   30000,
+   34000,
+   38000,
+   42000,
+   46000,
+   50000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate_flux_a",
+  "run": "era5enc_1305_naive70_nogate_flux",
+  "source": "era5enc_1305_naive70_nogate",
+  "load_step": 50000,
+  "steps": [
+   0,
+   4000,
+   8000,
+   12000,
+   16000,
+   20000,
+   24000,
+   28000,
+   32000,
+   36000,
+   40000,
+   44000,
+   48000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate_flux_b",
+  "run": "era5enc_1305_naive70_nogate_flux",
+  "source": "era5enc_1305_naive70_nogate",
+  "load_step": 50000,
+  "steps": [
+   2000,
+   6000,
+   10000,
+   14000,
+   18000,
+   22000,
+   26000,
+   30000,
+   34000,
+   38000,
+   42000,
+   46000,
+   50000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ },
+ {
+  "name": "era5enc_1301_halo22_flux_a",
+  "run": "era5enc_1301_halo22_flux",
+  "source": "era5enc_1301_halo22",
+  "load_step": 50000,
+  "steps": [
+   0,
+   4000,
+   8000,
+   12000,
+   16000,
+   20000,
+   24000,
+   28000,
+   32000,
+   36000,
+   40000,
+   44000,
+   48000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ },
+ {
+  "name": "era5enc_1301_halo22_flux_b",
+  "run": "era5enc_1301_halo22_flux",
+  "source": "era5enc_1301_halo22",
+  "load_step": 50000,
+  "steps": [
+   2000,
+   6000,
+   10000,
+   14000,
+   18000,
+   22000,
+   26000,
+   30000,
+   34000,
+   38000,
+   42000,
+   46000,
+   50000
+  ],
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval,lfmc_woody_eval,dfmc1000h_grav_eval]"
+ }
+]

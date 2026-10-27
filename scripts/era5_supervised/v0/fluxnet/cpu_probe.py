@@ -12,7 +12,9 @@ Each source run's model is rebuilt from its ``step<N>/config.json`` (fields
 older configs lack get the behaviour of the code that trained them, as in
 ``probe_queue.source_flags``), each checkpoint is unsharded to local disk and
 loaded strictly, and every eval is appended to ``<results_dir>/<name>.jsonl``
-in the evaluator's format. ``--shard i/n`` splits a queue across nodes; a
+in the evaluator's format. Besides the ``probe_queue.py`` keys, an entry may
+list explicit ``steps`` (to split one run's checkpoints across jobs) and a
+``run`` name to record (default: the entry name), so the parts merge. ``--shard i/n`` splits a queue across nodes; a
 finished entry leaves ``<done_dir>/<name>.done``.
 
 Usage (repo root)::
@@ -279,13 +281,17 @@ def run_entry(entry: dict[str, Any], args: argparse.Namespace) -> None:
     prober = Prober(
         task_configs(entry.get("tasks", args.tasks), args.lr_grid), args.workers
     )
+    run_name = entry.get("run", entry["name"])
     results = Path(args.results_dir) / f"{entry['name']}.jsonl"
     if entry.get("random_init", False):
-        prober.run(model.encoder, entry["name"], 0, results)
+        prober.run(model.encoder, run_name, 0, results)
         return
-    for step in checkpoint_steps(run_dir, int(entry.get("interval", 50000))):
+    steps = entry.get("steps") or checkpoint_steps(
+        run_dir, int(entry.get("interval", 50000))
+    )
+    for step in steps:
         load_weights(model, run_dir / f"step{step}")
-        prober.run(model.encoder, entry["name"], step, results)
+        prober.run(model.encoder, run_name, step, results)
 
 
 def main() -> None:
