@@ -46,6 +46,9 @@ from olmoearth_pretrain.train.masking import MaskingConfig, MaskingStrategy
 
 logger = logging.getLogger(__name__)
 
+# All-token budget handed to the dataset when shapes come from an encoder token budget.
+_UNLIMITED_TOKEN_BUDGET = 1 << 30
+
 
 def _worker_ignore_sigterm(worker_id: int) -> None:
     """Make dataloader workers ignore SIGTERM.
@@ -82,6 +85,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_timesteps: int = 12,
         tile_size: int = 128,
         max_location_queries: int | None = None,
+        encoder_token_budget: int | None = None,
+        min_encoder_tokens: int = 0,
+        max_num_visible: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -152,6 +158,16 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 ``(sampled_hw_p * patch_size / s) ** 2`` fits the budget (``s ==
                 patch_size``, one location query per token, is always allowed). None leaves
                 it None (one location query per token).
+            encoder_token_budget: If set, budget the ONLINE-ENCODER tokens instead of all
+                tokens (``token_budget`` is then ignored for shapes). Every rank batch draws a
+                visible band-set count ``e ~ U{1..max_num_visible}``, sizes its (grid, t) so
+                ``e * hw^2 * ceil(t / 2) <= encoder_token_budget`` (an upper bound on what a
+                masking strategy that encodes half of each visible band set's tokens, or the
+                encode half of its timesteps, can show the encoder), and hands ``e`` to the
+                masking strategy (``apply_mask(..., num_visible=e)``).
+            min_encoder_tokens: Floor for the same encoder-token count (0 disables).
+            max_num_visible: Largest visible band-set count drawn (the number of
+                encode-decode band sets minus one). Required with encoder_token_budget.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -196,6 +212,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 f"max_location_queries must be positive, got {max_location_queries}"
             )
         self.max_location_queries = max_location_queries
+        if encoder_token_budget is not None and (
+            max_num_visible is None or max_num_visible < 1
+        ):
+            raise ValueError("encoder_token_budget needs max_num_visible >= 1")
+        self.encoder_token_budget = encoder_token_budget
+        self.min_encoder_tokens = min_encoder_tokens
+        self.max_num_visible = max_num_visible
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -401,11 +424,19 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self, idx: int, patch_size: int, sampled_hw_p: int, target_t: int | None = None
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
+        # With an encoder token budget the sampler's (grid, target_t) already encodes the
+        # budget; an unlimited all-token budget keeps the crop but stops the dataset from
+        # re-capping t by the all-token count.
+        token_budget = (
+            self.token_budget
+            if self.encoder_token_budget is None
+            else _UNLIMITED_TOKEN_BUDGET
+        )
         args = GetItemArgs(
             idx=idx,
             patch_size=patch_size,
             sampled_hw_p=sampled_hw_p,
-            token_budget=self.token_budget,
+            token_budget=token_budget,
             tokenization_config=self.tokenization_config,
             target_t=target_t,
             budget_exclude_modalities=self.budget_exclude_modalities,
@@ -673,7 +704,10 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         hw_p_to_sample: list[int],
         rank_batch_size: int,
     ) -> Iterator[tuple[int, int, int, int, int | None]]:
-        """Yield ``(idx, patch_size, sampled_hw_p, target_t, location_query_patch_size)`` per instance.
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t, location_query_patch_size, num_visible)`` per instance.
+
+        ``num_visible`` is the rank batch's visible band-set count when the loader has an
+        ``encoder_token_budget`` (see __init__), else None.
 
         See the OlmoEarthDataLoader.__init__ docstring for a description
         of the subsetting behaviour.
@@ -693,6 +727,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         temporal_bias = dl.temporal_bias
         min_tokens = dl.min_tokens_per_instance
         max_location_queries = dl.max_location_queries
+        encoder_budget = dl.encoder_token_budget
+        min_encoder_tokens = dl.min_encoder_tokens
+        max_num_visible = dl.max_num_visible
 
         def max_t_for(hw: int) -> int:
             """Largest number of timesteps that fits the budget for this grid."""
@@ -718,6 +755,17 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             if per_t <= 0:  # no time-varying modalities and floor unmet
                 return max_t_data + 1  # unsatisfiable -> grid dropped below
             return int(max(1, -(-(min_tokens - fixed) // per_t)))  # ceil division
+
+        def encoder_window(hw: int, num_visible: int) -> tuple[int, int]:
+            """(min_t, max_t) with num_visible * hw^2 * ceil(t / 2) within the encoder budget/floor."""
+            assert encoder_budget is not None
+            per_half_t = num_visible * hw * hw  # encoder tokens per ceil(t / 2)
+            hi = min(max_t_data, 2 * (encoder_budget // per_half_t))
+            if min_encoder_tokens <= 0:
+                lo = 1
+            else:
+                lo = max(1, 2 * (-(-min_encoder_tokens // per_half_t)) - 1)
+            return lo, hi
 
         def sample_t(lo: int, hi: int) -> int:
             """Sample a timestep in [lo, hi], biased toward hi by temporal_bias."""
@@ -752,9 +800,13 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         worker_id = self.worker_info.id if self.worker_info is not None else 0
         rng = self.rngs[worker_id]
 
+        num_visible: int | None = None
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
                 patch_size = int(rng.choice(patch_size_array))
+                if encoder_budget is not None:
+                    assert max_num_visible is not None
+                    num_visible = int(rng.integers(1, max_num_visible + 1))
                 # Bound the grid so sampled_hw_p * patch_size fits the tile extent.
                 grid_cap = dl.tile_size // patch_size
                 grids = hw_p_to_sample_array[
@@ -762,9 +814,14 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 ]
                 # A grid is a candidate only if some timestep count satisfies both
                 # the budget ceiling and the token floor: min_t_for <= max_t_for.
-                windows = {
-                    int(h): (min_t_for(int(h)), max_t_for(int(h))) for h in grids
-                }
+                if num_visible is not None:
+                    windows = {
+                        int(h): encoder_window(int(h), num_visible) for h in grids
+                    }
+                else:
+                    windows = {
+                        int(h): (min_t_for(int(h)), max_t_for(int(h))) for h in grids
+                    }
                 candidates = np.array(
                     [h for h in grids if windows[int(h)][0] <= windows[int(h)][1]],
                     dtype=grids.dtype,
@@ -816,6 +873,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 int(sampled_hw_p),
                 int(target_t),
                 location_query_patch_size,
+                num_visible,
             )
             instances_processed += 1
 
@@ -846,15 +904,23 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         indices = self.data_loader._get_local_instance_indices(global_indices)
 
         # Create iterator that fetches samples from the dataset, each carrying the
-        # location-query patch size of its rank batch.
+        # location-query patch size and visible band-set count of its rank batch.
         instance_iterator = (
             (
                 self.data_loader._get_dataset_item(
                     int(idx), patch_size, sampled_hw_p, target_t
                 ),
                 location_query_patch_size,
+                num_visible,
             )
-            for idx, patch_size, sampled_hw_p, target_t, location_query_patch_size in (
+            for (
+                idx,
+                patch_size,
+                sampled_hw_p,
+                target_t,
+                location_query_patch_size,
+                num_visible,
+            ) in (
                 self._get_batch_item_params_iterator(
                     indices,
                     self.data_loader.patch_sizes,
@@ -864,9 +930,16 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             )
         )
 
+        def collate(batch: list) -> tuple:
+            items = [item for item, _, _ in batch]
+            num_visible = batch[0][2]
+            if num_visible is None:
+                return self.data_loader.collator(items)
+            return self.data_loader.collator(items, num_visible=num_visible)
+
         return (
             (
-                *self.data_loader.collator([item for item, _ in batch]),
+                *collate(batch),
                 batch[0][1],
             )
             for batch in iter_batched(
@@ -908,6 +981,10 @@ class OlmoEarthDataLoaderConfig(Config):
     # Per-sample location-query budget: if set, each rank batch draws a
     # location_query_patch_size (pixels per location query along each side) that fits it.
     max_location_queries: int | None = None
+    # Budget the online-encoder tokens instead (see OlmoEarthDataLoader.__init__).
+    encoder_token_budget: int | None = None
+    min_encoder_tokens: int = 0
+    max_num_visible: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -989,6 +1066,9 @@ class OlmoEarthDataLoaderConfig(Config):
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
             max_location_queries=self.max_location_queries,
+            encoder_token_budget=self.encoder_token_budget,
+            min_encoder_tokens=self.min_encoder_tokens,
+            max_num_visible=self.max_num_visible,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
