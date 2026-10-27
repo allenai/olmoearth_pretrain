@@ -45,7 +45,23 @@ CLASSIFICATION = {
 }
 # Supervised-training flavours on the full 'all' group.
 FULL = ("sev", "dpast8", "dfut8")
-PROBE_LRS: dict[str, float] = {}
+# Probe inputs (registry ``probe_pooling``): the recent-change targets read the
+# mean of the last 4 tokens, which kept 1.3-2x the gain over the random-init
+# floor and a 2-9x larger between-arm F than the pooled vector (dumped
+# embeddings of the 20 v1.4-v1.6 arms x 3 seeds, 2026-10-27).
+PROBE_POOLINGS = {
+    "usdm_dpast8_eval": "last4",
+    "usdm_dpast13_eval": "last4",
+    "usdm_dpast26_eval": "last4",
+}
+# Plateau of the step-50k probe-LR sweep over the same arms (median val), for
+# each task's own pooling.
+PROBE_LRS = {
+    "usdm_sev_eval": 0.3, "usdm_sev_p8_eval": 0.3, "usdm_drought_eval": 0.01,
+    "usdm_dpast4_eval": 0.003, "usdm_dpast8_eval": 0.003, "usdm_dpast13_eval": 0.003,
+    "usdm_dpast26_eval": 0.003, "usdm_dfut4_eval": 0.001, "usdm_dfut8_eval": 0.003,
+    "usdm_dfut13_eval": 0.003, "usdm_tpast8_eval": 0.01, "usdm_tfut8_eval": 0.0001,
+}  # fmt: skip
 DEFAULT_PROBE_LR = 0.01
 
 YAML = """\
@@ -140,6 +156,8 @@ def entry(target: str, group: str, stats: dict, notes: str) -> dict:
     }  # fmt: skip
     name = f"usdm_{target}_eval" if group == "eval" else f"usdm_{target}"
     out["probe_lr"] = PROBE_LRS.get(name, DEFAULT_PROBE_LR)
+    if name in PROBE_POOLINGS:
+        out["probe_pooling"] = PROBE_POOLINGS[name]
     if target in CLASSIFICATION:
         out.update(
             task_type="classification", num_classes=len(CLASSIFICATION[target][0])

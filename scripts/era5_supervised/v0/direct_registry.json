@@ -614,7 +614,7 @@
       "model_yaml_path": "configs/usdm_dfut13_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 13 weeks after the anchor (forecast of the evolution), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
       "tags": {
         "split": "train"
       },
@@ -645,7 +645,7 @@
       "model_yaml_path": "configs/usdm_dfut4_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 4 weeks after the anchor (forecast of the evolution), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.001,
       "tags": {
         "split": "train"
       },
@@ -707,7 +707,7 @@
       "model_yaml_path": "configs/usdm_dfut8_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 8 weeks after the anchor (forecast of the evolution), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
       "tags": {
         "split": "train"
       },
@@ -738,7 +738,8 @@
       "model_yaml_path": "configs/usdm_dpast13_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 13 weeks before the anchor (recent evolution, inside the input window), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
+      "probe_pooling": "last4",
       "tags": {
         "split": "train"
       },
@@ -769,7 +770,8 @@
       "model_yaml_path": "configs/usdm_dpast26_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 26 weeks before the anchor (recent evolution, inside the input window), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
+      "probe_pooling": "last4",
       "tags": {
         "split": "train"
       },
@@ -800,7 +802,7 @@
       "model_yaml_path": "configs/usdm_dpast4_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 4 weeks before the anchor (recent evolution, inside the input window), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
       "tags": {
         "split": "train"
       },
@@ -862,7 +864,8 @@
       "model_yaml_path": "configs/usdm_dpast8_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 8 weeks before the anchor (recent evolution, inside the input window), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.003,
+      "probe_pooling": "last4",
       "tags": {
         "split": "train"
       },
@@ -952,7 +955,7 @@
       "model_yaml_path": "configs/usdm_sev_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): current USDM severity (0 none, 1 D0 .. 5 D4; cell area average = cell DSCI / 100), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.3,
       "tags": {
         "split": "train"
       },
@@ -983,7 +986,7 @@
       "model_yaml_path": "configs/usdm_sev_p8_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): USDM severity 8 weeks after the anchor (forecast of the state), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 1,
-      "probe_lr": 0.01,
+      "probe_lr": 0.3,
       "tags": {
         "split": "train"
       },
@@ -1013,7 +1016,7 @@
       "model_yaml_path": "configs/usdm_tfut8_era5d.yaml",
       "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): 8-week coming severity change as improve / stable / worsen (|change| >= 0.5), from the 448-day ERA5-Land history ending the day before the map date. 'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics and spread over cells and water years. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
       "num_classes": 3,
-      "probe_lr": 0.01,
+      "probe_lr": 0.0001,
       "tags": {
         "split": "train"
       },

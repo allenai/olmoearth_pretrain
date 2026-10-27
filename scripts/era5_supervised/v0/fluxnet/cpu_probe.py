@@ -181,7 +181,7 @@ class Prober:
         for task in self.tasks:
             start = time.monotonic()
             train_b, val_b, test_b = self._batches(task)
-            embs = [_extract_embeddings(b, encoder, DEVICE) if b else (None, None)
+            embs = [_extract_embeddings(b, encoder, DEVICE, task.probe_pooling) if b else (None, None)
                     for b in (train_b, val_b, test_b)]  # fmt: skip
             geometry = _embedding_geometry_metrics(task.name, embs[0][0])
             task_type = TaskType(task.task_type)

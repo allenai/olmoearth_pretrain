@@ -76,6 +76,10 @@ class DirectRslearnTaskEntry(BaseModel):
         probe_lr: Per-task linear-probe learning rate for downstream eval.
             ``None`` defers to the run-level ``common.eval_probe_lr`` default.
             Set per eval task since the best probe LR differs by task.
+        probe_pooling: Which encoder output the downstream probe reads:
+            ``pooled`` (the encoder's pooled embedding, default) or ``last4``
+            (mean of the last 4 tokens, about the window's final 35 days, under
+            a parameter-free LayerNorm; for targets about the window's end).
         norm_stats_from_pretrained: Use the pretrain ``computed.json`` stats.
         max_samples: Optional cap on the number of samples (debug / smoke runs).
         ssl: When True, this is a self-supervised task used purely for data
@@ -107,6 +111,7 @@ class DirectRslearnTaskEntry(BaseModel):
     test_tags: dict[str, str] = Field(default_factory=dict)
     has_test: bool = True
     probe_lr: float | None = None
+    probe_pooling: str = "pooled"
     norm_stats_from_pretrained: bool = True
     max_samples: int | None = None
     target_mean: float | None = None

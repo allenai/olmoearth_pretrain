@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from olmo_core.train.callbacks.callback import Callback, CallbackConfig
 from olmo_core.train.common import Duration
 from olmo_core.train.trainer import Trainer
@@ -96,6 +97,34 @@ class Era5LinearProbeTaskConfig:
     height_width: int | None = None
     # ERA5-specific opt-out; omitted test filters otherwise defer to the YAML.
     has_test: bool = True
+    # Which encoder output the probe reads (see `PROBE_POOLINGS`).
+    probe_pooling: str = "pooled"
+
+
+# Probe inputs: "pooled" is the encoder's own pooled embedding (every eval's
+# default); "last4" is the mean of the last 4 patch tokens (about the final 35
+# days of the window, each token attending to the whole window) under a
+# parameter-free LayerNorm, for targets about the window's recent end that a
+# mean over all 448 days dilutes (the USDM drought-change evals).
+PROBE_POOLINGS = ("pooled", "last4")
+
+
+def _probe_input(out: dict[str, torch.Tensor], pooling: str) -> torch.Tensor:
+    """The embedding a probe reads from one encoder forward output.
+
+    Args:
+        out: Encoder output (``pooled`` and ``tokens``).
+        pooling: One of ``PROBE_POOLINGS``.
+
+    Returns:
+        ``[B, D]`` float embeddings.
+    """
+    if pooling == "pooled":
+        return out["pooled"].float()
+    if pooling == "last4":
+        tokens = out["tokens"].float()
+        return F.layer_norm(tokens[:, -4:].mean(dim=1), (tokens.shape[-1],))
+    raise ValueError(f"probe_pooling must be one of {PROBE_POOLINGS}, got {pooling!r}")
 
 
 def _build_eval_dataset(
@@ -170,8 +199,9 @@ def _extract_embeddings(
     batches: list[Any],
     encoder: torch.nn.Module,
     device: torch.device,
+    pooling: str = "pooled",
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Extract frozen mean-pooled embeddings from the encoder for all batches."""
+    """Extract frozen embeddings (``pooling``, see `_probe_input`) for all batches."""
     all_embeddings: list[torch.Tensor] = []
     all_labels: list[torch.Tensor] = []
 
@@ -188,7 +218,7 @@ def _extract_embeddings(
             with torch.amp.autocast(device_type=device.type, dtype=torch.bfloat16):
                 out = encoder(era5=era5, timestamps=timestamps, valid_mask=valid_mask)
 
-            all_embeddings.append(out["pooled"].float().cpu())
+            all_embeddings.append(_probe_input(out, pooling).cpu())
             all_labels.append(batch.labels)
 
     if was_training:
@@ -580,16 +610,18 @@ class Era5DownstreamEvaluatorCallback(Callback):
         train_batches, val_batches, test_batches = batches
 
         train_embeddings, train_labels = _extract_embeddings(
-            train_batches, encoder, device
+            train_batches, encoder, device, task.probe_pooling
         )
         geometry = _embedding_geometry_metrics(task.name, train_embeddings)
-        val_embeddings, val_labels = _extract_embeddings(val_batches, encoder, device)
+        val_embeddings, val_labels = _extract_embeddings(
+            val_batches, encoder, device, task.probe_pooling
+        )
 
         test_embeddings: torch.Tensor | None = None
         test_labels: torch.Tensor | None = None
         if test_batches is not None:
             test_embeddings, test_labels = _extract_embeddings(
-                test_batches, encoder, device
+                test_batches, encoder, device, task.probe_pooling
             )
 
         task_type = TaskType(task.task_type)

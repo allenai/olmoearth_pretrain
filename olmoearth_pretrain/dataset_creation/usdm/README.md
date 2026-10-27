@@ -109,6 +109,19 @@ float32 `NumpyRasterFormat` with per-day timestamps and nodata -9999 in raw
 ECMWF units, and a `label` point (at the pixel centre) with every target as a
 property.
 
-## Provenance
+## Provenance: how the dataset on weka was built (2026-10-27)
 
-Filled in as the dataset is built (Beaker experiment, commit, what it did).
+CPU-only Beaker jobs on one Jupiter node each (48 workers), from
+`scripts/era5_supervised/v0/usdm/launch_build.sh`.
+
+| Step | Beaker experiment | Commit | What it did |
+|---|---|---|---|
+| Build | 01M5ZNKXJG2465H95B9XFNWR3J | 706bf8e1a | Download (1,399 maps 2000-01-04..2026-10-20; 2026-10-27 not yet published), rasterize (81,751 domain cells), cells (3,457 sampled, 912 mirror chunk columns), candidates (4.63M: train 1.95M / val 125k / test 154k / none 2.40M). 15 min. |
+| Eval windows | 01M5ZPMFDSC04V1Z13FCBJHKE9 | 8ce5917e8 | `eval` group: 4000 / 1500 / 1500 windows over 3,137 cells, keys in `meta/eval_keys.parquet`. |
+| All windows | 01M5ZPTZXP9KFG803Y3V811XYH | 8ce5917e8 | `all` group: 185,772 windows (train 162,526 / val 10,417 / test 12,829). |
+| Tower labels | (weka session) | 4670fdcb1 | `fluxnet_drought.parquet`: 33,098 FLUXNET windows at 266 CONUS towers. |
+
+Final state: 3,457 cells, `eval` 7,000 windows, `all` 185,772 windows;
+`meta/label_stats.json` holds the per-split target statistics (registry
+`target_mean` / `target_std`), `meta/baselines_windows_eval.json` the reference
+baselines.
