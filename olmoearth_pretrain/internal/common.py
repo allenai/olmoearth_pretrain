@@ -181,6 +181,14 @@ def build_launch_config(
                 value=loop_eval_from_train_config,
             )
         )
+    # Optional "i/n" shard of the in-loop eval tasks (checkpoint_sweep_evals.py), so a
+    # long task list can be split over jobs that each fit in the 8h minimum runtime.
+    loop_eval_task_shard = os.environ.get("OE_LOOP_EVAL_TASK_SHARD")
+    if loop_eval_task_shard is not None:
+        logger.info(f"Propagating OE_LOOP_EVAL_TASK_SHARD to experiment: {loop_eval_task_shard}")
+        env_vars.append(
+            BeakerEnvVar(name="OE_LOOP_EVAL_TASK_SHARD", value=loop_eval_task_shard)
+        )
     # Propagate the finetune tag to the experiment if set
     finetune = os.environ.get("FINETUNE")
     if finetune is not None:

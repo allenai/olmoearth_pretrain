@@ -440,6 +440,13 @@ if __name__ == "__main__":
     trainer_config_builder = build_trainer_config
     if os.environ.get("OE_LOOP_EVAL_FROM_TRAIN_CONFIG"):
         train_eval_tasks = get_train_run_eval_tasks(user_mod, common)
+        shard = os.environ.get("OE_LOOP_EVAL_TASK_SHARD")
+        if train_eval_tasks and shard:
+            # "i/n": keep every n-th task (in config order) starting at i.
+            i, n = (int(x) for x in shard.split("/"))
+            train_eval_tasks = {
+                k: v for j, (k, v) in enumerate(train_eval_tasks.items()) if j % n == i
+            }
         if train_eval_tasks:
             logger.info(
                 "In-loop eval: using %d tasks from the training run's config: %s",
