@@ -26,15 +26,17 @@ HIGH_VOLUME_URL = "https://earthengine-highvolume.googleapis.com"
 
 
 class OpenBuildingsTemporal(GEE):
-    """Google Open Buildings 2.5D Temporal, aggregated to the window resolution.
+    """Google Open Buildings 2.5D Temporal, fetched at 2.5 m/pixel.
 
-    The rasters have 0.5 m pixels (~4 m effective resolution). building_presence and
-    building_height are averaged over each output pixel, so they become the
-    building-confidence fraction and the mean height including non-building area
-    (built volume per unit area). building_fractional_count is summed, so it
-    becomes the building count per output pixel.
+    The rasters have 0.5 m pixels (~4 m effective resolution). Requesting 2.5 m makes
+    Earth Engine read its mean-pyramided ~2 m level, which is ~10x faster than an
+    exact reduceResolution from 0.5 m and agrees with it after 4x4 averaging
+    (correlation >= 0.99 on presence and height). building_presence and
+    building_height stay per-pixel means (building-confidence fraction, and mean
+    height including non-building area). building_fractional_count is a mean per
+    0.5 m pixel in the pyramid, so it is scaled to the building count per 2.5 m pixel.
 
-    Windows are small (256x256 at 10 m/pixel), so each one is fetched with a
+    Windows are small (1024x1024 at 2.5 m/pixel), so each one is fetched with a
     synchronous computePixels request instead of the base class's batch export to
     GCS, which takes tens of seconds per window.
 
@@ -42,11 +44,9 @@ class OpenBuildingsTemporal(GEE):
     """
 
     COLLECTION_NAME = "GOOGLE/Research/open-buildings-temporal/v1"
-    MEAN_BANDS = ["building_presence", "building_height"]
-    SUM_BANDS = ["building_fractional_count"]
-    # reduceResolution reads at most this many input pixels per output pixel; 10 m
-    # from 0.5 m is 400 inputs.
-    MAX_INPUT_PIXELS = 1024
+    COUNT_BAND = "building_fractional_count"
+    # 0.5 m pixels per 2.5 m pixel, to turn the pyramided mean count into a count.
+    COUNT_SCALE = 25
 
     def __init__(
         self,
@@ -74,21 +74,11 @@ class OpenBuildingsTemporal(GEE):
         )
 
     def item_to_image(self, item: Item) -> ee.image.Image:
-        """Get the Image for one tile, reduced to the requested resolution."""
-        image = super().item_to_image(item)
-        means = (
-            image.select(self.MEAN_BANDS)
-            .toFloat()
-            .reduceResolution(ee.Reducer.mean(), maxPixels=self.MAX_INPUT_PIXELS)
-        )
-        sums = (
-            image.select(self.SUM_BANDS)
-            .toFloat()
-            .reduceResolution(ee.Reducer.sum(), maxPixels=self.MAX_INPUT_PIXELS)
-        )
-        # Reducer.mean outputs doubles, and Earth Engine exports need one data type.
+        """Get the Image for one tile, with the count band scaled to a count."""
+        image = super().item_to_image(item).toFloat()
+        count = image.select(self.COUNT_BAND).multiply(self.COUNT_SCALE)
         return (
-            ee.Image.cat(means, sums)
+            image.addBands(count, overwrite=True)
             .select(self.bands)
             .unmask(NODATA_VALUE, False)
             .toFloat()

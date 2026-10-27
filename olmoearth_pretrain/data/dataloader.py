@@ -537,8 +537,16 @@ class OlmoEarthDataLoader(DataLoaderBase):
             )
             output_dict[Modality.VIIRS.name] = mock_viirs
         if Modality.OPEN_BUILDINGS.name in self.dataset.training_modalities:
+            open_buildings_hw = (
+                standard_hw * Modality.OPEN_BUILDINGS.image_tile_size_factor
+            )
             mock_open_buildings = rng.random(
-                (standard_hw, standard_hw, 1, Modality.OPEN_BUILDINGS.num_bands),
+                (
+                    open_buildings_hw,
+                    open_buildings_hw,
+                    1,
+                    Modality.OPEN_BUILDINGS.num_bands,
+                ),
                 dtype=np.float32,
             )
             output_dict[Modality.OPEN_BUILDINGS.name] = mock_open_buildings

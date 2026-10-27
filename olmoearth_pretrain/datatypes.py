@@ -105,7 +105,10 @@ class OlmoEarthSample(NamedTuple):
     worldcereal: ArrayTensor | None = None  # [B, H, W, 1, len(CDL_bands)]
     wri_canopy_height_map: ArrayTensor | None = None  # [B, H, W, 1, 1]
     viirs: ArrayTensor | None = None  # [B, H, W, 1, 1]
-    open_buildings: ArrayTensor | None = None  # [B, H, W, 1, len(OPEN_BUILDINGS_bands)]
+    # open_buildings is 4x the height/width of sentinel2_l2a, like naip_10.
+    open_buildings: ArrayTensor | None = (
+        None  # [B, 4H, 4W, 1, len(OPEN_BUILDINGS_bands)]
+    )
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.

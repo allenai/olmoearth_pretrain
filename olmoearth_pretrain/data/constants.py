@@ -576,9 +576,11 @@ class Modality:
         ignore_when_parsing=False,
     )
 
-    # Google Open Buildings 2.5D Temporal (Global South only), aggregated from ~4 m
-    # to 10 m/pixel: mean presence confidence, mean height including non-building
-    # area, and summed building count.
+    # Google Open Buildings 2.5D Temporal (Global South only) at 2.5 m/pixel (its
+    # effective resolution is ~4 m), so it can be a sub-10 m reconstruction target:
+    # mean presence confidence, mean height including non-building area, and
+    # building count per pixel. Like NAIP_10 the tile covers the 10 m grid's extent
+    # with 4x the pixels.
     OPEN_BUILDINGS = ModalitySpec(
         name="open_buildings",
         tile_resolution_factor=16,
@@ -589,11 +591,12 @@ class Modality:
                     "building_height",
                     "building_fractional_count",
                 ],
-                16,
+                4,
             )
         ],
         is_multitemporal=False,
         ignore_when_parsing=False,
+        image_tile_size_factor=4,
     )
 
     NDVI = ModalitySpec(
