@@ -731,13 +731,17 @@ class GradDiagCallback(Callback):
 
     Run from a trained checkpoint: after each backward (before the optimizer step) it
     logs each module group's gradient L2 norm, the attention q/k weight norms per
-    block, and the RMS / max |x| of the narrow stage, slot merge, up-projection and
-    first / last trunk block outputs; then a mean over the steps, and exits.
+    block, and the RMS / max |x| of the narrow stage (and each of its blocks), slot
+    merge, up-projection and first / last trunk block outputs; then a mean over the
+    steps, and exits. For the attention of each narrow block and the first / last trunk
+    block it also logs the max per-head q and k vector norms and their product times
+    the softmax scale: an upper bound on any attention logit (logit growth shows here).
     """
 
     def pre_train(self) -> None:  # noqa: D102
         model = self.trainer.train_module.model
         self._acts: dict[str, list[tuple[float, float]]] = {}
+        self._qk: dict[str, list[float]] = {}
         self._grads: dict[str, list[float]] = {}
         self._steps = 0
         names = dict(model.named_modules())
@@ -747,8 +751,32 @@ class GradDiagCallback(Callback):
             if n.startswith("encoder.blocks.") and n.count(".") == 2
         )
         watch = ["encoder.narrow_stage", "encoder.slot_merge", "encoder.narrow_up"]
+        watch += [
+            n
+            for n in names
+            if n.startswith("encoder.narrow_stage.blocks.") and n.count(".") == 3
+        ]
         if blocks:
             watch += [f"encoder.blocks.{blocks[0]}", f"encoder.blocks.{blocks[-1]}"]
+        attn_blocks = [w for w in watch if ".blocks." in w]
+
+        def qk_hook(name, which):  # type: ignore[no-untyped-def]
+            def fn(module, inputs, output):  # type: ignore[no-untyped-def]
+                if torch.is_tensor(output):
+                    n = output.detach().float().norm(dim=-1).max()
+                    self._qk.setdefault(f"{name}.{which}", []).append(float(n))
+
+            return fn
+
+        for name in attn_blocks:
+            for which in ("q", "k"):
+                sub = f"{name}.attn.{which}_norm"
+                if sub in names:
+                    names[sub].register_forward_hook(qk_hook(name, which))
+            if f"{name}.attn" in names:
+                self._qk.setdefault(f"{name}.scale", []).append(
+                    float(names[f"{name}.attn"].scale)
+                )
 
         def hook(name):  # type: ignore[no-untyped-def]
             def fn(module, inputs, output):  # type: ignore[no-untyped-def]
@@ -818,6 +846,20 @@ class GradDiagCallback(Callback):
                 for k, v in self._acts.items()
             },
             "qk_weight_norm_top": dict(sorted(qk.items(), key=lambda kv: -kv[1])[:12]),
+            "attn_max_qnorm_knorm_logitbound": {
+                b: [
+                    round(float(np.max(self._qk[f"{b}.q"])), 1),
+                    round(float(np.max(self._qk[f"{b}.k"])), 1),
+                    round(
+                        float(np.max(self._qk[f"{b}.q"]))
+                        * float(np.max(self._qk[f"{b}.k"]))
+                        * self._qk[f"{b}.scale"][0],
+                        1,
+                    ),
+                ]
+                for b in sorted({k.rsplit(".", 1)[0] for k in self._qk})
+                if f"{b}.q" in self._qk and f"{b}.k" in self._qk
+            },
         }
         logger.info("DIAG SUMMARY %s", json.dumps(summary))
 
