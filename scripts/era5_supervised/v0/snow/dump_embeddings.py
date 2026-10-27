@@ -37,7 +37,9 @@ from olmo_core.utils import seed_all  # noqa: E402
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy  # noqa: E402
-from olmoearth_pretrain.dataset_creation.snow.write_windows import FAMILIES  # noqa: E402
+from olmoearth_pretrain.dataset_creation.snow.write_windows import (  # noqa: E402
+    FAMILIES,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -112,7 +114,11 @@ def main() -> None:
         inputs[family] = (out_dir, era5, stamps, valid)
     index, count = (int(v) for v in args.shard.split("/"))
     for entry in json.loads(Path(args.queue).read_text())[index::count]:
-        todo = {f: v for f, v in inputs.items() if not (v[0] / f"{entry['name']}.npz").exists()}
+        todo = {
+            f: v
+            for f, v in inputs.items()
+            if not (v[0] / f"{entry['name']}.npz").exists()
+        }
         if not todo:
             continue
         run_dir = CKPT_ROOT / entry["source"]

@@ -156,14 +156,18 @@ class SasToken:
                 except requests.RequestException as exc:
                     if time.time() > deadline:
                         raise
-                    logger.warning("SAS token unavailable (%s); waiting for the relay", exc)
+                    logger.warning(
+                        "SAS token unavailable (%s); waiting for the relay", exc
+                    )
                     time.sleep(30 * random.uniform(0.8, 1.2))
                     continue
                 body = response.json()
                 expiry = datetime.fromisoformat(
                     body["msft:expiry"].replace("Z", "+00:00")
                 ).timestamp()
-                self.cache.write_text(json.dumps(dict(token=body["token"], expiry=expiry)))
+                self.cache.write_text(
+                    json.dumps(dict(token=body["token"], expiry=expiry))
+                )
         return self.token
 
 
@@ -188,7 +192,9 @@ def http_get(url: str) -> requests.Response:
             wait = min(120.0, 2.0 * 2**attempt) * random.uniform(0.5, 1.5)
             if status == 429:
                 wait = max(wait, float(exc.response.headers.get("Retry-After", 10)))
-            logger.warning("GET failed (%s), retry in %.0f s: %s", exc, wait, url.split("?")[0])
+            logger.warning(
+                "GET failed (%s), retry in %.0f s: %s", exc, wait, url.split("?")[0]
+            )
             time.sleep(wait)
     raise AssertionError("unreachable")
 
@@ -268,7 +274,11 @@ def tile_cells(h: int, v: int) -> dict[str, np.ndarray]:
     lon10 = np.rint(np.degrees(lon) * 10).ravel()
     lon10 = np.where(lon10 >= 1800, lon10 - 3600, lon10)
     pixels = np.flatnonzero(on_globe)
-    key = (lat10[pixels].astype(np.int64) + 900) * 3600 + lon10[pixels].astype(np.int64) + 1800
+    key = (
+        (lat10[pixels].astype(np.int64) + 900) * 3600
+        + lon10[pixels].astype(np.int64)
+        + 1800
+    )
     keys, index, npix = np.unique(key, return_inverse=True, return_counts=True)
     return dict(
         pixels=pixels, index=index.astype(np.int64),
@@ -344,7 +354,9 @@ def screen_tile(job: tuple[int, int]) -> dict[str, Any]:
                 continue
             if cells is None:
                 cells = tile_cells(h, v)
-            counts = cell_counts(read_composite(blobs[doy], _SAS), cells).astype(np.int64)
+            counts = cell_counts(read_composite(blobs[doy], _SAS), cells).astype(
+                np.int64
+            )
             clear = counts[:, 0] + counts[:, 1]
             snowy = (clear >= MIN_CLEAR_PIXELS) & (2 * counts[:, 0] >= clear)
             best = max(best, int(snowy.sum()))
@@ -468,9 +480,13 @@ def main() -> None:
     ap.add_argument("--root", default=str(DEFAULT_ROOT))
     ap.add_argument("--workers", type=int, default=48)
     ap.add_argument("--last-year", type=int, default=2026)
-    ap.add_argument("--tiles", default=None, help="hHHvVV list (counts; default: screened)")
     ap.add_argument(
-        "--token-file", default=None, help="relay token file (default <root>/raw/modis/sas_token.json)"
+        "--tiles", default=None, help="hHHvVV list (counts; default: screened)"
+    )
+    ap.add_argument(
+        "--token-file",
+        default=None,
+        help="relay token file (default <root>/raw/modis/sas_token.json)",
     )
     args = ap.parse_args()
     root = Path(args.root)

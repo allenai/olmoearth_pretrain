@@ -47,8 +47,12 @@ def relay_once(shell: Path, path: str) -> float:
         The token's expiry (epoch seconds).
     """
     body = requests.get(SAS_URL, timeout=60).json()
-    expiry = datetime.fromisoformat(body["msft:expiry"].replace("Z", "+00:00")).timestamp()
-    payload = base64.b64encode(json.dumps(dict(token=body["token"], expiry=expiry)).encode())
+    expiry = datetime.fromisoformat(
+        body["msft:expiry"].replace("Z", "+00:00")
+    ).timestamp()
+    payload = base64.b64encode(
+        json.dumps(dict(token=body["token"], expiry=expiry)).encode()
+    )
     command = (f"umask 077; mkdir -p $(dirname {path}); echo {payload.decode()} | base64 -d"
                f" > {path}.tmp && mv {path}.tmp {path} && echo relayed")  # fmt: skip
     # ``script`` gives the Beaker CLI the pseudo-terminal it needs.
@@ -57,7 +61,9 @@ def relay_once(shell: Path, path: str) -> float:
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300,
     )  # fmt: skip
     if "relayed" not in out.stdout:
-        raise RuntimeError(f"relay write failed: {out.stdout[-500:]} {out.stderr[-500:]}")
+        raise RuntimeError(
+            f"relay write failed: {out.stdout[-500:]} {out.stderr[-500:]}"
+        )
     return expiry
 
 
@@ -75,8 +81,14 @@ def main() -> None:
     while time.time() < stop:
         try:
             expiry = relay_once(Path(args.shell), args.path)
-            logger.info("relayed a token valid until %s", datetime.fromtimestamp(expiry))
-        except (requests.RequestException, RuntimeError, subprocess.TimeoutExpired) as exc:
+            logger.info(
+                "relayed a token valid until %s", datetime.fromtimestamp(expiry)
+            )
+        except (
+            requests.RequestException,
+            RuntimeError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             logger.warning("relay failed: %s", exc)
             time.sleep(60)
             continue

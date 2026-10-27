@@ -275,16 +275,22 @@ def process_tile(job: tuple[str, str]) -> tuple[str, int, int]:
     land_frac = np.where(read, land.max(axis=0) / data["npix"], 0.0)
     keep = full & read & (land_frac >= MIN_LAND_FRACTION)
     idx = np.flatnonzero(keep)
-    seen = (clear[:, idx] >= np.maximum(MIN_CLEAR_PIXELS, MIN_CLEAR_FRACTION * land[:, idx]))
+    seen = clear[:, idx] >= np.maximum(
+        MIN_CLEAR_PIXELS, MIN_CLEAR_FRACTION * land[:, idx]
+    )
     scf = np.where(seen, snow[:, idx] / np.maximum(clear[:, idx], 1), np.nan)
     filled = fill_series(scf)
-    filtered = median_filter(np.nan_to_num(filled, nan=0.0), size=(3, 1), mode="nearest")
+    filtered = median_filter(
+        np.nan_to_num(filled, nan=0.0), size=(3, 1), mode="nearest"
+    )
     filtered = np.where(np.isfinite(filled), filtered, np.nan)
     mid = data["slot_start"] + data["slot_days"] / 2.0
     lat10, lon10 = data["lat10"][idx], data["lon10"][idx]
     out_scf = root / "meta" / "scf" / f"{tile}.npz"
     out_scf.parent.mkdir(parents=True, exist_ok=True)
-    stored = np.where(np.isfinite(filtered), np.rint(filtered * 200), 255).astype(np.uint8)
+    stored = np.where(np.isfinite(filtered), np.rint(filtered * 200), 255).astype(
+        np.uint8
+    )
     np.savez_compressed(out_scf.with_suffix(".part.npz"), lat10=lat10, lon10=lon10,
                         slot_mid=mid, scf=stored, observed=seen)  # fmt: skip
     out_scf.with_suffix(".part.npz").rename(out_scf)
@@ -294,14 +300,21 @@ def process_tile(job: tuple[str, str]) -> tuple[str, int, int]:
             continue
         cell_rows = cell_years(filtered[:, k], seen[:, k], mid, data["slot_days"],
                                water_years(lat10[k] > 0))  # fmt: skip
-        if np.mean([r["run_slots"] >= MIN_SEASON_SLOTS for r in cell_rows]) < MIN_SEASON_SHARE:
+        if (
+            np.mean([r["run_slots"] >= MIN_SEASON_SLOTS for r in cell_rows])
+            < MIN_SEASON_SHARE
+        ):
             continue
         for r in cell_rows:
             r.update(lat10=int(lat10[k]), lon10=int(lon10[k]))
         rows += cell_rows
     frame = pd.DataFrame(rows)
     if len(frame):
-        frame.insert(0, "cell", [f"c{a:+05d}{b:+06d}" for a, b in zip(frame["lat10"], frame["lon10"])])
+        frame.insert(
+            0,
+            "cell",
+            [f"c{a:+05d}{b:+06d}" for a, b in zip(frame["lat10"], frame["lon10"])],
+        )
         frame["tile"] = tile
         frame["npix"] = frame["cell"].map(dict(zip(
             [f"c{a:+05d}{b:+06d}" for a, b in zip(lat10, lon10)], data["npix"][idx])))  # fmt: skip
@@ -358,7 +371,9 @@ def main() -> None:
     )
     ap.add_argument("--root", default=str(DEFAULT_ROOT))
     ap.add_argument("--workers", type=int, default=16)
-    ap.add_argument("--tiles", default=None, help="hHHvVV list (default: every tile with parts)")
+    ap.add_argument(
+        "--tiles", default=None, help="hHHvVV list (default: every tile with parts)"
+    )
     args = ap.parse_args()
     root = Path(args.root)
     parts = sorted((root / "raw" / "modis" / "parts").glob("h*_*.npz"))

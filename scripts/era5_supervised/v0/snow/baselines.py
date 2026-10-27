@@ -139,11 +139,15 @@ def cell_features(
     # Leave-one-year-out: the cell's windows of one family sit at the same
     # offset from its climatological melt (or water year end), one per year.
     total, count = np.nansum(snow_arr, axis=0), np.isfinite(snow_arr).sum(axis=0)
-    others = np.where(count > 1, (total - np.nan_to_num(snow_arr)) / np.maximum(count - 1, 1), np.nan)
+    others = np.where(
+        count > 1, (total - np.nan_to_num(snow_arr)) / np.maximum(count - 1, 1), np.nan
+    )
     return [r[0] for r in rows], np.array(win), snow_arr, snow_arr - others
 
 
-def build_features(root: Path, frame: pd.DataFrame, workers: int) -> dict[str, np.ndarray]:
+def build_features(
+    root: Path, frame: pd.DataFrame, workers: int
+) -> dict[str, np.ndarray]:
     """Feature sets for every row of a window table.
 
     Args:
@@ -210,9 +214,13 @@ def run(root: Path, table: str, workers: int) -> dict:
             xs = StandardScaler().fit(x[train & defined]).transform(x)
             fit = train & defined
             fit_idx = np.flatnonzero(fit)
-            target_folds = list(GroupKFold(5).split(fit_idx, groups=frame["block"].to_numpy()[fit_idx]))
+            target_folds = list(
+                GroupKFold(5).split(fit_idx, groups=frame["block"].to_numpy()[fit_idx])
+            )
             linear = RidgeCV(alphas=ALPHAS, cv=target_folds).fit(xs[fit], y[fit])
-            gbm = HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, random_state=0)
+            gbm = HistGradientBoostingRegressor(
+                max_iter=300, learning_rate=0.05, random_state=0
+            )
             gbm.fit(xs[fit], y[fit])
             for model_name, model in (("linear", linear), ("gbm", gbm)):
                 results[target][f"{name}/{model_name}"] = {

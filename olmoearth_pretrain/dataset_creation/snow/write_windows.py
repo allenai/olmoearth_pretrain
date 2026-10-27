@@ -228,7 +228,9 @@ def build_candidates(root: Path, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]
     candidates = pd.concat(parts, ignore_index=True)
     candidates["days_to_melt"] = candidates["sdd"] - candidates["anchor"]
     candidates["melted"] = candidates["days_to_melt"] <= 0
-    candidates["has_sad"] = candidates["sad_anom"].notna() & candidates["season_anom"].notna()
+    candidates["has_sad"] = (
+        candidates["sad_anom"].notna() & candidates["season_anom"].notna()
+    )
     candidates = candidates.merge(
         cells[["cell_id", "block", "region", "space_split"]], on="cell_id"
     )
@@ -284,7 +286,9 @@ def select_eval_keys(
     Returns:
         ``cell_id, wy, split`` rows.
     """
-    per_key = candidates[candidates["split"] != "none"].groupby(["cell_id", "wy", "split"])
+    per_key = candidates[candidates["split"] != "none"].groupby(
+        ["cell_id", "wy", "split"]
+    )
     families = per_key["family"].nunique().rename("n_families").reset_index()
     full = families[families["n_families"] == len(FAMILIES)]
     parts = []
@@ -492,10 +496,14 @@ def main() -> None:
                 keys[["cell_id", "wy"]], on=["cell_id", "wy"]
             )
             if len(rows) != len(keys):
-                raise ValueError(f"{family}: {len(keys) - len(rows)} eval keys lack a window")
+                raise ValueError(
+                    f"{family}: {len(keys) - len(rows)} eval keys lack a window"
+                )
             selected[f"eval_{family}"] = rows
         for family in filter(None, args.all_families.split(",")):
-            rows = candidates[(candidates["family"] == family) & (candidates["split"] != "none")]
+            rows = candidates[
+                (candidates["family"] == family) & (candidates["split"] != "none")
+            ]
             selected[f"all_{family}"] = rows
         write_all(root, selected, cells, args.workers)
 

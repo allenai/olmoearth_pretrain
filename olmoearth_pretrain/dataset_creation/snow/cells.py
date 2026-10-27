@@ -108,11 +108,15 @@ def sample_cells(root: Path, mirror: Era5Mirror, seed: int) -> pd.DataFrame:
     chunk = (cand["ilat"] // MIRROR_CHUNK) * 10_000 + cand["ilon"] // MIRROR_CHUNK
     for key, rows in cand.groupby(chunk).indices.items():
         i0, j0 = (key // 10_000) * MIRROR_CHUNK, (key % 10_000) * MIRROR_CHUNK
-        block = np.asarray(mirror.valid[i0 : i0 + MIRROR_CHUNK, j0 : j0 + MIRROR_CHUNK], bool)
+        block = np.asarray(
+            mirror.valid[i0 : i0 + MIRROR_CHUNK, j0 : j0 + MIRROR_CHUNK], bool
+        )
         sub = cand.iloc[rows]
         land[rows] = block[sub["ilat"].to_numpy() - i0, sub["ilon"].to_numpy() - j0]
     cand = cand[land]
-    cand["block"] = (cand["lat10"] // BLOCK_CELLS) * 10_000 + cand["lon10"] // BLOCK_CELLS
+    cand["block"] = (cand["lat10"] // BLOCK_CELLS) * 10_000 + cand[
+        "lon10"
+    ] // BLOCK_CELLS
     rng = np.random.default_rng(seed)
     cand["_key"] = rng.random(len(cand))
     cells = cand.sort_values("_key").groupby("block").head(1)
@@ -214,8 +218,7 @@ def run(root: Path, workers: int, seed: int) -> None:
     np.save(meta / "era5_dates.npy", mirror.dates[mirror.dates >= SERIES_START])
     chunk = (cells["ilat"] // MIRROR_CHUNK) * 10_000 + cells["ilon"] // MIRROR_CHUNK
     todo = [
-        (group.to_dict("records"), str(out_dir))
-        for _, group in cells.groupby(chunk)
+        (group.to_dict("records"), str(out_dir)) for _, group in cells.groupby(chunk)
     ]
     logger.info("%d chunk columns to read (%d cells)", len(todo), len(cells))
     rows: list[dict[str, Any]] = []
