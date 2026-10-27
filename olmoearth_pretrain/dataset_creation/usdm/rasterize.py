@@ -38,7 +38,9 @@ from rasterio.transform import from_origin
 
 from .common import (
     DEFAULT_ROOT,
+    EPOCH_DATE,
     GRID_COLS,
+    GRID_LATS,
     GRID_NORTH,
     GRID_RES,
     GRID_ROWS,
@@ -47,8 +49,6 @@ from .common import (
     NON_CONUS_STATES,
     OUTSIDE,
     SUB,
-    days_since_epoch,
-    grid_lat,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -142,7 +142,7 @@ def national_stats(
         Columns ``dsci`` and ``d0p``..``d4p`` (fraction of area at or above
         each category, from cell-average severities).
     """
-    weights = (np.cos(np.radians(grid_lat(np.arange(GRID_ROWS))))[:, None]
+    weights = (np.cos(np.radians(GRID_LATS))[:, None]
                * np.ones(GRID_COLS))[domain]  # fmt: skip
     weights = weights / weights.sum()
     sev = sums[:, domain] / inside[domain]
@@ -179,7 +179,8 @@ def run(root: Path, workers: int) -> None:
                 logger.info("[%d/%d maps]", k + 1, len(paths))
     np.save(meta / "usdm_sum.npy", sums)
     np.save(meta / "usdm_inside.npy", inside)
-    np.save(meta / "usdm_dates.npy", np.array([days_since_epoch(d) for d in dates]))
+    days = np.array([(d - EPOCH_DATE).days for d in dates])
+    np.save(meta / "usdm_dates.npy", days)
     (meta / "grid.json").write_text(json.dumps(dict(
         north=GRID_NORTH, west=GRID_WEST, res=GRID_RES, rows=GRID_ROWS, cols=GRID_COLS,
         sub=SUB, min_inside_subcells=MIN_INSIDE_SUBCELLS, outside=OUTSIDE,
@@ -189,7 +190,7 @@ def run(root: Path, workers: int) -> None:
     national = national_stats(sums, inside, domain)
     national.insert(0, "date", [d.isoformat() for d in dates])
     national.to_csv(meta / "usdm_national.csv", index=False)
-    gaps = np.diff(np.array([days_since_epoch(d) for d in dates]))
+    gaps = np.diff(days)
     logger.info(
         "%d maps %s..%s (gaps != 7 days: %d), %d domain cells; D1+ area: mean %.3f, max %.3f on %s",
         len(dates), dates[0], dates[-1], int((gaps != 7).sum()), int(domain.sum()),

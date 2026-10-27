@@ -43,7 +43,7 @@ from sklearn.ensemble import (
     HistGradientBoostingRegressor,
 )
 from sklearn.linear_model import LogisticRegression, RidgeCV
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, r2_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
@@ -210,19 +210,6 @@ def build_features(
     }  # fmt: skip
 
 
-def r2(y: np.ndarray, pred: np.ndarray) -> float:
-    """Coefficient of determination.
-
-    Args:
-        y: Targets.
-        pred: Predictions.
-
-    Returns:
-        R2.
-    """
-    return float(1 - np.sum((y - pred) ** 2) / np.sum((y - y.mean()) ** 2))
-
-
 def run(root: Path, table: str, workers: int) -> dict:
     """Fit and score every baseline for every target.
 
@@ -275,10 +262,10 @@ def run(root: Path, table: str, workers: int) -> dict:
                     sel = split == s
                     pred = model.predict(xs[sel])
                     scores[s] = (f1_score(y[sel], pred, average="macro") if is_class
-                                 else r2(y[sel], pred))  # fmt: skip
+                                 else r2_score(y[sel], pred))  # fmt: skip
                 results[target][f"{name}/{model_name}"] = scores
         if target.startswith(("dpast", "dfut")):
-            results[target]["zero"] = {s: r2(y[split == s], np.zeros((split == s).sum()))
+            results[target]["zero"] = {s: r2_score(y[split == s], np.zeros((split == s).sum()))
                                        for s in ("val", "test")}  # fmt: skip
         logger.info(
             "%s: %s",

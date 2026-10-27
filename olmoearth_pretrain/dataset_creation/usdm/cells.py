@@ -35,11 +35,11 @@ from ..fluxnet.era5 import Era5Mirror
 from .common import (
     DEFAULT_ROOT,
     GRID_COLS,
+    GRID_LATS,
+    GRID_LONS,
     GRID_ROWS,
     MIN_INSIDE_SUBCELLS,
     NODATA,
-    grid_lat,
-    grid_lon,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -82,7 +82,7 @@ def sample_cells(root: Path, mirror: Era5Mirror, seed: int) -> pd.DataFrame:
     """
     inside = np.load(root / "meta" / "usdm_inside.npy")
     rows, cols = np.nonzero(inside >= MIN_INSIDE_SUBCELLS)
-    lat, lon = grid_lat(rows), grid_lon(cols)
+    lat, lon = GRID_LATS[rows], GRID_LONS[cols]
     ilat, ilon = era5_indices(mirror, lat, lon)
     # ERA5-Land land mask over the grid's bounding box, read in one go.
     i0, i1, j0, j1 = ilat.min(), ilat.max() + 1, ilon.min(), ilon.max() + 1

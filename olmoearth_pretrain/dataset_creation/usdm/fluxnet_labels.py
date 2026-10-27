@@ -66,26 +66,15 @@ def run(root: Path, flux_root: Path) -> pd.DataFrame:
     ok = (k >= 0) & (frame["anchor"].to_numpy() - 1 - dates[np.maximum(k, 0)] < 7)
     frame, rows, cols, k = frame[ok].reset_index(drop=True), rows[ok], cols[ok], k[ok]
 
-    def severity(index: np.ndarray) -> np.ndarray:
-        """Cell severity in map ``index`` per row.
-
-        Args:
-            index: Map index per row (inside the record).
-
-        Returns:
-            Severity per row.
-        """
-        return (
-            np.asarray(sums[index, rows, cols], dtype=np.float32) / inside[rows, cols]
-        )
-
     frame["map_date"] = pd.to_datetime(dates[k], unit="D").date
-    frame["sev"] = severity(k)
+    cell_inside = inside[rows, cols]
+    frame["sev"] = np.asarray(sums[k, rows, cols], dtype=np.float32) / cell_inside
     for lag in LAGS:
         j = np.clip(k + lag, 0, len(dates) - 1)
         # Defined only when the map ``lag`` weeks away exists (no gap).
         exact = (k + lag == j) & (dates[j] - dates[k] == 7 * lag)
-        shifted = np.where(exact, severity(j), np.nan)
+        lagged = np.asarray(sums[j, rows, cols], dtype=np.float32) / cell_inside
+        shifted = np.where(exact, lagged, np.nan)
         name = f"dpast{-lag}" if lag < 0 else f"dfut{lag}"
         frame[name] = frame["sev"] - shifted if lag < 0 else shifted - frame["sev"]
     frame["drought"] = frame["sev"] >= 2.0

@@ -38,6 +38,9 @@ from sklearn.linear_model import LogisticRegression, RidgeCV
 from sklearn.metrics import f1_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
+from threadpoolctl import threadpool_limits
+
+from olmoearth_pretrain.dataset_creation.usdm.write_windows import NUMERIC_TARGETS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -47,18 +50,6 @@ ALPHAS = np.logspace(-1, 5, 13)
 CS = np.logspace(-4, 1, 6)
 CLASS_TARGETS = ("tpast8", "tfut8", "drought")
 SEED_RE = re.compile(r"_seed\d+")
-
-
-def arm_of(name: str) -> str:
-    """Arm of an embedding set name (``<run>[_seedN]@<step>`` or ``init_<x>[_seedN]``).
-
-    Args:
-        name: Embedding set name.
-
-    Returns:
-        The name without seed suffix (step kept).
-    """
-    return SEED_RE.sub("", name)
 
 
 def regression_scores(
@@ -156,8 +147,6 @@ def score_job(job: tuple) -> tuple[str, str, dict]:
         ``(set name, pooling, {target: scores})``.
     """
     path, pooling, todo, windows, folds, threads = job
-    from threadpoolctl import threadpool_limits
-
     with threadpool_limits(threads):
         x = np.load(path)[pooling].astype(np.float32)
         return Path(path).stem, pooling, score_set(x, windows, todo, folds)
@@ -174,7 +163,7 @@ def between_arm_f(values: dict[str, float]) -> float:
     """
     groups: dict[str, list[float]] = {}
     for name, v in values.items():
-        groups.setdefault(arm_of(name), []).append(v)
+        groups.setdefault(SEED_RE.sub("", name), []).append(v)
     arms = [np.array(v) for v in groups.values() if len(v) > 1]
     if len(arms) < 2:
         return float("nan")
@@ -203,11 +192,13 @@ def summarize(results: dict, metric: str = "val") -> pd.DataFrame:
             init = [v for k, v in vals.items() if k.startswith("init_")]
             trained = {k: v for k, v in vals.items() if k.endswith("@50000")}
             ref = [
-                v for k, v in trained.items() if arm_of(k) == "era5enc_1601_doyc@50000"
+                v
+                for k, v in trained.items()
+                if SEED_RE.sub("", k) == "era5enc_1601_doyc@50000"
             ]
             traj = {int(k.split("@")[1]): v for k, v in vals.items()
                     if k.startswith("era5enc_1306_halo75_nogate@")}  # fmt: skip
-            arm_means = pd.Series(trained).groupby(lambda k: arm_of(k)).mean()
+            arm_means = pd.Series(trained).groupby(lambda k: SEED_RE.sub("", k)).mean()
             floor = float(np.mean(init)) if init else np.nan
             floor_sd = float(np.std(init, ddof=1)) if len(init) > 1 else np.nan
             ref_mean = float(np.mean(ref)) if ref else np.nan
@@ -247,10 +238,6 @@ def main() -> None:
         table.drop(columns=["split"]), on=["cell_id", "anchor"], how="left"
     )
     assert len(windows) == len(order)
-    from olmoearth_pretrain.dataset_creation.usdm.write_windows import (
-        NUMERIC_TARGETS,
-    )
-
     targets = (
         args.targets.split(",")
         if args.targets

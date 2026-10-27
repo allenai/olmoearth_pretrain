@@ -146,31 +146,6 @@ def spatial_split(cells: pd.DataFrame, seed: int) -> pd.DataFrame:
     return cells
 
 
-def water_year(days: np.ndarray) -> np.ndarray:
-    """Water year (October-September, named by its end) of dates.
-
-    Args:
-        days: Days since 1970-01-01.
-
-    Returns:
-        Water years.
-    """
-    dt = pd.to_datetime(days, unit="D")
-    return (dt.year + (dt.month >= 10)).to_numpy()
-
-
-def time_split(wy: np.ndarray) -> np.ndarray:
-    """Split of each water year.
-
-    Args:
-        wy: Water years.
-
-    Returns:
-        ``train`` / ``val`` / ``test`` per entry.
-    """
-    return np.array([WY_SPLIT.get(int(y) % 5, "train") for y in wy])
-
-
 # --- targets ------------------------------------------------------------------
 def cell_severity(root: Path, cells: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Severity series of every cell.
@@ -294,11 +269,13 @@ def build_candidates(
     with multiprocessing.get_context("spawn").Pool(workers) as pool:
         parts = list(pool.imap(cell_candidates, jobs, chunksize=8))
     candidates = pd.concat(parts, ignore_index=True)
-    candidates["wy"] = water_year(candidates["anchor"].to_numpy())
+    # Water year (October-September, named by its end) of each anchor.
+    anchor_dt = pd.to_datetime(candidates["anchor"].to_numpy(), unit="D")
+    candidates["wy"] = (anchor_dt.year + (anchor_dt.month >= 10)).to_numpy()
     candidates = candidates.merge(
         cells[["cell_id", "block", "region", "space_split"]], on="cell_id"
     )
-    time_part = time_split(candidates["wy"].to_numpy())
+    time_part = np.array([WY_SPLIT.get(int(y) % 5, "train") for y in candidates["wy"]])
     candidates["split"] = np.where(candidates["space_split"].to_numpy() == time_part,
                                    time_part, "none")  # fmt: skip
     candidates = candidates.drop(columns=["space_split"])

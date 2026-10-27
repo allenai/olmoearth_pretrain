@@ -48,30 +48,12 @@ MIN_INSIDE_SUBCELLS = 12
 OUTSIDE = 255
 
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+EPOCH_DATE = date(1970, 1, 1)
 
-
-def grid_lat(rows: np.ndarray | int) -> np.ndarray:
-    """Cell-centre latitude of grid rows.
-
-    Args:
-        rows: Row index (0 = northernmost).
-
-    Returns:
-        Latitude (deg).
-    """
-    return np.round(GRID_NORTH - np.asarray(rows) * GRID_RES, 1)
-
-
-def grid_lon(cols: np.ndarray | int) -> np.ndarray:
-    """Cell-centre longitude of grid columns.
-
-    Args:
-        cols: Column index (0 = westernmost).
-
-    Returns:
-        Longitude (deg, -180..180).
-    """
-    return np.round(GRID_WEST + np.asarray(cols) * GRID_RES, 1)
+# Cell-centre latitude of each grid row (north to south) and longitude of each
+# column (west to east, -180..180).
+GRID_LATS = np.round(GRID_NORTH - np.arange(GRID_ROWS) * GRID_RES, 1)
+GRID_LONS = np.round(GRID_WEST + np.arange(GRID_COLS) * GRID_RES, 1)
 
 
 def grid_index(lat: float, lon: float) -> tuple[int, int] | None:
@@ -89,15 +71,3 @@ def grid_index(lat: float, lon: float) -> tuple[int, int] | None:
     if 0 <= row < GRID_ROWS and 0 <= col < GRID_COLS:
         return row, col
     return None
-
-
-def days_since_epoch(d: date) -> int:
-    """Days since 1970-01-01.
-
-    Args:
-        d: Date.
-
-    Returns:
-        Day number.
-    """
-    return (d - date(1970, 1, 1)).days
