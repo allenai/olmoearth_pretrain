@@ -27,25 +27,29 @@ def spatial_token_grid(
 ) -> tuple[int, int]:
     """``(h_p, w_p)`` token grid shared by every spatial modality of ``sample``.
 
-    Raises if a spatial modality is stored on a different pixel grid
-    (``image_tile_size_factor != 1``) or if the spatial modalities disagree.
+    A modality stored on a finer pixel grid (``image_tile_size_factor = f > 1``, e.g.
+    ``naip_10``) tokenizes ``p * f`` of its own pixels per token, so it shares the base
+    grid. Raises if a spatial modality is on a coarser grid (``f < 1``) or if the
+    spatial modalities disagree.
     """
     grid: tuple[int, int] | None = None
     for name in sample.modalities:
         spec = Modality.get(name)
         if not spec.is_spatial:
             continue
-        if spec.image_tile_size_factor != 1:
+        factor = spec.image_tile_size_factor
+        if factor < 1:
             raise ValueError(
-                f"pixel targets need every spatial modality on the base pixel grid; "
-                f"{name} has image_tile_size_factor={spec.image_tile_size_factor}"
+                f"pixel targets need image_tile_size_factor >= 1; {name} has {factor}"
             )
+        token_px = patch_size * factor
         height, width = getattr(sample, name).shape[1:3]
-        if height % patch_size or width % patch_size:
+        if height % token_px or width % token_px:
             raise ValueError(
-                f"{name} is {height}x{width}, not a multiple of patch_size={patch_size}"
+                f"{name} is {height}x{width}, not a multiple of patch_size * "
+                f"image_tile_size_factor = {token_px}"
             )
-        modality_grid = (height // patch_size, width // patch_size)
+        modality_grid = (height // token_px, width // token_px)
         if grid is not None and modality_grid != grid:
             raise ValueError(
                 f"spatial modalities disagree on the token grid: {grid} vs "
@@ -85,6 +89,34 @@ def offsets_to_query_shift(offsets: Tensor, patch_size: int) -> Tensor:
     return (offsets.to(torch.float32) + 0.5) / patch_size - 0.5
 
 
+def _gather_block(
+    field: Tensor, offsets: Tensor, patch_size: int, factor: int
+) -> Tensor:
+    """Keep the ``factor x factor`` fine-pixel block under each cell's drawn base pixel.
+
+    For a modality on a ``factor``-times finer pixel grid: the drawn base pixel
+    ``(i * p + r, j * p + c)`` covers the fine pixels starting at
+    ``((i * p + r) * f, (j * p + c) * f)``; that block is kept, so
+    ``[B, H * f, W * f, ...]`` -> ``[B, h_p * f, w_p * f, ...]`` (one ``f x f`` block
+    per cell, i.e. one token per cell when tokenized at ``patch_size=1``).
+    """
+    batch_size, h_p, w_p, _ = offsets.shape
+    device = offsets.device
+    f = factor
+    within = torch.arange(f, device=device)
+    rows = (
+        (torch.arange(h_p, device=device) * patch_size).view(1, h_p, 1, 1, 1)
+        + offsets[..., 0].view(batch_size, h_p, 1, w_p, 1)
+    ) * f + within.view(1, 1, f, 1, 1)
+    cols = (
+        (torch.arange(w_p, device=device) * patch_size).view(1, 1, 1, w_p, 1)
+        + offsets[..., 1].view(batch_size, h_p, 1, w_p, 1)
+    ) * f + within.view(1, 1, 1, 1, f)
+    batch_index = torch.arange(batch_size, device=device).view(batch_size, 1, 1, 1, 1)
+    out = field[batch_index, rows, cols]  # [B, h_p, f, w_p, f, ...]
+    return out.reshape(batch_size, h_p * f, w_p * f, *out.shape[5:])
+
+
 def gather_pixels(
     sample: MaskedOlmoEarthSample, offsets: Tensor, patch_size: int
 ) -> MaskedOlmoEarthSample:
@@ -94,8 +126,11 @@ def gather_pixels(
     ``[B, h_p, w_p, ...]``, cell ``(i, j)`` holding pixel
     ``(i * p + offsets[..., 0], j * p + offsets[..., 1])``. Projected at
     ``patch_size=1`` this gives one target per token cell, on the same grid (and
-    with the same token layout) as the patch-size targets it replaces. Non-spatial
-    modalities and the timestamps are passed through unchanged.
+    with the same token layout) as the patch-size targets it replaces. A modality on
+    a finer pixel grid (``image_tile_size_factor = f > 1``, e.g. ``naip_10``) keeps
+    the ``f x f`` block under the drawn base pixel instead (see
+    :func:`_gather_block`), which is again one token per cell at ``patch_size=1``.
+    Non-spatial modalities and the timestamps are passed through unchanged.
     """
     batch_size, h_p, w_p, _ = offsets.shape
     device = offsets.device
@@ -111,8 +146,13 @@ def gather_pixels(
         if not Modality.get(name).is_spatial:
             continue
         mask_name = sample.get_masked_modality_name(name)
-        updates[name] = getattr(sample, name)[batch_index, rows, cols]
-        mask = getattr(sample, mask_name)
-        if mask is not None:
-            updates[mask_name] = mask[batch_index, rows, cols]
+        factor = Modality.get(name).image_tile_size_factor
+        for field_name in (name, mask_name):
+            value = getattr(sample, field_name)
+            if value is None:
+                continue
+            if factor > 1:
+                updates[field_name] = _gather_block(value, offsets, patch_size, factor)
+            else:
+                updates[field_name] = value[batch_index, rows, cols]
     return sample._replace(**updates)
