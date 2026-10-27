@@ -104,7 +104,21 @@ a `label` point with the defined targets as properties. The task configs read
 one property each with `allow_invalid: false`, so a missing target fails
 instead of reading as 0.
 
-## Provenance
+## Provenance: how the dataset on weka was built (2026-10-26/27)
 
-See `scripts/era5_supervised/v0/fluxnet/` for the launchers and the record of
-what ran (filled in after the build).
+All builds are CPU-only Beaker jobs from `scripts/era5_supervised/v0/fluxnet/launch_build.sh`
+on one Jupiter node each (48 workers).
+
+| Step | Beaker experiment | Commit | What it did |
+|---|---|---|---|
+| Download | 01M5X5RTBQRZHCJCS7BJA3SPZV | 581175b81 | First 700 of 814 archives; stopped to add the FULLSET (legacy) archive layout. |
+| Build 1 | 01M5XB4MFHK5MZK3WANNM4QJ54 | c38a497c7 | Catalogue + remaining downloads (814 / 814), targets, ERA5 series (813 sites; 790 on their own cell, 23 one cell away). Stopped before the windows: GPP was night-time partitioning only, and ~115 sites have none. |
+| Build 2 | 01M5XE5JDWD1K60GMM5VX9MJ06 | 6a22dc212 | Targets with GPP = NT / DT mean, windows: `all` 106,320, `eval` 7,000. |
+| rgpp | 01M5XVGTAJW3W9BBHMTER413FV | 003c042e4 | Added `rgpp`. Exposed a bug: candidate order came from `imap_unordered`, so the seeded eval draw changed and stale eval windows stayed behind (12,837). |
+| Eval keys | 01M5XW5FDKXB95TANA2VQMX6T5 | 967791867 | `eval` group deleted and rewritten from the original 7,000 keys (now `meta/eval_keys.parquet`); candidates sorted. |
+| rgpp cap | 01M5XWH4N222S60VP0Y46K0362 | 41c0b5e6a | `rgpp` capped at 1.5 (one dryland tower reached 13.6). Final state. |
+
+Final state: 813 sites parsed, 757 with windows (524 train / 113 val / 120 test towers),
+212,718 candidate anchors, `all` 106,320 windows, `eval` 4,000 / 1,500 / 1,500 windows over
+513 / 111 / 113 towers. `meta/label_stats.json` holds the per-split target statistics (the
+registry `target_mean` / `target_std`), `meta/baselines.json` the reference baselines.
