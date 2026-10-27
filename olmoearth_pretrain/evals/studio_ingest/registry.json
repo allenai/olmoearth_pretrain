@@ -3292,6 +3292,289 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/nigeria_settlement",
       "window_size": 64
     },
+    "nisar26_descals": {
+      "classes": [
+        "0",
+        "1",
+        "2"
+      ],
+      "config_json_sha256": "f046a89e0da008b9ebeaa3574c0c0e18be8c374777c48d51caa2157fe5d21c9f",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar26_descals",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat",
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "nisar26_descals",
+      "norm_stats": {},
+      "num_classes": 3,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/descals",
+      "split_stats": {
+        "test": {
+          "count": 1442
+        },
+        "train": {
+          "count": 419
+        },
+        "val": {
+          "count": 728
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2025-10-20",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/descals",
+      "window_size": 32
+    },
+    "nisar26_lcmap_lu": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "config_json_sha256": "f046a89e0da008b9ebeaa3574c0c0e18be8c374777c48d51caa2157fe5d21c9f",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar26_lcmap_lu",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat",
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "nisar26_lcmap_lu",
+      "norm_stats": {},
+      "num_classes": 6,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/lcmap_lu",
+      "split_stats": {
+        "test": {
+          "count": 1547
+        },
+        "train": {
+          "count": 1326
+        },
+        "val": {
+          "count": 772
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2025-10-20",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/lcmap_lu",
+      "window_size": 32
+    },
+    "nisar26_surface_fuels": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28"
+      ],
+      "config_json_sha256": "f046a89e0da008b9ebeaa3574c0c0e18be8c374777c48d51caa2157fe5d21c9f",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar26_surface_fuels",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat",
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "nisar26_surface_fuels",
+      "norm_stats": {},
+      "num_classes": 29,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/surface_fuels",
+      "split_stats": {
+        "test": {
+          "count": 2000
+        },
+        "train": {
+          "count": 3000
+        },
+        "val": {
+          "count": 1000
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2025-10-20",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/surface_fuels",
+      "window_size": 32
+    },
+    "nisar26_us_trees": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "27",
+        "28",
+        "29",
+        "30",
+        "31",
+        "32",
+        "33",
+        "34",
+        "35",
+        "36",
+        "37",
+        "38"
+      ],
+      "config_json_sha256": "f046a89e0da008b9ebeaa3574c0c0e18be8c374777c48d51caa2157fe5d21c9f",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar26_us_trees",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat",
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "nisar26_us_trees",
+      "norm_stats": {},
+      "num_classes": 39,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/us_trees",
+      "split_stats": {
+        "test": {
+          "count": 1456
+        },
+        "train": {
+          "count": 2213
+        },
+        "val": {
+          "count": 741
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2025-10-20",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/us_trees",
+      "window_size": 32
+    },
+    "nisar26_worldcover": {
+      "classes": [
+        "tree",
+        "shrubland",
+        "grassland",
+        "cropland",
+        "built_up",
+        "bare",
+        "snow_ice",
+        "water",
+        "wetland",
+        "mangroves",
+        "moss_lichen"
+      ],
+      "config_json_sha256": "f046a89e0da008b9ebeaa3574c0c0e18be8c374777c48d51caa2157fe5d21c9f",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar26_worldcover",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat",
+        "nisar_asc",
+        "nisar_desc",
+        "sentinel1",
+        "sentinel2_l2a"
+      ],
+      "name": "nisar26_worldcover",
+      "norm_stats": {},
+      "num_classes": 11,
+      "num_timesteps": 12,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/worldcover",
+      "split_stats": {
+        "test": {
+          "count": 197
+        },
+        "train": {
+          "count": 792
+        },
+        "val": {
+          "count": 192
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2025-10-20",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar26_evals/worldcover",
+      "window_size": 64
+    },
     "nisar_land_eval": {
       "classes": [
         "tree",
