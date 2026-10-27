@@ -53,19 +53,22 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", category=ConvergenceWarning)
 
 
-def family_windows(root: Path, emb_dir: Path, family: str) -> pd.DataFrame:
+def family_windows(
+    root: Path, emb_dir: Path, family: str, prefix: str = "windows_eval_"
+) -> pd.DataFrame:
     """A family's window table in the embedding row order.
 
     Args:
         root: Dataset root.
         emb_dir: The family's embedding directory.
         family: Window family.
+        prefix: Window table prefix under ``meta``.
 
     Returns:
         Windows with targets, ``split`` and ``block``.
     """
     order = pd.read_parquet(emb_dir / "windows.parquet")
-    table = pd.read_parquet(root / "meta" / f"windows_eval_{family}.parquet")
+    table = pd.read_parquet(root / "meta" / f"{prefix}{family}.parquet")
     windows = order.merge(
         table.drop(columns=["split"]), on=["cell_id", "anchor"], how="left"
     )
@@ -106,6 +109,7 @@ def main() -> None:
     ap.add_argument("--root", default="/weka/dfive-default/rslearn-eai/datasets/snow")
     ap.add_argument("--emb-dir", default="embeddings")
     ap.add_argument("--families", default=",".join(FAMILIES))
+    ap.add_argument("--table-prefix", default="windows_eval_")
     ap.add_argument("--poolings", default="mean,last4")
     ap.add_argument("--sets", default=None, help="regex on embedding set names")
     ap.add_argument("--workers", type=int, default=32)
@@ -118,7 +122,7 @@ def main() -> None:
     jobs = []
     for family in args.families.split(","):
         emb_dir = emb_root / family
-        windows = family_windows(root, emb_dir, family)
+        windows = family_windows(root, emb_dir, family, args.table_prefix)
         targets = TARGETS[family_kind(family)]
         for path in sorted(emb_dir.glob("*.npz")):
             if args.sets and not re.search(args.sets, path.stem):
