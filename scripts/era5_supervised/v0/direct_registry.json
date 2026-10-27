@@ -666,37 +666,6 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/usdm/rslearn_dataset"
     },
-    "usdm_dfut8": {
-      "groups": [
-        "all"
-      ],
-      "height_width": 1,
-      "label_extractor_name": "default_regression",
-      "modality_layer_name": "era5_daily",
-      "model_yaml_path": "configs/usdm_dfut8_era5d.yaml",
-      "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 8 weeks after the anchor (forecast of the evolution), from the 448-day ERA5-Land history ending the day before the map date. Full 'all' group (every cell on a 12-week anchor grid) for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
-      "num_classes": 1,
-      "probe_lr": 0.01,
-      "tags": {
-        "split": "train"
-      },
-      "target_mean": 0.004025,
-      "target_std": 0.851234,
-      "task_type": "regression",
-      "test_groups": [
-        "all"
-      ],
-      "test_tags": {
-        "split": "test"
-      },
-      "val_groups": [
-        "all"
-      ],
-      "val_tags": {
-        "split": "val"
-      },
-      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/usdm/rslearn_dataset"
-    },
     "usdm_dfut8_eval": {
       "groups": [
         "eval"
@@ -754,6 +723,37 @@
       },
       "val_groups": [
         "eval"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/usdm/rslearn_dataset"
+    },
+    "usdm_dpast26": {
+      "groups": [
+        "all"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/usdm_dpast26_era5d.yaml",
+      "notes": "USDM drought eval (weekly US Drought Monitor maps 2000-2026 on CONUS ERA5-Land cells): severity change over the 26 weeks before the anchor (recent evolution, inside the input window), from the 448-day ERA5-Land history ending the day before the map date. Full 'all' group (every cell on a 12-week anchor grid) for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within west/central/east) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/usdm.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 0.037822,
+      "target_std": 1.323837,
+      "task_type": "regression",
+      "test_groups": [
+        "all"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "all"
       ],
       "val_tags": {
         "split": "val"

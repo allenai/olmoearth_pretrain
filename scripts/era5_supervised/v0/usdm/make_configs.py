@@ -44,7 +44,7 @@ CLASSIFICATION = {
     "drought": (["no", "yes"], "in drought: severity >= 2 (D1 or worse)"),
 }
 # Supervised-training flavours on the full 'all' group.
-FULL = ("sev", "dpast8", "dfut8")
+FULL = ("sev", "dpast8", "dpast26")
 # Probe inputs (registry ``probe_pooling``): the recent-change targets read the
 # mean of the last 4 tokens, which kept 1.3-2x the gain over the random-init
 # floor and a 2-9x larger between-arm F than the pooled vector (dumped
