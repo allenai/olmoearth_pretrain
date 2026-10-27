@@ -82,6 +82,10 @@ class Slug(StrEnum):
     SPACENET2 = "spacenet2"
     SPACENET7 = "spacenet7"
     TREESATAI = "treesatai"
+    # Extra high-res chip sets served through the gb2 pipeline (not GeoBench-2).
+    ISAID = "isaid"
+    LOVEDA = "loveda"
+    CHESAPEAKE = "chesapeake"
 
 
 class HighresModality(StrEnum):
@@ -108,6 +112,13 @@ HIGHRES_SLUG_GSD_M: dict[str, float] = {
     Slug.SPACENET2: 0.3 * 650 / 512,
     # PlanetScope on a Web-Mercator zoom-15 grid (4.777 m/px at the equator).
     Slug.SPACENET7: 4.777,
+    # DOTA v1 mixes Google Earth / GF-2 / JL-1 / CycloMedia at 0.1–4.5 m; most
+    # chips are Google Earth at roughly 0.5 m, used as the nominal GSD.
+    Slug.ISAID: 0.5,
+    # LoveDA is 0.3 m.
+    Slug.LOVEDA: 0.3,
+    # Chesapeake CVPR NAIP is resampled to 1 m.
+    Slug.CHESAPEAKE: 1.0,
 }
 assert set(HIGHRES_SLUG_GSD_M) == set(GB2_NAIP10_SLUGS)
 
@@ -301,6 +312,12 @@ def _sample_to_olmoearth(
         src = [_RGBN_TO_S2[b] for b in ("red", "green", "blue", "nir")]
         return _s2_sample(sample["image"].float(), src, device)
 
+    if slug in (Slug.ISAID, Slug.LOVEDA, Slug.CHESAPEAKE):
+        # uint8 [0–255] RGB(N) chips; rescale to S2 DN range like FLAIR2.
+        x = sample["image"].float() * (_S2_DN_MAX / _UINT8_MAX)
+        src = [_RGBN_TO_S2[n] for n in _flat_names(band_order)]
+        return _s2_sample(x, src, device)
+
     if slug == Slug.FLAIR2:
         # 5-band 0.2 m aerial uint8 [0–255] (red, green, blue, nir, elevation).
         # Rescale to S2 DN range and map RGBN to their S2 bands by name. The
@@ -400,7 +417,10 @@ def _sample_to_naip10(
     bands (spacenet7's IR) are zero-filled and re-zeroed after normalization.
     """
     device = next(iter(sample.values())).device
-    if slug == Slug.FLAIR2:
+    if slug in (Slug.ISAID, Slug.LOVEDA, Slug.CHESAPEAKE):
+        x = sample["image"].float()  # uint8 RGB(N); missing IR stays zero
+        src = [_RGBN_TO_NAIP[n] for n in _flat_names(band_order)]
+    elif slug == Slug.FLAIR2:
         x = sample["image"].float()  # uint8 RGBN + elevation; elevation dropped
         src = [_RGBN_TO_NAIP.get(n, n) for n in _flat_names(band_order)]
     elif slug == Slug.SPACENET7:
@@ -667,7 +687,7 @@ class GeobenchV2Dataset(Dataset):
                 )
 
         loader_cls = SLUG_TO_DATASET[slug]
-        root = str(Path(paths.GEOBENCH2_DIR) / slug)
+        root = str(Path(getattr(loader_cls, "ROOT_DIR", paths.GEOBENCH2_DIR)) / slug)
         self._inner = loader_cls(root=root, split=split)
         self._band_order = loader_cls.band_order
 

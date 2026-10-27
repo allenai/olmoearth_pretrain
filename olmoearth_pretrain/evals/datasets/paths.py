@@ -16,6 +16,8 @@ _DEFAULTS = {
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
     "FIFTY_CITIES_DIR": "/weka/dfive-default/presto_eval_sets/fifty_cities",
     "SBD_DIR": "/weka/dfive-default/presto_eval_sets/similar_but_different",
+    # Extra high-res segmentation chips (iSAID, LoveDA, Chesapeake) for gb2-style evals.
+    "HR_SEG_DIR": "/weka/dfive-default/favyen/hr_seg_evals/processed",
 }
 
 GEOBENCH_DIR = UPath(os.getenv("GEOBENCH_DIR", _DEFAULTS["GEOBENCH_DIR"]))
@@ -30,3 +32,4 @@ PASTIS_DIR_PARTITION = UPath(
 )
 FIFTY_CITIES_DIR = UPath(os.getenv("FIFTY_CITIES_DIR", _DEFAULTS["FIFTY_CITIES_DIR"]))
 SBD_DIR = UPath(os.getenv("SBD_DIR", _DEFAULTS["SBD_DIR"]))
+HR_SEG_DIR = UPath(os.getenv("HR_SEG_DIR", _DEFAULTS["HR_SEG_DIR"]))

@@ -61,8 +61,9 @@ def _make_encoder(modality_names: list[str]) -> torch.nn.Module:
 @pytest.mark.parametrize("slug", list(SLUG_TO_DATASET.keys()))
 def test_raw_loader_one_sample(slug: str) -> None:
     """Verify each raw loader can load exactly one sample from the test split."""
-    root = str(GEOBENCH2_DIR / slug)
     loader_cls = SLUG_TO_DATASET[slug]
+    # The extra high-res chip sets (iSAID etc.) live outside GEOBENCH2_DIR.
+    root = str(Path(getattr(loader_cls, "ROOT_DIR", GEOBENCH2_DIR)) / slug)
     ds = loader_cls(root=root, split="test")
     assert len(ds) > 0, f"{slug}: test split is empty"
 

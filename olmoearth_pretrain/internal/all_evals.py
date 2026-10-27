@@ -1121,7 +1121,29 @@ EVAL_TASKS = {
 #                              spacenet7 976 px (upsampled from ~4.8 m) at ps4.
 # Keys: gb2_flair2_naip10, gb2_flair2_naip10_nominal, gb2_spacenet2_naip10,
 # gb2_spacenet2_naip10_nominal, gb2_spacenet7_naip10, gb2_spacenet7_naip10_nominal.
-_GB2_NAIP10_NOMINAL_PATCH_SIZE = {"flair2": 1, "spacenet2": 1, "spacenet7": 4}
+_GB2_NAIP10_NOMINAL_PATCH_SIZE = {
+    "flair2": 1,
+    "spacenet2": 1,
+    "spacenet7": 4,
+    # 512 px at ~0.5 / 0.3 / 1 m -> 104 / 60 / 204 px at 2.5 m.
+    "isaid": 1,
+    "loveda": 1,
+    "chesapeake": 1,
+}
+
+# Extra high-res segmentation chip sets (see configs.py "gb2-isaid" etc.); they
+# reuse the gb2_flair2 protocol (512 px uint8 aerial, S2 slot at ps8).
+_GB2_EXTRA_HIGHRES_SLUGS = ("isaid", "loveda", "chesapeake")
+
+
+def _gb2_extra_highres_tasks(
+    tasks: dict[str, DownstreamTaskConfig],
+) -> dict[str, DownstreamTaskConfig]:
+    """Copy the gb2_flair2 task config for each extra high-res chip set."""
+    return {
+        f"gb2_{slug}": replace(tasks["gb2_flair2"], dataset=f"gb2-{slug}")
+        for slug in _GB2_EXTRA_HIGHRES_SLUGS
+    }
 
 
 def _gb2_naip10_tasks(
@@ -1147,6 +1169,7 @@ def _gb2_naip10_tasks(
     return out
 
 
+EVAL_TASKS.update(_gb2_extra_highres_tasks(EVAL_TASKS))
 EVAL_TASKS.update(_gb2_naip10_tasks(EVAL_TASKS))
 
 # Pretrain-subset evals read from frozen snapshots under presto_eval_sets, NOT
@@ -1877,6 +1900,7 @@ FT_EVAL_TASKS = {
         primary_metric=EvalMetric.MICRO_MAP,
     ),
 }
+FT_EVAL_TASKS.update(_gb2_extra_highres_tasks(FT_EVAL_TASKS))
 FT_EVAL_TASKS.update(_gb2_naip10_tasks(FT_EVAL_TASKS))
 
 

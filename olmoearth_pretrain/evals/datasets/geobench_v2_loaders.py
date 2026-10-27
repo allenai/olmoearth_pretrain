@@ -17,6 +17,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
 
+import olmoearth_pretrain.evals.datasets.paths as paths
+
 
 def _raster_f32(row: Any, idx: int) -> torch.Tensor:
     """Read rasterio subfile → float32 (C, H, W)."""
@@ -395,7 +397,58 @@ class Flair2Dataset(_BaseGeobenchDataset):
         return {"image": image, "mask": mask}
 
 
-SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
+class _ChipSegDataset(Dataset):
+    """Pre-tiled 512 px uint8 chips + int masks stored as per-split .npy arrays.
+
+    Used for the extra high-res segmentation sets (iSAID, LoveDA, Chesapeake)
+    that are not part of GeoBench-2. ``<root>/<split>_image.npy`` is
+    (N, C, 512, 512) uint8 and ``<root>/<split>_mask.npy`` is (N, 512, 512)
+    int16 with -1 for ignored pixels. The prep scripts live in the 2026-10-23
+    NAIP training session folder on the agent board (hr_seg_evals/).
+    """
+
+    ROOT_DIR = str(paths.HR_SEG_DIR)
+    band_order: Any
+
+    def __init__(self, root: str, split: str) -> None:
+        """Memory-map the image and mask arrays of the split."""
+        if split in ("val", "validation"):
+            split = "valid"
+        self._image = np.load(os.path.join(root, f"{split}_image.npy"), mmap_mode="r")
+        self._mask = np.load(os.path.join(root, f"{split}_mask.npy"), mmap_mode="r")
+        if len(self._image) != len(self._mask):
+            raise ValueError(f"image/mask length mismatch under {root} ({split})")
+
+    def __len__(self) -> int:
+        """Return number of samples in the split."""
+        return len(self._image)
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        """Load sample at idx."""
+        image = torch.from_numpy(np.array(self._image[idx], dtype=np.float32))
+        mask = torch.from_numpy(np.array(self._mask[idx], dtype=np.int64))
+        return {"image": image, "mask": mask}
+
+
+class ISAIDDataset(_ChipSegDataset):
+    """iSAID semantic seg on DOTA v1 imagery: RGB (gray replicated) -> 16 classes (0=bg)."""
+
+    band_order = ["red", "green", "blue"]
+
+
+class LoveDADataset(_ChipSegDataset):
+    """LoveDA 0.3 m RGB -> 7 land-cover classes (no-data = -1)."""
+
+    band_order = ["red", "green", "blue"]
+
+
+class ChesapeakeDataset(_ChipSegDataset):
+    """Chesapeake CVPR 1 m NAIP RGBN -> 6 land-cover classes (no-data = -1)."""
+
+    band_order = ["red", "green", "blue", "nir"]
+
+
+SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset] | type[_ChipSegDataset]] = {
     "benv2": BENV2Dataset,
     "biomassters": BioMasstersDataset,
     "burn_scars": BurnScarsDataset,
@@ -407,4 +460,7 @@ SLUG_TO_DATASET: dict[str, type[_BaseGeobenchDataset]] = {
     "spacenet2": SpaceNet2Dataset,
     "spacenet7": SpaceNet7Dataset,
     "treesatai": TreeSatAIDataset,
+    "isaid": ISAIDDataset,
+    "loveda": LoveDADataset,
+    "chesapeake": ChesapeakeDataset,
 }

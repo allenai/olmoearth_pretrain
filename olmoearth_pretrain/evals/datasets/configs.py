@@ -53,6 +53,10 @@ class SourceImagery(StrEnum):
     GRAYSCALE_AERIAL = "grayscale_aerial"
     # 5-band RGB + NIR + elevation aerial imagery.
     RGBNE_AERIAL = "rgbne_aerial"
+    # 3-band RGB very-high-res aerial/satellite imagery (Google Earth etc.).
+    RGB_AERIAL = "rgb_aerial"
+    # USDA NAIP 4-band (RGBN) aerial imagery at its native ~1 m.
+    NAIP = "naip"
 
 
 @dataclass
@@ -527,6 +531,37 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
         supported_modalities=[Modality.SENTINEL2_L2A.name],
         source_imagery=[SourceImagery.RGBNE_AERIAL],
     ),
+    # Extra high-res semantic segmentation sets (not part of GeoBench-2) prepared
+    # as 512 px uint8 chips and served through the same gb2 pipeline so they get
+    # the S2-slot and naip10-slot variants. iSAID and LoveDA are CC BY-NC
+    # (non-commercial, internal research evals only).
+    "gb2-isaid": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=16,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=[SourceImagery.RGB_AERIAL],
+    ),
+    "gb2-loveda": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=7,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=[SourceImagery.RGB_AERIAL],
+    ),
+    "gb2-chesapeake": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=6,
+        is_multilabel=False,
+        height_width=512,
+        supported_modalities=[Modality.SENTINEL2_L2A.name],
+        source_imagery=[SourceImagery.NAIP],
+    ),
     "gb2-fotw": EvalDatasetConfig(
         task_type=TaskType.SEGMENTATION,
         imputes=[],
@@ -543,7 +578,14 @@ _GB2_DATASET_TO_CONFIG: dict[str, EvalDatasetConfig] = {
 # ``gb2-<slug>-naip10`` keeps the native pixel grid; ``gb2-<slug>-naip10-nominal``
 # resamples the image to 2.5 m/px. Labels (and so height_width) are unchanged.
 # See GeobenchV2Dataset(highres_modality=..., highres_resample=...).
-GB2_NAIP10_SLUGS = ("flair2", "spacenet2", "spacenet7")
+GB2_NAIP10_SLUGS = (
+    "flair2",
+    "spacenet2",
+    "spacenet7",
+    "isaid",
+    "loveda",
+    "chesapeake",
+)
 GB2_NAIP10_SUFFIX = "naip10"
 GB2_NAIP10_NOMINAL_SUFFIX = "nominal"
 for _slug in GB2_NAIP10_SLUGS:
