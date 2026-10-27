@@ -76,6 +76,10 @@ class SlotMergeConfig(Config):
             it the narrow residual stream reaches the merge un-normalized: slots start
             at its scale and are the GRU's hidden state (at d768 it grew to RMS ~33 by
             80k, and the merge GRU's gradients ~900x those at d256).
+        narrow_qk_norm: QK-norm in the narrow stage's attention only (the trunk keeps
+            the encoder's ``qk_norm``). At d768 the narrow blocks' q/k norms doubled
+            between 5k and 15k steps (logit bound 49 -> 190, trunk ~100, d256 ~40)
+            and training destabilized at ~10k.
         month_length: One slot per calendar month instead of ``ceil(n / ratio)``:
             the length of a month in the RoPE time coordinate (30.4375 days times
             the encoder's ``rope_temporal_coordinate_scale``). A cell gets
@@ -100,6 +104,7 @@ class SlotMergeConfig(Config):
     narrow_front_end: bool = False
     month_length: float | None = None
     narrow_out_norm: bool = False
+    narrow_qk_norm: bool = False
     slot_update: str = "gru"
 
     def validate(self, depth: int) -> None:

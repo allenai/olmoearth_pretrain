@@ -1,6 +1,7 @@
 """Per-cell slot merge (``nn/slot_merge.py``) and its use inside the encoder."""
 
 import math
+from typing import Any
 
 import pytest
 import torch
@@ -267,7 +268,7 @@ def test_narrow_stage_attends_within_each_cell() -> None:
     assert not torch.allclose(a[valid & (cell == 1)], b[valid & (cell == 1)])
 
 
-def _narrow_encoder() -> Encoder:
+def _narrow_encoder(**slot_kwargs: Any) -> Encoder:
     torch.manual_seed(0)
     return EncoderConfig(
         supported_modality_names=MODALITIES,
@@ -292,7 +293,11 @@ def _narrow_encoder() -> Encoder:
             student_output_norm=True,
         ),
         slot_merge_config=SlotMergeConfig(
-            merge_after=0, narrow_depth=1, narrow_dim=64, max_slots_per_cell=4
+            merge_after=0,
+            narrow_depth=1,
+            narrow_dim=64,
+            max_slots_per_cell=4,
+            **slot_kwargs,
         ),
     ).build()
 
@@ -448,3 +453,11 @@ def test_residual_update_replaces_the_gru() -> None:
     assert merge.update_proj.weight.grad.abs().sum() > 0
     with pytest.raises(ValueError, match="slot_update"):
         SlotMergeConfig(merge_after=1, slot_update="lstm").validate(depth=3)
+
+
+def test_narrow_qk_norm_applies_to_the_narrow_stage_only() -> None:
+    """narrow_qk_norm: LayerNorm q/k in the narrow blocks; trunk attention unchanged."""
+    enc = _narrow_encoder(narrow_qk_norm=True)
+    assert enc.narrow_stage is not None
+    assert isinstance(enc.narrow_stage.blocks[0].attn.q_norm, torch.nn.LayerNorm)
+    assert isinstance(enc.blocks[0].attn.q_norm, torch.nn.Identity)
