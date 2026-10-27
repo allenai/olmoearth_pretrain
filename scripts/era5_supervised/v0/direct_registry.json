@@ -229,6 +229,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 3.520294,
+      "target_std": 3.842466,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -259,6 +261,8 @@
         "has_anom": "",
         "split": "train"
       },
+      "target_mean": 0.003871,
+      "target_std": 1.618661,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -291,6 +295,8 @@
         "has_anom": "",
         "split": "train"
       },
+      "target_mean": -0.026354,
+      "target_std": 1.595106,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -322,6 +328,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 3.629378,
+      "target_std": 3.86726,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -352,6 +360,8 @@
         "has_le": "",
         "split": "train"
       },
+      "target_mean": 40.972947,
+      "target_std": 34.505425,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -383,6 +393,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 42.944378,
+      "target_std": 35.365747,
       "task_type": "regression",
       "test_groups": [
         "eval"
@@ -412,6 +424,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.617501,
+      "target_std": 2.120344,
       "task_type": "regression",
       "test_groups": [
         "eval"
