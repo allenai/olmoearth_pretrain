@@ -6,7 +6,7 @@
 # One window per (CONUS cell, map date): the cell's ERA5-Land series, 1x1 in a
 # WGS84 0.1 deg/px window; label = a property of the vector `label` point.
 # Splits cross 3 deg blocks with water years (tags written at creation).
-# Registry entries pick the group (`eval` subset or `all`) and the split tags.
+# Registry entries pick the group (eval subset or `all`) and the split tags.
 data:
   class_path: rslearn.train.data_module.RslearnDataModule
   init_args:
@@ -41,17 +41,17 @@ data:
     # (Strategy.ZSCORE, computed.json); no rslearn Normalize transform here.
     train_config:
       groups:
-      - eval
+      - evalu
       tags:
         split: train
     val_config:
       groups:
-      - eval
+      - evalu
       tags:
         split: val
     test_config:
       groups:
-      - eval
+      - evalu
       tags:
         split: test
     predict_config:

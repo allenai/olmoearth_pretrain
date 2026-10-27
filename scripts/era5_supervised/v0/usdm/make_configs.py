@@ -43,6 +43,13 @@ CLASSIFICATION = {
     ),
     "drought": (["no", "yes"], "in drought: severity >= 2 (D1 or worse)"),
 }
+# Window group of the in-loop eval tasks: an unstratified draw (cell- and
+# water-year-balanced, the natural mix of drought states; keys
+# meta/windows_eval_u0.parquet). The first, stratified ``eval`` group stays on
+# disk; across two draws of each recipe the unstratified one separated the
+# arms about twice as well on val (26-week change, last4: F 10.2 / 8.1 vs 4.9 /
+# 5.5) and as well on test (12.0 / 8.1 vs 9.2 / 8.0).
+EVAL_GROUP = "evalu"
 # Supervised-training flavours on the full 'all' group.
 FULL = ("sev", "dpast8", "dpast26")
 # Probe inputs (registry ``probe_pooling``): the recent-change targets read the
@@ -73,7 +80,7 @@ YAML = """\
 # One window per (CONUS cell, map date): the cell's ERA5-Land series, 1x1 in a
 # WGS84 0.1 deg/px window; label = a property of the vector `label` point.
 # Splits cross 3 deg blocks with water years (tags written at creation).
-# Registry entries pick the group (`eval` subset or `all`) and the split tags.
+# Registry entries pick the group (eval subset or `all`) and the split tags.
 data:
   class_path: rslearn.train.data_module.RslearnDataModule
   init_args:
@@ -99,17 +106,17 @@ data:
     # (Strategy.ZSCORE, computed.json); no rslearn Normalize transform here.
     train_config:
       groups:
-      - eval
+      - {group}
       tags:
         split: train
     val_config:
       groups:
-      - eval
+      - {group}
       tags:
         split: val
     test_config:
       groups:
-      - eval
+      - {group}
       tags:
         split: test
     predict_config:
@@ -140,7 +147,7 @@ def entry(target: str, group: str, stats: dict, notes: str) -> dict:
 
     Args:
         target: Property name.
-        group: ``eval`` or ``all``.
+        group: ``EVAL_GROUP`` or ``all``.
         stats: ``label_stats.json`` content (may be empty).
         notes: Entry notes.
 
@@ -154,7 +161,7 @@ def entry(target: str, group: str, stats: dict, notes: str) -> dict:
         "model_yaml_path": f"configs/usdm_{target}_era5d.yaml",
         "weka_path": WEKA_PATH, "notes": notes,
     }  # fmt: skip
-    name = f"usdm_{target}_eval" if group == "eval" else f"usdm_{target}"
+    name = f"usdm_{target}" if group == "all" else f"usdm_{target}_eval"
     out["probe_lr"] = PROBE_LRS.get(name, DEFAULT_PROBE_LR)
     if name in PROBE_POOLINGS:
         out["probe_pooling"] = PROBE_POOLINGS[name]
@@ -187,14 +194,14 @@ def main() -> None:
     for target, what in REGRESSION.items():
         task = REGRESSION_TASK.format(prop=target)
         (V0_DIR / "configs" / f"usdm_{target}_era5d.yaml").write_text(
-            YAML.format(what=what, weka_path=WEKA_PATH, task=task)
+            YAML.format(what=what, weka_path=WEKA_PATH, task=task, group=EVAL_GROUP)
         )
     for target, (classes, what) in CLASSIFICATION.items():
         # Quoted: YAML 1.1 reads bare yes / no as booleans.
         listed = "\n".join(f'        - "{c}"' for c in classes)
         task = CLASSIFICATION_TASK.format(prop=target, classes=listed)
         (V0_DIR / "configs" / f"usdm_{target}_era5d.yaml").write_text(
-            YAML.format(what=what, weka_path=WEKA_PATH, task=task)
+            YAML.format(what=what, weka_path=WEKA_PATH, task=task, group=EVAL_GROUP)
         )
     registry_path = V0_DIR / "direct_registry.json"
     registry = json.loads(registry_path.read_text())
@@ -210,9 +217,9 @@ def main() -> None:
     )
     descriptions = {**REGRESSION, **{k: v[1] for k, v in CLASSIFICATION.items()}}
     for target, what in descriptions.items():
-        tasks[f"usdm_{target}_eval"] = entry(target, "eval", stats, base.format(what=what) + (
-            "'eval' group: 4000 / 1500 / 1500 windows stratified by drought state x 8-week dynamics "
-            "and spread over cells and water years. " + split_note))  # fmt: skip
+        tasks[f"usdm_{target}_eval"] = entry(target, EVAL_GROUP, stats, base.format(what=what) + (
+            f"'{EVAL_GROUP}' group: 4000 / 1500 / 1500 windows, an unstratified draw spread over cells "
+            "and water years (the natural mix of drought states). " + split_note))  # fmt: skip
     for target in FULL:
         tasks[f"usdm_{target}"] = entry(target, "all", stats, base.format(what=descriptions[target]) + (
             "Full 'all' group (every cell on a 12-week anchor grid) for supervised training. " + split_note))  # fmt: skip
