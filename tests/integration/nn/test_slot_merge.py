@@ -125,10 +125,11 @@ def test_unmerge_gives_merged_tokens_their_cell_mean() -> None:
         torch.testing.assert_close(back[0][sel], expected, atol=1e-5, rtol=1e-5)
 
 
-def test_every_parameter_gets_a_gradient_even_without_merging() -> None:
+@pytest.mark.parametrize("slot_update", ["gru", "residual"])
+def test_every_parameter_gets_a_gradient_even_without_merging(slot_update: str) -> None:
     """DDP needs grads for all parameters; a batch with only small cells must not drop them."""
     for counts in ([[12, 2]], [[2, 3]]):
-        merge = _merge()
+        merge = _merge(slot_update=slot_update)  # type: ignore[arg-type]
         x, pos, valid, cell, mod = _cells(counts)
         x.requires_grad_(True)
         out, _, out_valid, _, _ = merge(x, pos, valid, cell, mod)
@@ -435,3 +436,15 @@ def test_narrow_out_norm_normalizes_each_token() -> None:
     torch.testing.assert_close(
         out.var(-1, unbiased=False), torch.ones(len(out)), atol=1e-2, rtol=0
     )
+
+
+def test_residual_update_replaces_the_gru() -> None:
+    """slot_update="residual": no GRU; the zero-initialized projection learns."""
+    merge = _merge(slot_update="residual")  # type: ignore[arg-type]
+    assert not hasattr(merge, "gru")
+    x, pos, valid, cell, mod = _cells([[12, 9]])
+    out, _, out_valid, _, _ = merge(x, pos, valid, cell, mod)
+    out[out_valid].pow(2).sum().backward()
+    assert merge.update_proj.weight.grad.abs().sum() > 0
+    with pytest.raises(ValueError, match="slot_update"):
+        SlotMergeConfig(merge_after=1, slot_update="lstm").validate(depth=3)

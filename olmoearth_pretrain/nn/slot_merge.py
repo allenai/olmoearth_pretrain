@@ -11,7 +11,7 @@ tokens and the slots together.
 Slots start at chunk means: the cell's tokens in (modality, time) order are split into
 ``t`` consecutive chunks, so the initial slots are shared across modalities in
 proportion to their visible counts, and then move freely over ``iters`` rounds
-(GRU + MLP update). A slot's RoPE position is the cell's row/col and the
+(GRU or residual update, then an MLP). A slot's RoPE position is the cell's row/col and the
 attention-weighted mean time of the tokens it absorbed (a point position).
 
 The merge also returns an *unmerge* for callers that want per-token outputs in the
@@ -83,6 +83,9 @@ class SlotMergeConfig(Config):
             calendar months its tokens fall in; with one slot per month, slot
             ``k`` starts from the tokens of the cell's ``k``-th month, otherwise
             (short spans) from ``t`` time-ordered chunks of its tokens.
+        slot_update: How each round's attention output updates the slots: "gru"
+            (Locatello et al.) or "residual" (``slots + proj(updates)``, ``proj``
+            zero-initialized, so the slots start as their month/chunk means).
     """
 
     merge_after: int = 4
@@ -97,6 +100,7 @@ class SlotMergeConfig(Config):
     narrow_front_end: bool = False
     month_length: float | None = None
     narrow_out_norm: bool = False
+    slot_update: str = "gru"
 
     def validate(self, depth: int) -> None:
         """Check the merge point fits the encoder depth."""
@@ -116,6 +120,8 @@ class SlotMergeConfig(Config):
             raise ValueError(
                 f"merge_after must be in (0, depth={depth}), got {self.merge_after}"
             )
+        if self.slot_update not in ("gru", "residual"):
+            raise ValueError(f"slot_update must be gru or residual: {self.slot_update}")
         if self.ratio < 2 or self.min_slots < 1 or self.iters < 1:
             raise ValueError(f"invalid slot merge settings: {self}")
         cap = self.max_slots_per_cell
@@ -135,6 +141,7 @@ class SlotMergeConfig(Config):
             mlp_ratio=self.mlp_ratio,
             max_slots_per_cell=self.max_slots_per_cell,
             month_length=self.month_length,
+            slot_update=self.slot_update,
         )
 
 
@@ -214,6 +221,7 @@ class SlotMerge(nn.Module):
         mlp_ratio: float,
         max_slots_per_cell: int | None = None,
         month_length: float | None = None,
+        slot_update: str = "gru",
     ) -> None:
         """Initialize the merge."""
         super().__init__()
@@ -231,7 +239,13 @@ class SlotMerge(nn.Module):
         self.q = nn.Linear(dim, dim, bias=False)
         self.k = nn.Linear(dim, dim, bias=False)
         self.v = nn.Linear(dim, dim, bias=False)
-        self.gru = nn.GRUCell(dim, dim)
+        if slot_update == "gru":
+            self.gru = nn.GRUCell(dim, dim)
+        else:
+            self.update_proj = nn.Linear(dim, dim)
+            nn.init.zeros_(self.update_proj.weight)
+            nn.init.zeros_(self.update_proj.bias)
+        self.slot_update = slot_update
         hidden = int(dim * mlp_ratio)
         self.mlp = nn.Sequential(
             nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim)
@@ -378,9 +392,12 @@ class SlotMerge(nn.Module):
             attn = logits.softmax(dim=-1) * tok_valid[..., None]  # over slots
             weights = attn / (attn.sum(dim=1, keepdim=True) + 1e-8)  # mean per slot
             updates = torch.einsum("gps,gpd->gsd", weights.to(v.dtype), v)
-            slots = self.gru(
-                updates.reshape(-1, D), slots.reshape(-1, D).to(updates.dtype)
-            ).view(G, S, D)
+            if self.slot_update == "gru":
+                slots = self.gru(
+                    updates.reshape(-1, D), slots.reshape(-1, D).to(updates.dtype)
+                ).view(G, S, D)
+            else:
+                slots = slots.to(updates.dtype) + self.update_proj(updates)
             slots = slots + self.mlp(self.norm_mlp(slots))
         slot_time = torch.einsum("gps,gp->gs", weights, times)
 

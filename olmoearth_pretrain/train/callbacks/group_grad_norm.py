@@ -17,6 +17,7 @@ DEFAULT_GROUPS = (
     "encoder.patch_embeddings",
     "encoder.narrow_stage",
     "encoder.slot_merge.gru",
+    "encoder.slot_merge.update_proj",
     "encoder.slot_merge",
     "encoder.narrow_up",
     "encoder.blocks",
