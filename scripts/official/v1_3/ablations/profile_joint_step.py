@@ -13,7 +13,9 @@ prof_tmlp1 ai2/jupiter --launch.num_gpus=1 --launch.priority=urgent``.
 """
 
 import importlib
+import json
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +67,9 @@ PROFILE_TARGETS = {
     "prof_peakv13": "rc_ld1_pixtgt_pix512",
     "prof_peakFDfe": "allcap_slot_n4d192_fe",
     "prof_peakFv13": "rc_ld1_pixtgt_pix512",
+    # Gradient / activation diagnostics from a trained checkpoint (GradDiagCallback;
+    # launch with --trainer.load_path=<checkpoint dir>/stepN).
+    "diag_allcap": "allcap_slot_n4d192_fe",
 }
 # Prefixes that turn on the compiled mixed-RoPE rotation (fused kernels; the eager
 # rotation is dozens of small elementwise kernels per q/k per block).
@@ -693,6 +698,130 @@ class PeakMemoryCallback(Callback):
         )
 
 
+DIAG_STEPS = 30
+# Parameter / activation groups for GradDiagCallback (name prefix -> group).
+DIAG_GROUPS = (
+    ("encoder.patch_embeddings", "patch_embed"),
+    ("encoder.composite_encodings", "composite_enc"),
+    ("encoder.narrow_stage", "narrow_stage"),
+    ("encoder.slot_merge.gru", "merge.gru"),
+    ("encoder.slot_merge.mlp", "merge.mlp"),
+    ("encoder.slot_merge", "merge.other"),
+    ("encoder.narrow_up", "narrow_up"),
+    ("encoder.blocks.", "trunk.block"),
+    ("encoder.perceiver", "perceiver"),
+    ("encoder", "encoder.other"),
+    ("decoder", "decoder"),
+)
+
+
+def _diag_group(name: str) -> str:
+    for prefix, group in DIAG_GROUPS:
+        if name.startswith(prefix):
+            if group == "trunk.block":
+                return f"trunk.{name.split('.')[2]}"
+            if group == "narrow_stage" and ".blocks." in name:
+                return f"narrow.{name.split('.blocks.')[1].split('.')[0]}"
+            return group
+    return name.split(".")[0]
+
+
+class GradDiagCallback(Callback):
+    """Per-module gradient norms, weight norms and activation RMS for DIAG_STEPS steps.
+
+    Run from a trained checkpoint: after each backward (before the optimizer step) it
+    logs each module group's gradient L2 norm, the attention q/k weight norms per
+    block, and the RMS / max |x| of the narrow stage, slot merge, up-projection and
+    first / last trunk block outputs; then a mean over the steps, and exits.
+    """
+
+    def pre_train(self) -> None:  # noqa: D102
+        model = self.trainer.train_module.model
+        self._acts: dict[str, list[tuple[float, float]]] = {}
+        self._grads: dict[str, list[float]] = {}
+        self._steps = 0
+        names = dict(model.named_modules())
+        blocks = sorted(
+            int(n.split(".")[2])
+            for n in names
+            if n.startswith("encoder.blocks.") and n.count(".") == 2
+        )
+        watch = ["encoder.narrow_stage", "encoder.slot_merge", "encoder.narrow_up"]
+        if blocks:
+            watch += [f"encoder.blocks.{blocks[0]}", f"encoder.blocks.{blocks[-1]}"]
+
+        def hook(name):  # type: ignore[no-untyped-def]
+            def fn(module, inputs, output):  # type: ignore[no-untyped-def]
+                x = output[0] if isinstance(output, tuple) else output
+                if not torch.is_tensor(x) or not x.is_floating_point():
+                    return
+                x = x.detach().float()
+                self._acts.setdefault(name, []).append(
+                    (float(x.pow(2).mean().sqrt()), float(x.abs().max()))
+                )
+
+            return fn
+
+        for name in watch:
+            if name in names:
+                names[name].register_forward_hook(hook(name))
+
+    def pre_optim_step(self) -> None:  # noqa: D102
+        model = self.trainer.train_module.model
+        sq: dict[str, float] = {}
+        for name, p in model.named_parameters():
+            if p.grad is None:
+                continue
+            g = p.grad
+            g = g.to_local() if hasattr(g, "to_local") else g
+            group = _diag_group(name)
+            sq[group] = sq.get(group, 0.0) + float(g.float().pow(2).sum())
+        for group, v in sq.items():
+            self._grads.setdefault(group, []).append(v**0.5)
+        self._steps += 1
+        logger.info(
+            "DIAG step %d grads %s",
+            self.trainer.global_step,
+            {k: round(v**0.5, 3) for k, v in sorted(sq.items())},
+        )
+        if self._steps >= DIAG_STEPS:
+            self._summary(model)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
+
+    def _summary(self, model) -> None:  # type: ignore[no-untyped-def]
+        import numpy as np
+
+        weights: dict[str, float] = {}
+        qk: dict[str, float] = {}
+        for name, p in model.named_parameters():
+            w = p.detach()
+            w = w.to_local() if hasattr(w, "to_local") else w
+            group = _diag_group(name)
+            weights[group] = weights.get(group, 0.0) + float(w.float().pow(2).sum())
+            if any(t in name for t in (".q.", ".k.", "q_proj", "k_proj", ".qkv.")):
+                qk[name] = float(w.float().norm())
+        summary = {
+            "grad_norm_mean": {
+                k: round(float(np.mean(v)), 3) for k, v in sorted(self._grads.items())
+            },
+            "grad_norm_max": {
+                k: round(float(np.max(v)), 3) for k, v in sorted(self._grads.items())
+            },
+            "weight_norm": {k: round(v**0.5, 2) for k, v in sorted(weights.items())},
+            "act_rms_mean_absmax": {
+                k: [
+                    round(float(np.mean([a for a, _ in v])), 3),
+                    round(float(np.max([m for _, m in v])), 1),
+                ]
+                for k, v in self._acts.items()
+            },
+            "qk_weight_norm_top": dict(sorted(qk.items(), key=lambda kv: -kv[1])[:12]),
+        }
+        logger.info("DIAG SUMMARY %s", json.dumps(summary))
+
+
 def build_trainer_config(common: CommonComponents):
     """The arm's trainer, stripped to a short profiled run."""
     trainer_config = _target(common).build_trainer_config(common)
@@ -701,6 +830,14 @@ def build_trainer_config(common: CommonComponents):
     )
     trainer_config.callbacks.pop("downstream_evaluator", None)
     trainer_config.callbacks["wandb"].enabled = False
+    if _prefix(common) == "diag_allcap":
+        # Runs from --trainer.load_path; the callback exits after DIAG_STEPS.
+        trainer_config.max_duration = Duration.steps(10**7)
+        checkpointer = trainer_config.callbacks["checkpointer"]
+        checkpointer.save_interval = 10**9
+        checkpointer.ephemeral_save_interval = None
+        trainer_config.callbacks["grad_diag"] = GradDiagCallback()
+        return trainer_config
     checkpointer = trainer_config.callbacks["checkpointer"]
     checkpointer.save_interval = 10**9
     checkpointer.ephemeral_save_interval = None
