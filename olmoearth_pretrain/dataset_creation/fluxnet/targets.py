@@ -144,6 +144,21 @@ def parse_daily(text: str) -> pd.DataFrame:
     return daily.set_index("date")[DAILY_COLUMNS].astype("float32")
 
 
+def daily_gpp(daily: pd.DataFrame) -> pd.Series:
+    """Daily GPP: the mean of the night- and day-time partitionings.
+
+    Where only one partitioning exists it is used alone (about 115 sites have
+    no night-time GPP at all but a full day-time record).
+
+    Args:
+        daily: Frame from :func:`parse_daily`.
+
+    Returns:
+        GPP per day (gC m-2 d-1), NaN where neither partitioning exists.
+    """
+    return daily[["GPP_NT_VUT_REF", "GPP_DT_VUT_REF"]].mean(axis=1, skipna=True)
+
+
 def valid_gpp_days(daily: pd.DataFrame) -> pd.Series:
     """Days whose GPP is usable as a target.
 
@@ -151,9 +166,10 @@ def valid_gpp_days(daily: pd.DataFrame) -> pd.Series:
         daily: Frame from :func:`parse_daily`.
 
     Returns:
-        Boolean series: NT GPP present and NEE daily QC >= ``MIN_DAILY_QC``.
+        Boolean series: GPP present (either partitioning) and NEE daily QC
+        >= ``MIN_DAILY_QC``.
     """
-    return daily["GPP_NT_VUT_REF"].notna() & (daily["NEE_VUT_REF_QC"] >= MIN_DAILY_QC)
+    return daily_gpp(daily).notna() & (daily["NEE_VUT_REF_QC"] >= MIN_DAILY_QC)
 
 
 def parse_archive(job: tuple[str, str, str]) -> dict[str, Any] | None:
@@ -197,7 +213,7 @@ def parse_archive(job: tuple[str, str, str]) -> dict[str, Any] | None:
         n_gpp_valid=int(valid.sum()),
         n_le_valid=int(le_valid.sum()),
         n_years_gpp=int((valid.groupby(daily.index.year).sum() >= 180).sum()),
-        gpp_mean=float(daily.loc[valid, "GPP_NT_VUT_REF"].mean()),
+        gpp_mean=float(daily_gpp(daily)[valid].mean()),
         **info,
     )
 

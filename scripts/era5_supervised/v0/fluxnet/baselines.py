@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 NODATA = -9999.0
 WINDOW_DAYS = 448
 SPANS = (8, 30, 90, 365)
-TARGETS = ("gpp", "gpp_dt", "le", "nee", "gpp_anom")
+TARGETS = ("gpp", "le", "nee", "gpp_anom")
 
 
 def window_features(series: np.ndarray, t0: int, anchor: int) -> np.ndarray:

@@ -308,35 +308,6 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
     },
-    "fluxnet_gpp_dt_eval": {
-      "groups": [
-        "eval"
-      ],
-      "height_width": 1,
-      "label_extractor_name": "default_regression",
-      "modality_layer_name": "era5_daily",
-      "model_yaml_path": "configs/fluxnet_gpp_dt_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP_DT_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
-      "num_classes": 1,
-      "probe_lr": 0.03,
-      "tags": {
-        "split": "train"
-      },
-      "task_type": "regression",
-      "test_groups": [
-        "eval"
-      ],
-      "test_tags": {
-        "split": "test"
-      },
-      "val_groups": [
-        "eval"
-      ],
-      "val_tags": {
-        "split": "val"
-      },
-      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
-    },
     "fluxnet_gpp_eval": {
       "groups": [
         "eval"
@@ -345,7 +316,7 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_gpp_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP_NT_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP (gC m-2 d-1; per day the mean of GPP_NT_VUT_REF and GPP_DT_VUT_REF, or the one that exists), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
       "num_classes": 1,
       "probe_lr": 0.03,
       "tags": {

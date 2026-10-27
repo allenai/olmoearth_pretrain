@@ -7,7 +7,7 @@
 # the full 'all' group (8-day GPP, LE and GPP anomaly; one regression head
 # each, targets z-scored with the registry train stats), LR 1e-4 as for the
 # v1.1.x ceilings. The in-loop probes (every 1000 steps, frozen encoder) read
-# the five FLUXNET evals plus LFMC; the best value over steps is the ceiling
+# the four FLUXNET evals plus LFMC; the best value over steps is the ceiling
 # estimate. As in v1.1.x, a frozen linear probe can understate what direct
 # supervision reaches, so read it next to the offline gbm baseline.
 #
@@ -20,7 +20,7 @@ set -euo pipefail
 SUBCMD="${SUBCMD:-launch}"
 RUN="${RUN:-era5enc_1103_sup_flux}"
 CLUSTER="${CLUSTER:-ai2/saturn}"
-FLUX="fluxnet_gpp_eval,fluxnet_gpp_dt_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval"
+FLUX="fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval"
 
 .venv/bin/python scripts/era5_supervised/v0/base.py "${SUBCMD}" "${RUN}" "${CLUSTER}" \
   common.enable_supervised=True \

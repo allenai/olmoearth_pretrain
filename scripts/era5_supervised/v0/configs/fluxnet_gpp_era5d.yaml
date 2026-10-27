@@ -1,4 +1,4 @@
-# Data-only config for the FLUXNET flux-tower eval: 8-day mean GPP (night-time partitioning, GPP_NT_VUT_REF), gC m-2 d-1
+# Data-only config for the FLUXNET flux-tower eval: 8-day mean GPP (mean of the night- and day-time partitionings), gC m-2 d-1
 # from a 448-day ERA5-Land daily history (the window ends on the target period's
 # last day). Only the `data:` section is consumed (rslearn_builder).
 #

@@ -44,10 +44,10 @@ cite each site's product.
 ### Targets (stage 2)
 
 From each archive's daily file (`*_FLUXMET_DD_*`, or `*_FULLSET_DD_*` in
-legacy archives) and BIF site metadata. A day is valid for GPP when
-`GPP_NT_VUT_REF` is present and `NEE_VUT_REF_QC` (the daily fraction of
-measured or good-quality gap-filled half-hours) is >= 0.5; for LE likewise
-with `LE_F_MDS_QC`.
+legacy archives) and BIF site metadata. A day is valid for GPP when either
+partitioning (`GPP_NT_VUT_REF`, `GPP_DT_VUT_REF`) is present and
+`NEE_VUT_REF_QC` (the daily fraction of measured or good-quality gap-filled
+half-hours) is >= 0.5; for LE likewise with `LE_F_MDS_QC`.
 
 ### ERA5-Land series (stage 3)
 
@@ -74,8 +74,7 @@ least 6 valid days:
 
 | Property | Target |
 |---|---|
-| `gpp` | night-time-partitioned GPP (`GPP_NT_VUT_REF`), gC m-2 d-1 |
-| `gpp_dt` | day-time-partitioned GPP on the same days |
+| `gpp` | GPP, gC m-2 d-1: per day the mean of the night- and day-time partitionings (`GPP_NT_VUT_REF`, `GPP_DT_VUT_REF`), or the one that exists (about 115 sites have no night-time GPP) |
 | `le` | latent heat `LE_F_MDS`, W m-2 |
 | `nee` | `NEE_VUT_REF` on the GPP days |
 | `gpp_anom` | `gpp` minus the site's leave-one-year-out climatology at the same day of year (8-day GPP within +-7 days in every other year; >= 2 other years) |
@@ -92,7 +91,7 @@ Two window groups, one window per (site, anchor):
   `has_anom` select the windows defining each target).
 - `eval`: a site-balanced subset (4000 train / 1500 val / 1500 test; sites are
   visited round-robin, so every site contributes before any contributes twice)
-  of the candidates where `gpp`, `gpp_dt`, `le` and `nee` are all defined; the
+  of the candidates where `gpp`, `le` and `nee` are all defined; the
   registry `fluxnet_*_eval` tasks. A separate group so the in-loop evaluator does
   not scan the full set.
 

@@ -5,9 +5,9 @@ the 8-day target periods never overlap) whose ERA5 window ``[d - 448, d)`` is
 inside the mirror and has no all-missing day, with targets over the window's
 last 8 days ``[d - 8, d)``:
 
-* ``gpp``: mean night-time-partitioned GPP (``GPP_NT_VUT_REF``, gC m-2 d-1)
-  over days with NEE daily QC >= 0.5; at least 6 such days.
-* ``gpp_dt``: the day-time-partitioned GPP on the same days.
+* ``gpp``: mean GPP (gC m-2 d-1; per day the mean of the night- and day-time
+  partitionings ``GPP_NT_VUT_REF`` / ``GPP_DT_VUT_REF``, or the one that
+  exists) over days with NEE daily QC >= 0.5; at least 6 such days.
 * ``le``: mean latent heat (``LE_F_MDS``, W m-2), LE daily QC >= 0.5, >= 6 days.
 * ``nee``: mean ``NEE_VUT_REF`` on the GPP days.
 * ``gpp_anom``: ``gpp`` minus the site's leave-one-year-out climatology at the
@@ -25,7 +25,7 @@ never straddle splits.
 * ``all``: every candidate with ``gpp`` on a ``--spacing``-day grid, for
   supervised training;
 * ``eval``: a site-balanced subset (``--n-train/--n-val/--n-test``) of the
-  candidates where ``gpp``, ``gpp_dt``, ``le`` and ``nee`` are all defined, for
+  candidates where ``gpp``, ``le`` and ``nee`` are all defined, for
   the in-loop linear probes (the task configs use ``allow_invalid: false``, so a
   missing property fails loudly instead of reading as 0). It is a separate
   group so the evaluator does not scan the full set.
@@ -70,7 +70,7 @@ from .common import (
     WINDOW_DAYS,
     haversine_km,
 )
-from .targets import MIN_DAILY_QC
+from .targets import MIN_DAILY_QC, daily_gpp, valid_gpp_days
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -82,9 +82,9 @@ CLIM_HALF_WIDTH_DAYS = 7
 MIN_CLIM_YEARS = 2
 GROUP_KM = 50.0
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
-TARGETS = ("gpp", "gpp_dt", "le", "nee", "gpp_anom")
+TARGETS = ("gpp", "le", "nee", "gpp_anom")
 # Targets every eval window carries; gpp_anom is optional (has_anom tag).
-EVAL_REQUIRED = ("gpp", "gpp_dt", "le", "nee")
+EVAL_REQUIRED = ("gpp", "le", "nee")
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -232,13 +232,10 @@ def site_targets(daily: pd.DataFrame) -> pd.DataFrame:
         Frame with ``TARGETS`` columns on a complete daily index.
     """
     daily = daily.asfreq("D")
-    gpp_valid = daily["GPP_NT_VUT_REF"].notna() & (
-        daily["NEE_VUT_REF_QC"] >= MIN_DAILY_QC
-    )
+    gpp_valid = valid_gpp_days(daily)
     le_valid = daily["LE_F_MDS"].notna() & (daily["LE_F_MDS_QC"] >= MIN_DAILY_QC)
     out = pd.DataFrame(index=daily.index)
-    out["gpp"] = _rolling_target(daily["GPP_NT_VUT_REF"], gpp_valid)
-    out["gpp_dt"] = _rolling_target(daily["GPP_DT_VUT_REF"], gpp_valid)
+    out["gpp"] = _rolling_target(daily_gpp(daily), gpp_valid)
     out["le"] = _rolling_target(daily["LE_F_MDS"], le_valid)
     out["nee"] = _rolling_target(daily["NEE_VUT_REF"], gpp_valid)
     out["gpp_anom"] = out["gpp"] - loo_climatology(out["gpp"])
