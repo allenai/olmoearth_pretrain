@@ -5,9 +5,11 @@ input already explains, so probe numbers can be read against it:
 
 * ``mean``: the train-split mean (R2 = 0 by construction on train).
 * ``ridge``: ridge regression (alpha by 5-fold CV over sites) on hand-crafted
-  summaries of the window: per-band means over the last 8 / 30 / 90 / 365 days
-  plus the anchor's day of year (sin, cos). A linear model on the summaries a
-  linear probe would need from the embedding.
+  summaries of the window: per-band means over the last 8 / 30 / 90 / 365 days,
+  over the same 8 / 30 / 83 days one year earlier (so this-year-vs-last-year
+  contrasts, which the anomaly target needs, are linear in the features), plus
+  the anchor's day of year (sin, cos). A linear model on the summaries a linear
+  probe would need from the embedding.
 * ``gbm``: histogram gradient boosting on the same features (nonlinear).
 
 Inputs come from the dataset's ``meta`` tables (``windows_eval.parquet`` and
@@ -38,6 +40,8 @@ logger = logging.getLogger(__name__)
 NODATA = -9999.0
 WINDOW_DAYS = 448
 SPANS = (8, 30, 90, 365)
+# The same periods one year earlier (the window holds 83 days before that).
+LAST_YEAR_SPANS = (8, 30, 83)
 TARGETS = ("gpp", "le", "nee", "gpp_anom")
 
 
@@ -50,12 +54,13 @@ def window_features(series: np.ndarray, t0: int, anchor: int) -> np.ndarray:
         anchor: Anchor date (days since epoch; the window ends the day before).
 
     Returns:
-        ``14 * len(SPANS) + 2`` features.
+        ``14 * (len(SPANS) + len(LAST_YEAR_SPANS)) + 2`` features.
     """
     block = series[t0 : t0 + WINDOW_DAYS].astype(np.float64)
     block = np.where(block == NODATA, np.nan, block)
     parts = [np.nanmean(block[-span:], axis=0) for span in SPANS]
-    doy = (pd.Timestamp("1970-01-01") + pd.Timedelta(days=int(anchor) - 1)).dayofyear
+    parts += [np.nanmean(block[-365 - span : -365], axis=0) for span in LAST_YEAR_SPANS]
+    doy = (pd.Timestamp("1970-01-01") + pd.Timedelta(days=int(anchor) - 1)).day_of_year
     angle = 2 * np.pi * doy / 365.25
     return np.concatenate(parts + [[np.sin(angle), np.cos(angle)]])
 
@@ -70,7 +75,7 @@ def build_features(root: Path, frame: pd.DataFrame) -> np.ndarray:
     Returns:
         ``(len(frame), n_features)`` array.
     """
-    out = np.zeros((len(frame), 14 * len(SPANS) + 2))
+    out = np.zeros((len(frame), 14 * (len(SPANS) + len(LAST_YEAR_SPANS)) + 2))
     for site_id, rows in frame.groupby("site_id"):
         series = np.load(root / "meta" / "era5" / f"{site_id}.npy")
         for k, row in zip(rows.index, rows.itertuples()):
