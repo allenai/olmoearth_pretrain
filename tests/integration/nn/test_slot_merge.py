@@ -421,3 +421,17 @@ def test_one_slot_per_month() -> None:
     _, _, out_valid2, _, _ = merge(x2, pos2, valid2, cell2, mod2)
     assert int(out_valid[0].sum()) == 12 + 10 + 20 + 24
     assert int(out_valid2[0].sum()) == 12
+
+
+def test_narrow_out_norm_normalizes_each_token() -> None:
+    """narrow_out_norm: every valid output token has zero mean, unit variance (init)."""
+    from olmoearth_pretrain.nn.slot_merge import NarrowStage
+
+    torch.manual_seed(0)
+    stage = NarrowStage(D, 64, depth=1, out_norm=True)  # heads = dim // 64
+    x, pos, valid, cell, _ = _cells([[5, 3], [4, 0]])
+    out = stage(x * 50.0, pos, valid, cell)[valid]
+    torch.testing.assert_close(out.mean(-1), torch.zeros(len(out)), atol=1e-4, rtol=0)
+    torch.testing.assert_close(
+        out.var(-1, unbiased=False), torch.ones(len(out)), atol=1e-2, rtol=0
+    )

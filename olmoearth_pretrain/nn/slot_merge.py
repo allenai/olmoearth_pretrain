@@ -72,6 +72,10 @@ class SlotMergeConfig(Config):
         narrow_front_end: Embed straight to ``narrow_dim`` (patch embedding and
             composite encodings at the narrow width) and drop the encoder-width skip;
             requires the narrow stage.
+        narrow_out_norm: LayerNorm the narrow stage's output before the merge. Without
+            it the narrow residual stream reaches the merge un-normalized: slots start
+            at its scale and are the GRU's hidden state (at d768 it grew to RMS ~33 by
+            80k, and the merge GRU's gradients ~900x those at d256).
         month_length: One slot per calendar month instead of ``ceil(n / ratio)``:
             the length of a month in the RoPE time coordinate (30.4375 days times
             the encoder's ``rope_temporal_coordinate_scale``). A cell gets
@@ -92,6 +96,7 @@ class SlotMergeConfig(Config):
     narrow_dim: int | None = None
     narrow_front_end: bool = False
     month_length: float | None = None
+    narrow_out_norm: bool = False
 
     def validate(self, depth: int) -> None:
         """Check the merge point fits the encoder depth."""
@@ -136,8 +141,19 @@ class SlotMergeConfig(Config):
 class NarrowStage(nn.Module):
     """Down-projection + blocks that attend within each patch cell (narrow width)."""
 
-    def __init__(self, in_dim: int, dim: int, depth: int, **block_kwargs: object):
-        """Initialize: ``in_dim -> dim`` projection and ``depth`` blocks at ``dim``."""
+    def __init__(
+        self,
+        in_dim: int,
+        dim: int,
+        depth: int,
+        out_norm: bool = False,
+        **block_kwargs: object,
+    ):
+        """Initialize: ``in_dim -> dim`` projection and ``depth`` blocks at ``dim``.
+
+        ``out_norm``: a LayerNorm on the stage's output (the merge's input), as a
+        pre-norm stack's final norm.
+        """
         super().__init__()
         # Tokens already at the narrow width (narrow front end) need no projection.
         self.down: nn.Module = (
@@ -147,6 +163,7 @@ class NarrowStage(nn.Module):
             Block(dim, dim // 64, **block_kwargs)  # type: ignore[arg-type]
             for _ in range(depth)
         )
+        self.out_norm: nn.Module = nn.LayerNorm(dim) if out_norm else nn.Identity()
 
     def forward(
         self, x: Tensor, positions: Tensor, valid: Tensor, cell_ids: Tensor
@@ -178,6 +195,7 @@ class NarrowStage(nn.Module):
         key_mask[g, rank] = True
         for blk in self.blocks:
             grouped = blk(x=grouped, attn_mask=key_mask, rope_positions=grouped_pos)
+        grouped = self.out_norm(grouped)
         out = h.new_zeros(B, L, grouped.shape[-1])
         out[b_idx, l_idx] = grouped[g, rank].to(out.dtype)
         return out
