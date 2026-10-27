@@ -9,7 +9,8 @@
             "building_fractional_count"
           ],
           "dtype": "float32",
-          "nodata_value": -99999
+          "nodata_value": -99999,
+          "zoom_offset": 2
         }
       ],
       "data_source": {

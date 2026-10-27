@@ -180,14 +180,15 @@ rslearn dataset materialize --root $DATASET_PATH --group res_10 --workers 64 --n
 ```
 
 Google Open Buildings 2.5D Temporal (Africa, South/Southeast Asia, Latin America and
-the Caribbean, yearly 2016-2023) is exported from Google Earth Engine in the same way as
-Google Satellite Embedding below. Each window gets the yearly raster closest to its
-start time, aggregated from ~4 m to 10 m/pixel by Earth Engine:
+the Caribbean, yearly 2016-2023) is fetched from Google Earth Engine with one
+computePixels request per window, using the same service account as Google Satellite
+Embedding below. Each window gets the yearly raster closest to its start time, at
+2.5 m/pixel. It needs rslearn >= 0.1.19, and `--batch-size` keeps the data source from
+being re-created for every window:
 
 ```
-cp data/rslearn_dataset_configs/config_open_buildings.json $DATASET_PATH/config.json
-rslearn dataset prepare --root $DATASET_PATH --group res_10 --workers 64
-rslearn dataset materialize --root $DATASET_PATH --workers 32 --load-workers 128 --group res_10 --no-use-initial-job --ignore-errors
+rslearn dataset prepare --root $DATASET_PATH --config data/rslearn_dataset_configs/config_open_buildings.json --group res_10 --workers 64
+rslearn dataset materialize --root $DATASET_PATH --config data/rslearn_dataset_configs/config_open_buildings.json --group res_10 --workers 16 --batch-size 100 --no-use-initial-job --ignore-errors --retry-max-attempts 10 --retry-backoff-seconds 60
 ```
 
 Annual VIIRS night lights (VNL v2) are not materialized with rslearn. Export the global
