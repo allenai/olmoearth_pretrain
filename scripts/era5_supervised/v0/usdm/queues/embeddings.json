@@ -1,0 +1,140 @@
+[
+ {
+  "name": "init_1601",
+  "source": "era5enc_1601_doyc",
+  "random_init": true,
+  "init_seed": 12536
+ },
+ {
+  "name": "init_1601_seed1",
+  "source": "era5enc_1601_doyc",
+  "random_init": true,
+  "init_seed": 1
+ },
+ {
+  "name": "init_1601_seed2",
+  "source": "era5enc_1601_doyc",
+  "random_init": true,
+  "init_seed": 2
+ },
+ {
+  "name": "era5enc_1601_doyc@50000",
+  "source": "era5enc_1601_doyc",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1601_doyc_seed1@50000",
+  "source": "era5enc_1601_doyc_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1601_doyc_seed2@50000",
+  "source": "era5enc_1601_doyc_seed2",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@0",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 0
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@10000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 10000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@20000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 20000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@30000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 30000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@40000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 40000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@50000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1501_ln_d128@50000",
+  "source": "era5enc_1501_ln_d128",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1501_ln_d128_seed1@50000",
+  "source": "era5enc_1501_ln_d128_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1501_ln_d128_seed2@50000",
+  "source": "era5enc_1501_ln_d128_seed2",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1502_ln_d256@50000",
+  "source": "era5enc_1502_ln_d256",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1502_ln_d256_seed1@50000",
+  "source": "era5enc_1502_ln_d256_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1502_ln_d256_seed2@50000",
+  "source": "era5enc_1502_ln_d256_seed2",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1407_halo75_nogate_ln@50000",
+  "source": "era5enc_1407_halo75_nogate_ln",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1407_halo75_nogate_ln_seed1@50000",
+  "source": "era5enc_1407_halo75_nogate_ln_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1407_halo75_nogate_ln_seed2@50000",
+  "source": "era5enc_1407_halo75_nogate_ln_seed2",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1504_ln_shd1536@50000",
+  "source": "era5enc_1504_ln_shd1536",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1504_ln_shd1536_seed1@50000",
+  "source": "era5enc_1504_ln_shd1536_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1504_ln_shd1536_seed2@50000",
+  "source": "era5enc_1504_ln_shd1536_seed2",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1607_doyc_d512@50000",
+  "source": "era5enc_1607_doyc_d512",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1607_doyc_d512_seed1@50000",
+  "source": "era5enc_1607_doyc_d512_seed1",
+  "step": 50000
+ },
+ {
+  "name": "era5enc_1607_doyc_d512_seed2@50000",
+  "source": "era5enc_1607_doyc_d512_seed2",
+  "step": 50000
+ }
+]
