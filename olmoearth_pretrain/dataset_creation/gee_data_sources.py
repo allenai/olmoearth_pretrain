@@ -69,4 +69,10 @@ class OpenBuildingsTemporal(GEE):
             .toFloat()
             .reduceResolution(ee.Reducer.sum(), maxPixels=self.MAX_INPUT_PIXELS)
         )
-        return ee.Image.cat(means, sums).select(self.bands).unmask(NODATA_VALUE, False)
+        # Reducer.mean outputs doubles, and Earth Engine exports need one data type.
+        return (
+            ee.Image.cat(means, sums)
+            .select(self.bands)
+            .unmask(NODATA_VALUE, False)
+            .toFloat()
+        )
