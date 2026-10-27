@@ -198,7 +198,9 @@ def build_candidates(root: Path, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]
     cells = spatial_split(pd.read_parquet(meta / "cells.parquet"), seed)
     era5_dates = np.load(meta / "era5_dates.npy")
     phen = pd.read_parquet(meta / "phenology.parquet")
-    phen = phen.rename(columns={"cell": "cell_id"})
+    # A date anomaly is the same in days of the water year as in days.
+    phen = phen.rename(columns={"cell": "cell_id", "sdd_dowy_anom": "sdd_anom",
+                                "sad_dowy_anom": "sad_anom"})  # fmt: skip
     phen = phen[phen["cell_id"].isin(cells["cell_id"])]
     ok = (phen["sdd"].notna() & phen["sdd_dowy_clim"].notna()
           & (phen["sdd_gap"] <= MAX_SDD_GAP))  # fmt: skip
