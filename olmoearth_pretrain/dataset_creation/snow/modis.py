@@ -32,9 +32,13 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import fcntl
+import json
 import logging
 import multiprocessing
+import random
 import re
+import tempfile
 import time
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta
@@ -67,7 +71,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = (30, 180)
-MAX_ATTEMPTS = 6
+MAX_ATTEMPTS = 10
+TOKEN_CACHE = Path(tempfile.gettempdir()) / "snow_modis_sas_token.json"
 FIRST_YEAR = 2000
 SLOTS_PER_YEAR = 46
 NH_ROWS = range(1, 7)
@@ -90,30 +95,48 @@ BLOB_RE = re.compile(
 
 
 class SasToken:
-    """Planetary Computer SAS token for the MODIS COG container, refreshed before expiry."""
+    """Planetary Computer SAS token for the MODIS COG container, refreshed before expiry.
 
-    def __init__(self) -> None:
-        """Start without a token."""
+    The token endpoint is rate-limited, so the worker processes of one job share
+    a single token through a file cache under a lock: only the first process to
+    find it stale fetches a new one.
+    """
+
+    def __init__(self, cache: Path = TOKEN_CACHE) -> None:
+        """Start without a token.
+
+        Args:
+            cache: Token cache file shared by the job's processes.
+        """
+        self.cache = cache
         self.token = ""
         self.expiry = 0.0
 
     def get(self) -> str:
-        """A token valid for at least five more minutes.
+        """A token valid for at least ten more minutes.
 
         Returns:
             The SAS query string.
         """
-        if time.time() > self.expiry - 300:
-            body = http_get(SAS_URL).json()
-            self.token = body["token"]
-            self.expiry = datetime.fromisoformat(
-                body["msft:expiry"].replace("Z", "+00:00")
-            ).timestamp()
+        if time.time() < self.expiry - 600:
+            return self.token
+        with open(self.cache.with_suffix(".lock"), "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if self.cache.exists():
+                body = json.loads(self.cache.read_text())
+                self.token, self.expiry = body["token"], float(body["expiry"])
+            if time.time() > self.expiry - 600:
+                body = http_get(SAS_URL).json()
+                self.token = body["token"]
+                self.expiry = datetime.fromisoformat(
+                    body["msft:expiry"].replace("Z", "+00:00")
+                ).timestamp()
+                self.cache.write_text(json.dumps(dict(token=self.token, expiry=self.expiry)))
         return self.token
 
 
 def http_get(url: str) -> requests.Response:
-    """GET with retries and backoff.
+    """GET with retries, backing off longer on rate limits.
 
     Args:
         url: URL.
@@ -129,8 +152,12 @@ def http_get(url: str) -> requests.Response:
         except requests.RequestException as exc:
             if attempt == MAX_ATTEMPTS - 1:
                 raise
-            logger.warning("GET failed (%s), retrying: %s", exc, url.split("?")[0])
-            time.sleep(2 * 2**attempt)
+            status = getattr(exc.response, "status_code", None)
+            wait = min(120.0, 2.0 * 2**attempt) * random.uniform(0.5, 1.5)
+            if status == 429:
+                wait = max(wait, float(exc.response.headers.get("Retry-After", 10)))
+            logger.warning("GET failed (%s), retry in %.0f s: %s", exc, wait, url.split("?")[0])
+            time.sleep(wait)
     raise AssertionError("unreachable")
 
 
