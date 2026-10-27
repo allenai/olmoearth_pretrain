@@ -548,6 +548,9 @@ class DownstreamEvaluator:
                 extra_kwargs["label_at_center_pixel"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
+        if self.dataset.startswith("gb2-"):
+            # naip_10 inputs must be divisible by image_tile_size_factor * patch_size.
+            extra_kwargs["patch_size"] = self.patch_size
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
             extra_kwargs["h5py_dir"] = self.h5py_dir
             extra_kwargs["training_modalities"] = self.input_modalities

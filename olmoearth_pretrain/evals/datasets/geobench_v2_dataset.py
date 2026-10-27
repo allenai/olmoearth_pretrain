@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import Dataset
 
@@ -19,7 +20,12 @@ import olmoearth_pretrain.evals.datasets.paths as paths
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
-from olmoearth_pretrain.evals.datasets.configs import dataset_to_config
+from olmoearth_pretrain.evals.datasets.configs import (
+    GB2_NAIP10_NOMINAL_SUFFIX,
+    GB2_NAIP10_SLUGS,
+    GB2_NAIP10_SUFFIX,
+    dataset_to_config,
+)
 from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
 from olmoearth_pretrain.evals.datasets.normalize import normalize_bands
 from olmoearth_pretrain.evals.task_types import TaskType
@@ -39,8 +45,13 @@ _UINT8_MAX = 255.0
 # SpaceNet2's WorldView-3 multispectral bands are 11-bit DNs stored as uint16.
 _WORLDVIEW_DN_MAX = 2047.0
 
-# Generic RGBN band names used by the GeoBench v2 loaders -> S2 names.
+_NAIP10_ORDER = list(Modality.NAIP_10.band_order)  # R, G, B, IR
+# naip_10 is NAIP resampled to 10 m / image_tile_size_factor = 2.5 m/px.
+NAIP10_NOMINAL_GSD_M = 10.0 / Modality.NAIP_10.image_tile_size_factor
+
+# Generic RGBN band names used by the GeoBench v2 loaders -> S2 / NAIP names.
 _RGBN_TO_S2 = {"red": "B04", "green": "B03", "blue": "B02", "nir": "B08"}
+_RGBN_TO_NAIP = {"red": "R", "green": "G", "blue": "B", "nir": "IR"}
 # SpaceNet2 WorldView-3 MS bands -> closest S2 bands. yellow (585–625 nm) and
 # nir2 (860–1040 nm) have no S2 counterpart and are dropped, as is pan.
 _WORLDVIEW_TO_S2 = {
@@ -51,6 +62,7 @@ _WORLDVIEW_TO_S2 = {
     "red_edge": "B05",  # 705–745 nm vs S2 B05 705 nm
     "nir1": "B08",  # 770–895 nm vs S2 B08 842 nm
 }
+_WORLDVIEW_TO_NAIP = {"red": "R", "green": "G", "blue": "B", "nir1": "IR"}
 
 
 class Slug(StrEnum):
@@ -70,6 +82,71 @@ class Slug(StrEnum):
     SPACENET2 = "spacenet2"
     SPACENET7 = "spacenet7"
     TREESATAI = "treesatai"
+
+
+class HighresModality(StrEnum):
+    """Which OlmoEarth modality slot sub-10 m GeoBench v2 imagery is fed through."""
+
+    SENTINEL2_L2A = "sentinel2_l2a"  # default: rescaled into the S2 DN range
+    NAIP_10 = "naip_10"  # RGBN into the 2.5 m NAIP slot
+
+
+class HighresResample(StrEnum):
+    """How naip_10 inputs are resampled before entering the model."""
+
+    NATIVE = "native"  # keep the dataset's pixel grid (finer than 2.5 m)
+    NOMINAL = "nominal"  # resample to naip_10's nominal 2.5 m/px
+
+
+# Ground sample distance (m/px) of each high-res slug's image *as returned by
+# the loader*; used to compute the 2.5 m nominal size for naip_10 inputs.
+HIGHRES_SLUG_GSD_M: dict[str, float] = {
+    # FLAIR #2 IGN aerial ortho-imagery, 0.2 m.
+    Slug.FLAIR2: 0.2,
+    # Pan-sharpened WorldView-3 tiles are ~0.3 m over 650 px (~195 m); the loader
+    # resizes them to 512 px, so ~0.38 m/px.
+    Slug.SPACENET2: 0.3 * 650 / 512,
+    # PlanetScope on a Web-Mercator zoom-15 grid (4.777 m/px at the equator).
+    Slug.SPACENET7: 4.777,
+}
+assert set(HIGHRES_SLUG_GSD_M) == set(GB2_NAIP10_SLUGS)
+
+
+def parse_gb2_dataset_name(
+    dataset: str,
+) -> tuple[str, HighresModality, HighresResample]:
+    """Split a ``gb2-<slug>[-naip10[-nominal]]`` name into its parts."""
+    if not dataset.startswith("gb2-"):
+        raise ValueError(dataset)
+    slug, *suffix = dataset[len("gb2-") :].split("-", 1)
+    if not suffix:
+        return slug, HighresModality.SENTINEL2_L2A, HighresResample.NATIVE
+    if suffix[0] == GB2_NAIP10_SUFFIX:
+        return slug, HighresModality.NAIP_10, HighresResample.NATIVE
+    if suffix[0] == f"{GB2_NAIP10_SUFFIX}-{GB2_NAIP10_NOMINAL_SUFFIX}":
+        return slug, HighresModality.NAIP_10, HighresResample.NOMINAL
+    raise ValueError(f"unknown gb2 dataset variant: {dataset}")
+
+
+def gb2_dataset_name(
+    slug: str,
+    highres_modality: HighresModality | str = HighresModality.SENTINEL2_L2A,
+    highres_resample: HighresResample | str = HighresResample.NATIVE,
+) -> str:
+    """Inverse of :func:`parse_gb2_dataset_name`."""
+    if HighresModality(highres_modality) == HighresModality.SENTINEL2_L2A:
+        if HighresResample(highres_resample) != HighresResample.NATIVE:
+            raise ValueError("highres_resample='nominal' requires naip_10 inputs")
+        return f"gb2-{slug}"
+    if HighresResample(highres_resample) == HighresResample.NATIVE:
+        return f"gb2-{slug}-{GB2_NAIP10_SUFFIX}"
+    return f"gb2-{slug}-{GB2_NAIP10_SUFFIX}-{GB2_NAIP10_NOMINAL_SUFFIX}"
+
+
+def nominal_naip10_size(height: int, gsd_m: float, multiple: int) -> int:
+    """Pixel size that resamples ``height`` px at ``gsd_m`` to 2.5 m, rounded to ``multiple``."""
+    target = height * gsd_m / NAIP10_NOMINAL_GSD_M
+    return max(multiple, int(round(target / multiple)) * multiple)
 
 
 def _flat_names(band_order: Any, key: str | None = None) -> list[str]:
@@ -311,6 +388,51 @@ def _sample_to_olmoearth(
     raise KeyError(f"cannot map GeoBench v2 sample keys={list(sample)} slug={slug}")
 
 
+def _sample_to_naip10(
+    sample: dict[str, torch.Tensor],
+    band_order: Any,
+    slug: str,
+) -> OlmoEarthSample:
+    """Map a raw high-res GeoBench sample into a naip_10-only OlmoEarthSample.
+
+    Output is ``naip_10`` of shape (H, W, 1, 4) in R, G, B, IR order, in the
+    uint8 [0–255] scale that OlmoEarth's NAIP_10 stats are computed in. Missing
+    bands (spacenet7's IR) are zero-filled and re-zeroed after normalization.
+    """
+    device = next(iter(sample.values())).device
+    if slug == Slug.FLAIR2:
+        x = sample["image"].float()  # uint8 RGBN + elevation; elevation dropped
+        src = [_RGBN_TO_NAIP.get(n, n) for n in _flat_names(band_order)]
+    elif slug == Slug.SPACENET7:
+        # uint8 RGB + alpha mask labelled "nir"; IR stays zero.
+        x = sample["image"].float()
+        rgb_to_naip = {k: v for k, v in _RGBN_TO_NAIP.items() if k != "nir"}
+        src = [rgb_to_naip.get(n, n) for n in _flat_names(band_order, "s2")]
+    elif slug == Slug.SPACENET2:
+        # 11-bit WorldView-3 DN -> uint8 scale.
+        x = sample["image_worldview"].float() * (_UINT8_MAX / _WORLDVIEW_DN_MAX)
+        src = [
+            _WORLDVIEW_TO_NAIP.get(n, n) for n in _flat_names(band_order, "worldview")
+        ]
+    else:
+        raise ValueError(f"gb2 slug {slug!r} has no naip_10 mapping")
+    rgbn = _permute_bchw(x.unsqueeze(0), src, _NAIP10_ORDER)[0]  # (4, H, W)
+    hwtc = _bchw_to_hwtc(rgbn)  # (H, W, 1, 4)
+    return OlmoEarthSample(naip_10=hwtc, timestamps=_timestamps(1, device))
+
+
+def _resize_spatial(
+    olmo: OlmoEarthSample, field_name: str, size: tuple[int, int]
+) -> OlmoEarthSample:
+    """Bilinearly (antialiased) resize one (H, W, T, C) modality to ``size``."""
+    hwtc = getattr(olmo, field_name)
+    tchw = rearrange(hwtc, "h w t c -> t c h w")
+    tchw = F.interpolate(
+        tchw, size=size, mode="bilinear", align_corners=False, antialias=True
+    )
+    return olmo._replace(**{field_name: rearrange(tchw, "t c h w -> h w t c")})
+
+
 def _extract_label(
     sample: dict[str, torch.Tensor],
     slug: str,
@@ -338,6 +460,7 @@ _MODALITY_NORM_MAP: dict[str, ModalitySpec] = {
     "sentinel1": Modality.SENTINEL1,
     "landsat": Modality.LANDSAT,
     "naip": Modality.NAIP,
+    "naip_10": Modality.NAIP_10,
     "srtm": Modality.SRTM,
 }
 
@@ -462,11 +585,16 @@ class GeobenchV2Dataset(Dataset):
         partition: str,
         norm_stats_from_pretrained: bool = False,
         norm_method: str = "norm_no_clip_2_std",
+        highres_modality: HighresModality | str | None = None,
+        highres_resample: HighresResample | str | None = None,
+        patch_size: int | None = None,
     ) -> None:
         """Initialize dataset for the given gb2 slug and split.
 
         Args:
-            dataset: ``gb2-<slug>`` dataset identifier.
+            dataset: ``gb2-<slug>`` dataset identifier, optionally suffixed with
+                ``-naip10`` or ``-naip10-nominal`` to select the high-res options
+                below (this is how eval task configs select them).
             split: One of ``train``, ``valid``, ``test``.
             partition: Unused; splits are fixed per-dataset.
             norm_stats_from_pretrained: If True, always normalize with the
@@ -474,17 +602,51 @@ class GeobenchV2Dataset(Dataset):
                 published stats *when available* (see ``geobench2_norm_stats.json``),
                 falling back to the pretraining stats otherwise.
             norm_method: Normalization method applied when using dataset stats.
+            highres_modality: ``"sentinel2_l2a"`` (default) feeds the imagery
+                through the S2 slot rescaled to S2 DN; ``"naip_10"`` feeds RGBN
+                through the NAIP_10 slot (only flair2, spacenet2, spacenet7).
+                Defaults to what the dataset name implies.
+            highres_resample: For naip_10 only. ``"native"`` (default) keeps the
+                dataset's pixel grid; ``"nominal"`` resamples the image (not the
+                label) to naip_10's 2.5 m/px given the dataset GSD.
+            patch_size: Encoder patch size. naip_10 inputs must have H, W
+                divisible by ``image_tile_size_factor * patch_size``; nominal
+                sizes are rounded to that multiple. Defaults to 1.
         """
         del partition  # splits are fixed per-dataset; partition is not applicable
-        if not dataset.startswith("gb2-"):
-            raise ValueError(dataset)
-        slug = dataset[len("gb2-") :]
+        slug, name_modality, name_resample = parse_gb2_dataset_name(dataset)
         if slug not in SLUG_TO_DATASET:
             raise ValueError(f"unknown gb2 slug: {slug}")
         if split not in ("train", "valid", "test"):
             raise ValueError(split)
+        has_suffix = dataset != f"gb2-{slug}"
+        for arg, implied, label in (
+            (highres_modality, name_modality, "highres_modality"),
+            (highres_resample, name_resample, "highres_resample"),
+        ):
+            if arg is not None and has_suffix and str(arg) != str(implied):
+                raise ValueError(
+                    f"{label}={arg!r} conflicts with dataset name {dataset!r}"
+                )
+        self._highres_modality = HighresModality(highres_modality or name_modality)
+        self._highres_resample = HighresResample(highres_resample or name_resample)
+        if (
+            self._highres_modality == HighresModality.NAIP_10
+            and slug not in HIGHRES_SLUG_GSD_M
+        ):
+            raise ValueError(
+                f"highres_modality=naip_10 is only supported for "
+                f"{sorted(HIGHRES_SLUG_GSD_M)}, got {slug!r}"
+            )
+        # Validates the (modality, resample) combination too.
+        canonical = gb2_dataset_name(
+            slug, self._highres_modality, self._highres_resample
+        )
+        self._size_multiple = Modality.NAIP_10.image_tile_size_factor * (
+            patch_size or 1
+        )
 
-        self.config = dataset_to_config(dataset)
+        self.config = dataset_to_config(canonical)
         self._slug = slug
         self._normalizer = Normalizer(Strategy.COMPUTED)
         self._norm_method = norm_method
@@ -509,6 +671,26 @@ class GeobenchV2Dataset(Dataset):
         self._inner = loader_cls(root=root, split=split)
         self._band_order = loader_cls.band_order
 
+    def _naip10_input(self, raw: dict[str, torch.Tensor]) -> OlmoEarthSample:
+        """Build the naip_10 input, resampled to 2.5 m if requested."""
+        olmo = _sample_to_naip10(raw, self._band_order, self._slug)
+        assert olmo.naip_10 is not None
+        h, w = olmo.naip_10.shape[:2]
+        if self._highres_resample == HighresResample.NOMINAL:
+            gsd = HIGHRES_SLUG_GSD_M[self._slug]
+            size = (
+                nominal_naip10_size(h, gsd, self._size_multiple),
+                nominal_naip10_size(w, gsd, self._size_multiple),
+            )
+            if (h, w) != size:
+                olmo = _resize_spatial(olmo, "naip_10", size)
+        elif h % self._size_multiple or w % self._size_multiple:
+            raise ValueError(
+                f"naip_10 input {h}x{w} is not divisible by "
+                f"image_tile_size_factor * patch_size = {self._size_multiple}"
+            )
+        return olmo
+
     def __len__(self) -> int:
         """Return number of samples in the split."""
         return len(self._inner)
@@ -519,7 +701,10 @@ class GeobenchV2Dataset(Dataset):
         device = next(
             (v.device for v in raw.values() if torch.is_tensor(v)), torch.device("cpu")
         )
-        olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
+        if self._highres_modality == HighresModality.NAIP_10:
+            olmo = self._naip10_input(raw)
+        else:
+            olmo = _sample_to_olmoearth(raw, self._band_order, self._slug)
         pre_norm = olmo
         if self._dataset_stats is not None:
             olmo = _apply_dataset_normalization(

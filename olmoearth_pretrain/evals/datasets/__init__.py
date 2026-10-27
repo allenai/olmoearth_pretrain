@@ -82,6 +82,9 @@ def get_eval_dataset(
             partition=kwargs.get("partition", ""),
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
+            highres_modality=kwargs.get("highres_modality"),
+            highres_resample=kwargs.get("highres_resample"),
+            patch_size=kwargs.get("patch_size"),
         )
     elif eval_dataset.startswith("m-"):
         # m- == "modified for geobench"

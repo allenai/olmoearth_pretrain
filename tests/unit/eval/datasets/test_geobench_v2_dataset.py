@@ -1,4 +1,4 @@
-"""CPU unit tests for GeoBench v2 band mapping.
+"""CPU unit tests for GeoBench v2 band mapping and the opt-in naip_10 path.
 
 All tests use fake samples (no GeoBench v2 data needed).
 """
@@ -7,14 +7,38 @@ from __future__ import annotations
 
 from typing import Any
 
+import numpy as np
 import pytest
 import torch
+from einops import rearrange
 
 import olmoearth_pretrain.evals.datasets.geobench_v2_dataset as gb2
 from olmoearth_pretrain.data.constants import Modality
+from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.evals.datasets import get_eval_dataset
+from olmoearth_pretrain.evals.datasets.configs import (
+    GB2_NAIP10_SLUGS,
+    dataset_to_config,
+)
+from olmoearth_pretrain.evals.datasets.geobench_v2_dataset import (
+    GeobenchV2Dataset,
+    HighresModality,
+    HighresResample,
+    gb2_dataset_name,
+    nominal_naip10_size,
+    parse_gb2_dataset_name,
+)
 from olmoearth_pretrain.evals.datasets.geobench_v2_loaders import SLUG_TO_DATASET
+from olmoearth_pretrain.evals.datasets.utils import eval_collate_fn_variable_time
+from olmoearth_pretrain.evals.eval_wrapper import OlmoEarthEvalWrapper
+from olmoearth_pretrain.evals.finetune.evaluate import _seg_logits_to_pixel
+from olmoearth_pretrain.evals.task_types import TaskType
+from olmoearth_pretrain.nn.flexi_vit import EncoderConfig
+from olmoearth_pretrain.nn.pooling import PoolingType
+from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 S2 = list(Modality.SENTINEL2_L2A.band_order)
+NAIP = list(Modality.NAIP_10.band_order)
 H = 32
 
 
@@ -148,5 +172,332 @@ def test_dataset_stats_are_keyed_to_new_layout() -> None:
     assert stats["flair2"]["sentinel2_l2a"]["B05"] == zero  # was elevation
     assert stats["spacenet7"]["sentinel2_l2a"]["B08"] == zero  # was alpha
     assert stats["spacenet2"]["sentinel2_l2a"]["B11"] == zero  # was nir2
-    for slug in ("flair2", "spacenet2", "spacenet7"):
-        assert set(stats[slug]["sentinel2_l2a"]) == set(S2)
+    for slug in GB2_NAIP10_SLUGS:
+        s2 = stats[slug]["sentinel2_l2a"]
+        assert set(s2) == set(S2)
+        assert set(stats[slug]["naip_10"]) == set(NAIP)
+
+
+# ---------------------------------------------------------------------------
+# naip_10 path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "slug,expected",
+    [
+        ("flair2", [10, 20, 30, 40]),
+        ("spacenet7", [11, 22, 33, 0]),  # IR left empty (alpha)
+        ("spacenet2", [v * 255 / 2047 for v in (500, 300, 200, 700)]),
+    ],
+)
+def test_naip10_mapping(slug: str, expected: list[float]) -> None:
+    """RGBN lands in naip_10 as (H, W, 1, 4) R, G, B, IR in uint8 scale."""
+    olmo = gb2._sample_to_naip10(
+        _fake_raw(slug), SLUG_TO_DATASET[slug].band_order, slug
+    )
+    assert olmo.modalities == ["naip_10"]
+    assert olmo.naip_10 is not None
+    assert olmo.naip_10.shape == (H, H, 1, 4)
+    assert olmo.timestamps is not None and olmo.timestamps.shape == (1, 3)
+    vals = _channel_values(olmo.naip_10, NAIP)
+    for name, exp in zip(NAIP, expected):
+        assert vals[name] == pytest.approx(exp, rel=1e-5), name
+
+
+def test_naip10_unsupported_slug_raises() -> None:
+    """Only the three sub-10 m slugs have a naip_10 mapping."""
+    with pytest.raises(ValueError):
+        gb2._sample_to_naip10({"image": torch.zeros(3, 4, 4)}, ["a"], "fotw")
+
+
+def test_dataset_name_roundtrip() -> None:
+    """Dataset-name suffixes encode the highres options."""
+    cases = {
+        "gb2-flair2": (HighresModality.SENTINEL2_L2A, HighresResample.NATIVE),
+        "gb2-flair2-naip10": (HighresModality.NAIP_10, HighresResample.NATIVE),
+        "gb2-flair2-naip10-nominal": (
+            HighresModality.NAIP_10,
+            HighresResample.NOMINAL,
+        ),
+        "gb2-burn_scars": (HighresModality.SENTINEL2_L2A, HighresResample.NATIVE),
+    }
+    for name, (mod, res) in cases.items():
+        slug, m, r = parse_gb2_dataset_name(name)
+        assert (m, r) == (mod, res)
+        assert gb2_dataset_name(slug, m, r) == name
+    with pytest.raises(ValueError):
+        parse_gb2_dataset_name("gb2-flair2-naip")
+    with pytest.raises(ValueError):
+        gb2_dataset_name("flair2", "sentinel2_l2a", "nominal")
+
+
+def test_naip10_configs() -> None:
+    """Variants differ from the S2 config only in supported_modalities."""
+    for slug in GB2_NAIP10_SLUGS:
+        base = dataset_to_config(f"gb2-{slug}")
+        for suffix in ("naip10", "naip10-nominal"):
+            cfg = dataset_to_config(f"gb2-{slug}-{suffix}")
+            assert cfg.supported_modalities == [Modality.NAIP_10.name]
+            assert cfg.task_type == base.task_type
+            assert cfg.num_classes == base.num_classes
+            assert cfg.height_width == base.height_width
+        assert base.supported_modalities == [Modality.SENTINEL2_L2A.name]
+
+
+@pytest.mark.parametrize(
+    "h,gsd,multiple,expected",
+    [
+        (512, 0.2, 4, 40),  # flair2, ps1
+        (512, 0.3 * 650 / 512, 4, 80),  # spacenet2, ps1
+        (512, 4.777, 16, 976),  # spacenet7, ps4 (upsampled)
+        (512, 0.2, 16, 48),  # flair2, ps4
+        (8, 0.2, 4, 4),  # never below one tile
+    ],
+)
+def test_nominal_size(h: int, gsd: float, multiple: int, expected: int) -> None:
+    """Nominal size ~= H * gsd / 2.5, rounded to the token multiple."""
+    size = nominal_naip10_size(h, gsd, multiple)
+    assert size == expected
+    assert size % multiple == 0
+
+
+class _FakeLoader:
+    """Stands in for a GeoBench v2 tortilla loader."""
+
+    def __init__(self, slug: str, h: int) -> None:
+        self.slug = slug
+        self.h = h
+        self.band_order = SLUG_TO_DATASET[slug].band_order
+
+    def __call__(self, root: str, split: str) -> _FakeLoader:
+        return self
+
+    def __len__(self) -> int:
+        return 2
+
+    def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
+        return _fake_raw(self.slug, self.h)
+
+
+@pytest.fixture
+def fake_loaders(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Patch SLUG_TO_DATASET with fake loaders of a given image size."""
+
+    def install(h: int) -> None:
+        for slug in GB2_NAIP10_SLUGS:
+            monkeypatch.setitem(gb2.SLUG_TO_DATASET, slug, _FakeLoader(slug, h))
+
+    return install
+
+
+@pytest.mark.parametrize("slug", GB2_NAIP10_SLUGS)
+@pytest.mark.parametrize("pretrained", [True, False])
+def test_dataset_naip10_native(slug: str, pretrained: bool, fake_loaders: Any) -> None:
+    """End-to-end naip_10 native sample: shape, normalization, re-zeroed IR."""
+    fake_loaders(64)
+    ds = get_eval_dataset(
+        f"gb2-{slug}-naip10",
+        "train",
+        norm_stats_from_pretrained=pretrained,
+        input_modalities=[Modality.NAIP_10.name],
+        patch_size=4,
+    )
+    assert isinstance(ds, GeobenchV2Dataset)
+    assert ds.config.supported_modalities == [Modality.NAIP_10.name]
+    masked, label = ds[0]
+    assert isinstance(masked, MaskedOlmoEarthSample)
+    assert masked.modalities == ["naip_10"]
+    assert masked.naip_10 is not None and masked.naip_10_mask is not None
+    assert masked.naip_10.shape == (64, 64, 1, 4)
+    assert masked.naip_10_mask.shape == (64, 64, 1, 4)
+    assert label.shape == (64, 64)
+
+    raw = gb2._sample_to_naip10(_fake_raw(slug, 64), ds._band_order, slug)
+    assert raw.naip_10 is not None
+    if pretrained:
+        expected = Normalizer(Strategy.COMPUTED).normalize(
+            Modality.NAIP_10, raw.naip_10.numpy()
+        )
+        if slug == "spacenet7":
+            expected[..., 3] = 0.0  # empty IR is re-zeroed
+        np.testing.assert_allclose(masked.naip_10.numpy(), expected, rtol=1e-5)
+    if slug == "spacenet7":
+        assert (masked.naip_10[..., 3] == 0).all()
+    else:
+        assert (masked.naip_10 != 0).all()
+
+
+def test_dataset_naip10_nominal_resamples_image_not_label(fake_loaders: Any) -> None:
+    """Nominal mode resizes the image to 2.5 m/px; the label keeps its size."""
+    fake_loaders(512)
+    ds = GeobenchV2Dataset(
+        "gb2-flair2-naip10-nominal", "train", "", norm_stats_from_pretrained=True
+    )
+    masked, label = ds[0]
+    assert masked.naip_10 is not None
+    assert masked.naip_10.shape == (40, 40, 1, 4)
+    assert label.shape == (512, 512)
+    ds = GeobenchV2Dataset(
+        "gb2-flair2", "train", "", highres_modality="naip_10",
+        highres_resample="nominal", patch_size=4,
+    )  # fmt: skip
+    assert ds.config.supported_modalities == [Modality.NAIP_10.name]
+    masked, _ = ds[0]
+    assert masked.naip_10 is not None
+    assert masked.naip_10.shape == (48, 48, 1, 4)
+
+
+def test_dataset_native_requires_divisible_size(fake_loaders: Any) -> None:
+    """Native naip_10 H, W must be divisible by 4 * patch_size."""
+    fake_loaders(40)
+    ds = GeobenchV2Dataset("gb2-flair2-naip10", "train", "", patch_size=4)
+    with pytest.raises(ValueError, match="not divisible"):
+        ds[0]
+
+
+def test_dataset_option_validation(fake_loaders: Any) -> None:
+    """Invalid or conflicting highres options are rejected."""
+    fake_loaders(64)
+    with pytest.raises(ValueError):
+        GeobenchV2Dataset("gb2-flair2-naip10", "train", "", highres_resample="nominal")
+    with pytest.raises(ValueError):
+        GeobenchV2Dataset("gb2-flair2", "train", "", highres_resample="nominal")
+    with pytest.raises(ValueError):
+        GeobenchV2Dataset("gb2-fotw", "train", "", highres_modality="naip_10")
+
+
+def test_dataset_s2_default_unchanged_and_rezeroed(fake_loaders: Any) -> None:
+    """Default S2 path: missing S2 channels stay exactly zero after normalization."""
+    fake_loaders(64)
+    for pretrained in (True, False):
+        ds = GeobenchV2Dataset(
+            "gb2-flair2", "train", "", norm_stats_from_pretrained=pretrained
+        )
+        assert ds.config.supported_modalities == [Modality.SENTINEL2_L2A.name]
+        masked, _ = ds[0]
+        assert masked.modalities == ["sentinel2_l2a"]
+        assert masked.sentinel2_l2a is not None
+        x = masked.sentinel2_l2a
+        for i, band in enumerate(S2):
+            if band in ("B02", "B03", "B04", "B08"):
+                assert (x[..., i] != 0).all(), band
+            else:
+                assert (x[..., i] == 0).all(), band
+
+
+# ---------------------------------------------------------------------------
+# Model path: naip_10-only batches through the encoder, probe and FT heads
+# ---------------------------------------------------------------------------
+
+
+def _naip10_encoder() -> torch.nn.Module:
+    return EncoderConfig(
+        supported_modality_names=[Modality.NAIP_10.name],
+        embedding_size=16,
+        max_patch_size=4,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=1.0,
+        depth=1,
+        drop_path=0.0,
+        max_sequence_length=12,
+    ).build()
+
+
+@pytest.mark.parametrize("patch_size,h", [(4, 64), (1, 40)])
+def test_naip10_batch_token_grid(patch_size: int, h: int) -> None:
+    """A naip_10-only batch yields an (H / (4 * ps))^2 token grid; heads upsample."""
+    ts = torch.tensor([[15, 6, 2020]])
+    items = []
+    for _ in range(2):
+        sample = gb2.OlmoEarthSample(naip_10=torch.rand(h, h, 1, 4), timestamps=ts)
+        items.append(
+            (MaskedOlmoEarthSample.from_olmoearthsample(sample), torch.zeros(h, h))
+        )
+    batch, labels = eval_collate_fn_variable_time(items)
+    wrapper = OlmoEarthEvalWrapper(
+        model=_naip10_encoder(),
+        task_type=TaskType.SEGMENTATION,
+        patch_size=patch_size,
+        pooling_type=PoolingType.MEAN,
+    )
+    wrapper.eval()
+    with torch.no_grad():
+        emb, _ = wrapper(batch, labels)
+    grid = h // (Modality.NAIP_10.image_tile_size_factor * patch_size)
+    assert emb.shape == (2, grid, grid, 16)
+
+    # Finetune head: num_classes * ps^2 logits per token, pixel-shuffled then
+    # resized to the label grid.
+    num_classes = 3
+    logits = torch.randn(2, grid, grid, num_classes * patch_size**2)
+    label = torch.zeros(2, 512, 512)
+    out = _seg_logits_to_pixel(logits, label, False, num_classes, patch_size)
+    assert out.shape == (2, num_classes, 512, 512)
+
+
+def test_linear_probe_small_token_grid() -> None:
+    """Linear probe sizes its per-token output from height_width / token grid."""
+    from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig
+    from olmoearth_pretrain.evals.linear_probe import train_and_eval_probe
+
+    # e.g. gb2-flair2-naip10-nominal at ps1: 40 px -> 10 x 10 tokens, 512 px label
+    # (scaled down here: 4 x 4 tokens, 30 px label -> 7 px/token -> resized).
+    n, grid, hw, d = 8, 4, 30, 8
+    cfg = EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=2,
+        is_multilabel=False,
+        height_width=hw,
+        supported_modalities=[Modality.NAIP_10.name],
+    )
+    emb = torch.rand(n, grid, grid, d)
+    lbl = torch.randint(0, 2, (n, hw, hw))
+    result = train_and_eval_probe(
+        config=cfg,
+        train_embeddings=emb,
+        train_labels=lbl,
+        val_embeddings=emb,
+        val_labels=lbl,
+        test_embeddings=None,
+        test_labels=None,
+        device=torch.device("cpu"),
+        batch_size=n,
+        lr=0.1,
+        epochs=1,
+    )
+    assert result.val_result is not None
+    assert "miou" in result.val_result.metrics
+
+
+def test_all_evals_has_naip10_tasks() -> None:
+    """LP and FT task tables both carry the naip_10 variants."""
+    pytest.importorskip("beaker")
+    from olmoearth_pretrain.internal.all_evals import EVAL_TASKS, FT_EVAL_TASKS
+
+    for tasks in (EVAL_TASKS, FT_EVAL_TASKS):
+        for slug in GB2_NAIP10_SLUGS:
+            for suffix, dataset_suffix in (
+                ("naip10", "naip10"),
+                ("naip10_nominal", "naip10-nominal"),
+            ):
+                task = tasks[f"gb2_{slug}_{suffix}"]
+                assert task.dataset == f"gb2-{slug}-{dataset_suffix}"
+                assert task.input_modalities == [Modality.NAIP_10.name]
+                assert set(task.input_modalities) <= set(
+                    dataset_to_config(task.dataset).supported_modalities
+                )
+            # Defaults of the S2 tasks are unchanged.
+            assert tasks[f"gb2_{slug}"].input_modalities == [
+                Modality.SENTINEL2_L2A.name
+            ]
+        assert tasks["gb2_flair2_naip10_nominal"].patch_size == 1
+
+
+def test_rearrange_sanity() -> None:
+    """_bchw_to_hwtc keeps channel order (guards the naip_10 band order)."""
+    x = _const_bands([1, 2, 3, 4], 2)
+    assert rearrange(x, "c h w -> h w 1 c")[0, 0, 0].tolist() == [1, 2, 3, 4]
+    assert gb2._bchw_to_hwtc(x)[0, 0, 0].tolist() == [1, 2, 3, 4]
