@@ -441,8 +441,9 @@ def count_year(job: tuple[int, int, int, str]) -> tuple[str, int]:
 
 
 def count_all(
-    root: Path, workers: int, last_year: int, tiles_arg: str | None, relay: str
-) -> None:
+    root: Path, workers: int, last_year: int, tiles_arg: str | None, relay: str,
+    shard: str = "0/1",
+) -> None:  # fmt: skip
     """Every (kept tile, year) part that is not on disk yet.
 
     Args:
@@ -451,15 +452,20 @@ def count_all(
         last_year: Last calendar year read.
         tiles_arg: Optional comma-separated ``hHHvVV`` list overriding the screening.
         relay: Relay token file.
+        shard: ``index/count``: this job reads every count-th kept tile.
     """
     if tiles_arg:
         tiles = [(int(t[1:3]), int(t[4:6])) for t in tiles_arg.split(",")]
     else:
         table = pd.read_csv(root / "raw" / "modis" / "tiles.csv")
         tiles = [(int(r.h), int(r.v)) for r in table[table["kept"]].itertuples()]
+    index, count = (int(x) for x in shard.split("/"))
+    tiles = tiles[index::count]
     (root / "raw" / "modis" / "parts").mkdir(parents=True, exist_ok=True)
-    jobs = [(h, v, year, str(root)) for year in range(FIRST_YEAR, last_year + 1)
-            for h, v in tiles if not part_path(root, h, v, year).exists()]  # fmt: skip
+    # Tile-major, so whole tiles finish (and can be checked) early.
+    jobs = [(h, v, year, str(root)) for h, v in tiles
+            for year in range(FIRST_YEAR, last_year + 1)
+            if not part_path(root, h, v, year).exists()]  # fmt: skip
     logger.info("%d tiles, %d (tile, year) parts to read", len(tiles), len(jobs))
     started = time.time()
     total = 0
@@ -486,6 +492,7 @@ def main() -> None:
     ap.add_argument(
         "--tiles", default=None, help="hHHvVV list (counts; default: screened)"
     )
+    ap.add_argument("--shard", default="0/1", help="index/count over the kept tiles")
     ap.add_argument(
         "--token-file",
         default=None,
@@ -497,7 +504,7 @@ def main() -> None:
     if args.step == "screen":
         screen(root, args.workers, relay)
     else:
-        count_all(root, args.workers, args.last_year, args.tiles, relay)
+        count_all(root, args.workers, args.last_year, args.tiles, relay, args.shard)
 
 
 if __name__ == "__main__":

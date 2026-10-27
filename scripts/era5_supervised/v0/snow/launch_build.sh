@@ -9,6 +9,7 @@
 # Usage (from the repo root; the commit must be pushed):
 #   HOST=jupiter-cs-aus-192.reviz.ai2.in bash scripts/era5_supervised/v0/snow/launch_build.sh
 #   STEPS="phenology cells" HOST=... bash ...   # any of screen counts phenology cells candidates windows
+#   STEPS=counts SHARD=1/2 HOST=... bash ...    # half of the MODIS tiles (one job per node)
 #   DRY_RUN=1 HOST=... bash ...                 # print the gantry command only
 #
 # CPU-only: no --cpus / --memory (either would land the job on a GPU slot);
@@ -23,6 +24,7 @@ WORKERS="${WORKERS:-48}"
 MODIS_WORKERS="${MODIS_WORKERS:-64}"
 NAME="${NAME:-snow_build}"
 WINDOW_ARGS="${WINDOW_ARGS:-}"
+SHARD="${SHARD:-0/1}"
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
 REF=$(git rev-parse HEAD)
 MOD=olmoearth_pretrain.dataset_creation.snow
@@ -31,7 +33,7 @@ STAGES=""
 for step in ${STEPS}; do
   case "${step}" in
     screen) STAGES+="python -m ${MOD}.modis screen --workers ${MODIS_WORKERS} && " ;;
-    counts) STAGES+="python -m ${MOD}.modis counts --workers ${MODIS_WORKERS} && " ;;
+    counts) STAGES+="python -m ${MOD}.modis counts --workers ${MODIS_WORKERS} --shard ${SHARD} && " ;;
     phenology) STAGES+="python -m ${MOD}.phenology --workers ${WORKERS} && " ;;
     cells) STAGES+="python -m ${MOD}.cells --workers ${WORKERS} && " ;;
     candidates) STAGES+="python -m ${MOD}.write_windows candidates --workers ${WORKERS} && " ;;
