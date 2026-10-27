@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import multiprocessing
 import re
 import warnings
 from pathlib import Path
@@ -145,6 +146,23 @@ def score_set(
     return out
 
 
+def score_job(job: tuple) -> tuple[str, str, dict]:
+    """Worker: score the listed targets on one (embedding set, pooling).
+
+    Args:
+        job: ``(npz path, pooling, targets, windows, folds, threads)``.
+
+    Returns:
+        ``(set name, pooling, {target: scores})``.
+    """
+    path, pooling, todo, windows, folds, threads = job
+    from threadpoolctl import threadpool_limits
+
+    with threadpool_limits(threads):
+        x = np.load(path)[pooling].astype(np.float32)
+        return Path(path).stem, pooling, score_set(x, windows, todo, folds)
+
+
 def between_arm_f(values: dict[str, float]) -> float:
     """Between-arm over within-arm (seed) variance, arms with >= 2 seeds.
 
@@ -218,6 +236,8 @@ def main() -> None:
     ap.add_argument("--poolings", default="mean,last4")
     ap.add_argument("--targets", default=None, help="comma list (default: all)")
     ap.add_argument("--sets", default=None, help="regex on embedding set names")
+    ap.add_argument("--workers", type=int, default=32)
+    ap.add_argument("--threads", type=int, default=2)
     args = ap.parse_args()
     root = Path(args.root)
     emb_dir = root / args.emb_dir
@@ -245,23 +265,29 @@ def main() -> None:
     results: dict = (
         json.loads(out_path.read_text())["results"] if out_path.exists() else {}
     )
+    jobs = []
     for path in sorted(emb_dir.glob("*.npz")):
         if args.sets and not re.search(args.sets, path.stem):
             continue
-        emb = np.load(path)
         for pooling in args.poolings.split(","):
             todo = [
                 t
                 for t in targets
                 if path.stem not in results.get(t, {}).get(pooling, {})
             ]
-            if not todo:
-                continue
-            scores = score_set(emb[pooling].astype(np.float32), windows, todo, folds)
-            for target, s in scores.items():
-                results.setdefault(target, {}).setdefault(pooling, {})[path.stem] = s
-        logger.info("scored %s", path.stem)
-        out_path.write_text(json.dumps({"results": results}, indent=1))
+            if todo:
+                jobs.append((str(path), pooling, todo, windows, folds, args.threads))
+    logger.info("%d (set, pooling) jobs", len(jobs))
+    with multiprocessing.get_context("spawn").Pool(args.workers) as pool:
+        for k, (stem, pooling, scores) in enumerate(
+            pool.imap_unordered(score_job, jobs), start=1
+        ):
+            for target, sc in scores.items():
+                results.setdefault(target, {}).setdefault(pooling, {})[stem] = sc
+            if k % 10 == 0 or k == len(jobs):
+                logger.info("[%d/%d] scored %s %s", k, len(jobs), stem, pooling)
+                out_path.write_text(json.dumps({"results": results}, indent=1))
+    out_path.write_text(json.dumps({"results": results}, indent=1))
     pd.set_option("display.width", 250)
     pd.set_option("display.max_rows", 200)
     for metric in ("val", "test"):
