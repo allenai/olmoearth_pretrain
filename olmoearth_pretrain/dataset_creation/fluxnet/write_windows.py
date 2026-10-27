@@ -11,7 +11,7 @@ last 8 days ``[d - 8, d)``:
 * ``le``: mean latent heat (``LE_F_MDS``, W m-2), LE daily QC >= 0.5, >= 6 days.
 * ``nee``: mean ``NEE_VUT_REF`` on the GPP days.
 * ``rgpp``: ``gpp`` divided by the site's 95th percentile of ``gpp`` (relative
-  GPP; undefined when that percentile is below 0.5 gC m-2 d-1). The headline
+  GPP; undefined when that percentile is below 0.5 gC m-2 d-1; capped at 1.5). The headline
   target: dividing out the site's productivity level, which the weather does not
   determine, leaves the phenological / stress state.
 * ``gpp_anom``: ``gpp`` minus the site's leave-one-year-out climatology at the
@@ -93,6 +93,10 @@ TARGETS = ("gpp", "rgpp", "le", "nee", "gpp_anom")
 EVAL_REQUIRED = ("gpp", "le", "nee")
 RGPP_QUANTILE = 0.95
 MIN_RGPP_SCALE = 0.5  # gC m-2 d-1; below that a site has no growing season to scale by
+# Dryland towers with a 95th percentile barely above MIN_RGPP_SCALE reach rgpp
+# 3-14 on rare GPP spikes (225 of 212k candidates exceed 1.5), which would
+# dominate an MSE probe: cap there.
+RGPP_MAX = 1.5
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
@@ -248,7 +252,9 @@ def site_targets(daily: pd.DataFrame) -> pd.DataFrame:
     # vegetation's productivity level (not inferable from weather) drops out
     # and the target is the phenological / stress state.
     scale = out["gpp"].quantile(RGPP_QUANTILE)
-    out["rgpp"] = out["gpp"] / scale if scale > MIN_RGPP_SCALE else np.nan
+    out["rgpp"] = (
+        (out["gpp"] / scale).clip(upper=RGPP_MAX) if scale > MIN_RGPP_SCALE else np.nan
+    )
     out["le"] = _rolling_target(daily["LE_F_MDS"], le_valid)
     out["nee"] = _rolling_target(daily["NEE_VUT_REF"], gpp_valid)
     out["gpp_anom"] = out["gpp"] - loo_climatology(out["gpp"])
