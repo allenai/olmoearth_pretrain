@@ -41,6 +41,7 @@ def collate_single_masked_batched(
     batch: list[tuple[int, OlmoEarthSample]],
     transform: Transform | None,
     masking_strategy: MaskingStrategy,
+    num_visible: int | None = None,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -52,6 +53,8 @@ def collate_single_masked_batched(
         batch: List of (patch_size, OlmoEarthSample) tuples.
         transform: Optional transform to apply to the batch.
         masking_strategy: Masking strategy to apply to the batch.
+        num_visible: Optional visible band-set count for the whole batch, drawn by the
+            dataloader with an encoder token budget (passed on to ``apply_mask``).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample).
@@ -64,7 +67,12 @@ def collate_single_masked_batched(
         stacked_sample = transform.apply(stacked_sample)
 
     # Apply masking to the batch
-    masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+    if num_visible is None:
+        masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+    else:
+        masked_sample = masking_strategy.apply_mask(
+            stacked_sample, patch_size, num_visible=num_visible
+        )
 
     return patch_size, masked_sample
 

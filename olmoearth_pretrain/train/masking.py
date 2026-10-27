@@ -1780,6 +1780,21 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
     If an instance is time-encode-decode then:
     for all the encode-decode modalities, calculate the union of present timesteps
     randomly select some of those timesteps as encode only, and others as decode only.
+
+    Optional behaviour (all off by default):
+
+    * ``num_visible="uniform"``: instead of encoding ``ceil(n * encode_ratio)`` of the
+      ``n`` present encode-decode band sets, encode ``e ~ U{1, ..., n - 1}`` of them
+      (at least one visible and one hidden). ``apply_mask(..., num_visible=e)`` fixes
+      ``e`` for the whole batch instead (the dataloader sized the crop for it); an
+      instance with ``n <= e`` band sets draws its own ``e ~ U{1, ..., n - 1}``, so
+      every instance's visible count stays uniform over ``1..n-1``.
+    * ``decode_visible_remainder``: the tokens of a visible band set that are not
+      encoded are decoded (predicted) instead of target-encoder-only: the other
+      ``decode_ratio`` of its tokens in random mode, its decode timesteps in time mode.
+    * ``max_decode_tokens``: per instance, at most this many DECODER tokens (all
+      modalities, decode-only ones included); a uniform random subset is kept and the
+      rest become TARGET_ENCODER_ONLY.
     """
 
     def __init__(
@@ -1788,6 +1803,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        num_visible: str = "ratio",
+        decode_visible_remainder: bool = False,
+        max_decode_tokens: int | None = None,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,6 +1814,10 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        num_visible: "ratio" (ceil(n * encode_ratio) visible band sets) or "uniform"
+                     (U{1..n-1}); see the class docstring.
+        decode_visible_remainder: decode the non-encoded tokens of visible band sets.
+        max_decode_tokens: optional per-instance cap on DECODER tokens.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -1803,6 +1825,83 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         self.random_ratio = random_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
+        if num_visible not in ("ratio", "uniform"):
+            raise ValueError(
+                f"num_visible must be 'ratio' or 'uniform', got {num_visible}"
+            )
+        self.num_visible = num_visible
+        self.decode_visible_remainder = decode_visible_remainder
+        if max_decode_tokens is not None and max_decode_tokens < 1:
+            raise ValueError(f"max_decode_tokens must be >= 1, got {max_decode_tokens}")
+        self.max_decode_tokens = max_decode_tokens
+
+    def _num_encode_bandsets(self, n: int, batch_num_visible: int | None) -> int:
+        """How many of an instance's ``n`` encode-decode band sets are visible."""
+        if self.num_visible == "ratio":
+            if batch_num_visible is not None:
+                raise ValueError("a per-batch num_visible needs num_visible='uniform'")
+            return math.ceil(n * self.encode_ratio)
+        if n <= 1:
+            return n
+        if batch_num_visible is not None and n > batch_num_visible:
+            return batch_num_visible
+        return int(np.random.randint(1, n))  # U{1..n-1}
+
+    @staticmethod
+    def _cap_decode_tokens(
+        output_dict: dict[str, ArrayTensor | None],
+        instance_idx: int,
+        patch_size: int,
+        max_tokens: int,
+    ) -> None:
+        """Keep at most ``max_tokens`` DECODER tokens of one instance (uniform subset).
+
+        Masks are stored per pixel (each token's value repeated over its patch), so
+        tokens are read at the patch stride and written back repeated.
+        """
+        views: list[tuple[str, bool, torch.Tensor, int]] = []
+        counts: list[int] = []
+        for name, mask in output_dict.items():
+            if mask is None or not name.endswith("_mask"):
+                continue
+            modality = Modality.get(
+                MaskedOlmoEarthSample.get_unmasked_modality_name(name)
+            )
+            assert isinstance(mask, torch.Tensor)
+            inst = mask[instance_idx]
+            if modality.is_spatial:
+                stride = patch_size * modality.image_tile_size_factor
+                token_view = inst[::stride, ::stride]
+            else:
+                stride = 1
+                token_view = inst
+            views.append((name, modality.is_spatial, token_view, stride))
+            counts.append(int((token_view == MaskValue.DECODER.value).sum().item()))
+        total = sum(counts)
+        if total <= max_tokens:
+            return
+        demote = torch.zeros(total, dtype=torch.bool)
+        demote[torch.randperm(total)[: total - max_tokens]] = True
+        offset = 0
+        for (name, is_spatial, token_view, stride), count in zip(views, counts):
+            chunk = demote[offset : offset + count]
+            offset += count
+            if count == 0 or not chunk.any():
+                continue
+            token_view = token_view.clone()
+            flat = token_view.reshape(-1)
+            positions = torch.nonzero(flat == MaskValue.DECODER.value).flatten()
+            flat[positions[chunk.to(positions.device)]] = (
+                MaskValue.TARGET_ENCODER_ONLY.value
+            )
+            token_view = flat.view(token_view.shape)
+            mask = output_dict[name]
+            assert isinstance(mask, torch.Tensor)
+            if is_spatial:
+                token_view = token_view.repeat_interleave(
+                    stride, dim=0
+                ).repeat_interleave(stride, dim=1)
+            mask[instance_idx] = token_view
 
     @staticmethod
     def _bandset_has_data_at_timestamps(
@@ -1823,9 +1922,16 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         )
 
     def apply_mask(
-        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+        self,
+        batch: OlmoEarthSample,
+        patch_size: int | None = None,
+        num_visible: int | None = None,
+        **kwargs: Any,
     ) -> MaskedOlmoEarthSample:
         """Apply masking to the input data.
+
+        ``num_visible``: optional per-batch visible band-set count (needs
+        ``num_visible="uniform"``; see the class docstring).
 
         This function has three parts:
 
@@ -1955,7 +2061,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 )
             else:
                 np.random.shuffle(encode_decode_bandsets)
-                num_encode = math.ceil(len(encode_decode_bandsets) * self.encode_ratio)
+                num_encode = self._num_encode_bandsets(
+                    len(encode_decode_bandsets), num_visible
+                )
                 encode_bandsets = encode_decode_bandsets[:num_encode]
                 decode_bandsets = encode_decode_bandsets[num_encode:]
 
@@ -1987,7 +2095,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             Modality.get(modality_name),
                             patch_size,
                             self.encode_ratio,
-                            0,
+                            self.decode_ratio if self.decode_visible_remainder else 0,
                         )
                     else:
                         output_dict[masked_modality_name][
@@ -1998,6 +2106,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             ],
                             encode_timestamps,
                             MaskValue.ONLINE_ENCODER.value,
+                            decode_timestamps
+                            if self.decode_visible_remainder
+                            else None,
                         )
                 for modality_name, bandset_idx in decode_bandsets:
                     randomly_mask_bandset = (
@@ -2040,17 +2151,32 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                             MaskValue.DECODER.value,
                         )
 
+        if self.max_decode_tokens is not None:
+            for i in range(batch.batch_size):
+                self._cap_decode_tokens(
+                    output_dict, i, patch_size, self.max_decode_tokens
+                )
+
         return MaskedOlmoEarthSample(**output_dict)
 
     @staticmethod
     def time_masking_with_missing(
-        mask: torch.Tensor, timestamps: torch.Tensor, mask_value: int
+        mask: torch.Tensor,
+        timestamps: torch.Tensor,
+        mask_value: int,
+        decode_timestamps: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Time masking with missing values."""
+        """Time masking with missing values.
+
+        Tokens at ``timestamps`` get ``mask_value``, tokens at ``decode_timestamps`` (if
+        given) DECODER, and all other non-missing tokens TARGET_ENCODER_ONLY.
+        """
         assert len(mask.shape) == 5  # BHWTC
         missing_mask = mask == MaskValue.MISSING.value
         mask[:] = MaskValue.TARGET_ENCODER_ONLY.value
         mask[:, :, :, timestamps] = mask_value
+        if decode_timestamps is not None:
+            mask[:, :, :, decode_timestamps] = MaskValue.DECODER.value
         mask[missing_mask] = MaskValue.MISSING.value
         return mask
 

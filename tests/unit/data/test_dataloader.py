@@ -1,6 +1,7 @@
 """Unit tests for dataloader module."""
 
 import functools
+import math
 from pathlib import Path
 from typing import cast
 
@@ -23,7 +24,7 @@ from olmoearth_pretrain.data.dataset import (
     OlmoEarthSample,
     compute_bandset_rates,
 )
-from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
+from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample, MaskValue
 from olmoearth_pretrain.train.masking import MaskingConfig
 
 
@@ -136,6 +137,9 @@ def _build_shape_sampling_dataloader(
     max_patch_size: int = 1,
     tile_size: int = 256,
     max_location_queries: int | None = None,
+    encoder_token_budget: int | None = None,
+    min_encoder_tokens: int = 0,
+    max_num_visible: int | None = None,
 ) -> OlmoEarthDataLoader:
     """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
     training_modalities = [
@@ -156,6 +160,8 @@ def _build_shape_sampling_dataloader(
                 Modality.WORLDCOVER.name,
                 Modality.OPENSTREETMAP_RASTER.name,
             ],
+            "num_visible": "uniform" if encoder_token_budget else "ratio",
+            "decode_visible_remainder": encoder_token_budget is not None,
         }
     ).build()
     collator = functools.partial(
@@ -184,9 +190,83 @@ def _build_shape_sampling_dataloader(
         max_timesteps=12,
         tile_size=tile_size,
         max_location_queries=max_location_queries,
+        encoder_token_budget=encoder_token_budget,
+        min_encoder_tokens=min_encoder_tokens,
+        max_num_visible=max_num_visible,
         masking_strategy=masking_strategy,
         num_masked_views=1,
     )
+
+
+def test_encoder_token_budget_shapes(tmp_path: Path, setup_h5py_dir: Path) -> None:
+    """Per rank batch: one visible count e, and e * hw^2 * ceil(t/2) within the budget.
+
+    Fewer visible band sets allow larger (grid, t) shapes.
+    """
+    budget, max_nv = 600, 3
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=100,  # ignored for shapes under the encoder budget
+        sampled_hw_p_list=[2, 4, 6, 8, 12],
+        time_priority_prob=0.5,
+        encoder_token_budget=budget,
+        min_encoder_tokens=20,
+        max_num_visible=max_nv,
+    )
+    dl.reshuffle()
+    items = list(
+        _IterableDatasetWrapper(dl)._get_batch_item_params_iterator(
+            np.arange(800), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+        )
+    )
+    for start in range(0, len(items), 4):
+        assert len({it[5] for it in items[start : start + 4]}) == 1
+    largest: dict[int, int] = {}
+    for _idx, _ps, hw, t, _lps, nv in items:
+        assert nv is not None and 1 <= nv <= max_nv
+        encoder_tokens = nv * hw * hw * math.ceil(t / 2)
+        assert 20 <= encoder_tokens <= budget, (nv, hw, t)
+        largest[nv] = max(largest.get(nv, 0), hw * hw * t)
+    assert set(largest) == set(range(1, max_nv + 1))
+    assert largest[1] > largest[2] > largest[3]
+
+
+def test_encoder_token_budget_end_to_end(tmp_path: Path, setup_h5py_dir: Path) -> None:
+    """Batches carry the sampled crop (not re-capped by token_budget) and the batch's e."""
+    budget = 600
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=100,
+        sampled_hw_p_list=[2, 4],
+        time_priority_prob=1.0,
+        encoder_token_budget=budget,
+        max_num_visible=3,
+    )
+    dl.reshuffle()
+    batches = list(_IterableDatasetWrapper(dl))
+    assert batches
+    big_t = False
+    for patch_size, masked, _lps in batches:
+        s2 = masked.sentinel2_l2a_mask
+        tokens = s2[:, ::patch_size, ::patch_size]
+        hw, t = tokens.shape[1], tokens.shape[3]
+        # S2 (3 band sets) + S1 (1) cost 4 * hw^2 * t tokens: over token_budget=100, which
+        # the dataset would have re-capped without the encoder budget.
+        big_t = big_t or 4 * hw * hw * t > 100
+        for i in range(tokens.shape[0]):
+            visible = 0
+            encoder_tokens = 0
+            for name in (Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name):
+                m = getattr(masked, f"{name}_mask")[i, ::patch_size, ::patch_size]
+                for b in range(m.shape[-1]):
+                    enc = int((m[..., b] == MaskValue.ONLINE_ENCODER.value).sum())
+                    visible += enc > 0
+                    encoder_tokens += enc
+            assert 1 <= visible <= 3
+            assert encoder_tokens <= budget
+    assert big_t
 
 
 def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
@@ -216,8 +296,8 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     seen: set[int] = set()
     for start in range(0, len(items), 4):
         batch = items[start : start + 4]
-        assert len({(ps, lps) for _i, ps, _hw, _t, lps in batch}) == 1
-        _idx, ps, hw, _t, lps = batch[0]
+        assert len({(ps, lps) for _i, ps, _hw, _t, lps, _nv in batch}) == 1
+        _idx, ps, hw, _t, lps, _nv = batch[0]
         assert lps is not None and ps % lps == 0
         assert lps == ps or (hw * ps // lps) ** 2 <= 256
         seen.add(lps)
@@ -236,7 +316,7 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     dl_tiny.reshuffle()
     assert all(
         lps == ps
-        for _idx, ps, _hw, _t, lps in _IterableDatasetWrapper(
+        for _idx, ps, _hw, _t, lps, _nv in _IterableDatasetWrapper(
             dl_tiny
         )._get_batch_item_params_iterator(
             np.arange(40), dl_tiny.patch_sizes, dl_tiny.sampled_hw_p_list, 4
@@ -254,7 +334,7 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     dl_off.reshuffle()
     assert all(
         lps is None
-        for *_rest, lps in _IterableDatasetWrapper(
+        for *_rest, lps, _nv in _IterableDatasetWrapper(
             dl_off
         )._get_batch_item_params_iterator(
             np.arange(40), dl_off.patch_sizes, dl_off.sampled_hw_p_list, 4
@@ -292,10 +372,10 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         )
     )
 
-    assert all(len(it) == 5 for it in items)
+    assert all(len(it) == 6 and it[5] is None for it in items)
     hw_seen: set[int] = set()
     t_by_hw: dict[int, set[int]] = {}
-    for _idx, ps, hw, t, _lps in items:
+    for _idx, ps, hw, t, _lps, _nv in items:
         assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
         assert hw * ps <= dl.tile_size
         hw_seen.add(hw)
@@ -331,7 +411,7 @@ def test_min_tokens_floor_and_temporal_bias(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
         )
     )
-    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps in items]
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps, _nv in items]
     # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
     assert all(tok >= 36 for _hw, _t, tok in tokens)
     assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)
