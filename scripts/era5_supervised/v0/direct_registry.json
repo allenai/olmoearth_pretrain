@@ -288,9 +288,9 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_gpp_anom_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day GPP minus the site's leave-one-year-out day-of-year climatology (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day GPP minus the site's leave-one-year-out day-of-year climatology (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr 0.001 from the step-50k probe-LR sweep over every v1.4-v1.6 arm (2026-10-27).",
       "num_classes": 1,
-      "probe_lr": 0.03,
+      "probe_lr": 0.001,
       "tags": {
         "has_anom": "",
         "split": "train"
@@ -322,9 +322,9 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_gpp_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP (gC m-2 d-1; per day the mean of GPP_NT_VUT_REF and GPP_DT_VUT_REF, or the one that exists), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean GPP (gC m-2 d-1; per day the mean of GPP_NT_VUT_REF and GPP_DT_VUT_REF, or the one that exists), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr 0.001 from the step-50k probe-LR sweep over every v1.4-v1.6 arm (2026-10-27).",
       "num_classes": 1,
-      "probe_lr": 0.03,
+      "probe_lr": 0.001,
       "tags": {
         "split": "train"
       },
@@ -387,9 +387,9 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_le_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean LE_F_MDS (W m-2); partly circular with the ERA5-Land evaporation input, from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean LE_F_MDS (W m-2); partly circular with the ERA5-Land evaporation input, from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr 0.001 from the step-50k probe-LR sweep over every v1.4-v1.6 arm (2026-10-27).",
       "num_classes": 1,
-      "probe_lr": 0.03,
+      "probe_lr": 0.001,
       "tags": {
         "split": "train"
       },
@@ -418,9 +418,9 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_nee_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean NEE_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr provisional until the LR sweep.",
+      "notes": "FLUXNET flux-tower eval (AmeriFlux + ICOS + TERN ONEFlux archives): 8-day mean NEE_VUT_REF (gC m-2 d-1), from the 448-day ERA5-Land history ending on the target period's last day. 'eval' group: site-balanced 4000 / 1500 / 1500 windows over spatially split sites (sites within 50 km share a split). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr 0.001 from the step-50k probe-LR sweep over every v1.4-v1.6 arm (2026-10-27).",
       "num_classes": 1,
-      "probe_lr": 0.03,
+      "probe_lr": 0.001,
       "tags": {
         "split": "train"
       },
@@ -483,9 +483,9 @@
       "label_extractor_name": "default_regression",
       "modality_layer_name": "era5_daily",
       "model_yaml_path": "configs/fluxnet_rgpp_era5d.yaml",
-      "notes": "FLUXNET flux-tower eval, headline target: relative GPP (8-day mean GPP divided by the tower's 95th percentile of it), from the 448-day ERA5-Land history ending on the target period's last day. Same 'eval' windows as the other fluxnet tasks (tag has_rgpp: towers with a 95th percentile >= 0.5 gC m-2 d-1). Built by olmoearth_pretrain/dataset_creation/fluxnet.",
+      "notes": "FLUXNET flux-tower eval, headline target: relative GPP (8-day mean GPP divided by the tower's 95th percentile of it), from the 448-day ERA5-Land history ending on the target period's last day. Same 'eval' windows as the other fluxnet tasks (tag has_rgpp: towers with a 95th percentile >= 0.5 gC m-2 d-1). Built by olmoearth_pretrain/dataset_creation/fluxnet. probe_lr 0.003 from the step-50k probe-LR sweep over every v1.4-v1.6 arm (2026-10-27).",
       "num_classes": 1,
-      "probe_lr": 0.03,
+      "probe_lr": 0.003,
       "tags": {
         "has_rgpp": "",
         "split": "train"
