@@ -456,8 +456,8 @@
         "has_rgpp": "",
         "split": "train"
       },
-      "target_mean": 0.384125,
-      "target_std": 0.35237,
+      "target_mean": 0.38362,
+      "target_std": 0.347336,
       "task_type": "regression",
       "test_groups": [
         "all"
@@ -490,8 +490,8 @@
         "has_rgpp": "",
         "split": "train"
       },
-      "target_mean": 0.398575,
-      "target_std": 0.403624,
+      "target_mean": 0.395479,
+      "target_std": 0.345327,
       "task_type": "regression",
       "test_groups": [
         "eval"
