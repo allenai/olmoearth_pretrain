@@ -19,6 +19,7 @@ TASKS="${TASKS:?task list, e.g. [fluxnet_gpp_eval,lfmc_woody_eval]}"
 HOSTS="${HOSTS:?space-separated jupiter hostnames, one shard each}"
 LR_GRID="${LR_GRID:-[1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1]}"
 THREADS="${THREADS:-60}"
+SCRIPT="${SCRIPT:-cpu_probe.py}"  # or pooling_probe.py
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
 REF=$(git rev-parse HEAD)
 read -r -a HOST_LIST <<<"${HOSTS}"
@@ -41,7 +42,7 @@ for i in "${!HOST_LIST[@]}"; do
     --install "uv sync --locked --all-extras"
     --post-setup "uv pip install breizhcrops==0.0.4.1"
     --yes
-    -- python scripts/era5_supervised/v0/fluxnet/cpu_probe.py
+    -- python "scripts/era5_supervised/v0/fluxnet/${SCRIPT}"
     --queue "scripts/era5_supervised/v0/fluxnet/queues/${QUEUE}.json"
     --tasks "${TASKS}" --lr-grid "${LR_GRID}" --shard "${i}/${N}" --threads "${THREADS}"
   )

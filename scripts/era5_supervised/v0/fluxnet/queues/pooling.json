@@ -1,0 +1,23 @@
+[
+ {
+  "name": "era5enc_1601_doyc_pool_init",
+  "source": "era5enc_1601_doyc",
+  "random_init": true,
+  "init_seed": 12536
+ },
+ {
+  "name": "era5enc_1601_doyc_pool",
+  "source": "era5enc_1601_doyc",
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1601_doyc_seed1_pool",
+  "source": "era5enc_1601_doyc_seed1",
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1601_doyc_seed2_pool",
+  "source": "era5enc_1601_doyc_seed2",
+  "load_step": 50000
+ }
+]
