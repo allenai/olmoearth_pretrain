@@ -74,6 +74,9 @@ HTTP_TIMEOUT = (30, 180)
 MAX_ATTEMPTS = 10
 TOKEN_CACHE = Path(tempfile.gettempdir()) / "snow_modis_sas_token.json"
 TOKEN_WAIT_S = 3600
+# One connection pool per process: keep-alive also spares the DNS lookups that
+# fail intermittently under load.
+SESSION = requests.Session()
 FIRST_YEAR = 2000
 SLOTS_PER_YEAR = 46
 NH_ROWS = range(1, 7)
@@ -182,7 +185,7 @@ def http_get(url: str) -> requests.Response:
     """
     for attempt in range(MAX_ATTEMPTS):
         try:
-            response = requests.get(url, timeout=HTTP_TIMEOUT)
+            response = SESSION.get(url, timeout=HTTP_TIMEOUT)
             response.raise_for_status()
             return response
         except requests.RequestException as exc:
@@ -192,9 +195,9 @@ def http_get(url: str) -> requests.Response:
             wait = min(120.0, 2.0 * 2**attempt) * random.uniform(0.5, 1.5)
             if status == 429:
                 wait = max(wait, float(exc.response.headers.get("Retry-After", 10)))
-            logger.warning(
-                "GET failed (%s), retry in %.0f s: %s", exc, wait, url.split("?")[0]
-            )
+            # The exception text holds the full URL; keep the SAS token out of logs.
+            logger.warning("GET failed (%s, HTTP %s), retry in %.0f s: %s",
+                           type(exc).__name__, status, wait, url.split("?")[0])  # fmt: skip
             time.sleep(wait)
     raise AssertionError("unreachable")
 
