@@ -542,6 +542,10 @@ def write_all(
         cells: Cell table.
         workers: Processes.
     """
+    # Tables first: the embedding dumps and baselines read only these and the
+    # cell series, so they can start while the windows are being written.
+    for group, frame in selected.items():
+        frame.to_parquet(root / "meta" / f"windows_{group}.parquet")
     ds_path = root / "rslearn_dataset"
     ds_path.mkdir(parents=True, exist_ok=True)
     (ds_path / "config.json").write_text(json.dumps(dataset_config(), indent=2))
@@ -562,7 +566,6 @@ def write_all(
                 logger.info("[%d/%d cells] %s", k, len(jobs), totals)
     stats: dict[str, Any] = {}
     for group, frame in selected.items():
-        frame.to_parquet(root / "meta" / f"windows_{group}.parquet")
         stats[group] = {
             split: {"windows": len(part), "cells": int(part["cell_id"].nunique()),
                     **{t: dict(mean=float(part[t].mean()), std=float(part[t].std()))
@@ -570,7 +573,11 @@ def write_all(
                     **{t: part[t].value_counts().to_dict() for t in CLASS_TARGETS}}
             for split, part in frame.groupby("split")
         }  # fmt: skip
-    (root / "meta" / "label_stats.json").write_text(json.dumps(stats, indent=2))
+    # Merged with earlier runs, so groups can be written by separate runs.
+    stats_path = root / "meta" / "label_stats.json"
+    if stats_path.exists():
+        stats = {**json.loads(stats_path.read_text()), **stats}
+    stats_path.write_text(json.dumps(stats, indent=2))
     logger.info("windows written: %s", totals)
 
 
