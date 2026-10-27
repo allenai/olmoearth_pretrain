@@ -10,7 +10,7 @@
 #
 # Usage (repo root; the commit must be pushed):
 #   QUEUE=curves TASKS=all bash scripts/era5_supervised/v0/fluxnet/launch_probe_queue.sh
-#   QUEUE=arms_v145 TASKS=flux_lfmc bash ...
+#   QUEUE=arms TASKS=all bash ...           # entries may override TASKS
 #   DRY_RUN=1 QUEUE=... bash ...          # print the gantry command only
 #
 # TASKS: flux (the four FLUXNET evals), flux_lfmc (+ LFMC as an anchor to the

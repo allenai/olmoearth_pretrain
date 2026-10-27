@@ -8,7 +8,8 @@ being restated by hand: the script defaults changed between batches (pooled
 LayerNorm, conv-stem widths, patch day of year), and a checkpoint loaded with
 the wrong parameter-free flags loads fine but probes a different model.
 
-An entry with ``"random_init": true`` probes an untrained encoder instead (the
+An entry's ``tasks`` (e.g. ``"[fluxnet_gpp_eval,lfmc_woody_eval]"``)
+overrides the queue's ``--tasks``. An entry with ``"random_init": true`` probes an untrained encoder instead (the
 step-0 random-projection floor): flags come from ``source``'s config, nothing
 is loaded, and ``init_seed`` picks the initialization.
 
@@ -131,7 +132,7 @@ def entry_command(entry: dict[str, Any], args: argparse.Namespace) -> list[str]:
         "torchrun", "--standalone", "--nproc_per_node=1", BASE, "evaluate",
         entry["name"], args.cluster,
         *source_flags(run_dir / f"step{load_step}" / "config.json"),
-        f"common.eval_tasks={args.tasks}",
+        f"common.eval_tasks={entry.get('tasks', args.tasks)}",
         f"common.eval_probe_lr_grid={args.lr_grid}",
         "common.eval_probe_seed=1202",
         "common.eval_run_on_test=True",
