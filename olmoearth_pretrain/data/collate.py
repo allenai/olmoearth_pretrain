@@ -138,7 +138,7 @@ def collate_olmoearth_pretrain(
         stacked = torch.full((len(arrays), *shape), fill, dtype=arrays[0].dtype)
         for i, array in enumerate(arrays):
             stacked[i][tuple(slice(0, n) for n in array.shape)] = array
-            if attr == "timestamps":
+            if attr == "timestamps" and array.shape[0]:
                 stacked[i, array.shape[0] :] = array[-1]
         return stacked
 

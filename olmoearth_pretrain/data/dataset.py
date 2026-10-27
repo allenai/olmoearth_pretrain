@@ -1492,6 +1492,10 @@ class OlmoEarthDataset(Dataset):
                 if len(cover) == len(timestamps[landsat_name]):
                     captures = kept[landsat_name]
                     keep = ~(cover[captures] > self.max_landsat_cloud_cover)
+                    # All too cloudy: keep the least cloudy, so the sample is never
+                    # left without timesteps (as random_clear does per bin).
+                    if not keep.any():
+                        keep[np.nanargmin(cover[captures])] = True
                     kept[landsat_name] = captures[keep]
             origin = None
             if _is_composite(args) and self.budget_before_read:
@@ -1588,7 +1592,9 @@ class OlmoEarthDataset(Dataset):
             scl, h5file[f"timestamps_{S2_SCL_LAYER}"][()], s2_timestamps
         )
         fraction = flags[:, :, captures].mean(axis=(0, 1))
-        return captures[fraction <= self.max_s2_cloud_fraction]
+        clear = captures[fraction <= self.max_s2_cloud_fraction]
+        # All too cloudy: keep the least cloudy (as random_clear does per bin).
+        return clear if len(clear) else captures[[int(np.argmin(fraction))]]
 
     def _budget_bins(
         self,

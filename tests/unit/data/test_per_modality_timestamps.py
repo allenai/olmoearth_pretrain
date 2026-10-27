@@ -1210,7 +1210,8 @@ def test_cloudy_s2_captures_are_dropped(
         _, before = unfiltered[args]
         _, after = filtered[args]
         cloud = _field(after, "sentinel2_l2a_cloud")
-        if cloud.shape[2]:
+        # All within 20%, or the single least-cloudy fallback capture.
+        if cloud.shape[2] > 1:
             assert (cloud.mean(axis=(0, 1)) <= 0.2).all()
         kept_before += _field(before, "sentinel2_l2a").shape[2]
         kept_after += cloud.shape[2]
@@ -1262,3 +1263,38 @@ def test_cloudy_landsat_scenes_are_dropped(
         assert kept <= clear_days[idx], kept - clear_days[idx]
         seen += len(kept)
     assert seen > 0
+
+
+def test_cloud_filters_keep_the_least_cloudy_capture_when_all_are_cloudy(
+    allcap_h5py_dir: UPath, tmp_path: Path
+) -> None:
+    """A filter that would drop every capture of a modality keeps its least cloudy one."""
+    import h5py
+
+    offsets, cover = [0], []
+    for idx in (0, 1):
+        with h5py.File(allcap_h5py_dir / f"sample_{idx}.h5", "r") as f:
+            key = "timestamps_landsat_l2"
+            n = len(f[key][()]) if key in f else 0
+        cover.append(np.full(n, 90.0))
+        offsets.append(offsets[-1] + n)
+    sidecar = tmp_path / "landsat_cloud.h5"
+    with h5py.File(sidecar, "w") as f:
+        f["offsets"] = np.array(offsets)
+        f["cloud_cover"] = np.concatenate(cover).astype(np.float16)
+    dataset = _dataset(
+        allcap_h5py_dir,
+        load_s2_cloud_mask=True,
+        max_s2_cloud_fraction=-1.0,  # no capture passes
+        landsat_cloud_cover_path=str(sidecar),
+        max_landsat_cloud_cover=50.0,  # every scene is 90%
+    )
+    for idx in (0, 1):
+        _, sample = dataset[
+            GetItemArgs(idx=idx, patch_size=2, sampled_hw_p=4, seed=idx)
+        ]
+        assert _field(sample, "timestamps").shape[0] >= 1
+        for name in ("sentinel2_l2a", "landsat_l2"):
+            steps = _field(sample, f"{name}_time_index")
+            if offsets[idx + 1] > offsets[idx] or name == "sentinel2_l2a":
+                assert (steps >= 0).sum() <= 1
