@@ -1,0 +1,20 @@
+[
+ {
+  "name": "era5enc_1306_halo75_nogate_flux",
+  "source": "era5enc_1306_halo75_nogate",
+  "interval": 2000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate_flux",
+  "source": "era5enc_1305_naive70_nogate",
+  "interval": 2000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22_flux",
+  "source": "era5enc_1301_halo22",
+  "interval": 2000,
+  "load_step": 50000
+ }
+]

@@ -244,6 +244,38 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
     },
+    "fluxnet_gpp_anom": {
+      "groups": [
+        "all"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_gpp_anom_era5d.yaml",
+      "notes": "FLUXNET 8-day gpp_anom, full 'all' group (windows where gpp_anom is defined, tag has_anom) for supervised training; val/test are the spatially held-out sites of the same group.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "has_anom": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "all"
+      ],
+      "test_tags": {
+        "has_anom": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "all"
+      ],
+      "val_tags": {
+        "has_anom": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
     "fluxnet_gpp_anom_eval": {
       "groups": [
         "eval"
@@ -330,6 +362,38 @@
         "eval"
       ],
       "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"
+    },
+    "fluxnet_le": {
+      "groups": [
+        "all"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/fluxnet_le_era5d.yaml",
+      "notes": "FLUXNET 8-day le, full 'all' group (windows where le is defined, tag has_le) for supervised training; val/test are the spatially held-out sites of the same group.",
+      "num_classes": 1,
+      "probe_lr": 0.03,
+      "tags": {
+        "has_le": "",
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "all"
+      ],
+      "test_tags": {
+        "has_le": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "all"
+      ],
+      "val_tags": {
+        "has_le": "",
         "split": "val"
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/fluxnet/rslearn_dataset"

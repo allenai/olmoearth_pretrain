@@ -31,7 +31,8 @@ never straddle splits.
   group so the evaluator does not scan the full set.
 
 Tags: ``split``, ``site_id``, ``igbp``, ``region``, ``hub``, ``site_group``,
-``anchor_date`` and ``has_anom`` (present when ``gpp_anom`` is defined).
+``anchor_date``, and ``has_anom`` / ``has_le`` (present when ``gpp_anom`` /
+``le`` is defined, for tasks on the ``all`` group).
 
 Usage::
 
@@ -414,6 +415,8 @@ class WindowWriter:
         )  # fmt: skip
         if "gpp_anom" in targets:
             options["has_anom"] = "1"
+        if "le" in targets:
+            options["has_le"] = "1"
         window = Window(
             storage=self.dataset.storage, group=group,
             name=f"{row['site_id']}_{end:%Y%m%d}", projection=self.projection,

@@ -114,8 +114,15 @@ def run(root: Path) -> dict[str, dict[str, dict[str, float]]]:
         x = scaler.transform(features)
         y = frame[target].to_numpy()
         groups = frame["site_id"].to_numpy()
-        ridge = RidgeCV(alphas=np.logspace(-2, 4, 13), cv=GroupKFold(5))
-        ridge.fit(x[train], y[train], groups=groups[train])
+        n_sites = len(np.unique(groups[train]))
+        # Folds by site; with a single site, RidgeCV's own leave-one-out.
+        splits = (
+            list(GroupKFold(min(5, n_sites)).split(x[train], y[train], groups[train]))
+            if n_sites >= 2
+            else None
+        )
+        ridge = RidgeCV(alphas=np.logspace(-2, 4, 13), cv=splits)
+        ridge.fit(x[train], y[train])
         gbm = HistGradientBoostingRegressor(
             max_iter=300, learning_rate=0.05, random_state=0
         )
@@ -123,6 +130,8 @@ def run(root: Path) -> dict[str, dict[str, dict[str, float]]]:
         results[target] = {}
         for split in ("train", "val", "test"):
             sel = ok & (frame["split"] == split).to_numpy()
+            if not sel.any():
+                continue
             mean_pred = np.full(sel.sum(), y[train].mean())
             results[target][f"mean/{split}"] = scores(y[sel], mean_pred)
             results[target][f"ridge/{split}"] = scores(y[sel], ridge.predict(x[sel]))
