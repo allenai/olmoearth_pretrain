@@ -1,0 +1,9 @@
+[
+ {
+  "name": "era5enc_1601_doyc_fluxcpu_test",
+  "source": "era5enc_1601_doyc",
+  "interval": 50000,
+  "load_step": 50000,
+  "tasks": "[fluxnet_gpp_eval,fluxnet_le_eval,fluxnet_nee_eval,fluxnet_gpp_anom_eval]"
+ }
+]

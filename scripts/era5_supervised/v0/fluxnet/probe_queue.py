@@ -154,7 +154,7 @@ def entry_command(entry: dict[str, Any], args: argparse.Namespace) -> list[str]:
             "--trainer.load_trainer_state=False",
             "--trainer.load_optim_state=False",
         ]
-    return cmd + list(entry.get("extra", []))
+    return cmd + list(args.extra) + list(entry.get("extra", []))
 
 
 def main() -> None:
@@ -171,6 +171,9 @@ def main() -> None:
     ap.add_argument("--lr-grid", default="[1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1]")
     ap.add_argument("--done-dir", default=str(DEFAULT_DONE_DIR))
     ap.add_argument("--results-dir", default=str(DEFAULT_RESULTS_DIR))
+    ap.add_argument(
+        "--extra", action="append", default=[], help="override added to every entry"
+    )
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     queue = json.loads(Path(args.queue).read_text())

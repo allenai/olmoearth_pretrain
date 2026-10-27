@@ -12,6 +12,8 @@
 #   QUEUE=curves TASKS=all bash scripts/era5_supervised/v0/fluxnet/launch_probe_queue.sh
 #   QUEUE=arms TASKS=all bash ...           # entries may override TASKS
 #   DRY_RUN=1 QUEUE=... bash ...          # print the gantry command only
+#   GPUS=0 HOST=<jupiter host> QUEUE=... bash ...   # CPU-only job on one node
+#     (no GPU, no --cpus/--memory, eval loader workers off: common.num_workers=0)
 #
 # TASKS: flux (the four FLUXNET evals), flux_lfmc (+ LFMC as an anchor to the
 # earlier sweeps), all (+ the six existing evals). LR_GRID overrides the probe
@@ -22,6 +24,7 @@ set -euo pipefail
 QUEUE="${QUEUE:?set QUEUE to a file name in scripts/era5_supervised/v0/fluxnet/queues (no .json)}"
 TASKS="${TASKS:-all}"
 CLUSTER="${CLUSTER:-ai2/saturn}"
+GPUS="${GPUS:-1}"
 LR_GRID="${LR_GRID:-[1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1]}"
 NAME="${NAME:-fluxnet_probe_${QUEUE}}"
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
@@ -36,18 +39,27 @@ case "${TASKS}" in
   *) echo "unknown TASKS=${TASKS}" >&2; exit 1 ;;
 esac
 
+if [[ "${GPUS}" == "0" ]]; then
+  HOST="${HOST:?CPU mode needs HOST (pick_nodes.sh ai2/jupiter 1)}"
+  PLACEMENT=(--gpus 0 --hostname "${HOST}")
+  EXTRA_ARGS=(--extra common.num_workers=0)
+  CLUSTER=ai2/jupiter
+else
+  PLACEMENT=(--gpus "${GPUS}" --cluster "${CLUSTER}" --shared-memory 256GiB)
+  EXTRA_ARGS=()
+fi
+
 cmd=(
   .venv/bin/gantry run
   --name "${NAME}"
-  --description "FLUXNET eval probe queue ${QUEUE} (tasks ${TASKS}, LR grid ${LR_GRID}); 1 GPU ${CLUSTER}; commit ${REF:0:9}"
+  --description "FLUXNET eval probe queue ${QUEUE} (tasks ${TASKS}, LR grid ${LR_GRID}); ${GPUS} GPU; commit ${REF:0:9}"
   --beaker-image tylerr/olmo-core-tch291cu128-2025-11-25
   --ref "${REF}" --branch "$(git branch --show-current)"
   --workspace ai2/earth-systems --budget ai2/atec-olmoearth
   --gh-token-secret "${ACCOUNT}_GITHUB_TOKEN"
   --env-secret "WANDB_API_KEY=${ACCOUNT}_WANDB_API_KEY"
   --env-secret "BEAKER_TOKEN=${ACCOUNT}_BEAKER_TOKEN"
-  --priority urgent --gpus 1 --cluster "${CLUSTER}"
-  --shared-memory 256GiB
+  --priority urgent "${PLACEMENT[@]}"
   --min-runtime 90m --retries 3
   --weka dfive-default:/weka/dfive-default
   --env UV_CACHE_DIR=/weka/dfive-default/olmoearth_pretrain/uv-cache
@@ -60,6 +72,7 @@ cmd=(
   -- python scripts/era5_supervised/v0/fluxnet/probe_queue.py
   --queue "scripts/era5_supervised/v0/fluxnet/queues/${QUEUE}.json"
   --cluster "${CLUSTER}" --tasks "${TASK_LIST}" --lr-grid "${LR_GRID}"
+  "${EXTRA_ARGS[@]}"
 )
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   printf '%q ' "${cmd[@]}"; echo
