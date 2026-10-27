@@ -15,7 +15,7 @@ validity rule (daily QC >= 0.5, at least 75 % valid days in the period):
 
 * ``gpp8`` / ``gpp30``: mean GPP over the window's last 8 / 30 days;
 * ``rgpp8`` / ``rgpp30``: the same divided by the site's 95th percentile of
-  ``gpp8`` (a phenological state in [0, ~1.2], vegetation level removed);
+  ``gpp8``, capped at 1.5 (a phenological state, vegetation level removed);
 * ``gpp_fwd30``: mean GPP over the 30 days after the window (a forecast);
 * ``rgpp_fwd30``: the same, site-normalized;
 * ``le8`` / ``le30``, ``ef8`` / ``ef30`` (evaporative fraction LE / (LE + H));
@@ -113,10 +113,12 @@ def site_target_table(daily: pd.DataFrame) -> pd.DataFrame:
     out["gpp8"], out["gpp30"] = _trailing(gpp, 8), _trailing(gpp, 30)
     scale = out["gpp8"].quantile(0.95)
     scale = scale if scale and scale > 0.5 else np.nan
-    out["rgpp8"], out["rgpp30"] = out["gpp8"] / scale, out["gpp30"] / scale
+    # Capped at 1.5 as in the dataset (dryland towers with a tiny percentile).
+    out["rgpp8"] = (out["gpp8"] / scale).clip(upper=1.5)
+    out["rgpp30"] = (out["gpp30"] / scale).clip(upper=1.5)
     # Mean over the 30 days after the window's last day.
     fwd = _trailing(gpp, 30).shift(-30)
-    out["gpp_fwd30"], out["rgpp_fwd30"] = fwd, fwd / scale
+    out["gpp_fwd30"], out["rgpp_fwd30"] = fwd, (fwd / scale).clip(upper=1.5)
     out["le8"], out["le30"] = _trailing(le, 8), _trailing(le, 30)
     for days in (8, 30):
         le_m, h_m = _trailing(le, days), _trailing(h, days)
