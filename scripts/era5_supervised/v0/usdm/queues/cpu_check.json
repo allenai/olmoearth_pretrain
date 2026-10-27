@@ -1,0 +1,4 @@
+[
+ {"name": "usdmcheck_1601_doyc", "run": "era5enc_1601_doyc", "source": "era5enc_1601_doyc", "steps": [50000], "load_step": 50000},
+ {"name": "usdmcheck_init_1601", "run": "init_1601", "source": "era5enc_1601_doyc", "random_init": true, "init_seed": 12536}
+]
