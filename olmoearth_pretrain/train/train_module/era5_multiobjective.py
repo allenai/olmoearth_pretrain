@@ -246,8 +246,15 @@ class SupervisedObjectiveConfig(Config):
     weight: float = 1.0
     tasks: list[SupervisedTaskConfig] = field(default_factory=list)
 
-    def build(self) -> SupervisedObjective:
-        """Instantiate the objective and its head registry."""
+    def build(self, pooled_dim: int | None = None) -> SupervisedObjective:
+        """Instantiate the objective and its head registry.
+
+        Args:
+            pooled_dim: Width of the encoder's pooled embedding. Pass it whenever
+                the heads train with the encoder: a head built without it is
+                sized on first forward, after the optimizer was built, so its
+                weights never train and its checkpoint cannot be resumed.
+        """
         if not self.tasks:
             raise ValueError("SupervisedObjectiveConfig requires at least one task")
         registry = SupervisedHeadRegistry()
@@ -260,6 +267,7 @@ class SupervisedObjectiveConfig(Config):
                 regression_loss=task.regression_loss,
                 target_mean=task.target_mean,
                 target_std=task.target_std,
+                embedding_dim=pooled_dim,
             )
             registry.register(task.name, head)
             task_weights[task.name] = task.weight
@@ -1080,13 +1088,13 @@ class Era5MultiObjectiveModelConfig(Config):
                     f"but the encoder uses {enc_patching}"
                 )
         encoder = self.encoder_config.build()
+        pooled_dim = self.encoder_config.embedding_size
+        if self.encoder_config.pooling == Era5Pooling.CLS_MEAN_CONCAT:
+            pooled_dim *= 2
         objectives: list[_Objective] = []
         if self.supervised_objective is not None:
-            objectives.append(self.supervised_objective.build())
+            objectives.append(self.supervised_objective.build(pooled_dim=pooled_dim))
         if self.reconstruction_objective is not None:
-            pooled_dim = self.encoder_config.embedding_size
-            if self.encoder_config.pooling == Era5Pooling.CLS_MEAN_CONCAT:
-                pooled_dim *= 2
             objectives.append(
                 self.reconstruction_objective.build(pooled_dim=pooled_dim)
             )

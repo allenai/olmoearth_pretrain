@@ -254,11 +254,6 @@ class TestSupervisedTaskRouting:
             labels=torch.randint(0, 2, (B,)),
         )
 
-        # Trigger lazy init on both heads so parameters exist
-        dummy_pooled = torch.randn(1, D)
-        obj.registry.heads["task_a"](dummy_pooled)
-        obj.registry.heads["task_b"](dummy_pooled)
-
         model.zero_grad()
         loss, metrics = obj.compute(model.encoder, batch)
         loss.backward()
@@ -279,6 +274,34 @@ class TestSupervisedTaskRouting:
 
         assert any("task_a" in k for k in metrics)
         assert not any("task_b" in k for k in metrics)
+
+
+class TestSupervisedHeadsBuiltSized:
+    """Heads get their real size at build: the optimizer sees them, resume loads."""
+
+    @pytest.mark.parametrize(
+        ("pooling", "width"), [("mean", D), ("cls_mean_concat", 2 * D)]
+    )
+    def test_sized_before_forward_and_reloadable(self, pooling: str, width: int):
+        model_cfg = Era5MultiObjectiveModelConfig(
+            encoder_config=_small_encoder_cfg(pooling=pooling),
+            supervised_objective=SupervisedObjectiveConfig(
+                tasks=[
+                    SupervisedTaskConfig(name="task_a", task_type="regression"),
+                    SupervisedTaskConfig(
+                        name="task_b", task_type="classification", num_classes=3
+                    ),
+                ],
+            ),
+        )
+        model = model_cfg.build()
+        heads = model.objective_list[0].registry.heads
+        assert heads["task_a"]._linear.weight.shape == (1, width)
+        assert heads["task_b"]._linear.weight.shape == (3, width)
+        # The optimizer is built from model.parameters() before any forward.
+        model_params = {id(p) for p in model.parameters()}
+        assert all(id(p) in model_params for p in heads.parameters())
+        model_cfg.build().load_state_dict(model.state_dict())
 
 
 class TestSupervisedInvalidLabels:
