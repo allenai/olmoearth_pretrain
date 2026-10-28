@@ -95,6 +95,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         min_encoder_tokens: int = 0,
         max_num_visible: int | None = None,
         encoder_budget_half_t: bool = False,
+        sync_shapes_across_ranks: bool = False,
         num_kept_modalities_choices: list[int] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
@@ -180,6 +181,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 so ``e = 2`` with budget ``B`` and floor ``F`` gives exactly the all-token
                 shapes of ``hw^2 * t <= B`` / ``>= F`` (time mode with odd ``t`` may then
                 encode up to ``e * hw^2 / 2`` tokens over the budget).
+            sync_shapes_across_ranks: seed the per-batch shape draws (patch size, grid,
+                t, visible count, kept count, location-query patch size) without the dp
+                rank, so all ranks use the same shape at each step (data indices and
+                masking stay per rank). Avoids the step waiting on whichever rank drew
+                the most expensive shape.
             num_kept_modalities_choices: If set (e.g. ``[3, 4]``), every rank batch draws
                 ``k`` uniformly from these and each of its samples keeps a uniform random
                 subset of at most ``k`` of its present budgeted modalities (the others are
@@ -240,6 +246,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.min_encoder_tokens = min_encoder_tokens
         self.max_num_visible = max_num_visible
         self.encoder_budget_half_t = encoder_budget_half_t
+        self.sync_shapes_across_ranks = sync_shapes_across_ranks
         if num_kept_modalities_choices is not None:
             if not num_kept_modalities_choices or min(num_kept_modalities_choices) < 1:
                 raise ValueError(
@@ -740,10 +747,13 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         """Initialize the IterableDatasetWrapper."""
         self.data_loader = data_loader
         workers = data_loader.num_workers or 1
+        # Worker i yields batches i, i + workers, ... on every rank, so dropping the
+        # dp rank from the seed gives every rank the same shape sequence.
+        rank_offset = (
+            0 if data_loader.sync_shapes_across_ranks else data_loader.dp_rank * workers
+        )
         self.rngs = [
-            get_rng(
-                data_loader.seed + data_loader.epoch + data_loader.dp_rank * workers + i
-            )
+            get_rng(data_loader.seed + data_loader.epoch + rank_offset + i)
             for i in range(workers)
         ]
         # Dataloader-side masking configuration
@@ -1067,6 +1077,7 @@ class OlmoEarthDataLoaderConfig(Config):
     min_encoder_tokens: int = 0
     max_num_visible: int | None = None
     encoder_budget_half_t: bool = False
+    sync_shapes_across_ranks: bool = False
     # Keep at most k ~ choices modalities per sample, crops sized for k (see __init__).
     num_kept_modalities_choices: list[int] | None = None
 
@@ -1154,6 +1165,7 @@ class OlmoEarthDataLoaderConfig(Config):
             min_encoder_tokens=self.min_encoder_tokens,
             max_num_visible=self.max_num_visible,
             encoder_budget_half_t=self.encoder_budget_half_t,
+            sync_shapes_across_ranks=self.sync_shapes_across_ranks,
             num_kept_modalities_choices=self.num_kept_modalities_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
