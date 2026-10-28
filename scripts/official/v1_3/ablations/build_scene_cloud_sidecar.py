@@ -1,17 +1,19 @@
-"""Scene-level cloud cover for every Landsat capture of the AllCaptures h5 corpus (CPU job).
+"""Scene-level cloud cover for every Landsat or S2 capture of the AllCaptures corpus (CPU job).
 
 The h5s keep no scene IDs, but the source tiles' metadata CSVs
-(``osm_allcaptures/10_landsat_l2_allcap_meta/<crs>_10_<col>_<row>.csv``) list the scene
-of every capture. A sample's tile is recovered from its ``latlon`` (the tile centre,
-``dataset/sample.py``), its captures are matched to the tile's scenes by date, and
-each scene's ``landsat:cloud_cover_land`` (else ``eo:cloud_cover``) comes from
-Planetary Computer's STAC. On a day with two scenes the cloudier one is used.
+(``osm_allcaptures/10_<modality>_allcap_meta/<crs>_10_<col>_<row>.csv``) list the
+scene of every capture. A sample's tile is recovered from its ``latlon`` (the tile
+centre, ``dataset/sample.py``), its captures are matched to the tile's scenes by date,
+and each scene's cloud cover comes from Planetary Computer's STAC (Landsat:
+``landsat:cloud_cover_land``, else ``eo:cloud_cover``; S2: ``eo:cloud_cover``). On a
+day with two scenes the cloudier one is used.
 
-Writes one h5 next to nothing else: ``offsets`` [N + 1] and ``cloud_cover`` (percent,
-NaN = unknown) aligned with each sample's ``timestamps_landsat_l2``, read by
-``OlmoEarthDatasetConfig.landsat_cloud_cover_path``.
+Writes one h5: ``offsets`` [N + 1] and ``cloud_cover`` (percent, NaN = unknown)
+aligned with each sample's ``timestamps_<modality>``, read through
+``OlmoEarthDatasetConfig.scene_cloud_cover_paths``.
 
-Usage: ``python build_landsat_cloud_sidecar.py OUT.h5 [--workers 32] [--limit N]``.
+Usage: ``python build_scene_cloud_sidecar.py {landsat,s2} OUT.h5 [--workers 32]
+[--limit N]``.
 """
 
 import argparse
@@ -31,7 +33,6 @@ import requests
 from pyproj import Transformer
 
 SOURCE = "/weka/dfive-default/helios/dataset/osm_allcaptures"
-META = f"{SOURCE}/10_landsat_l2_allcap_meta"
 H5_DIR = (
     f"{SOURCE}/h5py_data_w_missing_timesteps_zstd_3_128_x_4/"
     "cdl_landsat_l2_openstreetmap_raster_sentinel1_sentinel2_l2a_sentinel2_scl_"
@@ -39,11 +40,20 @@ H5_DIR = (
 )
 STAC = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
 TILE_M = 10 * 256  # metres per 256 px grid tile at 10 m
+# sensor -> (modality, STAC collection, cloud properties in order of preference)
+SENSORS = {
+    "landsat": (
+        "landsat_l2",
+        "landsat-c2-l2",
+        ("landsat:cloud_cover_land", "eo:cloud_cover"),
+    ),
+    "s2": ("sentinel2_l2a", "sentinel-2-l2a", ("eo:cloud_cover",)),
+}
 
 
 def _parse_csv(name: str) -> tuple[str, dict[int, list[str]]]:
     by_day: dict[int, list[str]] = defaultdict(list)
-    with open(os.path.join(META, name)) as f:
+    with open(os.path.join(_SENSOR["meta"], name)) as f:
         for row in csv.DictReader(f):
             day = date.fromisoformat(row["start_time"][:10]).toordinal()
             by_day[day].append(row["scene_id"])
@@ -55,24 +65,29 @@ def _cloud_covers(ids: list[str]) -> dict[str, float]:
         try:
             r = requests.post(
                 STAC,
-                json={"collections": ["landsat-c2-l2"], "ids": ids, "limit": len(ids)},
+                json={
+                    "collections": [_SENSOR["collection"]],
+                    "ids": ids,
+                    "limit": len(ids),
+                },
                 timeout=60,
             )
             r.raise_for_status()
             out = {}
             for feat in r.json()["features"]:
                 p = feat["properties"]
-                cc = p.get("landsat:cloud_cover_land")
-                if cc is None or cc < 0:
-                    cc = p.get("eo:cloud_cover")
-                if cc is not None:
-                    out[feat["id"]] = float(cc)
+                for key in _SENSOR["properties"]:
+                    cc = p.get(key)
+                    if cc is not None and cc >= 0:
+                        out[feat["id"]] = float(cc)
+                        break
             return out
         except Exception:  # noqa: BLE001 - retried, then reported missing
             time.sleep(2**attempt)
     return {}
 
 
+_SENSOR: dict = {}
 _TILES: dict = {}
 _CLOUD: dict = {}
 _TRANSFORMERS: dict[int, Transformer] = {}
@@ -105,9 +120,10 @@ def _tile_keys(lat: float, lon: float) -> list[str]:
 def _sample(i: int) -> tuple[np.ndarray, int, int]:
     """(cloud cover per Landsat capture, matched?, captures with a value)."""
     with h5py.File(f"{H5_DIR}/sample_{i}.h5", "r") as h5:
-        if "timestamps_landsat_l2" not in h5:
+        key = f"timestamps_{_SENSOR['modality']}"
+        if key not in h5:
             return np.zeros(0, np.float32), 1, 0
-        ts = h5["timestamps_landsat_l2"][()]
+        ts = h5[key][()]
         lat, lon = (float(v) for v in h5["latlon"][()])
     days = [date(int(y), int(m) + 1, int(d)).toordinal() for d, m, y in ts]
     for key in _tile_keys(lat, lon):
@@ -126,12 +142,20 @@ def _sample(i: int) -> tuple[np.ndarray, int, int]:
 def main() -> None:
     """Build the sidecar (see the module docstring)."""
     ap = argparse.ArgumentParser()
+    ap.add_argument("sensor", choices=sorted(SENSORS))
     ap.add_argument("out")
     ap.add_argument("--workers", type=int, default=32)
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
+    modality, collection, properties = SENSORS[args.sensor]
+    _SENSOR.update(
+        modality=modality,
+        collection=collection,
+        properties=properties,
+        meta=f"{SOURCE}/10_{modality}_allcap_meta",
+    )
 
-    names = sorted(os.listdir(META))
+    names = sorted(os.listdir(_SENSOR["meta"]))
     with get_context("fork").Pool(args.workers) as pool:
         tiles = dict(pool.map(_parse_csv, names, chunksize=64))
     ids = sorted({s for t in tiles.values() for v in t.values() for s in v})
@@ -139,7 +163,7 @@ def main() -> None:
 
     batches = [ids[k : k + 200] for k in range(0, len(ids), 200)]
     cloud: dict[str, float] = {}
-    with ThreadPoolExecutor(8) as ex:
+    with ThreadPoolExecutor(16) as ex:
         for n, part in enumerate(ex.map(_cloud_covers, batches)):
             cloud.update(part)
             if n % 200 == 0:
