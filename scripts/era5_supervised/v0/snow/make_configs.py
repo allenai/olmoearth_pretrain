@@ -31,11 +31,14 @@ FAMILIES = {
     "p60": "window ending 60 days after the cell's climatological melt-out date",
     "post": "window ending on the last day of the water year (whole season seen)",
 }
+# The lead / lag families register only the anomaly: their window ends a fixed
+# offset from the cell's climatological melt-out, so the last tokens' day of year
+# encodes that climatology and an absolute date target (``sdd_dowy``) reads it
+# off the timestamps (random-init R2 0.86-0.89); ``days_to_melt`` is the anomaly
+# plus the lead. Both stay as window properties for diagnostics.
 TARGETS = {
     "forecast": {
         "sdd_anom": "snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean)",
-        "sdd_dowy": "snow disappearance date (day of water year; absolute, climate-dominated)",
-        "days_to_melt": "days from the window's end to snow disappearance (negative: days since)",
     },
     "post": {
         "sdd_anom": "snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean)",
@@ -49,14 +52,25 @@ TARGETS = {
 OPTIONAL = ("sad_anom", "season_anom")
 # Supervised-training flavours on the full 'all_<family>' groups.
 FULL: tuple[tuple[str, str], ...] = (("sdd_anom", "l0"), ("sdd_anom", "p30"))
-# Probe inputs (registry ``probe_pooling``): the anomaly at the usual melt-out
-# date is read from the window's end (target lab on the 20 v1.4-v1.6 arms x 3
-# seeds, 2026-10-28: ridge val R2 floor 0.13 -> 1601 0.15 and F 1.0 on the
-# pooled vector, 0.25 -> 0.29 and F 4.0 on the last 4 tokens).
-PROBE_POOLINGS: dict[str, str] = {"snow_sdd_anom_l0_eval": "last4"}
-# Plateau of the step-50k probe-LR sweep (median val), per task and pooling.
-PROBE_LRS: dict[str, float] = {}
+# Probe inputs (registry ``probe_pooling``): the lead / lag anomalies are read
+# from the window's end (target lab on the 20 v1.4-v1.6 arms x 3 seeds,
+# 2026-10-28, l0: ridge val R2 floor 0.13 -> 1601 0.15 and F 1.0 on the pooled
+# vector, 0.25 -> 0.29 and F 4.0 on the last 4 tokens; p30 alike).
+PROBE_POOLINGS: dict[str, str] = {
+    f"snow_sdd_anom_{family}_eval": "last4"
+    for family in ("l0", "l30", "l60", "l90", "p30", "p60")
+}
+# Plateau of the step-50k probe-LR sweep (median val over the 20 arms x 3 seeds,
+# emb_probe on dumped embeddings, 2026-10-28), per task with its pooling.
+PROBE_LRS: dict[str, float] = {
+    "snow_sdd_anom_l0_eval": 3e-3, "snow_sdd_anom_l30_eval": 1e-3,
+    "snow_sdd_anom_p30_eval": 3e-3, "snow_sdd_anom_p60_eval": 3e-3,
+    "snow_sdd_anom_post_eval": 3e-3, "snow_scd_anom_post_eval": 3e-3,
+    "snow_scd_post_eval": 0.1, "snow_sdd_dowy_post_eval": 0.1,
+}  # fmt: skip
 DEFAULT_PROBE_LR = 0.01
+# Eval window group per task when not the family's ``eval_<family>``.
+EVAL_GROUPS: dict[str, str] = {}
 
 YAML = """\
 # Data-only config for the snow melt-timing eval: {what}
@@ -184,8 +198,9 @@ def main() -> None:
     for family, fam in FAMILIES.items():
         kind = "post" if family == "post" else "forecast"
         for target, what in TARGETS[kind].items():
-            tasks[f"snow_{target}_{family}_eval"] = entry(
-                target, family, f"eval_{family}", stats, base.format(what=what, fam=fam) + (
+            name = f"snow_{target}_{family}_eval"
+            tasks[name] = entry(
+                target, family, EVAL_GROUPS.get(name, f"eval_{family}"), stats, base.format(what=what, fam=fam) + (
                     f"'eval_{family}' group: 4000 / 1500 / 1500 (cell, water year) keys shared by "
                     "every family, spread over cells. " + split_note))  # fmt: skip
             n += 1

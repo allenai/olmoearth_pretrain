@@ -124,14 +124,20 @@ def main() -> None:
         }
     table["fluxnet_rgpp_eval"] = plateau_means(FLUX_DIR, "fluxnet_rgpp_eval")
     table["usdm_dpast26_eval"] = plateau_means(USDM_DIR, "usdm_dpast26_eval")
+    # (family, target, pooling, emb_probe results dir)
     snow = {
-        "snow_sdd_anom_l0_eval": ("l0", "sdd_anom", "last4"),
-        "snow_sdd_anom_p30_eval": ("p30", "sdd_anom", "last4"),
-        "snow_sdd_anom_p60_eval": ("p60", "sdd_anom", "last4"),
-        "snow_scd_post_eval": ("post", "scd", "last4"),
-        "snow_sdd_dowy_post_eval": ("post", "sdd_dowy", "mean"),
+        "snow_sdd_anom_l0_eval": ("l0", "sdd_anom", "last4", "probe_results_last4"),
+        "snow_sdd_anom_p30_eval": ("p30", "sdd_anom", "last4", "probe_results_last4"),
+        "snow_sdd_anom_p60_eval": ("p60", "sdd_anom", "last4", "probe_results_last4"),
+        "snow_scd_post_eval": ("post", "scd", "mean", "probe_results_post_mean"),
+        "snow_sdd_dowy_post_eval": (
+            "post",
+            "sdd_dowy",
+            "mean",
+            "probe_results_post_mean",
+        ),
     }
-    for task, (family, target, pooling) in snow.items():
+    for task, (family, target, pooling, results) in snow.items():
         if args.snow_source == "lab":
             lab = SNOW_ROOT / "embeddings" / "target_lab.json"
             try:
@@ -139,8 +145,7 @@ def main() -> None:
             except KeyError:
                 continue
         else:
-            sub = "probe_results" if pooling == "mean" else f"probe_results_{pooling}"
-            means = plateau_means(SNOW_ROOT / sub, task)
+            means = plateau_means(SNOW_ROOT / results, task)
             if means:
                 table[f"{task}[{pooling}]"] = means
     frame = pd.DataFrame(table)
