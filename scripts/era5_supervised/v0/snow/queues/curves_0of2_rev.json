@@ -1,0 +1,236 @@
+[
+ {
+  "name": "era5enc_1301_halo22@48000",
+  "source": "era5enc_1301_halo22",
+  "step": 48000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@44000",
+  "source": "era5enc_1301_halo22",
+  "step": 44000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@40000",
+  "source": "era5enc_1301_halo22",
+  "step": 40000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@36000",
+  "source": "era5enc_1301_halo22",
+  "step": 36000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@32000",
+  "source": "era5enc_1301_halo22",
+  "step": 32000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@28000",
+  "source": "era5enc_1301_halo22",
+  "step": 28000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@24000",
+  "source": "era5enc_1301_halo22",
+  "step": 24000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@20000",
+  "source": "era5enc_1301_halo22",
+  "step": 20000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@16000",
+  "source": "era5enc_1301_halo22",
+  "step": 16000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@12000",
+  "source": "era5enc_1301_halo22",
+  "step": 12000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@8000",
+  "source": "era5enc_1301_halo22",
+  "step": 8000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@4000",
+  "source": "era5enc_1301_halo22",
+  "step": 4000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1301_halo22@0",
+  "source": "era5enc_1301_halo22",
+  "step": 0,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@48000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 48000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@44000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 44000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@40000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 40000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@36000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 36000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@32000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 32000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@28000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 28000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@24000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 24000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@20000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 20000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@16000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 16000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@12000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 12000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@8000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 8000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@4000",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 4000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1305_naive70_nogate@0",
+  "source": "era5enc_1305_naive70_nogate",
+  "step": 0,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@48000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 48000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@44000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 44000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@40000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 40000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@36000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 36000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@32000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 32000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@28000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 28000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@24000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 24000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@20000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 20000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@16000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 16000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@12000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 12000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@8000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 8000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@4000",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 4000,
+  "load_step": 50000
+ },
+ {
+  "name": "era5enc_1306_halo75_nogate@0",
+  "source": "era5enc_1306_halo75_nogate",
+  "step": 0,
+  "load_step": 50000
+ }
+]
