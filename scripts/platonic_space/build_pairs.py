@@ -14,7 +14,10 @@ Output <out_dir>/{train,val,test}.npz:
   tile [N] int32 (footprint id i), lon / lat [N] float32 (tile centre).
 Only pixels where AEF and OE are both valid are sampled, up to --px per tile.
 
-Usage: python build_pairs.py <out_dir> [--px 1024] [--workers 0] [--clean_ids ids.npy]
+Tiles whose footprint overlaps an eval window (any hit_* in --overlap), or that Strata's buf0
+eval-clean list drops, are left out: 253 of 10,498 (investigation/FINDINGS.md, C).
+
+Usage: python build_pairs.py <out_dir> [--px 1024] [--workers 0]
 """
 
 import argparse
@@ -25,11 +28,16 @@ import sys
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, "/weka/dfive-default/agent/piperbots/2026-10-26-piperw-rs-imagenet")
 from gea_grid import block_of, gea_test  # noqa: E402
 
 SRC = "/weka/dfive-default/piperw/shared_embedding_space/pilot2024/out"
+OVERLAP = (
+    "/weka/dfive-default/agent/hadriens/2026-10-28-hadriens-platonic-space/"
+    "investigation/c_pilot_tiles_overlap.parquet"
+)
 
 
 def split_of(lon: float, lat: float) -> str:
@@ -86,16 +94,17 @@ def main() -> None:
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
-        "--clean_ids", default=None, help="npy of allowed tile ids (others dropped)"
+        "--overlap", default=OVERLAP, help="per-tile eval-overlap flags ('' keeps all)"
     )
     p.add_argument("--limit", type=int, default=0)
     a = p.parse_args()
     paths = sorted(glob.glob(f"{SRC}/*.npz"))
-    if a.clean_ids:
-        keep = set(np.load(a.clean_ids).tolist())
+    if a.overlap:
+        f = pd.read_parquet(a.overlap)
+        bad = set(f.i[~f.in_clean_buf0 | f.filter(like="hit_").any(axis=1)].astype(int))
         n0 = len(paths)
-        paths = [q for q in paths if int(os.path.basename(q)[:-4]) in keep]
-        print(f"clean_ids: kept {len(paths)} of {n0} tiles", flush=True)
+        paths = [q for q in paths if int(os.path.basename(q)[:-4]) not in bad]
+        print(f"overlap: dropped {n0 - len(paths)} of {n0} tiles", flush=True)
     if a.limit:
         paths = paths[: a.limit]
     workers = a.workers or min(64, len(os.sched_getaffinity(0)))
