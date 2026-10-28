@@ -159,6 +159,7 @@ def main() -> None:
     ap.add_argument("--lr-grid", default="[1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1]")
     ap.add_argument("--root", default=str(SNOW_ROOT))
     ap.add_argument("--emb-dir", default="embeddings")
+    ap.add_argument("--table-prefix", default="windows_eval_")
     ap.add_argument(
         "--results-dir", default=None, help="default <root>/probe_results[_<pooling>]"
     )
@@ -180,7 +181,7 @@ def main() -> None:
     names: set[str] | None = None
     for family in families:
         order = pd.read_parquet(emb_root / family / "windows.parquet")
-        table = pd.read_parquet(root / "meta" / f"windows_eval_{family}.parquet")
+        table = pd.read_parquet(root / "meta" / f"{args.table_prefix}{family}.parquet")
         windows = order.merge(
             table.drop(columns=["split"]), on=["cell_id", "anchor"], how="left"
         )
