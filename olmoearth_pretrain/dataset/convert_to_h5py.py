@@ -77,6 +77,9 @@ class ConvertToH5pyConfig(Config):
     # Optional work_dir of an earlier staged build of the same tile_path: its "process"
     # pickles are reused for the samples they cover instead of reloading those samples.
     reuse_processed_dir: str | None = None
+    # Modalities the reused pickles did not consider (they were not supported then);
+    # only these are processed for the reused samples.
+    reuse_new_modality_names: list[str] = field(default_factory=lambda: list())
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -103,6 +106,9 @@ class ConvertToH5pyConfig(Config):
                 UPath(self.reuse_processed_dir)
                 if self.reuse_processed_dir is not None
                 else None
+            ),
+            reuse_new_modalities=get_modality_specs_from_names(
+                self.reuse_new_modality_names
             ),
         )
 
@@ -135,6 +141,7 @@ class ConvertToH5py:
         shard_index: int = 0,
         work_dir: UPath | None = None,
         reuse_processed_dir: UPath | None = None,
+        reuse_new_modalities: list[ModalitySpec] = [],
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -162,6 +169,8 @@ class ConvertToH5py:
             work_dir: Directory for the pickles the split stages exchange.
             reuse_processed_dir: work_dir of an earlier staged build whose "process"
                 pickles are reused for the samples they cover.
+            reuse_new_modalities: Modalities the reused pickles did not consider; only
+                these are processed for the reused samples.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -194,6 +203,7 @@ class ConvertToH5py:
         self.shard_index = shard_index
         self.work_dir = work_dir
         self.reuse_processed_dir = reuse_processed_dir
+        self.reuse_new_modality_names = {m.name for m in reuse_new_modalities}
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -844,20 +854,44 @@ class ConvertToH5py:
             shard_samples = samples[self.shard_index :: self.num_shards]
             reusable = self._load_reusable_processed_samples()
             keys = [self._sample_key(sample) for sample in shard_samples]
-            todo = [
-                sample
-                for sample, key in zip(shard_samples, keys)
-                if key not in reusable
-            ]
+            # Samples the reused pickles do not cover are processed in full; covered
+            # ones only for reuse_new_modality_names (each modality is checked on its
+            # own, so this matches processing them in full).
+            todo = []
+            for sample, key in zip(shard_samples, keys):
+                if key not in reusable:
+                    todo.append(sample)
+                elif self.reuse_new_modality_names:
+                    todo.append(
+                        SampleInformation(
+                            grid_tile=sample.grid_tile,
+                            time_span=sample.time_span,
+                            modalities={
+                                modality: tile
+                                for modality, tile in sample.modalities.items()
+                                if modality.name in self.reuse_new_modality_names
+                            },
+                        )
+                    )
             logger.info(f"Processing {len(todo)} of {len(shard_samples)} shard samples")
             newly_processed = {
                 self._sample_key(sample): sample
                 for sample in self._process_samples(todo)
             }
-            processed = [
-                reusable[key] if key in reusable else newly_processed[key]
-                for key in keys
-            ]
+            processed = []
+            for sample, key in zip(shard_samples, keys):
+                if key not in reusable:
+                    processed.append(newly_processed[key])
+                    continue
+                kept = {modality.name for modality in reusable[key].modalities}
+                if key in newly_processed:
+                    kept |= {m.name for m in newly_processed[key].modalities}
+                sample.modalities = {
+                    modality: tile
+                    for modality, tile in sample.modalities.items()
+                    if modality.name in kept
+                }
+                processed.append(sample)
             assert self.work_dir is not None
             self.work_dir.mkdir(parents=True, exist_ok=True)
             self._dump_pickle(

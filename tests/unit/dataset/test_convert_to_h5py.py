@@ -147,10 +147,12 @@ def test_staged_build_matches_single_job_build(
     )
     modalities = [m for m in supported_modalities if m != Modality.LATLON]
 
-    def build(folder: str, **kwargs: Any) -> ConvertToH5py:
+    def build(
+        folder: str, supported: list | None = None, **kwargs: Any
+    ) -> ConvertToH5py:
         converter = ConvertToH5py(
             tile_path=UPath(tmp_path),
-            supported_modalities=modalities,
+            supported_modalities=modalities if supported is None else supported,
             multiprocessed_sample_processing=False,
             multiprocessed_h5_creation=False,
             **kwargs,
@@ -196,21 +198,36 @@ def test_staged_build_matches_single_job_build(
 
     assert_matches_single(staged_build("staged", UPath(tmp_path / "work")))
 
-    # An earlier "process" run with 3 shards; reusing it must not load any sample.
+    # An earlier "process" run with 3 shards that did not support the last modality;
+    # reusing it must load only that modality.
+    new_modality = modalities[-1]
     previous = UPath(tmp_path / "previous")
     for shard_index in range(3):
         build(
             "unused",
+            supported=modalities[:-1],
             stage="process",
             num_shards=3,
             shard_index=shard_index,
             work_dir=previous,
         ).run()
 
-    def fail(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("a reused sample was processed again")
+    original = ConvertToH5py._remove_bad_modalities_from_sample
 
-    monkeypatch.setattr(ConvertToH5py, "_remove_bad_modalities_from_sample", fail)
+    def only_new_modality(self: ConvertToH5py, sample: Any) -> Any:
+        assert set(sample.modalities) <= {new_modality}, (
+            "a reused modality was reloaded"
+        )
+        return original(self, sample)
+
+    monkeypatch.setattr(
+        ConvertToH5py, "_remove_bad_modalities_from_sample", only_new_modality
+    )
     assert_matches_single(
-        staged_build("reused", UPath(tmp_path / "work2"), reuse_processed_dir=previous)
+        staged_build(
+            "reused",
+            UPath(tmp_path / "work2"),
+            reuse_processed_dir=previous,
+            reuse_new_modalities=[new_modality],
+        )
     )
