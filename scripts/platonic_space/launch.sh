@@ -5,9 +5,10 @@
 # or CPU-only with GPUS=0 (then pick a node: pick_nodes.sh ai2/jupiter 1, HOST=...).
 #
 # Usage (repo root; the commit must be pushed):
-#   NAME=plato_paired_l128 CMD="python scripts/platonic_space/train.py --run paired_l128" \
+#   NAME=plato_paired_l128 CMD="python train.py --run paired_l128" \
 #     bash scripts/platonic_space/launch.sh
 #   DRY_RUN=1 ...    # print the gantry command only
+#   POST_SETUP="uv pip install 'zarr>=3.1' obstore"   # extra deps (oe_eval_inputs.py)
 #
 # The scripts import each other, so CMD runs from scripts/platonic_space.
 
@@ -41,6 +42,7 @@ cmd=(
   --weka dfive-default:/weka/dfive-default
   --env UV_CACHE_DIR=/weka/dfive-default/olmoearth_pretrain/uv-cache
   --install "uv sync --locked --all-extras"
+  ${POST_SETUP:+--post-setup "${POST_SETUP}"}
   --yes
   -- bash -c "cd scripts/platonic_space && ${CMD}"
 )
