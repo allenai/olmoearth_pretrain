@@ -775,7 +775,8 @@ class OlmoEarthDataset(Dataset):
             raise ValueError("max_scene_cloud_cover needs scene_cloud_cover_paths")
         self.scene_cloud_cover_paths = dict(scene_cloud_cover_paths or {})
         self.max_scene_cloud_cover = max_scene_cloud_cover
-        # Per modality: (offsets, cloud cover) loaded on first use, per worker.
+        # Per modality: (offsets, float16 cloud cover). Loaded in prepare(), before
+        # the DataLoader forks, so workers share one copy instead of each loading it.
         self._scene_cloud: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     @property
@@ -920,6 +921,8 @@ class OlmoEarthDataset(Dataset):
         before any other process tries to use the dataset
         """
         logger.info("Preparing dataset...")
+        for modality in self.scene_cloud_cover_paths:
+            self._load_scene_cloud(modality)
         if self.is_dataset_prepared:
             logger.info("Dataset is already prepared")
             return
@@ -1615,8 +1618,8 @@ class OlmoEarthDataset(Dataset):
             "scene_cover": scene_cover,
         }
 
-    def _scene_cloud_cover(self, modality: str, index: int) -> np.ndarray:
-        """Scene cloud cover (percent, NaN = unknown) of sample ``index``'s captures."""
+    def _load_scene_cloud(self, modality: str) -> tuple[np.ndarray, np.ndarray]:
+        """Load (once) a modality's sidecar: per-sample offsets and float16 cover."""
         if modality not in self._scene_cloud:
             with (
                 UPath(self.scene_cloud_cover_paths[modality]).open("rb") as f,
@@ -1624,12 +1627,16 @@ class OlmoEarthDataset(Dataset):
             ):
                 self._scene_cloud[modality] = (
                     h5["offsets"][()],
-                    h5["cloud_cover"][()].astype(np.float32),
+                    h5["cloud_cover"][()].astype(np.float16, copy=False),
                 )
-        offsets, cover = self._scene_cloud[modality]
+        return self._scene_cloud[modality]
+
+    def _scene_cloud_cover(self, modality: str, index: int) -> np.ndarray:
+        """Scene cloud cover (percent, NaN = unknown) of sample ``index``'s captures."""
+        offsets, cover = self._load_scene_cloud(modality)
         if index + 1 >= len(offsets):
             return np.zeros(0, np.float32)
-        return cover[offsets[index] : offsets[index + 1]]
+        return cover[offsets[index] : offsets[index + 1]].astype(np.float32)
 
     def _clear_s2(
         self,
