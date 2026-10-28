@@ -2,6 +2,7 @@
 
   python export.py --run <run>            # z_<src> for each source, plus the fused latent
   python export.py --baselines             # raw products, concat, concat+PCA (pair-set train stats)
+  python export.py --baselines --raw_only  # raw products only (needs no pair set)
 
 Inputs, one <dataset>.npz (ids, emb) per source:
   aef   favyen's products/gse (read-only): power-dequantised, rows of all -1 are nodata;
@@ -190,6 +191,8 @@ def export_dense(model, run, step, ds, device, pca, baselines) -> None:  # noqa:
             os.makedirs(d, exist_ok=True)
             if not os.path.lexists(f"{d}/{ds}.npz"):
                 os.symlink(f"{INPUTS[m]}/{ds}.npz", f"{d}/{ds}.npz")
+        if pca is None:
+            return
         cat = None
         off = 0
         for m in models:
@@ -227,10 +230,15 @@ def main() -> None:
     p.add_argument("--run", default=None)
     p.add_argument("--datasets", default=",".join(DATASETS))
     p.add_argument("--baselines", action="store_true")
+    p.add_argument(
+        "--raw_only", action="store_true", help="with --baselines: raw_<src> only"
+    )
     p.add_argument("--pca_k", type=int, default=128)
     a = p.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    if a.baselines:
+    if a.raw_only:
+        model, step = Vec2Vec(DIMS, latent=8, width=8, depth=0, backbone_depth=0), 0
+    elif a.baselines:
         # Only the standardisation is used: the pair-set train stats, as train.py computes them.
         model, step = Vec2Vec(DIMS, latent=8, width=8, depth=0, backbone_depth=0), 0
         z = np.load(f"{ROOT}/pairs2024/train.npz")
@@ -239,7 +247,7 @@ def main() -> None:
     else:
         model, step = load_model(a.run, device)
     models = list(model.dims)
-    pca = fit_pca(model, a.pca_k) if a.baselines else None
+    pca = fit_pca(model, a.pca_k) if a.baselines and not a.raw_only else None
     for ds in a.datasets.split(","):
         t0 = time.time()
         if ds.startswith("pastis"):
@@ -262,6 +270,8 @@ def main() -> None:
         if a.baselines:
             for m in models:
                 write(f"raw_{m}", 0, ds, ids, embs[m], oks[m])
+            if a.raw_only:
+                continue
             cat = concat_blocks(model, embs)
             write("concat", 0, ds, ids, cat, np.ones(len(ids), bool))
             write(
