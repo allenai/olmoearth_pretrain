@@ -20,7 +20,10 @@ places the ERA5 window ``[d - 448, d)`` differently relative to the melt:
   it has seen.
 
 Labels need an observed melt: ``sdd`` with a leave-one-year-out climatology and
-bracketing observed composites at most ``MAX_SDD_GAP`` days apart. ``sad`` and
+bracketing observed composites at most ``MAX_SDD_GAP`` days apart, in a cell
+with a stable seasonal snowpack (inter-annual SDD SD at most
+``MAX_CELL_SDD_SD`` days, climatological season at least
+``MIN_CELL_SEASON_DAYS``). ``sad`` and
 ``season`` (the ``post`` family's ``sad_anom`` / ``season_anom``) are defined
 only when the season does not start before the water year (tag ``has_sad``).
 
@@ -81,6 +84,13 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 LEADS = (0, 30, 60, 90)
+# Cells with a stable seasonal snowpack: in short or intermittent snow climates
+# (much of the Tibetan Plateau, maritime lowlands) the longest snow run jumps
+# between separate episodes from year to year, which shows up as SDD anomalies
+# of +-60-120 days (kurtosis 15 over all cells, 2.7 with this filter; it keeps
+# 87 % of the cell-years and leaves the station agreement unchanged).
+MAX_CELL_SDD_SD = 20.0
+MIN_CELL_SEASON_DAYS = 60.0
 FAMILIES = tuple(f"l{lead}" for lead in LEADS) + ("post",)
 MAX_SDD_GAP = 24.0
 SPLIT_BLOCK_DEG = 3
@@ -195,7 +205,17 @@ def build_candidates(root: Path, seed: int) -> tuple[pd.DataFrame, pd.DataFrame]
         ``(cells, candidates)``; both written under ``meta``.
     """
     meta = root / "meta"
-    cells = spatial_split(pd.read_parquet(meta / "cells.parquet"), seed)
+    cells = pd.read_parquet(meta / "cells.parquet")
+    season = (cells["sdd_dowy_mean"] - cells["sad_dowy_mean"]).fillna(
+        cells["sdd_dowy_mean"]
+    )
+    stable = (cells["sdd_dowy_sd"] <= MAX_CELL_SDD_SD) & (
+        season >= MIN_CELL_SEASON_DAYS
+    )
+    logger.info(
+        "%d of %d cells with a stable seasonal snowpack", int(stable.sum()), len(cells)
+    )
+    cells = spatial_split(cells[stable].reset_index(drop=True), seed)
     era5_dates = np.load(meta / "era5_dates.npy")
     phen = pd.read_parquet(meta / "phenology.parquet")
     # A date anomaly is the same in days of the water year as in days.
