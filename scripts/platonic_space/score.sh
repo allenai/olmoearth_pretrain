@@ -6,7 +6,7 @@
 #   PASTIS=1 bash score.sh ...      # also the PASTIS segmentation LP (slow; one probe seed)
 #
 # Quantization follows what each vector is: raw_aef / raw_oe already sit on the int8 power
-# grid and concat is float (none), raw_tess gets TESSERA's own round trip as in the harness,
+# grid and concat / *_xplus* are float (none), raw_tess gets TESSERA's own round trip as in the harness,
 # and the unit-norm latents and concat_pca* get the AEF power scheme.
 # --allow_missing because export.py keeps only the windows where all three products exist.
 
@@ -22,7 +22,7 @@ mkdir -p "${WORK}" "${ROOT}/eval_results"
 for d in "$@"; do
   name="${d%%/*}"
   case "${name}" in
-    raw_aef | raw_oe | concat) q=none ;;
+    raw_aef | raw_oe | concat | *_xplus*) q=none ;;
     raw_tess) q=tessera ;;
     *) q=aef_power ;;
   esac

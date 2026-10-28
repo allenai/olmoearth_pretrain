@@ -19,6 +19,8 @@ us_trees (26 windows short). PASTIS keeps all windows (OE covers them all).
 Outputs under ROOT/eval_embeddings/<name>/step<N>/<dataset>.npz:
   <run>_z<src>   T(A_src(x_src)), unit norm (score with --quantization aef_power)
   <run>_zfused   mean of the three latents, renormalised
+  <run>_xplus<src>  (--plus, AEF tasks) the source itself plus its translations into the other
+                 two products, standardised, each block scaled to unit total variance (none)
   raw_<src>      the product itself on the common windows (quantization: none; tess: tessera)
   concat         the three products standardised with the pair-set train stats (the ones every
                  run standardises with), each block scaled
@@ -139,6 +141,23 @@ def load_model(run: str, device: torch.device) -> tuple[Vec2Vec, int]:
     return model.to(device).eval(), st["step"]
 
 
+@torch.no_grad()
+def plus_features(
+    model: Vec2Vec, m: str, x: np.ndarray, device: torch.device, chunk: int = 1 << 17
+) -> np.ndarray:
+    """[x_m, B_n(T(A_m(x_m))) for the other n], standardised, each block / sqrt(dim)."""
+    out = []
+    for i in range(0, len(x), chunk):
+        xs = model.standardize(m, torch.from_numpy(x[i : i + chunk]).to(device))
+        u = model.latent(m, xs)
+        parts = [xs / model.dims[m] ** 0.5]
+        parts += [
+            model.decode(n, u) / model.dims[n] ** 0.5 for n in model.dims if n != m
+        ]
+        out.append(torch.cat(parts, -1).float().cpu().numpy())
+    return np.concatenate(out)
+
+
 def concat_blocks(model: Vec2Vec, embs: dict[str, np.ndarray]) -> np.ndarray:
     """Per-product standardised blocks, each scaled to unit total variance, concatenated."""
     parts = []
@@ -234,6 +253,9 @@ def main() -> None:
         "--raw_only", action="store_true", help="with --baselines: raw_<src> only"
     )
     p.add_argument("--pca_k", type=int, default=128)
+    p.add_argument(
+        "--plus", action="store_true", help="xplus features only (AEF tasks)"
+    )
     a = p.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if a.raw_only:
@@ -250,6 +272,8 @@ def main() -> None:
     pca = fit_pca(model, a.pca_k) if a.baselines and not a.raw_only else None
     for ds in a.datasets.split(","):
         t0 = time.time()
+        if ds.startswith("pastis") and a.plus:
+            continue
         if ds.startswith("pastis"):
             export_dense(
                 model,
@@ -282,6 +306,11 @@ def main() -> None:
                 project(cat, pca),
                 np.ones(len(ids), bool),
             )
+            continue
+        if a.plus:
+            for m in models:
+                xp = plus_features(model, m, embs[m], device)
+                write(f"{a.run}_xplus{m}", step, ds, ids, xp, oks[m])
             continue
         zs = {m: translate(model, m, embs[m], device) for m in models}
         for m in models:

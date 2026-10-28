@@ -23,7 +23,7 @@ ROOT = "/weka/dfive-default/hadriens/platonic_space"
 def quantization(d: str) -> str:
     """Same mapping as score.sh."""
     name = d.split("/")[0]
-    if name in ("raw_aef", "raw_oe", "concat"):
+    if name in ("raw_aef", "raw_oe", "concat") or "_xplus" in name:
         return "none"
     return "tessera" if name == "raw_tess" else "aef_power"
 
