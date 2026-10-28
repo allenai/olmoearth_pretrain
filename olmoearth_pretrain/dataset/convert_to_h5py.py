@@ -1,9 +1,11 @@
 """Module for converting a dataset of GeoTiffs into a training dataset set up of h5py files."""
 
+import hashlib
 import json
 import logging
 import multiprocessing as mp
 import os
+import pickle  # nosec B403 - only reads pickles this module wrote to work_dir
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -63,6 +65,15 @@ class ConvertToH5pyConfig(Config):
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
+    # Split the build across jobs. "all" runs everything in one job. Otherwise run
+    # "process" for every shard_index in [0, num_shards) (loads each sample to drop bad
+    # modalities), then "prepare" once (merges the shards, filters samples and writes the
+    # metadata), then "write" for every shard_index (writes that shard's h5 files). The
+    # stages exchange pickles in work_dir. The output is the same as with "all".
+    stage: str = "all"
+    num_shards: int = 1
+    shard_index: int = 0
+    work_dir: str | None = None
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -81,6 +92,10 @@ class ConvertToH5pyConfig(Config):
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
             ),
+            stage=self.stage,
+            num_shards=self.num_shards,
+            shard_index=self.shard_index,
+            work_dir=UPath(self.work_dir) if self.work_dir is not None else None,
         )
 
 
@@ -107,6 +122,10 @@ class ConvertToH5py:
         tile_size: int = IMAGE_TILE_SIZE,
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
+        stage: str = "all",
+        num_shards: int = 1,
+        shard_index: int = 0,
+        work_dir: UPath | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -127,6 +146,11 @@ class ConvertToH5py:
                 higher-resolution modalities like NAIP would be split up correspondingly.
             reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
+            stage: "all", or one of "process", "prepare", "write" to split the build
+                across jobs (see ConvertToH5pyConfig.stage).
+            num_shards: Number of jobs the "process" and "write" stages are split into.
+            shard_index: The shard this job handles in the "process" or "write" stage.
+            work_dir: Directory for the pickles the split stages exchange.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -148,6 +172,16 @@ class ConvertToH5py:
         self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
         self.reserved_cores = reserved_cores
+        if stage not in ("all", "process", "prepare", "write"):
+            raise ValueError(f"Unknown stage {stage!r}")
+        if stage != "all" and work_dir is None:
+            raise ValueError(f"stage {stage!r} needs a work_dir")
+        if not 0 <= shard_index < num_shards:
+            raise ValueError(f"shard_index {shard_index} not in [0, {num_shards})")
+        self.stage = stage
+        self.num_shards = num_shards
+        self.shard_index = shard_index
+        self.work_dir = work_dir
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -190,10 +224,37 @@ class ConvertToH5py:
         #     return
         self._create_h5_file(sample, h5_file_path, sublock_index)
 
-    def create_h5_dataset(self, samples: list[tuple[int, SampleInformation]]) -> None:
-        """Create a dataset of the samples in h5 format in a shared weka directory under the given fingerprint."""
-        total_sample_indices = len(samples)
+    def process_sample_subtiles_into_h5(
+        self, index_sample_tuple: tuple[int, SampleInformation]
+    ) -> None:
+        """Write the h5 files of every subtile of a sample, loading its images once.
 
+        The subtiles get consecutive indices starting at the given one.
+        """
+        first_index, sample = index_sample_tuple
+        images = self._load_images(sample)
+        for sublock_index in range(self.num_subtiles):
+            h5_file_path = self._get_h5_file_path(first_index + sublock_index)
+            self._create_h5_file(sample, h5_file_path, sublock_index, images)
+
+    def create_h5_dataset(self, samples: list[tuple[int, SampleInformation]]) -> None:
+        """Create a dataset of the samples in h5 format in a shared weka directory under the given fingerprint.
+
+        ``samples`` holds every (subtile index, sample) pair in sample-major order, as
+        built by prepare_h5_dataset; each sample's images are loaded once for all of its
+        subtiles.
+        """
+        groups = []
+        for first_index in range(0, len(samples), self.num_subtiles):
+            sample = samples[first_index][1]
+            for j in range(self.num_subtiles):
+                if samples[first_index + j] != (j, sample):
+                    raise ValueError("samples must be in sample-major subtile order")
+            groups.append((first_index, sample))
+        self._create_h5_files(groups)
+
+    def _create_h5_files(self, groups: list[tuple[int, SampleInformation]]) -> None:
+        """Write the h5 files of the given (first subtile index, sample) groups."""
         if self.multiprocessed_h5_creation:
             num_processes = max(1, mp.cpu_count() - self.reserved_cores)
             logger.info(f"Creating H5 dataset using {num_processes} processes")
@@ -201,15 +262,15 @@ class ConvertToH5py:
                 # Process samples in parallel and track progress with tqdm
                 _ = list(
                     tqdm(
-                        pool.imap(self.process_sample_into_h5, enumerate(samples)),
-                        total=total_sample_indices,
+                        pool.imap(self.process_sample_subtiles_into_h5, groups),
+                        total=len(groups),
                         desc="Creating H5 files",
                     )
                 )
         else:
-            for i, (sublock_index, sample) in enumerate(samples):
-                logger.info(f"Processing sample {i}")
-                self.process_sample_into_h5((i, (sublock_index, sample)))
+            for group in groups:
+                logger.info(f"Processing sample at index {group[0]}")
+                self.process_sample_subtiles_into_h5(group)
 
     def save_sample_metadata(
         self, samples: list[tuple[int, SampleInformation]]
@@ -362,10 +423,29 @@ class ConvertToH5py:
                 processed_samples.append(processed_sample)
         return processed_samples
 
+    def _load_images(self, sample: SampleInformation) -> dict[ModalitySpec, np.ndarray]:
+        """Load the full (not yet subtiled) image of every modality of a sample."""
+        images = {}
+        for modality, sample_modality in sample.modalities.items():
+            image = self.load_sample(sample_modality, sample)
+            if modality == Modality.SENTINEL1:
+                # Convert Sentinel1 data to dB
+                image = convert_to_db(image)
+            images[modality] = image
+        return images
+
     def _create_h5_file(
-        self, sample: SampleInformation, h5_file_path: UPath, sublock_index: int
+        self,
+        sample: SampleInformation,
+        h5_file_path: UPath,
+        sublock_index: int,
+        images: dict[ModalitySpec, np.ndarray] | None = None,
     ) -> dict[str, Any]:
-        """Create the h5 file."""
+        """Create the h5 file.
+
+        ``images`` are the sample's full images from _load_images; they are loaded here
+        when not given.
+        """
         sample_dict = {}
         sample_dict["latlon"] = sample.get_latlon().astype(np.float32)
         multi_temporal_timestamps_dict = sample.get_timestamps()
@@ -389,14 +469,10 @@ class ConvertToH5py:
 
         sample_dict["timestamps"] = longest_timestamps_array
 
-        # Load image data for all modalities in the sample
+        if images is None:
+            images = self._load_images(sample)
         for modality in sample.modalities:
-            sample_modality = sample.modalities[modality]
-            image = self.load_sample(sample_modality, sample)
-
-            if modality == Modality.SENTINEL1:
-                # Convert Sentinel1 data to dB
-                image = convert_to_db(image)
+            image = images[modality]
 
             if modality.is_spatial:
                 # Calculate row and column indices for grid
@@ -588,6 +664,12 @@ class ConvertToH5py:
         # Remove bad modalities from samples
         # This ensures that the metadata is consistent with the actual data saved in h5
         processed_samples = self._process_samples(samples)
+        return self._filter_processed_samples(processed_samples)
+
+    def _filter_processed_samples(
+        self, processed_samples: list[SampleInformation]
+    ) -> list[SampleInformation]:
+        """Filter samples whose bad modalities were already removed by _process_samples."""
         filtered_samples = []
         for sample in processed_samples:
             if not all(
@@ -674,8 +756,10 @@ class ConvertToH5py:
         with settings_path.open("w") as f:
             json.dump(settings, f, indent=2)
 
-    def prepare_h5_dataset(self, samples: list[SampleInformation]) -> None:
-        """Prepare the h5 dataset."""
+    def prepare_h5_dataset(
+        self, samples: list[SampleInformation], create_files: bool = True
+    ) -> None:
+        """Prepare the h5 dataset (and write its files unless create_files is False)."""
         tuples = []
         for sample in samples:
             for j in range(self.num_subtiles):
@@ -684,10 +768,78 @@ class ConvertToH5py:
         self.save_compression_settings()  # Save settings before creating data
         self.save_sample_metadata(tuples)
         self.save_latlon_distribution(tuples)
+        if not create_files:
+            return
         logger.info("Attempting to create H5 files may take some time...")
         self.create_h5_dataset(tuples)
 
+    def _processed_shard_path(self, shard_index: int) -> UPath:
+        assert self.work_dir is not None
+        return self.work_dir / f"processed_{shard_index}_of_{self.num_shards}.pkl"
+
+    @property
+    def _filtered_samples_path(self) -> UPath:
+        assert self.work_dir is not None
+        return self.work_dir / "filtered_samples.pkl"
+
+    @staticmethod
+    def _dump_pickle(obj: Any, path: UPath) -> None:
+        """Pickle obj to path atomically, so jobs polling for path never see a partial file."""
+        tmp_path = path.parent / f"{path.name}.tmp"
+        with tmp_path.open("wb") as f:
+            pickle.dump(obj, f)
+        tmp_path.rename(path)
+
+    @staticmethod
+    def _sample_list_fingerprint(samples: list[SampleInformation]) -> str:
+        """Hash of the sample order, to check every shard split the same list."""
+        digest = hashlib.sha256()
+        for sample in samples:
+            digest.update(repr((sample.grid_tile, sample.time_span)).encode())
+        return digest.hexdigest()
+
     def run(self) -> None:
-        """Run the conversion."""
-        samples = self.get_and_filter_samples()
-        self.prepare_h5_dataset(samples)
+        """Run the conversion (or this job's stage of it, see ConvertToH5pyConfig.stage)."""
+        if self.stage == "all":
+            samples = self.get_and_filter_samples()
+            self.prepare_h5_dataset(samples)
+        elif self.stage == "process":
+            samples = self._get_samples()
+            processed = self._process_samples(
+                samples[self.shard_index :: self.num_shards]
+            )
+            assert self.work_dir is not None
+            self.work_dir.mkdir(parents=True, exist_ok=True)
+            self._dump_pickle(
+                {
+                    "num_samples": len(samples),
+                    "fingerprint": self._sample_list_fingerprint(samples),
+                    "samples": processed,
+                },
+                self._processed_shard_path(self.shard_index),
+            )
+        elif self.stage == "prepare":
+            shards = []
+            for shard_index in range(self.num_shards):
+                with self._processed_shard_path(shard_index).open("rb") as f:
+                    shards.append(pickle.load(f))  # nosec B301
+            if len({(s["num_samples"], s["fingerprint"]) for s in shards}) != 1:
+                raise ValueError("process shards saw different sample lists")
+            merged: list[SampleInformation | None] = [None] * shards[0]["num_samples"]
+            for shard_index, shard in enumerate(shards):
+                merged[shard_index :: self.num_shards] = shard["samples"]
+            assert all(sample is not None for sample in merged)
+            filtered = self._filter_processed_samples(merged)  # type: ignore[arg-type]
+            self.prepare_h5_dataset(filtered, create_files=False)
+            self._dump_pickle(filtered, self._filtered_samples_path)
+        else:  # write
+            with self._filtered_samples_path.open("rb") as f:
+                filtered = pickle.load(f)  # nosec B301
+            self.set_h5py_dir(len(filtered) * self.num_subtiles)
+            self._create_h5_files(
+                [
+                    (position * self.num_subtiles, sample)
+                    for position, sample in enumerate(filtered)
+                    if position % self.num_shards == self.shard_index
+                ]
+            )
