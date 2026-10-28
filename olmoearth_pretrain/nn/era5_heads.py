@@ -330,6 +330,21 @@ class SupervisedHeadRegistry(nn.Module):
         """Return the TaskType associated with ``task_name``."""
         return self._task_types[task_name]
 
+    def materialize(self, embedding_dim: int, device: torch.device) -> None:
+        """Create every head's linear layer now instead of on its first forward.
+
+        The train module builds its optimizer, and a resumed run loads its
+        checkpoint, before the first forward. A head still holding its
+        ``[1, 1]`` placeholder at that point is left out of the optimizer (it
+        never trains) and cannot load a saved ``[num_outputs, D]`` weight.
+
+        Args:
+            embedding_dim: width of the encoder's pooled embedding.
+            device: device to create the layers on.
+        """
+        for head in self.heads.values():
+            head._ensure_initialized(embedding_dim, device)
+
     def compute_loss(
         self, task_name: str, pooled: Tensor, labels: Tensor
     ) -> tuple[Tensor, dict[str, Tensor]]:
