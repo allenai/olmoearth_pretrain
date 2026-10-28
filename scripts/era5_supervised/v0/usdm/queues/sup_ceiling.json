@@ -1,0 +1,5 @@
+[
+ {"name": "era5enc_1104_sup_usdm_r2@29250", "source": "era5enc_1104_sup_usdm_r2", "step": 29250, "load_step": 29250},
+ {"name": "era5enc_1104_sup_usdm_r3@27000", "source": "era5enc_1104_sup_usdm_r3", "step": 27000, "load_step": 27000},
+ {"name": "era5enc_1104_sup_usdm_r3@30000", "source": "era5enc_1104_sup_usdm_r3", "step": 30000, "load_step": 30000}
+]
