@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 #
-# v1.1.4 supervised ceiling for the USDM evals: era5enc_1104_sup_usdm_r2
+# v1.1.4 supervised ceiling for the USDM evals: era5enc_1104_sup_usdm_r3
 # (r1, era5enc_1104_sup_usdm, trained a dfut8 head and probed without
-# probe_pooling; stopped at step ~50).
+# probe_pooling; stopped at step ~50. r2 ran to step 29,250 with its heads
+# frozen at random init, since they were created after the optimizer, and
+# could not resume after a preemption; fixed in 3c2d35621. r2 also predates
+# the evalu group, so its probes read the first eval group).
 #
 # Objective A only (reconstruction off): the 1601 encoder recipe (script
 # defaults + day-of-year fix) trained from scratch on three USDM targets of the
@@ -23,7 +26,7 @@
 set -euo pipefail
 
 SUBCMD="${SUBCMD:-launch}"
-RUN="${RUN:-era5enc_1104_sup_usdm_r2}"
+RUN="${RUN:-era5enc_1104_sup_usdm_r3}"
 CLUSTER="${CLUSTER:-ai2/saturn}"
 EVALS="${EVALS:-usdm_dpast26_eval,usdm_dpast13_eval,usdm_sev_eval}"
 PYTHON="${PYTHON:-.venv/bin/python}"
@@ -40,4 +43,5 @@ PYTHON="${PYTHON:-.venv/bin/python}"
   "common.eval_probe_lr_grid=[1e-3,1e-2,3e-2,1e-1]" \
   common.eval_run_on_test=True \
   "common.eval_results_jsonl=/weka/dfive-default/rslearn-eai/datasets/usdm/probe_results/${RUN}.jsonl" \
-  --trainer.callbacks.wandb.project=era5_usdm_eval
+  --trainer.callbacks.wandb.project=era5_usdm_eval \
+  --launch.min_runtime=5h
