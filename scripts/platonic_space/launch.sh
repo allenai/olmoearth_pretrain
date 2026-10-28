@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Run one platonic_space command as a Beaker job: 1 GPU on ai2/saturn by default
-# (hadriens's standing allowance for this project: up to 5 saturn GPU jobs, urgent),
+# Run one platonic_space command as a Beaker job: 1 GPU on any of CLUSTERS (hadriens's
+# allowance for this project: up to 5 GPU jobs at a time, urgent, on saturn / ceres / jupiter),
 # or CPU-only with GPUS=0 (then pick a node: pick_nodes.sh ai2/jupiter 1, HOST=...).
 #
 # Usage (repo root; the commit must be pushed):
@@ -17,11 +17,12 @@ set -euo pipefail
 NAME="${NAME:?set NAME}"
 CMD="${CMD:?set CMD to the command to run from scripts/platonic_space}"
 GPUS="${GPUS:-1}"
-CLUSTER="${CLUSTER:-ai2/saturn}"
+CLUSTERS="${CLUSTERS:-ai2/saturn ai2/ceres ai2/jupiter}"
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
 REF=$(git rev-parse HEAD)
 
-where=(--cluster "${CLUSTER}" --gpus "${GPUS}")
+where=(--gpus "${GPUS}")
+for c in ${CLUSTERS}; do where+=(--cluster "${c}"); done
 if [[ "${GPUS}" == "0" ]]; then
   where=(--gpus 0 --hostname "${HOST:?GPUS=0 needs HOST (pick_nodes.sh ai2/jupiter 1)}")
 else

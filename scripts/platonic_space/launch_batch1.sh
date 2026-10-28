@@ -4,7 +4,7 @@
 #   HOST=<jupiter host for the CPU job> bash scripts/platonic_space/launch_batch1.sh
 #
 # - plato_pairs2024 (CPU): build_pairs.py, then the concat / concat+PCA baselines.
-# - five 1-GPU saturn runs, each waiting for the pair set, then train + export:
+# - five 1-GPU runs (saturn / ceres / jupiter), each waiting for the pair set, then train + export:
 #     paired_l128          main line: rec + translation + InfoNCE alignment, 128-d latent
 #     paired_l128_noalign  no latent alignment (does the shared latent need it?)
 #     paired_l256          256-d latent
