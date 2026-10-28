@@ -1,5 +1,7 @@
 """Unit tests for the supervision head module."""
 
+from typing import Any
+
 import pytest
 import torch
 
@@ -340,4 +342,95 @@ class TestSupervisionHeadConfig:
             SupervisionModalityConfig(
                 task_type=SupervisionTaskType.CLASSIFICATION,
                 num_output_channels=11,
+            )
+
+
+def _make_batch_with_naip(missing_block: bool = False) -> MaskedOlmoEarthSample:
+    """Batch with naip_10 [B, 4H, 4W, 1, 4] on the 4x finer grid."""
+    naip = torch.randn(B, 4 * H_PIX, 4 * W_PIX, 1, 4)
+    if missing_block:
+        naip[0, :4, :4, 0, 0] = MISSING_VALUE
+    timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+    return MaskedOlmoEarthSample(
+        timestamps=timestamps,
+        naip_10=naip,
+        naip_10_mask=torch.full(naip.shape[:-1] + (1,), MaskValue.DECODER.value),
+    )
+
+
+class TestHighResTargets:
+    """laplacian_loss and the upsample decoder for finer-grid targets."""
+
+    def _head(self, **kwargs: Any) -> SupervisionHead:
+        cfg = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=4,
+            regression_loss_type="l1",
+            **kwargs,
+        )
+        return SupervisionHeadConfig(modality_configs={"naip_10": cfg}).build(
+            embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+        )
+
+    @pytest.mark.parametrize("decoder", ["linear", "upsample"])
+    def test_output_shape_matches_target(self, decoder: str) -> None:
+        """Both decoders predict the full 4x-resolution target grid."""
+        head = self._head(decoder=decoder)
+        batch = _make_batch_with_naip()
+        pred = head(_make_register_grid(), batch)["naip_10"]
+        assert batch.naip_10 is not None
+        assert pred.shape == batch.naip_10.shape
+
+    def test_upsample_gradients_reach_register_grid(self) -> None:
+        """The upsample decoder backpropagates into the register grid."""
+        head = self._head(decoder="upsample", laplacian_loss=True)
+        batch = _make_batch_with_naip()
+        grid = _make_register_grid()
+        total, _ = compute_supervision_loss(head(grid, batch), batch, head)
+        total.backward()
+        assert grid.grad is not None and grid.grad.abs().sum() > 0
+
+    def test_laplacian_loss_matches_manual(self) -> None:
+        """MSE on 4x4 block means plus L1 on the within-block residual."""
+        head = self._head(laplacian_loss=True)
+        batch = _make_batch_with_naip()
+        pred = torch.randn_like(batch.naip_10)
+        _, losses = compute_supervision_loss({"naip_10": pred}, batch, head)
+
+        def split(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            blocks = x.unfold(1, 4, 4).unfold(2, 4, 4)  # [B, H, W, T, C, 4, 4]
+            low = blocks.mean(dim=(-2, -1), keepdim=True)
+            return low, blocks - low
+
+        low_p, high_p = split(pred)
+        low_t, high_t = split(batch.naip_10)
+        expected = ((low_p - low_t) ** 2).mean() + (high_p - high_t).abs().mean()
+        assert torch.allclose(losses["naip_10"], expected, atol=1e-5)
+
+    def test_laplacian_loss_is_zero_for_exact_prediction_and_skips_missing(
+        self,
+    ) -> None:
+        """A perfect prediction scores 0 even with a missing block in the target."""
+        head = self._head(laplacian_loss=True)
+        batch = _make_batch_with_naip(missing_block=True)
+        pred = torch.where(
+            batch.naip_10 == MISSING_VALUE,
+            torch.zeros_like(batch.naip_10),
+            batch.naip_10,
+        )
+        # Other bands of the missing block are wrong, but the whole block is excluded.
+        pred[0, :4, :4, 0, 1:] = 1e6
+        _, losses = compute_supervision_loss({"naip_10": pred}, batch, head)
+        assert losses["naip_10"].item() == pytest.approx(0.0, abs=1e-6)
+
+    def test_laplacian_loss_rejects_base_grid_modality(self) -> None:
+        """laplacian_loss on a 10 m modality is a config error."""
+        cfg = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.REGRESSION,
+            num_output_channels=1,
+            laplacian_loss=True,
+        )
+        with pytest.raises(ValueError, match="finer-grid"):
+            SupervisionHeadConfig(modality_configs={"srtm": cfg}).build(
+                embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
             )

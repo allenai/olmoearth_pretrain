@@ -71,6 +71,21 @@ class SupervisionModalityConfig(Config):
             std over each ``f x f`` block (one base pixel), repeated to that 2x grid.
             ``num_output_channels`` is then ``2 * num_bands``. A block with any
             missing pixel is missing.
+        laplacian_loss: For regression on a modality on a finer grid
+            (``image_tile_size_factor = f``) only. Split prediction and target into a
+            low-frequency part (the mean over each ``f x f`` block, i.e. one base
+            pixel) scored with MSE, and the high-frequency residual (each fine pixel
+            minus its block mean) scored with ``regression_loss_type``; the loss is
+            their sum. Follows Scale-MAE (arXiv:2212.14532, Sec. 3), which reconstructs
+            low/high frequency images with L2/L1 and found the separate losses beat
+            one combined loss (Table 9: 80.7 vs 80.2 kNN on RESISC-45) and that the
+            high-frequency target matters most (low-only 74.3).
+        decoder: ``"linear"`` (default): the per-cell linear head + bilinear resize.
+            ``"upsample"`` (spatial modalities on a finer grid only): a small
+            progressive-upsampling decoder (``UpsampleHead``) in the spirit of
+            Scale-MAE's Laplacian decoder, whose upsampling decoder alone gave
+            +1.8 kNN over a vanilla MAE decoder (Table 6: 79.6 vs 77.8). A linear
+            head + bilinear resize can hardly express sharp sub-pixel edges.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -81,6 +96,8 @@ class SupervisionModalityConfig(Config):
     pos_weight: bool = False
     regression_loss_type: str = "mse"
     target_transform: str | None = None
+    laplacian_loss: bool = False
+    decoder: str = "linear"
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -100,6 +117,20 @@ class SupervisionModalityConfig(Config):
             raise ValueError(
                 f"target_transform must be None or 'subpixel_stats', got "
                 f"{self.target_transform!r}"
+            )
+        if self.decoder not in ("linear", "upsample"):
+            raise ValueError(
+                f"decoder must be 'linear' or 'upsample', got {self.decoder!r}"
+            )
+        if self.laplacian_loss and (
+            self.task_type != SupervisionTaskType.REGRESSION
+            or self.norm_pix_loss
+            or self.target_transform is not None
+            or self.regression_loss_type == "cosine"
+        ):
+            raise ValueError(
+                "laplacian_loss needs a plain regression target (no norm_pix_loss, "
+                "target_transform or cosine loss)"
             )
 
 
@@ -197,6 +228,68 @@ def supervision_target(
     raise ValueError(f"unknown target_transform {cfg.target_transform!r}")
 
 
+class UpsampleHead(nn.Module):
+    """Progressive-upsampling head for a spatial target on a finer grid.
+
+    A cheap take on Scale-MAE's Laplacian decoder (arXiv:2212.14532, Sec. 3): project
+    the register grid to ``hidden_dim`` channels, resize it to the base (10 m) pixel
+    grid, then ``log2(factor)`` stages of [2x transposed conv -> GroupNorm -> GELU ->
+    3x3 conv -> GELU] (halving the channels each stage) and a 1x1 conv to the output
+    channels. Unlike Scale-MAE there are no extra transformer layers before the
+    upsampling (the register grid is already the decoded representation) and no
+    per-frequency output blocks (the low/high split lives in the loss, see
+    ``SupervisionModalityConfig.laplacian_loss``).
+    """
+
+    def __init__(
+        self,
+        embedding_dim: int,
+        num_output_channels: int,
+        factor: int,
+        hidden_dim: int = 64,
+    ) -> None:
+        """Initialize the head; ``factor`` is the modality's image_tile_size_factor."""
+        super().__init__()
+        if factor < 2 or factor & (factor - 1):
+            raise ValueError(
+                f"UpsampleHead needs a power-of-2 factor >= 2, got {factor}"
+            )
+        self.factor = factor
+        self.proj = nn.Linear(embedding_dim, hidden_dim)
+        self.base_conv = nn.Sequential(
+            nn.Conv2d(hidden_dim, hidden_dim, 3, padding=1), nn.GELU()
+        )
+        stages = []
+        dim = hidden_dim
+        for _ in range(factor.bit_length() - 1):
+            stages.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(dim, dim // 2, 2, stride=2),
+                    nn.GroupNorm(1, dim // 2),
+                    nn.GELU(),
+                    nn.Conv2d(dim // 2, dim // 2, 3, padding=1),
+                    nn.GELU(),
+                )
+            )
+            dim //= 2
+        self.stages = nn.Sequential(*stages)
+        self.out = nn.Conv2d(dim, num_output_channels, 1)
+
+    def forward(
+        self, register_grid: Tensor, target_hw: tuple[int, int] | None
+    ) -> Tensor:
+        """``[B, n_h, n_w, D]`` -> ``[B, H*f, W*f, 1, C]`` (target size when given)."""
+        x = rearrange(self.proj(register_grid), "b h w d -> b d h w")
+        if target_hw is not None:
+            base_hw = (target_hw[0] // self.factor, target_hw[1] // self.factor)
+            if tuple(x.shape[-2:]) != base_hw:
+                x = F.interpolate(
+                    x.float(), size=base_hw, mode="bilinear", align_corners=False
+                ).to(x.dtype)
+        x = self.out(self.stages(self.base_conv(x)))
+        return rearrange(x, "b c h w -> b h w 1 c")
+
+
 class SupervisionHead(nn.Module):
     """Per-modality linear heads on the encoder register grid.
 
@@ -223,6 +316,21 @@ class SupervisionHead(nn.Module):
         self.heads = nn.ModuleDict()
         for name, cfg in modality_configs.items():
             modality_spec = Modality.get(name)
+            if cfg.laplacian_loss and modality_spec.image_tile_size_factor < 2:
+                raise ValueError(
+                    f"laplacian_loss needs a finer-grid modality, got {name}"
+                )
+            if cfg.decoder == "upsample":
+                if not modality_spec.is_spatial or cfg.target_transform is not None:
+                    raise ValueError(
+                        f"decoder='upsample' needs a spatial, untransformed target ({name})"
+                    )
+                self.heads[name] = UpsampleHead(
+                    embedding_dim,
+                    cfg.num_output_channels,
+                    modality_spec.image_tile_size_factor,
+                )
+                continue
             if modality_spec.is_spatial:
                 # The max_patch_size^2 unfold predates register supervision (each decoder
                 # token was one real patch of up to max_patch_size px). The registers are
@@ -288,6 +396,13 @@ class SupervisionHead(nn.Module):
         for sup_name, head in self.heads.items():
             if sup_name in self._non_spatial_modalities:
                 output = head(register_grid.mean(dim=(1, 2)))  # [B, C]
+            elif isinstance(head, UpsampleHead):
+                target = getattr(batch, sup_name, None)
+                output = head(
+                    register_grid,
+                    None if target is None else (target.shape[1], target.shape[2]),
+                )
+                output = self._maybe_interpolate_to_target(output, target)
             else:
                 num_channels = self.modality_configs[sup_name].num_output_channels
                 raw = head(register_grid.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
@@ -360,6 +475,11 @@ def _compute_per_modality_losses(
                 norm_pix_loss=cfg.norm_pix_loss,
                 max_patch_size=supervision_head.max_patch_size,
                 regression_loss_type=cfg.regression_loss_type,
+                laplacian_factor=(
+                    Modality.get(name).image_tile_size_factor
+                    if cfg.laplacian_loss
+                    else None
+                ),
             )
         else:
             raise ValueError(f"Unknown task type: {cfg.task_type}")
@@ -496,6 +616,7 @@ def _regression_loss(
     norm_pix_loss: bool = False,
     max_patch_size: int = 1,
     regression_loss_type: str = "mse",
+    laplacian_factor: int | None = None,
 ) -> Tensor:
     """Regression loss for continuous modalities.
 
@@ -509,6 +630,11 @@ def _regression_loss(
     patch, mean and variance are pooled over the (max_patch_size^2 * C) values
     (across valid pixels only) and used to normalize that patch's target.
     """
+    if laplacian_factor is not None:
+        return _laplacian_regression_loss(
+            pred, raw_target, valid_mask, laplacian_factor, regression_loss_type
+        )
+
     if regression_loss_type == "cosine":
         if norm_pix_loss:
             raise ValueError("norm_pix_loss does not apply to the cosine loss")
@@ -562,3 +688,45 @@ def _regression_loss(
     diff = pred_p.float() - target_normalized
     elementwise = diff.abs() if regression_loss_type == "l1" else diff * diff
     return _masked_mean(elementwise, valid_full).to(pred.dtype)
+
+
+def _laplacian_regression_loss(
+    pred: Tensor,
+    raw_target: Tensor,
+    valid_mask: Tensor,
+    factor: int,
+    regression_loss_type: str,
+) -> Tensor:
+    """MSE on ``factor x factor`` block means + ``regression_loss_type`` on the residual.
+
+    See ``SupervisionModalityConfig.laplacian_loss``. Only blocks whose pixels are all
+    valid are scored, in both terms.
+    """
+    b, hf, wf, t, c = pred.shape
+    if hf % factor or wf % factor:
+        raise ValueError(f"target ({hf}, {wf}) is not a multiple of factor {factor}")
+    target = torch.where(
+        valid_mask.unsqueeze(-1),
+        raw_target.float(),
+        torch.zeros_like(raw_target, dtype=torch.float32),
+    )
+
+    def split(x: Tensor) -> tuple[Tensor, Tensor]:
+        blocks = rearrange(
+            x, "b (h i) (w j) t c -> b h w t c (i j)", i=factor, j=factor
+        )
+        low = blocks.mean(dim=-1)  # [B, H, W, T, C]
+        return low, blocks - low.unsqueeze(-1)
+
+    low_p, high_p = split(pred.float())
+    low_t, high_t = split(target)
+    block_valid = rearrange(
+        valid_mask, "b (h i) (w j) t -> b h w t (i j)", i=factor, j=factor
+    ).all(dim=-1)  # [B, H, W, T]
+    low_mask = block_valid.unsqueeze(-1).expand_as(low_p)
+    high_mask = block_valid[..., None, None].expand_as(high_p)
+    low_loss = _masked_mean((low_p - low_t) ** 2, low_mask)
+    high_diff = high_p - high_t
+    high_elementwise = high_diff.abs() if regression_loss_type == "l1" else high_diff**2
+    high_loss = _masked_mean(high_elementwise, high_mask)
+    return (low_loss + high_loss).to(pred.dtype)
