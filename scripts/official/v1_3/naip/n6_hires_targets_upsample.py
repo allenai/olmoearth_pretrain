@@ -1,4 +1,4 @@
-"""High-res target arm N6: N5 with ``UpsampleHead`` (progressive 2x upsampling) for the 2.5 m targets.
+"""High-res target arm N6: N5 with ``UpsampleHead`` for the 2.5 m Open Buildings target.
 
 See ``hires_targets_common.py``. Trained as ``v1_3_naip_n6_hires_up``.
 """

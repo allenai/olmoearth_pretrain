@@ -1,4 +1,4 @@
-"""High-res target arm N5: the linear per-cell head + bilinear resize for the 2.5 m targets.
+"""High-res target arm N5: N2 + Open Buildings (linear head) and VIIRS targets.
 
 See ``hires_targets_common.py``. Trained as ``v1_3_naip_n5_hires``.
 """
