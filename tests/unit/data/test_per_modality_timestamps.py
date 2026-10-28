@@ -542,6 +542,62 @@ def test_cloudy_s2_targets_become_missing(allcap_h5py_dir: UPath) -> None:
     assert dropped > 0
 
 
+def test_mask_cloudy_s2_inputs_hides_every_cloudy_token(allcap_h5py_dir: UPath) -> None:
+    """mask_cloudy_s2_inputs: cloudy S2 tokens are MISSING in every role; others unchanged."""
+    import torch
+
+    from olmoearth_pretrain.data.collate import (
+        CLOUDY_TOKEN_FRACTION,
+        collate_single_masked_batched,
+    )
+    from olmoearth_pretrain.datatypes import MaskValue
+    from olmoearth_pretrain.train.masking import MaskingConfig
+
+    dataset = _dataset(allcap_h5py_dir, normalize=True, load_s2_cloud_mask=True)
+    np.random.seed(5)
+    items = [
+        dataset[
+            GetItemArgs(idx=i % 2, patch_size=2, sampled_hw_p=4, time_range_days=180)
+        ]
+        for i in range(4)
+    ]
+    masking = MaskingConfig(
+        strategy_config={
+            "type": "random_time_with_decode",
+            "only_decode_modalities": ["srtm"],
+        }
+    ).build()
+    outputs = []
+    for inputs in (False, True):
+        np.random.seed(6)
+        torch.manual_seed(6)
+        outputs.append(
+            collate_single_masked_batched(
+                items,
+                None,
+                masking,
+                drop_cloudy_s2_targets=False,
+                mask_cloudy_s2_inputs=inputs,
+            )[1]
+        )
+    ref, out = outputs
+    cloud = _field(collate_olmoearth_pretrain(items)[1], "sentinel2_l2a_cloud")
+    fraction = cloud.float().reshape(4, 4, 2, 4, 2, -1).mean(dim=(2, 4))
+    cloudy = (
+        (fraction > CLOUDY_TOKEN_FRACTION)
+        .repeat_interleave(2, 1)
+        .repeat_interleave(2, 2)
+        .unsqueeze(-1)
+    )
+    before = _field(ref, "sentinel2_l2a_mask")
+    after = _field(out, "sentinel2_l2a_mask")
+    cloudy = cloudy.expand_as(before)
+    assert (after[cloudy] == MaskValue.MISSING.value).all()
+    assert torch.equal(after[~cloudy], before[~cloudy])
+    hidden = cloudy & (before == MaskValue.ONLINE_ENCODER.value)
+    assert int(hidden.sum()) > 0
+
+
 def _densify(batch: OlmoEarthSample) -> OlmoEarthSample:
     """Batched compact sample -> the previous union-timeline layout (no time index)."""
     import torch

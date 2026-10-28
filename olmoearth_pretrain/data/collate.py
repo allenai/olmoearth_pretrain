@@ -36,13 +36,17 @@ def _with_time_indices(
 
 
 def _drop_cloudy_s2_targets(
-    masked: MaskedOlmoEarthSample, sample: OlmoEarthSample, patch_size: int
+    masked: MaskedOlmoEarthSample,
+    sample: OlmoEarthSample,
+    patch_size: int,
+    inputs: bool = False,
 ) -> MaskedOlmoEarthSample:
     """Cloudy S2 decoder targets become MISSING, so the loss never asks for a cloud.
 
     Uses the sample's ``S2_CLOUD_FIELD`` flags (absent: no change). Cloudy S2
-    tokens the masking made encoder inputs stay inputs; other modalities are
-    untouched.
+    tokens the masking made encoder inputs stay inputs unless ``inputs``, which
+    makes every cloudy S2 token MISSING (encoder inputs and target-encoder-only
+    tokens too); other modalities are untouched.
     """
     cloud = getattr(sample, S2_CLOUD_FIELD)
     if cloud is None:
@@ -54,7 +58,11 @@ def _drop_cloudy_s2_targets(
     fraction = cloud.float().reshape(b, h // p, p, w // p, p, t).mean(dim=(2, 4))
     cloudy = (fraction > CLOUDY_TOKEN_FRACTION).repeat_interleave(p, dim=1)
     cloudy = cloudy.repeat_interleave(p, dim=2).unsqueeze(-1)
-    drop = cloudy & (mask == MaskValue.DECODER.value)
+    drop = cloudy & (
+        (mask != MaskValue.MISSING.value)
+        if inputs
+        else (mask == MaskValue.DECODER.value)
+    )
     return masked._replace(
         sentinel2_l2a_mask=mask.masked_fill(drop, MaskValue.MISSING.value)
     )
@@ -158,6 +166,7 @@ def collate_single_masked_batched(
     uint8_masks: bool = False,
     max_decode_tokens: int | None = None,
     drop_cloudy_s2_targets: bool = True,
+    mask_cloudy_s2_inputs: bool = False,
 ) -> tuple[int, MaskedOlmoEarthSample]:
     """Collate function that applies transform and masking to the full batch.
 
@@ -174,6 +183,8 @@ def collate_single_masked_batched(
             ``_cap_decoder_tokens``).
         drop_cloudy_s2_targets: With S2 cloud flags present, make cloudy S2
             decoder targets MISSING (``_drop_cloudy_s2_targets``).
+        mask_cloudy_s2_inputs: With S2 cloud flags present, make every cloudy S2
+            token MISSING, encoder inputs included (implies dropping the targets).
 
     Returns:
         A tuple of (patch_size, MaskedOlmoEarthSample).
@@ -189,9 +200,9 @@ def collate_single_masked_batched(
     masked_sample = _with_time_indices(
         masking_strategy.apply_mask(stacked_sample, patch_size), stacked_sample
     )
-    if drop_cloudy_s2_targets:
+    if drop_cloudy_s2_targets or mask_cloudy_s2_inputs:
         masked_sample = _drop_cloudy_s2_targets(
-            masked_sample, stacked_sample, patch_size
+            masked_sample, stacked_sample, patch_size, inputs=mask_cloudy_s2_inputs
         )
     masked_sample = _cap_decoder_tokens(masked_sample, patch_size, max_decode_tokens)
     if uint8_masks:

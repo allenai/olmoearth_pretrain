@@ -1167,6 +1167,9 @@ class OlmoEarthDataLoaderConfig(Config):
     # With S2 cloud flags loaded (load_s2_cloud_mask), drop cloudy S2 decoder
     # targets (single masked view). Off = flags only feed the composites.
     drop_cloudy_s2_targets: bool = True
+    # Every cloudy S2 token (encoder inputs too) becomes MISSING; see
+    # collate._drop_cloudy_s2_targets.
+    mask_cloudy_s2_inputs: bool = False
     num_dataset_repeats_per_epoch: int = 1
     # New fields for dataloader-side masking
     transform_config: TransformConfig | None = None
@@ -1225,6 +1228,7 @@ class OlmoEarthDataLoaderConfig(Config):
                 uint8_masks=self.uint8_masks,
                 max_decode_tokens=self.max_decode_tokens,
                 drop_cloudy_s2_targets=self.drop_cloudy_s2_targets,
+                mask_cloudy_s2_inputs=self.mask_cloudy_s2_inputs,
             )
         else:  # num_masked_views == 2
             if self.max_decode_tokens is not None:
