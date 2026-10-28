@@ -1,5 +1,7 @@
 """Unit tests for convert_to_h5py module."""
 
+import dataclasses
+import random
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +10,7 @@ import numpy as np
 import pytest
 from upath import UPath
 
+import olmoearth_pretrain.dataset.convert_to_h5py as convert_to_h5py_module
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 
@@ -113,11 +116,36 @@ def test_staged_build_matches_single_job_build(
     prepare_samples_and_supported_modalities: tuple,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Process -> prepare -> write over 2 shards writes the same h5s as stage "all"."""
+    """Process -> prepare -> write over 2 shards writes the same h5s as stage "all".
+
+    Every call lists the samples in a different order (as image_tiles_to_samples does
+    across processes), and the second staged build reuses the processed samples of an
+    earlier, differently sharded "process" run instead of loading any sample.
+    """
     prepare_samples, supported_modalities = prepare_samples_and_supported_modalities
-    samples = prepare_samples(tmp_path) * 5
+    base_samples = prepare_samples(tmp_path)
+    samples = [
+        dataclasses.replace(
+            sample,
+            grid_tile=dataclasses.replace(
+                sample.grid_tile, col=sample.grid_tile.col + i
+            ),
+        )
+        for i in range(5)
+        for sample in base_samples
+    ]
+    rng = random.Random(0)
+
+    def shuffled_samples(*args: Any, **kwargs: Any) -> list:
+        order = list(samples)
+        rng.shuffle(order)
+        return order
+
+    monkeypatch.setattr(convert_to_h5py_module, "parse_dataset", lambda *a, **k: None)
+    monkeypatch.setattr(
+        convert_to_h5py_module, "image_tiles_to_samples", shuffled_samples
+    )
     modalities = [m for m in supported_modalities if m != Modality.LATLON]
-    monkeypatch.setattr(ConvertToH5py, "_get_samples", lambda self: list(samples))
 
     def build(folder: str, **kwargs: Any) -> ConvertToH5py:
         converter = ConvertToH5py(
@@ -133,27 +161,56 @@ def test_staged_build_matches_single_job_build(
     single = build("single")
     single.run()
     assert single.h5py_dir is not None
-
-    work_dir = UPath(tmp_path / "work")
-    for stage, shards in (("process", range(2)), ("prepare", [0]), ("write", range(2))):
-        for shard_index in shards:
-            build(
-                "staged",
-                stage=stage,
-                num_shards=2,
-                shard_index=shard_index,
-                work_dir=work_dir,
-            ).run()
-    staged_dir = UPath(str(single.h5py_dir).replace("/single", "/staged"))
-
     single_contents = _h5_contents(single.h5py_dir)
-    staged_contents = _h5_contents(staged_dir)
     assert len(single_contents) > 0
-    assert single_contents.keys() == staged_contents.keys()
-    for name, items in single_contents.items():
-        assert items.keys() == staged_contents[name].keys()
-        for key, value in items.items():
-            np.testing.assert_array_equal(value, staged_contents[name][key])
-    assert (single.h5py_dir / single.sample_metadata_fname).read_text() == (
-        staged_dir / single.sample_metadata_fname
-    ).read_text()
+
+    def staged_build(folder: str, work_dir: UPath, **kwargs: Any) -> UPath:
+        for stage, shards in (
+            ("process", range(2)),
+            ("prepare", [0]),
+            ("write", range(2)),
+        ):
+            for shard_index in shards:
+                build(
+                    folder,
+                    stage=stage,
+                    num_shards=2,
+                    shard_index=shard_index,
+                    work_dir=work_dir,
+                    **kwargs,
+                ).run()
+        assert single.h5py_dir is not None
+        return UPath(str(single.h5py_dir).replace("/single", f"/{folder}"))
+
+    def assert_matches_single(staged_dir: UPath) -> None:
+        staged_contents = _h5_contents(staged_dir)
+        assert single_contents.keys() == staged_contents.keys()
+        for name, items in single_contents.items():
+            assert items.keys() == staged_contents[name].keys()
+            for key, value in items.items():
+                np.testing.assert_array_equal(value, staged_contents[name][key])
+        assert single.h5py_dir is not None
+        assert (single.h5py_dir / single.sample_metadata_fname).read_text() == (
+            staged_dir / single.sample_metadata_fname
+        ).read_text()
+
+    assert_matches_single(staged_build("staged", UPath(tmp_path / "work")))
+
+    # An earlier "process" run with 3 shards; reusing it must not load any sample.
+    previous = UPath(tmp_path / "previous")
+    for shard_index in range(3):
+        build(
+            "unused",
+            stage="process",
+            num_shards=3,
+            shard_index=shard_index,
+            work_dir=previous,
+        ).run()
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("a reused sample was processed again")
+
+    monkeypatch.setattr(ConvertToH5py, "_remove_bad_modalities_from_sample", fail)
+    assert_matches_single(
+        staged_build("reused", UPath(tmp_path / "work2"), reuse_processed_dir=previous)
+    )

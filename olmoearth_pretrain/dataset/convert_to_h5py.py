@@ -74,6 +74,9 @@ class ConvertToH5pyConfig(Config):
     num_shards: int = 1
     shard_index: int = 0
     work_dir: str | None = None
+    # Optional work_dir of an earlier staged build of the same tile_path: its "process"
+    # pickles are reused for the samples they cover instead of reloading those samples.
+    reuse_processed_dir: str | None = None
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
@@ -96,6 +99,11 @@ class ConvertToH5pyConfig(Config):
             num_shards=self.num_shards,
             shard_index=self.shard_index,
             work_dir=UPath(self.work_dir) if self.work_dir is not None else None,
+            reuse_processed_dir=(
+                UPath(self.reuse_processed_dir)
+                if self.reuse_processed_dir is not None
+                else None
+            ),
         )
 
 
@@ -126,6 +134,7 @@ class ConvertToH5py:
         num_shards: int = 1,
         shard_index: int = 0,
         work_dir: UPath | None = None,
+        reuse_processed_dir: UPath | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -151,6 +160,8 @@ class ConvertToH5py:
             num_shards: Number of jobs the "process" and "write" stages are split into.
             shard_index: The shard this job handles in the "process" or "write" stage.
             work_dir: Directory for the pickles the split stages exchange.
+            reuse_processed_dir: work_dir of an earlier staged build whose "process"
+                pickles are reused for the samples they cover.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -182,6 +193,7 @@ class ConvertToH5py:
         self.num_shards = num_shards
         self.shard_index = shard_index
         self.work_dir = work_dir
+        self.reuse_processed_dir = reuse_processed_dir
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -206,7 +218,13 @@ class ConvertToH5py:
     def _get_samples(self) -> list[SampleInformation]:
         """Get the samples from the raw dataset (image tile directory)."""
         tiles = parse_dataset(self.tile_path, self.supported_modalities)
-        samples = image_tiles_to_samples(tiles, self.supported_modalities)
+        # image_tiles_to_samples iterates a set, so its order differs between processes
+        # (string hashing is randomized); sort so that every build, and every shard of a
+        # staged build, sees the same order.
+        samples = sorted(
+            image_tiles_to_samples(tiles, self.supported_modalities),
+            key=self._sample_key,
+        )
         logger.info(f"Total samples: {len(samples)}")
         logger.info("Distribution of samples before filtering:\n")
         self._log_modality_distribution(samples)
@@ -791,12 +809,30 @@ class ConvertToH5py:
         tmp_path.rename(path)
 
     @staticmethod
-    def _sample_list_fingerprint(samples: list[SampleInformation]) -> str:
+    def _sample_key(sample: SampleInformation) -> str:
+        """Identifies a sample across jobs (its grid tile and time span)."""
+        return repr((sample.grid_tile, sample.time_span))
+
+    @classmethod
+    def _sample_list_fingerprint(cls, samples: list[SampleInformation]) -> str:
         """Hash of the sample order, to check every shard split the same list."""
         digest = hashlib.sha256()
         for sample in samples:
-            digest.update(repr((sample.grid_tile, sample.time_span)).encode())
+            digest.update(cls._sample_key(sample).encode())
         return digest.hexdigest()
+
+    def _load_reusable_processed_samples(self) -> dict[str, SampleInformation]:
+        """Processed samples from reuse_processed_dir's "process" pickles, by sample key."""
+        reusable: dict[str, SampleInformation] = {}
+        if self.reuse_processed_dir is None:
+            return reusable
+        for path in sorted(self.reuse_processed_dir.glob("processed_*_of_*.pkl")):
+            with path.open("rb") as f:
+                shard = pickle.load(f)  # nosec B301
+            for sample in shard["samples"]:
+                reusable[self._sample_key(sample)] = sample
+        logger.info(f"Reusing {len(reusable)} processed samples")
+        return reusable
 
     def run(self) -> None:
         """Run the conversion (or this job's stage of it, see ConvertToH5pyConfig.stage)."""
@@ -805,9 +841,23 @@ class ConvertToH5py:
             self.prepare_h5_dataset(samples)
         elif self.stage == "process":
             samples = self._get_samples()
-            processed = self._process_samples(
-                samples[self.shard_index :: self.num_shards]
-            )
+            shard_samples = samples[self.shard_index :: self.num_shards]
+            reusable = self._load_reusable_processed_samples()
+            keys = [self._sample_key(sample) for sample in shard_samples]
+            todo = [
+                sample
+                for sample, key in zip(shard_samples, keys)
+                if key not in reusable
+            ]
+            logger.info(f"Processing {len(todo)} of {len(shard_samples)} shard samples")
+            newly_processed = {
+                self._sample_key(sample): sample
+                for sample in self._process_samples(todo)
+            }
+            processed = [
+                reusable[key] if key in reusable else newly_processed[key]
+                for key in keys
+            ]
             assert self.work_dir is not None
             self.work_dir.mkdir(parents=True, exist_ok=True)
             self._dump_pickle(
