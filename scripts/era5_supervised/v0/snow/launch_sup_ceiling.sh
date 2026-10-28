@@ -14,6 +14,7 @@
 # Usage (repo root; commit pushed):
 #   bash scripts/era5_supervised/v0/snow/launch_sup_ceiling.sh
 #   SUBCMD=dry_run bash ...   # build + print the config locally
+#   bash ... --launch.retries=3   # extra arguments go to base.py
 
 set -euo pipefail
 
@@ -36,4 +37,4 @@ PYTHON="${PYTHON:-.venv/bin/python}"
   "common.eval_probe_lr_grid=[1e-3,1e-2,3e-2,1e-1]" \
   common.eval_run_on_test=True \
   "common.eval_results_jsonl=/weka/dfive-default/rslearn-eai/datasets/snow/probe_results/${RUN}.jsonl" \
-  --trainer.callbacks.wandb.project=era5_snow_eval
+  --trainer.callbacks.wandb.project=era5_snow_eval "$@"
