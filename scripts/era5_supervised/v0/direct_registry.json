@@ -604,6 +604,599 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/lfmc/20251023/woody/scratch/dataset"
     },
+    "snow_days_to_melt_l0_eval": {
+      "groups": [
+        "eval_l0"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_days_to_melt_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): days from the window's end to snow disappearance, from the 448-day ERA5-Land history of the window ending on the cell's climatological melt-out date. 'eval_l0' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.560401,
+      "target_std": 10.838079,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l0"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l0"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_days_to_melt_l30_eval": {
+      "groups": [
+        "eval_l30"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_days_to_melt_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): days from the window's end to snow disappearance, from the 448-day ERA5-Land history of the window ending 30 days before the cell's climatological melt-out date. 'eval_l30' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 29.439599,
+      "target_std": 10.838079,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l30"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l30"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_days_to_melt_l60_eval": {
+      "groups": [
+        "eval_l60"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_days_to_melt_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): days from the window's end to snow disappearance, from the 448-day ERA5-Land history of the window ending 60 days before the cell's climatological melt-out date. 'eval_l60' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 59.439599,
+      "target_std": 10.838079,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l60"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l60"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_days_to_melt_l90_eval": {
+      "groups": [
+        "eval_l90"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_days_to_melt_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): days from the window's end to snow disappearance, from the 448-day ERA5-Land history of the window ending 90 days before the cell's climatological melt-out date. 'eval_l90' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 89.439599,
+      "target_std": 10.838079,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l90"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l90"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sad_anom_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sad_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow appearance date anomaly (days; windows whose season starts inside the water year), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "has_sad": "",
+        "split": "train"
+      },
+      "target_mean": -0.528406,
+      "target_std": 11.599023,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "has_sad": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "has_sad": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_scd_anom_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_scd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow-covered days anomaly (cell-mean days with snow minus the leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.517144,
+      "target_std": 14.261555,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_scd_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_scd_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow-covered days (absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 212.056088,
+      "target_std": 56.991901,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_l0_eval": {
+      "groups": [
+        "eval_l0"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending on the cell's climatological melt-out date. 'eval_l0' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l0"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l0"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_l30": {
+      "groups": [
+        "all_l30"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 30 days before the cell's climatological melt-out date. Full 'all_l30' group for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "task_type": "regression",
+      "test_groups": [
+        "all_l30"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "all_l30"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_l30_eval": {
+      "groups": [
+        "eval_l30"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 30 days before the cell's climatological melt-out date. 'eval_l30' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l30"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l30"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_l60_eval": {
+      "groups": [
+        "eval_l60"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 60 days before the cell's climatological melt-out date. 'eval_l60' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l60"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l60"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_l90_eval": {
+      "groups": [
+        "eval_l90"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 90 days before the cell's climatological melt-out date. 'eval_l90' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l90"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l90"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_anom_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_dowy_l0_eval": {
+      "groups": [
+        "eval_l0"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_dowy_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date (day of water year; absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending on the cell's climatological melt-out date. 'eval_l0' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l0"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l0"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_dowy_l30_eval": {
+      "groups": [
+        "eval_l30"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_dowy_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date (day of water year; absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending 30 days before the cell's climatological melt-out date. 'eval_l30' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l30"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l30"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_dowy_l60_eval": {
+      "groups": [
+        "eval_l60"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_dowy_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date (day of water year; absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending 60 days before the cell's climatological melt-out date. 'eval_l60' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l60"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l60"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_dowy_l90_eval": {
+      "groups": [
+        "eval_l90"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_dowy_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date (day of water year; absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending 90 days before the cell's climatological melt-out date. 'eval_l90' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_l90"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_l90"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_sdd_dowy_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_dowy_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date (day of water year; absolute, climate-dominated), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
+    "snow_season_anom_post_eval": {
+      "groups": [
+        "eval_post"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_season_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow season length anomaly (days; windows whose season starts inside the water year), from the 448-day ERA5-Land history of the window ending on the last day of the water year (whole season seen). 'eval_post' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "has_sad": "",
+        "split": "train"
+      },
+      "target_mean": 0.05568,
+      "target_std": 17.095344,
+      "task_type": "regression",
+      "test_groups": [
+        "eval_post"
+      ],
+      "test_tags": {
+        "has_sad": "",
+        "split": "test"
+      },
+      "val_groups": [
+        "eval_post"
+      ],
+      "val_tags": {
+        "has_sad": "",
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
     "usdm_dfut13_eval": {
       "groups": [
         "eval"

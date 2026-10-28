@@ -33,6 +33,7 @@ Root on weka: `/weka/dfive-default/rslearn-eai/datasets/snow/`.
 | 4 | `write_windows candidates` | `meta/cells_split.parquet`, `meta/candidates.parquet` |
 | 5 | `write_windows windows` | `meta/eval_keys.parquet`, `meta/windows_{eval,all}_<family>.parquet`, `meta/label_stats.json`, `rslearn_dataset/` |
 | - | `partner_labels` | `usdm_snow.parquet`, `fluxnet_snow.parquet` (snow labels for the USDM / FLUXNET evals) |
+| - | `stations` | `meta/stations_vs_modis.parquet`, `meta/stations_summary.json` (GHCN-Daily check of the labels) |
 
 `scripts/era5_supervised/v0/snow/launch_build.sh` runs any subset of the
 stages (`STEPS=...`) in one CPU-only Beaker job; every stage is resumable or
@@ -74,6 +75,19 @@ cell-mean count of snow-covered days. Leave-one-year-out climatologies (at
 least 8 other years) give the anomalies `*_anom`. A cell split between tiles is
 kept by the tile holding at least 80 % of its expected pixels.
 
+### Label check against GHCN-Daily snow depth (`stations`)
+
+12,275 GHCN-Daily stations with daily snow depth (`SNWD`, NOAA's public AWS
+copy) lie in seasonal-snow cells; 2,674 of them (North America and Europe;
+GHCN has no Russian snow depth) give 45,575 station-years in eligible cells
+with both a station and a MODIS melt-out anomaly. A station's SDD is the day
+after its longest run of >= 1 cm snow depth. Agreement of the anomalies:
+median per-station correlation 0.74 (IQR 0.54-0.87, 2,488 stations with >= 10
+years), pooled r = 0.60 (0.63 without the 2 % beyond +-60 days), RMSE 16.7
+days; stations melt out 7 days before their cell's median pixel on average
+(valley sites). The labels track the in-situ season, with point-to-cell noise
+of the order of the anomaly SD.
+
 ### Cells and ERA5-Land series (stage 3)
 
 Eligible cells: a snow season in at least 90 % of water years, an SDD in at
@@ -87,8 +101,15 @@ of `fluxnet.era5.Era5Mirror`.
 ### Targets, families and splits (stages 4-5)
 
 One label per (cell, water year), with an observed melt (bracketing observed
-composites at most 24 days apart). Window families place the 448-day window
-`[d - 448, d)`:
+composites at most 24 days apart), in cells with a stable seasonal snowpack:
+inter-annual SDD SD at most 20 days and a climatological season of at least 60
+days. In short or intermittent snow climates (much of the Tibetan Plateau,
+maritime lowlands) the longest snow run jumps between separate snow episodes
+from year to year, which produced SDD "anomalies" of +-60-120 days: over all
+sampled cells the anomaly kurtosis was 15.5 (1.1 % beyond 60 days); the filter
+keeps 87 % of the cell-years and 25,123 of 29,026 cells, brings the kurtosis to
+2.7 (SD 15.9 -> 10.4 days) and leaves the station agreement unchanged.
+Window families place the 448-day window `[d - 448, d)`:
 
 | Family | Anchor `d` | Targets |
 |---|---|---|
