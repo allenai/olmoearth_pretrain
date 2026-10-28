@@ -26,6 +26,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -97,8 +98,23 @@ def _cloud_covers(ids: list[str]) -> dict[str, float]:
     return {}
 
 
-def _items_token() -> str:
-    return requests.get(ITEMS_SAS_URL, timeout=60).json()["token"]
+_SAS: dict = {"token": None, "at": 0.0}
+_SAS_LOCK = threading.Lock()
+
+
+def _items_token(refresh: bool = False) -> str:
+    """One shared SAS token (the token endpoint rate-limits), renewed every 30 min."""
+    with _SAS_LOCK:
+        if refresh or _SAS["token"] is None or time.time() - _SAS["at"] > 1800:
+            for attempt in range(8):
+                body = requests.get(ITEMS_SAS_URL, timeout=60).json()
+                if "token" in body:
+                    _SAS.update(token=body["token"], at=time.time())
+                    break
+                time.sleep(2**attempt)
+            else:
+                raise RuntimeError(f"no SAS token: {body}")
+        return _SAS["token"]
 
 
 def _partitions(collection: str) -> list[tuple[str, date, date]]:
@@ -116,15 +132,20 @@ def _partitions(collection: str) -> list[tuple[str, date, date]]:
     return out
 
 
-def _parquet_covers(name: str, wanted: frozenset[str]) -> dict[str, float]:
-    """Cloud cover of the ``wanted`` ids in one partition (download, read, delete)."""
+def _parquet_covers(name: str, wanted: frozenset[str]) -> dict[str, float] | None:
+    """Cloud cover of the ``wanted`` ids in one partition (download, read, delete).
+
+    None if every attempt failed.
+    """
     import pyarrow.parquet as pq
 
-    for attempt in range(5):
+    for attempt in range(6):
         try:
             with tempfile.NamedTemporaryFile(suffix=".parquet") as tmp:
                 with requests.get(
-                    f"{ITEMS_BLOB}/{name}?{_items_token()}", stream=True, timeout=300
+                    f"{ITEMS_BLOB}/{name}?{_items_token(refresh=attempt > 0)}",
+                    stream=True,
+                    timeout=300,
                 ) as r:
                     r.raise_for_status()
                     for chunk in r.iter_content(2**24):
@@ -143,8 +164,8 @@ def _parquet_covers(name: str, wanted: frozenset[str]) -> dict[str, float]:
             return out
         except Exception as e:  # noqa: BLE001 - retried, then reported missing
             print(json.dumps({"partition_retry": name, "error": str(e)[:200]}))
-            time.sleep(2**attempt)
-    return {}
+            time.sleep(5 * 2**attempt)
+    return None
 
 
 _SENSOR: dict = {}
@@ -232,11 +253,18 @@ def main() -> None:
         parts = [n for n, a, b in _partitions(collection) if b >= lo and a <= hi]
         wanted = frozenset(ids)
         print(json.dumps({"partitions": len(parts), "from": str(lo), "to": str(hi)}))
+        failed = []
         with ThreadPoolExecutor(8) as ex:
             futures = [ex.submit(_parquet_covers, n, wanted) for n in parts]
-            for n, fut in enumerate(futures):
-                cloud.update(fut.result())
+            for n, (name, fut) in enumerate(zip(parts, futures)):
+                found = fut.result()
+                if found is None:
+                    failed.append(name)
+                else:
+                    cloud.update(found)
                 print(json.dumps({"partitions_done": n + 1, "found": len(cloud)}))
+        if failed:
+            raise RuntimeError(f"{len(failed)} partitions failed: {failed[:5]}")
     else:
         batches = [ids[k : k + 200] for k in range(0, len(ids), 200)]
         with ThreadPoolExecutor(16) as ex:
