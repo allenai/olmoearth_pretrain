@@ -281,6 +281,56 @@ class TestSupervisedTaskRouting:
         assert not any("task_b" in k for k in metrics)
 
 
+def _two_head_model(pooling: str) -> era5_multiobjective.Era5MultiObjectiveModel:
+    """A small model with a regression and a 3-class classification head.
+
+    Args:
+        pooling: the encoder's pooling mode.
+
+    Returns:
+        The built model.
+    """
+    return Era5MultiObjectiveModelConfig(
+        encoder_config=_small_encoder_cfg(pooling=pooling),
+        supervised_objective=SupervisedObjectiveConfig(
+            tasks=[
+                SupervisedTaskConfig(name="reg", task_type="regression"),
+                SupervisedTaskConfig(
+                    name="cls", task_type="classification", num_classes=3
+                ),
+            ],
+        ),
+    ).build()
+
+
+class TestSupervisedHeadsMaterialized:
+    """Heads have their full size once the model is built.
+
+    The optimizer is built, and a resumed run loads its checkpoint, before the
+    first forward; lazily created heads were left out of the optimizer and could
+    not load a saved head.
+    """
+
+    @pytest.mark.parametrize("pooling", ["mean", "cls_mean_concat"])
+    def test_heads_trainable_and_resumable(self, pooling: str) -> None:
+        model = _two_head_model(pooling)
+        registry = model.objective_list[0].registry
+        width = model.encoder.pooled_size
+        assert registry.heads["reg"]._linear.weight.shape == (1, width)
+        assert registry.heads["cls"]._linear.weight.shape == (3, width)
+
+        optimizer = torch.optim.AdamW(model.parameters())
+        optimized = {id(p) for group in optimizer.param_groups for p in group["params"]}
+        assert all(id(p) in optimized for p in registry.parameters())
+
+        loss, _ = model.objective_list[0].compute(
+            model.encoder, _make_batch(task_name="reg", labels=torch.randn(B))
+        )
+        loss.backward()
+        optimizer.step()
+        _two_head_model(pooling).load_state_dict(model.state_dict())
+
+
 class TestSupervisedInvalidLabels:
     """All-invalid supervised labels fail loudly instead of producing no-op loss."""
 

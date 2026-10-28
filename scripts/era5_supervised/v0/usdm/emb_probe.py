@@ -184,6 +184,9 @@ def main() -> None:
     ap.add_argument("--root", default=str(USDM_ROOT))
     ap.add_argument("--emb-dir", default="embeddings")
     ap.add_argument(
+        "--table", default="windows_eval", help="window table under meta (labels)"
+    )
+    ap.add_argument(
         "--results-dir", default=None, help="default <root>/probe_results[_<pooling>]"
     )
     ap.add_argument(
@@ -201,7 +204,7 @@ def main() -> None:
     results_dir.mkdir(parents=True, exist_ok=True)
     tasks = task_configs(args.tasks, args.lr_grid)
     order = pd.read_parquet(emb_dir / "windows.parquet")
-    table = pd.read_parquet(root / "meta" / "windows_eval.parquet").drop(
+    table = pd.read_parquet(root / "meta" / f"{args.table}.parquet").drop(
         columns=["split"]
     )
     windows = order.merge(table, on=["cell_id", "anchor"], how="left")

@@ -34,7 +34,9 @@ the FLUXNET eval:
 * ``all``: candidates on a ``--spacing``-week anchor grid (per-cell random
   phase), for supervised training;
 * ``eval``: a fixed subset (``meta/eval_keys.parquet``, reused on rebuilds) for
-  the in-loop linear probes, drawn by :func:`select_eval`.
+  the in-loop linear probes, drawn by :func:`select_eval`; ``--eval-group`` /
+  ``--eval-table`` write another fixed subset (e.g. an unstratified draw from
+  ``alt_eval_tables.py``) as its own group.
 
 Tags: ``split``, ``cell_id``, ``block``, ``region``, ``wy``, ``anchor_date``.
 
@@ -577,6 +579,14 @@ def main() -> None:
     ap.add_argument("--n-val", type=int, default=1500)
     ap.add_argument("--n-test", type=int, default=1500)
     ap.add_argument("--groups", default="all,eval", help="window groups to write")
+    ap.add_argument(
+        "--eval-group", default="eval", help="window group name of the eval subset"
+    )
+    ap.add_argument(
+        "--eval-table",
+        default=None,
+        help="meta table (e.g. windows_eval_u0) fixing the eval subset instead of eval_keys.parquet",
+    )
     args = ap.parse_args()
     root = Path(args.root)
     if args.step in ("candidates", "all"):
@@ -586,6 +596,8 @@ def main() -> None:
         candidates = pd.read_parquet(root / "meta" / "candidates.parquet")
     if args.step in ("windows", "all"):
         keys_path = root / "meta" / "eval_keys.parquet"
+        if args.eval_table:
+            keys_path = root / "meta" / f"{args.eval_table}.parquet"
         if keys_path.exists():
             keys = pd.read_parquet(keys_path)
             eval_rows = candidates.merge(
@@ -601,7 +613,7 @@ def main() -> None:
             eval_rows[["cell_id", "anchor", "split", "stratum"]].to_parquet(keys_path)
         selected = {
             "all": select_all(candidates, args.spacing, args.seed),
-            "eval": eval_rows,
+            args.eval_group: eval_rows,
         }
         selected = {g: f for g, f in selected.items() if g in args.groups.split(",")}
         write_all(root, selected, cells, args.workers)

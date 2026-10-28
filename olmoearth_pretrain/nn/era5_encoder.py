@@ -777,6 +777,13 @@ class Era5DailyEncoder(nn.Module):
         mid = (kernel - 1) // 2
         return doy[:, mid::stride][:, :num_tokens] + ((kernel - 1) % 2) / 2
 
+    @property
+    def pooled_size(self) -> int:
+        """Width of the ``pooled`` output: ``embedding_size``, twice it for ``cls_mean_concat``."""
+        if self.pooling == Era5Pooling.CLS_MEAN_CONCAT:
+            return 2 * self.embedding_size
+        return self.embedding_size
+
     def _layernorm_pooled(self, pooled: Tensor) -> Tensor:
         """Parameter-free LayerNorm over each ``embedding_size`` chunk of ``pooled``.
 

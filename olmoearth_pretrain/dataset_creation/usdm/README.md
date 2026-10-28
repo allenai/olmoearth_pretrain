@@ -95,13 +95,28 @@ its water year has the same split, else `none` (unused). Test water years:
 
 - `all`: every candidate of the train / val / test splits on a 12-week anchor
   grid (random phase per cell), for supervised training (registry `usdm_sev`,
-  `usdm_dpast8`, `usdm_dfut8`).
-- `eval`: 4000 train / 1500 val / 1500 test windows for the in-loop linear
-  probes (registry `usdm_*_eval`), fixed by `meta/eval_keys.parquet`. A uniform
-  draw would be mostly wet, steady cell-weeks, so each split is drawn by
-  stratum (drought state wet / dry / drought x 8-week dynamics steady /
-  moving, `write_windows.STRATUM_SHARES`), round-robin over cells and water
-  years within a stratum.
+  `usdm_dpast8`, `usdm_dfut8`). Supervised ceiling
+  (`scripts/era5_supervised/v0/usdm/launch_sup_ceiling.sh`,
+  `era5enc_1104_sup_usdm_r2`: the 1601 recipe trained from scratch on heads
+  for `sev`, `dpast8`, `dpast26`; single seed, 29k steps, probed on `eval`):
+  `dpast26` (last4) 0.214 / 0.219 val / test vs 0.168 / 0.224 for the
+  self-supervised 1601, so self-supervision is near the ceiling on the
+  headline; `sev` (pooled) 0.397 / 0.535 vs 0.184 / 0.263, so the drought
+  state is learnable from the window but not linear in self-supervised
+  embeddings. That run's heads were frozen at their random init (they were
+  created after the optimizer; fixed in `SupervisedHeadRegistry.materialize`).
+- `evalu`: the in-loop eval group (registry `usdm_*_eval`): 4000 train / 1500
+  val / 1500 test windows, an unstratified draw (round-robin over cells and
+  water years within each split, so the natural mix of drought states; keys
+  `meta/windows_eval_u0.parquet`, from `scripts/era5_supervised/v0/usdm/alt_eval_tables.py`).
+- `eval`: the first eval group, same sizes, stratified by drought state x
+  8-week dynamics (`write_windows.STRATUM_SHARES`), fixed by
+  `meta/eval_keys.parquet`. Kept for reproducibility of the first read-out.
+  On the 26-week change (last4 probe) two unstratified draws separated the 20
+  arms about twice as well on val as two stratified draws (F 10.2 / 8.1 vs
+  4.9 / 5.5) and as well on test (12.0 / 8.1 vs 9.2 / 8.0), so the registry
+  moved to `evalu`. Other independent draws (`windows_eval_s1`, `_u1`) exist as
+  tables only (no windows), for replication with dumped embeddings.
 
 Window layout as in the FLUXNET eval: WGS84 0.1 deg/px, 1x1 bounds whose
 north-west corner is the cell centre, `era5_daily` raster `(14, 448, 1, 1)`
@@ -119,9 +134,10 @@ CPU-only Beaker jobs on one Jupiter node each (48 workers), from
 | Build | 01M5ZNKXJG2465H95B9XFNWR3J | 706bf8e1a | Download (1,399 maps 2000-01-04..2026-10-20; 2026-10-27 not yet published), rasterize (81,751 domain cells), cells (3,457 sampled, 912 mirror chunk columns), candidates (4.63M: train 1.95M / val 125k / test 154k / none 2.40M). 15 min. |
 | Eval windows | 01M5ZPMFDSC04V1Z13FCBJHKE9 | 8ce5917e8 | `eval` group: 4000 / 1500 / 1500 windows over 3,137 cells, keys in `meta/eval_keys.parquet`. |
 | All windows | 01M5ZPTZXP9KFG803Y3V811XYH | 8ce5917e8 | `all` group: 185,772 windows (train 162,526 / val 10,417 / test 12,829). |
+| Eval windows (unstratified) | 01M5ZV0YJ38TTRZT1A5MFB0F9V | d0adc7d77 | `evalu` group: 7,000 windows from `windows_eval_u0` (alt_eval_tables, uniform, seed 0, excluding `eval`). |
 | Tower labels | (weka session) | 4670fdcb1 | `fluxnet_drought.parquet`: 33,098 FLUXNET windows at 266 CONUS towers. |
 
-Final state: 3,457 cells, `eval` 7,000 windows, `all` 185,772 windows;
+Final state: 3,457 cells, `evalu` 7,000 windows (registry), `eval` 7,000 windows (first, stratified), `all` 185,772 windows;
 `meta/label_stats.json` holds the per-split target statistics (registry
 `target_mean` / `target_std`), `meta/baselines_windows_eval.json` the reference
 baselines.
