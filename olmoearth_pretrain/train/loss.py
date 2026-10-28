@@ -528,9 +528,18 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         modality_weights: dict[str, float] | None = None,
         same_target_threshold: float = 0.999,
         mask_negatives_for_modalities: list[str] | None = None,
+        truncate_to_decoder: bool = False,
     ) -> None:
-        """Initialize with same params as ModalityPatchDiscriminationMaskedNegatives."""
+        """Initialize with same params as ModalityPatchDiscriminationMaskedNegatives.
+
+        ``truncate_to_decoder``: after sorting decoder tokens first, keep only the first
+        ``max_b count_b`` positions of each modality, so the score matrices are
+        (batch, max_dec, max_dec) instead of (batch, T, T). The dropped rows and columns
+        are already masked out, so the loss is unchanged; it costs one device-to-host
+        sync per ``compute`` call.
+        """
         self.tau = tau
+        self.truncate_to_decoder = truncate_to_decoder
         self.pred2unit = pred2unit
         self.weight = weight
         self.modality_weights = modality_weights
@@ -543,6 +552,7 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         all_masks: Tensor,
         all_targets: Tensor,
         modality: str,
+        max_count: int | None = None,
     ) -> Tensor:
         batch_size, num_tokens, dim = all_preds.shape
         decoder_mask = all_masks == MaskValue.DECODER.value
@@ -550,6 +560,10 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
 
         # Sort so decoder tokens come first per sample
         _, sort_indices = decoder_mask.long().sort(dim=1, descending=True, stable=True)
+        if max_count is not None:
+            # Positions past the largest decoder count are never valid.
+            num_tokens = max(1, min(num_tokens, max_count))
+            sort_indices = sort_indices[:, :num_tokens]
         sort_expanded = sort_indices.unsqueeze(-1).expand(-1, -1, dim)
         sorted_preds = all_preds.gather(1, sort_expanded).float()
         sorted_targets = all_targets.gather(1, sort_expanded).float()
@@ -652,12 +666,28 @@ class ModalityPatchDiscriminationMaskedNegativesVec(Loss):
         )
         modality_targets = targets.flatten_tokens_and_masks_per_modality()[0]
 
+        max_counts: list[int | None] = [None] * len(modality_masks)
+        if self.truncate_to_decoder and modality_masks:
+            # One sync for all modalities.
+            max_counts = (
+                torch.stack(
+                    [
+                        (m == MaskValue.DECODER.value).sum(dim=-1).max()
+                        for m in modality_masks
+                    ]
+                )
+                .tolist()
+            )
         total_loss = 0
-        for all_preds, all_masks, all_targets, modality in zip(
-            modality_preds, modality_masks, modality_targets, targets.modalities
+        for all_preds, all_masks, all_targets, modality, max_count in zip(
+            modality_preds,
+            modality_masks,
+            modality_targets,
+            targets.modalities,
+            max_counts,
         ):
             loss = self._compute_modality_loss_parallel(
-                all_preds, all_masks, all_targets, modality
+                all_preds, all_masks, all_targets, modality, max_count
             )
             if self.modality_weights is not None:
                 loss = loss * self.modality_weights.get(modality, 1.0)

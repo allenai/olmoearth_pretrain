@@ -180,3 +180,28 @@ def test_max_decode_tokens(patch_size: int) -> None:
             )
             assert torch.equal(expanded, mask)
         assert total == cap  # uncapped this batch decodes far more than 50
+
+
+def test_decode_cap_skips_decode_only_modalities() -> None:
+    """With decode_cap_skips_decode_only the cap leaves every map token DECODER."""
+    from olmoearth_pretrain.datatypes import MaskValue
+    from olmoearth_pretrain.train.masking import RandomTimeWithDecodeMaskingStrategy
+
+    n, h, w, t = 2, 16, 16, 4
+    masks = {
+        "sentinel2_l2a_mask": torch.full((n, h, w, t, 1), MaskValue.DECODER.value),
+        "worldcover_mask": torch.full((n, h, w, 1, 1), MaskValue.DECODER.value),
+    }
+    for skip, expect_maps in [(frozenset(), None), (frozenset({"worldcover"}), h * w)]:
+        out = {k: v.clone() for k, v in masks.items()}
+        for i in range(n):
+            RandomTimeWithDecodeMaskingStrategy._cap_decode_tokens(
+                out, i, 1, 100, skip
+            )
+        for i in range(n):
+            s2 = int((out["sentinel2_l2a_mask"][i] == MaskValue.DECODER.value).sum())
+            wc = int((out["worldcover_mask"][i] == MaskValue.DECODER.value).sum())
+            if expect_maps is None:
+                assert s2 + wc == 100
+            else:
+                assert wc == expect_maps and s2 == 100

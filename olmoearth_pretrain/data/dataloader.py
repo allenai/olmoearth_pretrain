@@ -94,6 +94,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         encoder_token_budget: int | None = None,
         min_encoder_tokens: int = 0,
         max_num_visible: int | None = None,
+        encoder_budget_half_t: bool = False,
         num_kept_modalities_choices: list[int] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
@@ -175,6 +176,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
             min_encoder_tokens: Floor for the same encoder-token count (0 disables).
             max_num_visible: Largest visible band-set count drawn (the number of
                 encode-decode band sets minus one). Required with encoder_token_budget.
+            encoder_budget_half_t: size shapes by ``e * hw^2 * t / 2`` (no ceil) instead,
+                so ``e = 2`` with budget ``B`` and floor ``F`` gives exactly the all-token
+                shapes of ``hw^2 * t <= B`` / ``>= F`` (time mode with odd ``t`` may then
+                encode up to ``e * hw^2 / 2`` tokens over the budget).
             num_kept_modalities_choices: If set (e.g. ``[3, 4]``), every rank batch draws
                 ``k`` uniformly from these and each of its samples keeps a uniform random
                 subset of at most ``k`` of its present budgeted modalities (the others are
@@ -234,6 +239,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.encoder_token_budget = encoder_token_budget
         self.min_encoder_tokens = min_encoder_tokens
         self.max_num_visible = max_num_visible
+        self.encoder_budget_half_t = encoder_budget_half_t
         if num_kept_modalities_choices is not None:
             if not num_kept_modalities_choices or min(num_kept_modalities_choices) < 1:
                 raise ValueError(
@@ -780,6 +786,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         encoder_budget = dl.encoder_token_budget
         min_encoder_tokens = dl.min_encoder_tokens
         max_num_visible = dl.max_num_visible
+        encoder_budget_half_t = dl.encoder_budget_half_t
         num_kept_choices = dl.num_kept_modalities_choices
         num_kept: int | None = None
 
@@ -825,6 +832,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             """(min_t, max_t) with num_visible * hw^2 * ceil(t / 2) within the encoder budget/floor."""
             assert encoder_budget is not None
             per_half_t = num_visible * hw * hw  # encoder tokens per ceil(t / 2)
+            if encoder_budget_half_t:
+                # num_visible * hw^2 * t <= 2 * budget, >= 2 * floor.
+                hi = min(max_t_data, 2 * encoder_budget // per_half_t)
+                lo = max(1, -(-2 * min_encoder_tokens // per_half_t))
+                return lo, hi
             hi = min(max_t_data, 2 * (encoder_budget // per_half_t))
             if min_encoder_tokens <= 0:
                 lo = 1
@@ -1054,6 +1066,7 @@ class OlmoEarthDataLoaderConfig(Config):
     encoder_token_budget: int | None = None
     min_encoder_tokens: int = 0
     max_num_visible: int | None = None
+    encoder_budget_half_t: bool = False
     # Keep at most k ~ choices modalities per sample, crops sized for k (see __init__).
     num_kept_modalities_choices: list[int] | None = None
 
@@ -1140,6 +1153,7 @@ class OlmoEarthDataLoaderConfig(Config):
             encoder_token_budget=self.encoder_token_budget,
             min_encoder_tokens=self.min_encoder_tokens,
             max_num_visible=self.max_num_visible,
+            encoder_budget_half_t=self.encoder_budget_half_t,
             num_kept_modalities_choices=self.num_kept_modalities_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,

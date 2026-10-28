@@ -1794,7 +1794,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
       ``decode_ratio`` of its tokens in random mode, its decode timesteps in time mode.
     * ``max_decode_tokens``: per instance, at most this many DECODER tokens (all
       modalities, decode-only ones included); a uniform random subset is kept and the
-      rest become TARGET_ENCODER_ONLY.
+      rest become TARGET_ENCODER_ONLY. With ``decode_cap_skips_decode_only`` the cap
+      counts and demotes only encode-decode band sets; every decode-only token stays
+      DECODER.
     """
 
     def __init__(
@@ -1806,6 +1808,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         num_visible: str = "ratio",
         decode_visible_remainder: bool = False,
         max_decode_tokens: int | None = None,
+        decode_cap_skips_decode_only: bool = False,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1818,6 +1821,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                      (U{1..n-1}); see the class docstring.
         decode_visible_remainder: decode the non-encoded tokens of visible band sets.
         max_decode_tokens: optional per-instance cap on DECODER tokens.
+        decode_cap_skips_decode_only: the cap leaves only_decode_modalities alone.
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
@@ -1834,6 +1838,7 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         if max_decode_tokens is not None and max_decode_tokens < 1:
             raise ValueError(f"max_decode_tokens must be >= 1, got {max_decode_tokens}")
         self.max_decode_tokens = max_decode_tokens
+        self.decode_cap_skips_decode_only = decode_cap_skips_decode_only
 
     def _num_encode_bandsets(self, n: int, batch_num_visible: int | None) -> int:
         """How many of an instance's ``n`` encode-decode band sets are visible."""
@@ -1853,8 +1858,11 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         instance_idx: int,
         patch_size: int,
         max_tokens: int,
+        skip_modalities: frozenset[str] = frozenset(),
     ) -> None:
         """Keep at most ``max_tokens`` DECODER tokens of one instance (uniform subset).
+
+        Modalities in ``skip_modalities`` are neither counted nor demoted.
 
         Masks are stored per pixel (each token's value repeated over its patch), so
         tokens are read at the patch stride and written back repeated.
@@ -1864,9 +1872,10 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         for name, mask in output_dict.items():
             if mask is None or not name.endswith("_mask"):
                 continue
-            modality = Modality.get(
-                MaskedOlmoEarthSample.get_unmasked_modality_name(name)
-            )
+            modality_name = MaskedOlmoEarthSample.get_unmasked_modality_name(name)
+            if modality_name in skip_modalities:
+                continue
+            modality = Modality.get(modality_name)
             assert isinstance(mask, torch.Tensor)
             inst = mask[instance_idx]
             if modality.is_spatial:
@@ -2152,9 +2161,14 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                         )
 
         if self.max_decode_tokens is not None:
+            skip = (
+                frozenset(self.only_decode_modalities)
+                if self.decode_cap_skips_decode_only
+                else frozenset()
+            )
             for i in range(batch.batch_size):
                 self._cap_decode_tokens(
-                    output_dict, i, patch_size, self.max_decode_tokens
+                    output_dict, i, patch_size, self.max_decode_tokens, skip
                 )
 
         return MaskedOlmoEarthSample(**output_dict)
