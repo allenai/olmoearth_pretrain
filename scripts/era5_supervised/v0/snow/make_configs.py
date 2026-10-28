@@ -62,15 +62,23 @@ PROBE_POOLINGS: dict[str, str] = {
 }
 # Plateau of the step-50k probe-LR sweep (median val over the 20 arms x 3 seeds,
 # emb_probe on dumped embeddings, 2026-10-28), per task with its pooling.
+# The headline tasks' plateaus are on their evalx groups (EVAL_GROUPS).
 PROBE_LRS: dict[str, float] = {
-    "snow_sdd_anom_l0_eval": 3e-3, "snow_sdd_anom_l30_eval": 1e-3,
-    "snow_sdd_anom_p30_eval": 3e-3, "snow_sdd_anom_p60_eval": 3e-3,
+    "snow_sdd_anom_l0_eval": 1e-2, "snow_sdd_anom_l30_eval": 1e-3,
+    "snow_sdd_anom_p30_eval": 1e-2, "snow_sdd_anom_p60_eval": 3e-3,
     "snow_sdd_anom_post_eval": 3e-3, "snow_scd_anom_post_eval": 3e-3,
-    "snow_scd_post_eval": 0.1, "snow_sdd_dowy_post_eval": 0.1,
+    "snow_scd_post_eval": 0.1, "snow_sdd_dowy_post_eval": 3e-2,
 }  # fmt: skip
 DEFAULT_PROBE_LR = 0.01
-# Eval window group per task when not the family's ``eval_<family>``.
-EVAL_GROUPS: dict[str, str] = {}
+# Eval window group per task when not the family's ``eval_<family>``: the
+# headline tasks read the union of two independent key draws (evalx: 8000 /
+# 3000 / 3000), which raised the between-arm F of the melt anomaly from 4.5 /
+# 3.2 to 6.7 / 5.1 (val / test) and of snow-covered days from 5.7 / 4.2 to
+# 10.0 / 5.5 (emb_probe, 20 v1.4-v1.6 arms x 3 seeds, 2026-10-28).
+EVAL_GROUPS: dict[str, str] = {
+    "snow_sdd_anom_l0_eval": "evalx_l0", "snow_sdd_anom_p30_eval": "evalx_p30",
+    "snow_scd_post_eval": "evalx_post", "snow_sdd_dowy_post_eval": "evalx_post",
+}  # fmt: skip
 
 YAML = """\
 # Data-only config for the snow melt-timing eval: {what}
@@ -199,10 +207,16 @@ def main() -> None:
         kind = "post" if family == "post" else "forecast"
         for target, what in TARGETS[kind].items():
             name = f"snow_{target}_{family}_eval"
+            group = EVAL_GROUPS.get(name, f"eval_{family}")
+            size = (
+                "8000 / 3000 / 3000"
+                if group.startswith("evalx")
+                else "4000 / 1500 / 1500"
+            )
             tasks[name] = entry(
-                target, family, EVAL_GROUPS.get(name, f"eval_{family}"), stats, base.format(what=what, fam=fam) + (
-                    f"'eval_{family}' group: 4000 / 1500 / 1500 (cell, water year) keys shared by "
-                    "every family, spread over cells. " + split_note))  # fmt: skip
+                target, family, group, stats, base.format(what=what, fam=fam) + (
+                    f"'{group}' group: {size} (cell, water year) keys shared by every family, "
+                    "spread over cells. " + split_note))  # fmt: skip
             n += 1
     for target, family in FULL:
         kind = "post" if family == "post" else "forecast"
