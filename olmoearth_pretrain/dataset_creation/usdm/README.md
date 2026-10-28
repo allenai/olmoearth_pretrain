@@ -95,7 +95,16 @@ its water year has the same split, else `none` (unused). Test water years:
 
 - `all`: every candidate of the train / val / test splits on a 12-week anchor
   grid (random phase per cell), for supervised training (registry `usdm_sev`,
-  `usdm_dpast8`, `usdm_dfut8`).
+  `usdm_dpast8`, `usdm_dfut8`). Supervised ceiling
+  (`scripts/era5_supervised/v0/usdm/launch_sup_ceiling.sh`,
+  `era5enc_1104_sup_usdm_r2`: the 1601 recipe trained from scratch on heads
+  for `sev`, `dpast8`, `dpast26`; single seed, 29k steps, probed on `eval`):
+  `dpast26` (last4) 0.214 / 0.219 val / test vs 0.168 / 0.224 for the
+  self-supervised 1601, so self-supervision is near the ceiling on the
+  headline; `sev` (pooled) 0.397 / 0.535 vs 0.184 / 0.263, so the drought
+  state is learnable from the window but not linear in self-supervised
+  embeddings. That run's heads were frozen at their random init (they were
+  created after the optimizer; fixed in `SupervisedHeadRegistry.materialize`).
 - `evalu`: the in-loop eval group (registry `usdm_*_eval`): 4000 train / 1500
   val / 1500 test windows, an unstratified draw (round-robin over cells and
   water years within each split, so the natural mix of drought states; keys
