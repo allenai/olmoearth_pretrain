@@ -54,7 +54,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 SNOW_ROOT = Path("/weka/dfive-default/rslearn-eai/datasets/snow")
-TASK_RE = re.compile(r"snow_(.+)_(l\d+|post)_eval")
+TASK_RE = re.compile(r"snow_(.+)_(l\d+|p\d+|post)_eval")
 DEVICE = torch.device("cpu")
 
 
