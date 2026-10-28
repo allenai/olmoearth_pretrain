@@ -134,6 +134,26 @@ whose north-west corner is the cell centre, `era5_daily` raster
 nodata -9999 in raw ECMWF units, and a `label` point (at the pixel centre)
 with the family's targets as properties.
 
-## Provenance
+## Provenance: how the dataset on weka was built (2026-10-27/28)
 
-Filled in as the dataset is built (Beaker experiment, commit, what it did).
+CPU-only Beaker jobs on Jupiter (one per node), from
+`scripts/era5_supervised/v0/snow/launch_build.sh` and `launch_cpu.sh`.
+
+| Step | Beaker experiment | Commit | What it did |
+|---|---|---|---|
+| MODIS screen + counts | 01M5ZSNS9J2MXPM3AJ70WZH84G, 01M5ZSZX4ACZ9BWADRNM8CJNT8 | 8707b214d, 78e863710 | Stopped: the SAS token endpoint answered 429 to every worker (then to every request from the cluster). |
+| MODIS screen | 01M5ZTCPT1ZH81448PBCEE5V4J | 861777cfc | 174 land tiles in 70 N-20 N and 20 S-60 S, 133 with seasonal snow. Counts stopped (one TCP + TLS handshake per GET: 11 composites/s). |
+| MODIS counts | 01M5ZV0YX316QFNHD6QWN44RJ6, 01M5ZV14H9X5YEGJD9PMD8S6MW | cd65c2ac4 | 3,591 (tile, year) parts, 2000-2026, about 180 composites/s per job; 12 min. |
+| Phenology | 01M5ZVY232WPXXZG5WR9P26R6E | bfdaa4b3e | 19.1M cell x water years; 736,393 cells with a snow season in at least half the years (665,919 with >= 15 SDD years; median inter-annual SDD SD 9.4 days). The job's cells stage then stalled in 8.6k separate land-mask reads and was stopped. |
+| Partner labels + stations | 01M5ZW6KRN4NMVF4X99K4Q89HR | cf9acb7a0 | `usdm_snow.parquet` (1.40M rows, 54,022 CONUS cells), `fluxnet_snow.parquet` (9,542 rows, 367 towers), GHCN-D check (12,275 stations). |
+| Cells + eval windows | 01M5ZXBQQAA4H1H33ZPZJPZEWD | 5a9bf4913 | 600,850 eligible cells, 30,061 sampled in 8,453 chunk columns, 29,026 land in ERA5-Land; ERA5 series 2000-2026. Its eval windows were deleted (labels before the stable-snowpack filter). |
+| Candidates + eval windows | 01M5ZZ0Y95FZV3JXDM9YKM2G0J | 97a753589 | 25,125 stable-snowpack cells; `eval_{l0,l30,l60,l90,post}` 4000 / 1500 / 1500 windows each (one key per cell per split). |
+| Lag families | 01M5ZZKHK545T81PSX4PVC0T1M | 8ae4ebe99 | `eval_p30`, `eval_p60` on the same keys. |
+| Supervised groups | 01M6003RT86BRSVD63DVRB6S8N | 948a58003 | `all_l0`, `all_p30`: 142,679 windows each (105,185 train over 17,536 cells, 18,732 val, 18,762 test; up to 6 water years per cell). |
+| Union eval draw | 01M600PS0PMRPNM9M5PASYVJ90, 01M602C5VKPWF1HB6V5AVZE8SN, 01M603CHV513F8SR5QE0CQMZGA | 61f522eac, 5973152ee | `evalb` (seed 1, disjoint keys; tables only) and `evalx` = `eval` + `evalb` (8000 / 3000 / 3000): windows `evalx_l0`, `evalx_p30`, `evalx_post`. |
+
+Final state: 25,125 cells (stable seasonal snowpack) of 29,026 sampled;
+candidates 7 families x about 410k cell-years; eval groups as above;
+`meta/label_stats.json` holds the per-group and per-split target statistics
+(the registry `target_mean` / `target_std`), `meta/baselines_windows_eval_*.json`
+the reference baselines.
