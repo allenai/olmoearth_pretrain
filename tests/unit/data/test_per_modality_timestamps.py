@@ -1278,7 +1278,7 @@ def test_cloudy_s2_captures_are_dropped(
 def test_cloudy_landsat_scenes_are_dropped(
     allcap_h5py_dir: UPath, tmp_path: Path, composite_days: float | None
 ) -> None:
-    """max_landsat_cloud_cover: only captures of scenes under it are kept."""
+    """max_scene_cloud_cover: only Landsat captures of scenes under it are kept."""
     import h5py
 
     offsets, cover, clear_days = [0], [], {}
@@ -1296,8 +1296,8 @@ def test_cloudy_landsat_scenes_are_dropped(
         f["cloud_cover"] = np.concatenate(cover).astype(np.float16)
     dataset = _dataset(
         allcap_h5py_dir,
-        landsat_cloud_cover_path=str(sidecar),
-        max_landsat_cloud_cover=50.0,
+        scene_cloud_cover_paths={"landsat_l2": str(sidecar)},
+        max_scene_cloud_cover=50.0,
         composite_selection="random_clear",  # composites dated by their capture
     )
     seen = 0
@@ -1342,8 +1342,8 @@ def test_cloud_filters_keep_the_least_cloudy_capture_when_all_are_cloudy(
         allcap_h5py_dir,
         load_s2_cloud_mask=True,
         max_s2_cloud_fraction=-1.0,  # no capture passes
-        landsat_cloud_cover_path=str(sidecar),
-        max_landsat_cloud_cover=50.0,  # every scene is 90%
+        scene_cloud_cover_paths={"landsat_l2": str(sidecar)},
+        max_scene_cloud_cover=50.0,  # every scene is 90%
     )
     for idx in (0, 1):
         _, sample = dataset[
@@ -1354,3 +1354,70 @@ def test_cloud_filters_keep_the_least_cloudy_capture_when_all_are_cloudy(
             steps = _field(sample, f"{name}_time_index")
             if offsets[idx + 1] > offsets[idx] or name == "sentinel2_l2a":
                 assert (steps >= 0).sum() <= 1
+
+
+def test_pick_least_cloudy_takes_each_bins_lowest_cover() -> None:
+    """pick_least_cloudy: lowest scene cover per bin; NaN ranks last; no cover = random."""
+    from olmoearth_pretrain.data.dataset import pick_least_cloudy
+
+    values = np.arange(6, dtype=np.float32).reshape(1, 1, 6, 1)
+    bins = np.array([0, 0, 0, 1, 1, 2])
+    cover = np.array([40.0, 5.0, 60.0, np.nan, 30.0, np.nan])
+    out, kept_bins, flags, chosen = pick_least_cloudy(
+        values, bins, cover, None, np.random.default_rng(0)
+    )
+    assert kept_bins.tolist() == [0, 1, 2]
+    assert chosen.tolist() == [1, 4, 5]
+    assert out[0, 0, :, 0].tolist() == [1.0, 4.0, 5.0]
+    assert not flags.any()
+    _, _, _, chosen = pick_least_cloudy(
+        values, bins, None, None, np.random.default_rng(0)
+    )
+    assert [bins[c] for c in chosen] == [0, 1, 2]
+
+
+@pytest.mark.parametrize("budget_before_read", [False, True])
+def test_least_cloudy_composites_pick_the_clearest_s2_scene(
+    allcap_h5py_dir: UPath, tmp_path: Path, budget_before_read: bool
+) -> None:
+    """least_cloudy monthly composites: each S2 bin keeps its lowest-cover capture."""
+    import h5py
+
+    offsets, cover, cover_by_day = [0], [], {}
+    for idx in (0, 1):
+        with h5py.File(allcap_h5py_dir / f"sample_{idx}.h5", "r") as f:
+            ts = f["timestamps_sentinel2_l2a"][()]
+        cc = np.random.default_rng(idx).uniform(0, 100, len(ts))
+        cover.append(cc)
+        offsets.append(offsets[-1] + len(ts))
+        cover_by_day[idx] = {tuple(t): float(c) for t, c in zip(ts.tolist(), cc)}
+    sidecar = tmp_path / "s2_cloud.h5"
+    with h5py.File(sidecar, "w") as f:
+        f["offsets"] = np.array(offsets)
+        f["cloud_cover"] = np.concatenate(cover).astype(np.float32)
+    dataset = _dataset(
+        allcap_h5py_dir,
+        scene_cloud_cover_paths={"sentinel2_l2a": str(sidecar)},
+        composite_selection="least_cloudy",
+        budget_before_read=budget_before_read,
+    )
+    reference = _dataset(
+        allcap_h5py_dir,
+        scene_cloud_cover_paths={"sentinel2_l2a": str(sidecar)},
+        composite_selection="random_clear",
+        budget_before_read=budget_before_read,
+    )
+    picked: list[float] = []
+    other: list[float] = []
+    for seed in range(6):
+        args = GetItemArgs(
+            idx=seed % 2, patch_size=2, sampled_hw_p=4, composite_days=30.0, seed=seed
+        )
+        for ds, out in ((dataset, picked), (reference, other)):
+            _, sample = ds[args]
+            steps = _field(sample, "sentinel2_l2a_time_index")
+            days = _field(sample, "timestamps")[steps[steps >= 0]].tolist()
+            out += [cover_by_day[seed % 2][tuple(d)] for d in days]
+    assert len(picked) > 0
+    # Same bins either way; the least-cloudy pick is never cloudier on average.
+    assert np.mean(picked) < np.mean(other)

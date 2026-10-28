@@ -174,6 +174,37 @@ def pick_captures(
     return values[:, :, chosen].astype(np.float32), bins, flags, chosen
 
 
+def pick_least_cloudy(
+    values: np.ndarray,
+    bin_index: np.ndarray,
+    cover: np.ndarray | None,
+    cloudy: np.ndarray | None,
+    rng: Any,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """One real capture per occupied bin: the one with the lowest scene cloud cover.
+
+    ``cover`` is the captures' scene cloud cover (percent, NaN = unknown, ranked
+    last); without it (e.g. S1) the capture is drawn uniformly. ``cloudy`` (``[H, W,
+    T]`` S2 cloud flags) only supplies the returned flags. Same returns as
+    :func:`pick_captures`.
+    """
+    bins = np.unique(bin_index)
+    picked = []
+    for b in bins:
+        members = np.flatnonzero(bin_index == b)
+        if cover is None or np.isnan(cover[members]).all():
+            picked.append(int(rng.choice(members)))
+        else:
+            picked.append(int(members[np.nanargmin(cover[members])]))
+    chosen = np.array(picked, dtype=np.int64)
+    flags = (
+        cloudy[:, :, chosen].astype(bool)
+        if cloudy is not None
+        else np.zeros((*values.shape[:2], len(chosen)), dtype=bool)
+    )
+    return values[:, :, chosen].astype(np.float32), bins, flags, chosen
+
+
 # =============================================================================
 # Subsetting Functions
 # =============================================================================
@@ -626,8 +657,8 @@ class OlmoEarthDataset(Dataset):
         composite_selection: str = "median",
         budget_before_read: bool = False,
         max_s2_cloud_fraction: float | None = None,
-        landsat_cloud_cover_path: str | None = None,
-        max_landsat_cloud_cover: float | None = None,
+        scene_cloud_cover_paths: dict[str, str] | None = None,
+        max_scene_cloud_cover: float | None = None,
     ):
         """Initialize the dataset.
 
@@ -664,8 +695,11 @@ class OlmoEarthDataset(Dataset):
                 cloudy S2 tokens from the decoder targets.
             composite_selection: How a composite bin becomes one timestep:
                 ``"median"`` (per-pixel median of the bin's captures, S2 over
-                SCL-clear pixels) or ``"random_clear"`` (one real capture per bin, see
-                :func:`pick_captures`; dated by that capture).
+                SCL-clear pixels), ``"random_clear"`` (one real capture per bin, see
+                :func:`pick_captures`; dated by that capture) or ``"least_cloudy"``
+                (the bin's capture with the lowest scene cloud cover, as v1.3's
+                monthly layers were built; modalities without a
+                ``scene_cloud_cover_paths`` sidecar pick at random).
             budget_before_read: With composites, choose the token-budget run of bins
                 from the timestamps before reading, and read only those bins'
                 captures (without composites the run is always chosen first). Same
@@ -674,13 +708,14 @@ class OlmoEarthDataset(Dataset):
                 S2 captures whose crop is more than this fraction cloudy (SCL, needs
                 ``load_s2_cloud_mask``) before the budget run is chosen. Composites
                 already pick a clear capture per bin. None = keep every capture.
-            landsat_cloud_cover_path: Sidecar h5 of scene-level Landsat cloud cover
-                per capture (``build_landsat_cloud_sidecar.py``: ``offsets`` [N + 1],
-                ``cloud_cover`` percent, NaN = unknown), aligned with each sample's
-                ``timestamps_landsat_l2``.
-            max_landsat_cloud_cover: With the sidecar, drop Landsat captures whose
-                scene is more than this percent cloudy, in every mode, before the
-                budget run (unknown cloud cover is kept). None = keep every capture.
+            scene_cloud_cover_paths: Modality name -> sidecar h5 of scene-level cloud
+                cover per capture (``build_scene_cloud_sidecar.py``: ``offsets``
+                [N + 1], ``cloud_cover`` percent, NaN = unknown), aligned with each
+                sample's ``timestamps_<modality>``.
+            max_scene_cloud_cover: With sidecars, drop captures whose scene is more
+                than this percent cloudy, in every mode, before the budget run
+                (unknown cloud cover is kept; if every capture is over, the least
+                cloudy is kept). None = no threshold.
 
         Returns:
             None
@@ -724,24 +759,24 @@ class OlmoEarthDataset(Dataset):
         if load_s2_cloud_mask and not per_modality_timestamps:
             raise ValueError("load_s2_cloud_mask needs per_modality_timestamps")
         self.load_s2_cloud_mask = load_s2_cloud_mask
-        if composite_selection not in ("median", "random_clear"):
+        if composite_selection not in ("median", "random_clear", "least_cloudy"):
             raise ValueError(
-                f"composite_selection must be 'median' or 'random_clear', got "
-                f"{composite_selection!r}"
+                "composite_selection must be 'median', 'random_clear' or "
+                f"'least_cloudy', got {composite_selection!r}"
             )
+        if composite_selection == "least_cloudy" and not scene_cloud_cover_paths:
+            raise ValueError("least_cloudy needs scene_cloud_cover_paths")
         self.composite_selection = composite_selection
         self.budget_before_read = budget_before_read
         if max_s2_cloud_fraction is not None and not load_s2_cloud_mask:
             raise ValueError("max_s2_cloud_fraction needs load_s2_cloud_mask")
         self.max_s2_cloud_fraction = max_s2_cloud_fraction
-        if (max_landsat_cloud_cover is None) != (landsat_cloud_cover_path is None):
-            raise ValueError(
-                "max_landsat_cloud_cover and landsat_cloud_cover_path go together"
-            )
-        self.landsat_cloud_cover_path = landsat_cloud_cover_path
-        self.max_landsat_cloud_cover = max_landsat_cloud_cover
-        # (offsets, cloud cover) loaded on first use, per worker.
-        self._landsat_cloud: tuple[np.ndarray, np.ndarray] | None = None
+        if max_scene_cloud_cover is not None and not scene_cloud_cover_paths:
+            raise ValueError("max_scene_cloud_cover needs scene_cloud_cover_paths")
+        self.scene_cloud_cover_paths = dict(scene_cloud_cover_paths or {})
+        self.max_scene_cloud_cover = max_scene_cloud_cover
+        # Per modality: (offsets, cloud cover) loaded on first use, per worker.
+        self._scene_cloud: dict[str, tuple[np.ndarray, np.ndarray]] = {}
 
     @property
     def fingerprint_version(self) -> str:
@@ -1220,6 +1255,7 @@ class OlmoEarthDataset(Dataset):
         selection: str = "median",
         rng: Any = np.random,
         origin: int | None = None,
+        scene_cover: dict[str, np.ndarray] | None = None,
     ) -> tuple[
         dict[str, np.ndarray],
         dict[str, np.ndarray],
@@ -1233,7 +1269,9 @@ class OlmoEarthDataset(Dataset):
         is the per-pixel median of the bin's captures (S2: over SCL-clear pixels,
         falling back to all captures; S1 and Landsat: all captures). Its date is
         the bin centre. With ``selection="random_clear"`` a bin is instead one real
-        capture (:func:`pick_captures`), dated by that capture. Returns updated ``(data, timestamps, kept, s2_no_clear)``;
+        capture (:func:`pick_captures`), dated by that capture; with ``"least_cloudy"``
+        the bin's capture with the lowest ``scene_cover`` (aligned with
+        ``timestamps``; random without it). Returns updated ``(data, timestamps, kept, s2_no_clear)``;
         ``s2_no_clear`` is ``[H, W, n_s2_bins]`` (pixels with no clear S2 capture),
         or None without S2.
         """
@@ -1254,7 +1292,17 @@ class OlmoEarthDataset(Dataset):
             if is_s2 and scl is not None and scl_timestamps is not None:
                 cloudy = s2_cloud_flags(scl, scl_timestamps, timestamps[modality])
                 clear = cloudy[:, :, captures] == 0
-            if selection == "random_clear":
+            if selection == "least_cloudy":
+                cover = (scene_cover or {}).get(modality)
+                values, bins, no_clear, chosen = pick_least_cloudy(
+                    data[modality][:, :, captures],
+                    bin_index,
+                    None if cover is None else cover[captures],
+                    None if clear is None else ~clear,
+                    rng,
+                )
+                timestamps[modality] = timestamps[modality][captures][chosen]
+            elif selection == "random_clear":
                 values, bins, no_clear, chosen = pick_captures(
                     data[modality][:, :, captures],
                     bin_index,
@@ -1483,20 +1531,23 @@ class OlmoEarthDataset(Dataset):
                 kept[s2_name] = self._clear_s2(
                     h5file, crop, timestamps[s2_name], kept[s2_name]
                 )
-            landsat_name = Modality.LANDSAT_L2.name
-            if (
-                self.max_landsat_cloud_cover is not None
-                and len(kept.get(landsat_name, ())) > 0
-            ):
-                cover = self._landsat_cloud_cover(index)
-                if len(cover) == len(timestamps[landsat_name]):
-                    captures = kept[landsat_name]
-                    keep = ~(cover[captures] > self.max_landsat_cloud_cover)
-                    # All too cloudy: keep the least cloudy, so the sample is never
-                    # left without timesteps (as random_clear does per bin).
-                    if not keep.any():
-                        keep[np.nanargmin(cover[captures])] = True
-                    kept[landsat_name] = captures[keep]
+            scene_cover = {}
+            for name in self.scene_cloud_cover_paths:
+                if name not in timestamps:
+                    continue
+                cover = self._scene_cloud_cover(name, index)
+                if len(cover) != len(timestamps[name]):
+                    continue
+                scene_cover[name] = cover
+                captures = kept.get(name, np.zeros(0, np.int64))
+                if self.max_scene_cloud_cover is None or len(captures) == 0:
+                    continue
+                keep = ~(cover[captures] > self.max_scene_cloud_cover)
+                # All too cloudy: keep the least cloudy, so the sample is never
+                # left without timesteps (as random_clear does per bin).
+                if not keep.any():
+                    keep[np.nanargmin(cover[captures])] = True
+                kept[name] = captures[keep]
             origin = None
             if _is_composite(args) and self.budget_before_read:
                 origin, kept = self._budget_bins(args, present, ordinals, kept, rng)
@@ -1535,6 +1586,8 @@ class OlmoEarthDataset(Dataset):
                 timestamps[modality] = timestamps[modality][lo:hi]
                 ordinals[modality] = ordinals[modality][lo:hi]
                 kept[modality] = captures - lo
+                if modality in scene_cover:
+                    scene_cover[modality] = scene_cover[modality][lo:hi]
             scl = scl_timestamps = None
             if has_scl:
                 # SCL captures within the read S2 span (dates match S2's).
@@ -1559,21 +1612,21 @@ class OlmoEarthDataset(Dataset):
             "scl": scl,
             "scl_timestamps": scl_timestamps,
             "origin": origin,
+            "scene_cover": scene_cover,
         }
 
-    def _landsat_cloud_cover(self, index: int) -> np.ndarray:
+    def _scene_cloud_cover(self, modality: str, index: int) -> np.ndarray:
         """Scene cloud cover (percent, NaN = unknown) of sample ``index``'s captures."""
-        if self._landsat_cloud is None:
-            assert self.landsat_cloud_cover_path is not None
+        if modality not in self._scene_cloud:
             with (
-                UPath(self.landsat_cloud_cover_path).open("rb") as f,
+                UPath(self.scene_cloud_cover_paths[modality]).open("rb") as f,
                 h5py.File(f, "r") as h5,
             ):
-                self._landsat_cloud = (
+                self._scene_cloud[modality] = (
                     h5["offsets"][()],
                     h5["cloud_cover"][()].astype(np.float32),
                 )
-        offsets, cover = self._landsat_cloud
+        offsets, cover = self._scene_cloud[modality]
         if index + 1 >= len(offsets):
             return np.zeros(0, np.float32)
         return cover[offsets[index] : offsets[index + 1]]
@@ -1671,6 +1724,7 @@ class OlmoEarthDataset(Dataset):
                 self.composite_selection,
                 rng,
                 read["origin"],
+                read["scene_cover"],
             )
         else:
             s2_no_clear = None
@@ -1889,8 +1943,8 @@ class OlmoEarthDatasetConfig(Config):
     composite_selection: str = "median"
     budget_before_read: bool = False
     max_s2_cloud_fraction: float | None = None
-    landsat_cloud_cover_path: str | None = None
-    max_landsat_cloud_cover: float | None = None
+    scene_cloud_cover_paths: dict[str, str] | None = None
+    max_scene_cloud_cover: float | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
