@@ -1,4 +1,4 @@
-# Data-only config for the snow melt-timing eval: days from the window's end to snow disappearance
+# Data-only config for the snow melt-timing eval: days from the window's end to snow disappearance (negative: days since)
 # from a 448-day ERA5-Land daily history ending at the window family's anchor
 # (registry entry). Only the `data:` section is consumed (rslearn_builder).
 #

@@ -27,13 +27,15 @@ FAMILIES = {
     "l30": "window ending 30 days before the cell's climatological melt-out date",
     "l60": "window ending 60 days before the cell's climatological melt-out date",
     "l90": "window ending 90 days before the cell's climatological melt-out date",
+    "p30": "window ending 30 days after the cell's climatological melt-out date",
+    "p60": "window ending 60 days after the cell's climatological melt-out date",
     "post": "window ending on the last day of the water year (whole season seen)",
 }
 TARGETS = {
     "forecast": {
         "sdd_anom": "snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean)",
         "sdd_dowy": "snow disappearance date (day of water year; absolute, climate-dominated)",
-        "days_to_melt": "days from the window's end to snow disappearance",
+        "days_to_melt": "days from the window's end to snow disappearance (negative: days since)",
     },
     "post": {
         "sdd_anom": "snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean)",

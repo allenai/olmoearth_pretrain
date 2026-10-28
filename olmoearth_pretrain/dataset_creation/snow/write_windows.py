@@ -11,6 +11,11 @@ places the ERA5 window ``[d - 448, d)`` differently relative to the melt:
   encoder never sees the climatology, so the target is "how many days until the
   snow is gone", from the snowpack's history and the spring so far. Small
   leads include early years whose melt is already inside the window (``melted``).
+* ``p<L>`` (lag, ``LAGS``): ``d`` is ``L`` days after the climatological melt-out
+  date, so the melt is usually inside the window; ``sdd_anom`` is then ``L``
+  minus the days since the snow disappeared: dating a past event of the
+  history (ERA5-Land's own albedo shows its modelled melt, which is not
+  MODIS's).
 * ``post`` (hindcast): ``d`` is the first day of the next water year, so the
   window holds the whole season (and its 83 days before). Targets ``sdd_anom``,
   ``scd_anom``, ``sad_anom``, ``season_anom``, and the absolute ``sdd_dowy``,
@@ -91,7 +96,10 @@ LEADS = (0, 30, 60, 90)
 # 87 % of the cell-years and leaves the station agreement unchanged).
 MAX_CELL_SDD_SD = 20.0
 MIN_CELL_SEASON_DAYS = 60.0
-FAMILIES = tuple(f"l{lead}" for lead in LEADS) + ("post",)
+LAGS = (30, 60)
+FAMILIES = (
+    tuple(f"l{lead}" for lead in LEADS) + tuple(f"p{lag}" for lag in LAGS) + ("post",)
+)
 MAX_SDD_GAP = 24.0
 SPLIT_BLOCK_DEG = 3
 SPLIT_FRACTIONS = {"train": 0.70, "val": 0.15, "test": 0.15}
@@ -189,7 +197,7 @@ def family_anchor(rows: pd.DataFrame, family: str) -> np.ndarray:
         start = pd.to_datetime(rows["wy_start"].to_numpy(), unit="D")
         end = start + pd.DateOffset(years=1)
         return (end - pd.Timestamp("1970-01-01")).days.to_numpy().astype(np.int64)
-    lead = int(family[1:])
+    lead = int(family[1:]) if family.startswith("l") else -int(family[1:])
     clim_date = rows["wy_start"] - 1 + rows["sdd_dowy_clim"]
     return np.rint(clim_date - lead).to_numpy().astype(np.int64)
 
