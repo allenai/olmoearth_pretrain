@@ -5,8 +5,11 @@ Run A (``nisar_naip.py``) with a different shape/modality sampler:
 * every rank batch draws ``k ~ U{3, 4}``; each sample keeps a uniform random subset of at
   most ``k`` of its present encode-decode modalities (S2, S1, Landsat, NISAR asc/desc,
   NAIP; decode-only maps are always kept) and the rest are dropped as if absent;
-* the crop is sized for ``k`` modalities under the v1.3 control budget:
-  ``k * hw^2 * t <= 3072`` (floor 228), i.e. the control's shapes at ``k = 3``;
+* the crop is sized for ``k`` modalities under the v1.3 control budget. The control's
+  dataloader counts default band sets (S2 3 + S1 1 + Landsat 2 = 6 per ``hw^2 * t``), so
+  its 3072 / 228 means ``hw^2 * t <= 512`` (>= 38), i.e. 1536 / 114 tokens as the model
+  tokenizes them (one band set each). Here ``k * hw^2 * t <= 1536`` (>= 114): the
+  control's shapes at ``k = 3`` and the control's token count at ``k = 4``;
 * masking as in run A: ``e ~ U{1..n-1}`` of the ``n`` kept band sets are visible (so 1-3
   visible, 1-3 hidden) and the visible band sets' non-encoded tokens are predicted.
 """
@@ -28,6 +31,14 @@ logger = logging.getLogger(__name__)
 
 MODULE_PATH = "scripts/official/v1_3/nisar/nisar_naip_cap4.py"
 NUM_KEPT_MODALITIES_CHOICES = [3, 4]
+# The v1.3 budget in model tokens (the control charges 6 default band sets for its 3
+# one-band-set modalities).
+CONTROL_DEFAULT_BANDSETS = 6
+CONTROL_MODALITIES = 3
+KEPT_TOKEN_BUDGET = TOKEN_BUDGET * CONTROL_MODALITIES // CONTROL_DEFAULT_BANDSETS  # 1536
+KEPT_MIN_TOKENS = (
+    MIN_TOKENS_PER_INSTANCE * CONTROL_MODALITIES // CONTROL_DEFAULT_BANDSETS
+)  # 114
 build_common_components = nisar_naip_common.build_common_components
 
 
@@ -37,11 +48,13 @@ def build_train_module_config(common):
 
 
 def build_dataloader_config(common):
-    """v1.3 budget (3072 / 228) over k ~ U{3, 4} kept modalities per rank batch."""
+    """The v1.3 budget (1536 / 114 model tokens) over k ~ U{3, 4} kept modalities."""
     config = nisar_naip_common.build_dataloader_config(common)
-    config.token_budget = TOKEN_BUDGET
-    config.min_tokens_per_instance = MIN_TOKENS_PER_INSTANCE
+    config.token_budget = KEPT_TOKEN_BUDGET
+    config.min_tokens_per_instance = KEPT_MIN_TOKENS
     config.num_kept_modalities_choices = NUM_KEPT_MODALITIES_CHOICES
+    # Band sets as the model tokenizes them (S2 / Landsat as one band set each).
+    config.tokenization_config = common.tokenization_config
     return config
 
 
