@@ -41,8 +41,8 @@ block's when its water year has the same split, else ``none`` (unused).
 ``(14, 448, 1, 1)`` + ``label`` point with the targets as properties, as in
 the FLUXNET / USDM evals), in groups ``eval_<family>`` (the same fixed
 (cell, water year) keys in every family, ``meta/eval_keys.parquet``) and
-``all_<family>`` (every candidate of the train / val / test splits, for
-supervised training; ``--all-families``).
+``all_<family>`` (up to ``--all-per-cell`` water years of every cell of the
+train / val / test splits, for supervised training; ``--all-families``).
 
 Tags: ``split``, ``cell_id``, ``block``, ``region``, ``wy``, ``anchor_date``,
 ``family``, ``has_sad``.
@@ -330,6 +330,25 @@ def select_eval_keys(
     return pd.concat(parts, ignore_index=True)[["cell_id", "wy", "split"]]
 
 
+def select_all(rows: pd.DataFrame, per_cell: int, seed: int) -> pd.DataFrame:
+    """The ``all`` group of one family: up to ``per_cell`` water years per cell.
+
+    Neighbouring years of a cell share its climate and much of its weather
+    history (the windows overlap by 83 days), so a few years from every cell
+    carry most of the information at a fraction of the windows.
+
+    Args:
+        rows: The family's candidates of the train / val / test splits.
+        per_cell: Water years kept per cell (random, seeded).
+        seed: Sampling seed.
+
+    Returns:
+        The selected rows.
+    """
+    shuffled = rows.sample(frac=1.0, random_state=seed)
+    return shuffled[shuffled.groupby("cell_id").cumcount() < per_cell].sort_index()
+
+
 # --- windows ------------------------------------------------------------------
 class WindowWriter:
     """Writes pre-materialized rslearn windows (ERA5 raster + target point)."""
@@ -505,6 +524,12 @@ def main() -> None:
     ap.add_argument("--n-test", type=int, default=1500)
     ap.add_argument("--eval-families", default=",".join(FAMILIES))
     ap.add_argument("--all-families", default="", help="families of the 'all' groups")
+    ap.add_argument(
+        "--all-per-cell",
+        type=int,
+        default=6,
+        help="water years per cell in 'all' groups",
+    )
     args = ap.parse_args()
     root = Path(args.root)
     if args.step in ("candidates", "all"):
@@ -534,7 +559,7 @@ def main() -> None:
             rows = candidates[
                 (candidates["family"] == family) & (candidates["split"] != "none")
             ]
-            selected[f"all_{family}"] = rows
+            selected[f"all_{family}"] = select_all(rows, args.all_per_cell, args.seed)
         write_all(root, selected, cells, args.workers)
 
 
