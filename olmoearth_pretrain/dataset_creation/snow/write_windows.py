@@ -523,6 +523,11 @@ def main() -> None:
     ap.add_argument("--n-val", type=int, default=1500)
     ap.add_argument("--n-test", type=int, default=1500)
     ap.add_argument("--eval-families", default=",".join(FAMILIES))
+    ap.add_argument(
+        "--eval-group",
+        default="eval",
+        help="eval key set: meta/<name>_keys.parquet, window groups <name>_<family>",
+    )
     ap.add_argument("--all-families", default="", help="families of the 'all' groups")
     ap.add_argument(
         "--all-per-cell",
@@ -538,7 +543,7 @@ def main() -> None:
         cells = pd.read_parquet(root / "meta" / "cells_split.parquet")
         candidates = pd.read_parquet(root / "meta" / "candidates.parquet")
     if args.step in ("windows", "all"):
-        keys_path = root / "meta" / "eval_keys.parquet"
+        keys_path = root / "meta" / f"{args.eval_group}_keys.parquet"
         if keys_path.exists():
             keys = pd.read_parquet(keys_path)
         else:
@@ -554,7 +559,7 @@ def main() -> None:
                 raise ValueError(
                     f"{family}: {len(keys) - len(rows)} eval keys lack a window"
                 )
-            selected[f"eval_{family}"] = rows
+            selected[f"{args.eval_group}_{family}"] = rows
         for family in filter(None, args.all_families.split(",")):
             rows = candidates[
                 (candidates["family"] == family) & (candidates["split"] != "none")
