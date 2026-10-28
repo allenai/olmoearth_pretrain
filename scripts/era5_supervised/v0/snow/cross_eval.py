@@ -7,7 +7,10 @@ For the step-50k arms of the v1.4-v1.6 probe queue (seed means), collects:
   USDM session's ``old_evals.json`` (per arm id, three seeds; negative RMSE /
   F1 as logged in-loop);
 * FLUXNET ``fluxnet_rgpp_eval`` and USDM ``usdm_dpast26_eval`` (val R2 at the
-  plateau LR of their probe-results JSONL, the USDM session's convention);
+  plateau LR of their probe-results JSONL, the USDM session's convention; USDM
+  from its registry ``evalu`` group, ``probe_results_u0_last4``: the first,
+  stratified ``eval`` group in ``probe_results_last4`` has half the between-arm
+  F, so its arm ranks are mostly seed noise);
 * the snow evals: val R2 at the plateau LR of ``emb_probe`` JSONL
   (``probe_results`` / ``probe_results_last4``) or, with ``--snow-source lab``,
   the ridge proxy of ``embeddings/target_lab.json``;
@@ -36,7 +39,7 @@ SEED_RE = re.compile(r"_seed\d+$")
 ARM_ID_RE = re.compile(r"era5enc_(\d{4})")
 OLD_EVALS = Path("/weka/dfive-default/hadriens/scratch/usdm/old_evals.json")
 FLUX_DIR = Path("/weka/dfive-default/rslearn-eai/datasets/fluxnet/probe_results")
-USDM_DIR = Path("/weka/dfive-default/rslearn-eai/datasets/usdm/probe_results_last4")
+USDM_DIR = Path("/weka/dfive-default/rslearn-eai/datasets/usdm/probe_results_u0_last4")
 SNOW_ROOT = Path("/weka/dfive-default/rslearn-eai/datasets/snow")
 CURVE_RUNS = ("1301", "1305", "1306")
 
