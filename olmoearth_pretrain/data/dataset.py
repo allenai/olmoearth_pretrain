@@ -385,6 +385,9 @@ class GetItemArgs(NamedTuple):
     tokenization_config: TokenizationConfig | None = None
     target_t: int | None = None
     budget_exclude_modalities: frozenset[str] = frozenset()
+    # Keep at most this many of the sample's budgeted (not budget-excluded) modalities,
+    # a uniform random subset; the rest are dropped as if absent. None keeps all.
+    num_kept_modalities: int | None = None
 
 
 # TODO should training modalities be str or modality_spec
@@ -911,6 +914,32 @@ class OlmoEarthDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
+    @staticmethod
+    def _drop_modalities_beyond(
+        sample_dict: dict[str, Any],
+        missing_timesteps_masks: dict[str, Any],
+        num_kept: int,
+        exclude: frozenset[str],
+    ) -> None:
+        """Keep a uniform random subset of at most ``num_kept`` budgeted modalities, in place.
+
+        Budgeted modalities are those present in ``sample_dict`` and not in ``exclude``
+        (decode-only maps are always kept). Dropped ones are removed from the sample and
+        its timestep masks, so they are filled as missing downstream.
+        """
+        present = [
+            k
+            for k in sample_dict
+            if k not in ("timestamps", "latlon") and k not in exclude
+        ]
+        if len(present) <= num_kept:
+            return
+        drop = np.random.choice(len(present), len(present) - num_kept, replace=False)
+        for i in drop:
+            name = present[int(i)]
+            del sample_dict[name]
+            missing_timesteps_masks.pop(name, None)
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
@@ -920,6 +949,13 @@ class OlmoEarthDataset(Dataset):
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
+        if args.num_kept_modalities is not None:
+            self._drop_modalities_beyond(
+                sample_dict,
+                missing_timesteps_masks,
+                args.num_kept_modalities,
+                args.budget_exclude_modalities,
+            )
         timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
             sample_dict["timestamps"], missing_timesteps_masks
         )

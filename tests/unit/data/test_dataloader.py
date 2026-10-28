@@ -223,7 +223,7 @@ def test_encoder_token_budget_shapes(tmp_path: Path, setup_h5py_dir: Path) -> No
     for start in range(0, len(items), 4):
         assert len({it[5] for it in items[start : start + 4]}) == 1
     largest: dict[int, int] = {}
-    for _idx, _ps, hw, t, _lps, nv in items:
+    for _idx, _ps, hw, t, _lps, nv, _nk in items:
         assert nv is not None and 1 <= nv <= max_nv
         encoder_tokens = nv * hw * hw * math.ceil(t / 2)
         assert 20 <= encoder_tokens <= budget, (nv, hw, t)
@@ -296,8 +296,8 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     seen: set[int] = set()
     for start in range(0, len(items), 4):
         batch = items[start : start + 4]
-        assert len({(ps, lps) for _i, ps, _hw, _t, lps, _nv in batch}) == 1
-        _idx, ps, hw, _t, lps, _nv = batch[0]
+        assert len({(ps, lps) for _i, ps, _hw, _t, lps, _nv, _nk in batch}) == 1
+        _idx, ps, hw, _t, lps, _nv, _nk = batch[0]
         assert lps is not None and ps % lps == 0
         assert lps == ps or (hw * ps // lps) ** 2 <= 256
         seen.add(lps)
@@ -316,7 +316,7 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     dl_tiny.reshuffle()
     assert all(
         lps == ps
-        for _idx, ps, _hw, _t, lps, _nv in _IterableDatasetWrapper(
+        for _idx, ps, _hw, _t, lps, _nv, _nk in _IterableDatasetWrapper(
             dl_tiny
         )._get_batch_item_params_iterator(
             np.arange(40), dl_tiny.patch_sizes, dl_tiny.sampled_hw_p_list, 4
@@ -334,7 +334,7 @@ def test_location_query_patch_size_is_drawn_per_rank_batch_under_the_budget(
     dl_off.reshuffle()
     assert all(
         lps is None
-        for *_rest, lps, _nv in _IterableDatasetWrapper(
+        for *_rest, lps, _nv, _nk in _IterableDatasetWrapper(
             dl_off
         )._get_batch_item_params_iterator(
             np.arange(40), dl_off.patch_sizes, dl_off.sampled_hw_p_list, 4
@@ -372,10 +372,10 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
         )
     )
 
-    assert all(len(it) == 6 and it[5] is None for it in items)
+    assert all(len(it) == 7 and it[5] is None and it[6] is None for it in items)
     hw_seen: set[int] = set()
     t_by_hw: dict[int, set[int]] = {}
-    for _idx, ps, hw, t, _lps, _nv in items:
+    for _idx, ps, hw, t, _lps, _nv, _nk in items:
         assert 1 <= t <= budget_max_t(hw), f"t={t} exceeds budget cap for hw={hw}"
         assert hw * ps <= dl.tile_size
         hw_seen.add(hw)
@@ -411,7 +411,7 @@ def test_min_tokens_floor_and_temporal_bias(
             np.arange(600), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
         )
     )
-    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps, _nv in items]
+    tokens = [(hw, t, st * hw * hw * t) for _idx, _ps, hw, t, _lps, _nv, _nk in items]
     # Floor holds: no shape costs fewer than min_tokens, so the hw=1,t=1 corner is gone.
     assert all(tok >= 36 for _hw, _t, tok in tokens)
     assert not any(hw == 1 and t == 1 for hw, t, _tok in tokens)

@@ -94,6 +94,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         encoder_token_budget: int | None = None,
         min_encoder_tokens: int = 0,
         max_num_visible: int | None = None,
+        num_kept_modalities_choices: list[int] | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -174,6 +175,14 @@ class OlmoEarthDataLoader(DataLoaderBase):
             min_encoder_tokens: Floor for the same encoder-token count (0 disables).
             max_num_visible: Largest visible band-set count drawn (the number of
                 encode-decode band sets minus one). Required with encoder_token_budget.
+            num_kept_modalities_choices: If set (e.g. ``[3, 4]``), every rank batch draws
+                ``k`` uniformly from these and each of its samples keeps a uniform random
+                subset of at most ``k`` of its present budgeted modalities (the others are
+                dropped as if absent from the sample). The (grid, t) shape is sized for
+                ``k`` single-band-set space-time modalities: ``k * hw^2 * t <=
+                token_budget`` (and ``>= min_tokens_per_instance``), so with fewer
+                modalities kept the crops are larger. Every budgeted (not decode-only)
+                training modality must have exactly one band set.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -225,6 +234,18 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.encoder_token_budget = encoder_token_budget
         self.min_encoder_tokens = min_encoder_tokens
         self.max_num_visible = max_num_visible
+        if num_kept_modalities_choices is not None:
+            if not num_kept_modalities_choices or min(num_kept_modalities_choices) < 1:
+                raise ValueError(
+                    f"num_kept_modalities_choices must be positive, got {num_kept_modalities_choices}"
+                )
+            if encoder_token_budget is not None:
+                raise ValueError(
+                    "num_kept_modalities_choices and encoder_token_budget are exclusive"
+                )
+            if token_budget is None:
+                raise ValueError("num_kept_modalities_choices needs a token_budget")
+        self.num_kept_modalities_choices = num_kept_modalities_choices
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -281,6 +302,20 @@ class OlmoEarthDataLoader(DataLoaderBase):
             # budget-unaware timestep sampling (max_t = max_timesteps).
             self._space_time_bandsets = self._space_only_bandsets = 0
             self._static_bandsets = self._time_bandsets = 0
+        if self.num_kept_modalities_choices is not None and training_modalities:
+            for name in training_modalities:
+                if name in self.budget_exclude_modalities:
+                    continue
+                num_band_sets = (
+                    self.tokenization_config.get_num_bandsets(name)
+                    if self.tokenization_config is not None
+                    else Modality.get(name).num_band_sets
+                )
+                if num_band_sets != 1:
+                    raise ValueError(
+                        f"num_kept_modalities_choices needs one band set per budgeted "
+                        f"modality; {name} has {num_band_sets}"
+                    )
 
     @property
     def total_unique_batches(self) -> int:
@@ -427,15 +462,20 @@ class OlmoEarthDataLoader(DataLoaderBase):
         return indices
 
     def _get_dataset_item(
-        self, idx: int, patch_size: int, sampled_hw_p: int, target_t: int | None = None
+        self,
+        idx: int,
+        patch_size: int,
+        sampled_hw_p: int,
+        target_t: int | None = None,
+        num_kept_modalities: int | None = None,
     ) -> tuple[int, OlmoEarthSample]:
         """Get a dataset item."""
-        # With an encoder token budget the sampler's (grid, target_t) already encodes the
-        # budget; an unlimited all-token budget keeps the crop but stops the dataset from
-        # re-capping t by the all-token count.
+        # With an encoder token budget or a kept-modality count the sampler's
+        # (grid, target_t) already encodes the budget; an unlimited all-token budget keeps
+        # the crop but stops the dataset from re-capping t by its own all-modality count.
         token_budget = (
             self.token_budget
-            if self.encoder_token_budget is None
+            if self.encoder_token_budget is None and num_kept_modalities is None
             else _UNLIMITED_TOKEN_BUDGET
         )
         args = GetItemArgs(
@@ -446,6 +486,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
             tokenization_config=self.tokenization_config,
             target_t=target_t,
             budget_exclude_modalities=self.budget_exclude_modalities,
+            num_kept_modalities=num_kept_modalities,
         )
         item = self.dataset[args]
         return item
@@ -711,11 +752,12 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         patch_size_list: list[int],
         hw_p_to_sample: list[int],
         rank_batch_size: int,
-    ) -> Iterator[tuple[int, int, int, int, int | None]]:
-        """Yield ``(idx, patch_size, sampled_hw_p, target_t, location_query_patch_size, num_visible)`` per instance.
+    ) -> Iterator[tuple[int, int, int, int, int | None, int | None, int | None]]:
+        """Yield ``(idx, patch_size, sampled_hw_p, target_t, location_query_patch_size, num_visible, num_kept)`` per instance.
 
         ``num_visible`` is the rank batch's visible band-set count when the loader has an
-        ``encoder_token_budget`` (see __init__), else None.
+        ``encoder_token_budget`` (see __init__), else None. ``num_kept`` is the rank batch's
+        kept-modality count ``k`` when it has ``num_kept_modalities_choices``, else None.
 
         See the OlmoEarthDataLoader.__init__ docstring for a description
         of the subsetting behaviour.
@@ -738,11 +780,25 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         encoder_budget = dl.encoder_token_budget
         min_encoder_tokens = dl.min_encoder_tokens
         max_num_visible = dl.max_num_visible
+        num_kept_choices = dl.num_kept_modalities_choices
+        num_kept: int | None = None
+
+        def rates() -> tuple[int, int, int, int]:
+            """(space-time, space-only, static, time-only) band sets charged to the budget.
+
+            With a kept-modality count ``k``: ``k`` space-time band sets (every budgeted
+            modality has one band set; a kept space-only one is charged as space-time,
+            which only over-counts).
+            """
+            if num_kept is not None:
+                return num_kept, 0, 0, 0
+            return space_time_bandsets, space_only_bandsets, static_bs, time_bs
 
         def max_t_for(hw: int) -> int:
             """Largest number of timesteps that fits the budget for this grid."""
             if budget is None:
                 return max_t_data
+            space_time_bandsets, space_only_bandsets, static_bs, time_bs = rates()
             fixed = space_only_bandsets * hw * hw + static_bs
             per_t = space_time_bandsets * hw * hw + time_bs
             if per_t <= 0:  # no time-varying modalities
@@ -756,6 +812,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             """Fewest timesteps whose (grid, t) shape clears the token floor."""
             if min_tokens <= 0:
                 return 1
+            space_time_bandsets, space_only_bandsets, static_bs, time_bs = rates()
             fixed = space_only_bandsets * hw * hw + static_bs
             per_t = space_time_bandsets * hw * hw + time_bs
             if fixed >= min_tokens:  # floor already met by the fixed spatial tokens
@@ -815,6 +872,8 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 if encoder_budget is not None:
                     assert max_num_visible is not None
                     num_visible = int(rng.integers(1, max_num_visible + 1))
+                if num_kept_choices is not None:
+                    num_kept = int(rng.choice(num_kept_choices))
                 # Bound the grid so sampled_hw_p * patch_size fits the tile extent.
                 grid_cap = dl.tile_size // patch_size
                 grids = hw_p_to_sample_array[
@@ -882,6 +941,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 int(target_t),
                 location_query_patch_size,
                 num_visible,
+                num_kept,
             )
             instances_processed += 1
 
@@ -916,7 +976,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         instance_iterator = (
             (
                 self.data_loader._get_dataset_item(
-                    int(idx), patch_size, sampled_hw_p, target_t
+                    int(idx), patch_size, sampled_hw_p, target_t, num_kept
                 ),
                 location_query_patch_size,
                 num_visible,
@@ -928,6 +988,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 target_t,
                 location_query_patch_size,
                 num_visible,
+                num_kept,
             ) in (
                 self._get_batch_item_params_iterator(
                     indices,
@@ -993,6 +1054,8 @@ class OlmoEarthDataLoaderConfig(Config):
     encoder_token_budget: int | None = None
     min_encoder_tokens: int = 0
     max_num_visible: int | None = None
+    # Keep at most k ~ choices modalities per sample, crops sized for k (see __init__).
+    num_kept_modalities_choices: list[int] | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1077,6 +1140,7 @@ class OlmoEarthDataLoaderConfig(Config):
             encoder_token_budget=self.encoder_token_budget,
             min_encoder_tokens=self.min_encoder_tokens,
             max_num_visible=self.max_num_visible,
+            num_kept_modalities_choices=self.num_kept_modalities_choices,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,
