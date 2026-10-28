@@ -151,6 +151,8 @@ CPU-only Beaker jobs on Jupiter (one per node), from
 | Lag families | 01M5ZZKHK545T81PSX4PVC0T1M | 8ae4ebe99 | `eval_p30`, `eval_p60` on the same keys. |
 | Supervised groups | 01M6003RT86BRSVD63DVRB6S8N | 948a58003 | `all_l0`, `all_p30`: 142,679 windows each (105,185 train over 17,536 cells, 18,732 val, 18,762 test; up to 6 water years per cell). |
 | Union eval draw | 01M600PS0PMRPNM9M5PASYVJ90, 01M602C5VKPWF1HB6V5AVZE8SN, 01M603CHV513F8SR5QE0CQMZGA | 61f522eac, 5973152ee | `evalb` (seed 1, disjoint keys; tables only) and `evalx` = `eval` + `evalb` (8000 / 3000 / 3000): windows `evalx_l0`, `evalx_p30`, `evalx_post`. |
+| Supervised ceiling | 01M600VVM4EMR2DM9F624QJXYH (`era5enc_1105_sup_snow`) | 0503e2170 | 5k of 30k steps, in-loop probes on the first `eval` draw. Frozen random heads (lazy head sizing, fixed in 3c2d35621); every retry after the 90 min preemption failed to load the head checkpoint. |
+| Supervised ceiling | 01M60C97WJFZ23WA02YSVW92PG (`era5enc_1105_sup_snow_r2`) | 6b268ec02 | Trainable heads, 8h min-runtime, in-loop probes on the `evalx` draws. |
 
 Final state: 25,125 cells (stable seasonal snowpack) of 29,026 sampled;
 candidates 7 families x about 410k cell-years; eval groups as above;
