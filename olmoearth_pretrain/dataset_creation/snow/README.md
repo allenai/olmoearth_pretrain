@@ -114,7 +114,14 @@ Window families place the 448-day window `[d - 448, d)`:
 | Family | Anchor `d` | Targets |
 |---|---|---|
 | `l0`, `l30`, `l60`, `l90` (forecast) | the cell's climatological melt-out date (leave-one-year-out mean SDD) minus 0 / 30 / 60 / 90 days | `sdd_anom` (= days from `d` to melt-out minus the lead), `sdd_dowy`, `days_to_melt` |
+| `p30`, `p60` (melt dating) | the cell's climatological melt-out date plus 30 / 60 days | `sdd_anom` (= days from `d` to melt-out plus the lag), `sdd_dowy`, `days_to_melt` |
 | `post` (hindcast) | first day of the next water year | `sdd_anom`, `scd_anom`, `sad_anom`, `season_anom` (tag `has_sad`), `sdd_dowy`, `scd` |
+
+The registry registers only `sdd_anom` for the lead and lag families. Their
+window ends a fixed offset from the cell's climatological melt-out, so the last
+tokens' day of year gives that climatology away: `sdd_dowy` reads off the
+timestamps (random-init R2 0.86-0.89), and `days_to_melt` is the anomaly
+shifted by the lead or lag. Both stay as window properties for diagnostics.
 
 Splits cross space and time as in the USDM eval: 3 deg blocks go to train /
 val / test (70 / 15 / 15 % of cells within south / America / Europe /
