@@ -5,12 +5,9 @@ Each head consumes a pooled per-sample embedding produced by
 Heads are intentionally tiny (single Linear) — the encoder is the part that
 actually learns transferable representations across tasks.
 
-The `embedding_dim` comes from the model config at build time, so the
-encoder's embedding size doesn't need to leak into the per-task configs. A
-head built without it discovers the dim on first forward (the pattern of
-`BackboneWithHead._init_head` in `evals/finetune/model.py`), which only suits
-standalone use: that Linear is created after the optimizer, so it never
-trains, and its checkpoint cannot be loaded into a fresh (placeholder) head.
+The `embedding_dim` is discovered on first forward (mirrors the pattern used
+by `BackboneWithHead._init_head` in `evals/finetune/model.py`) so the
+encoder's embedding size doesn't need to leak into the per-task configs.
 
 `SupervisedHeadRegistry` groups heads by `TaskType` and exposes a single
 `compute_loss` entry-point that the multi-objective train module calls per
@@ -36,17 +33,14 @@ SEGMENTATION_IGNORE_LABEL = -100
 
 
 class _LazyLinearHead(nn.Module, ABC):
-    """Base class for heads that may defer the input dim to first forward."""
+    """Base class for heads that defer the input dim to first forward."""
 
-    def __init__(self, num_outputs: int, embedding_dim: int | None = None) -> None:
+    def __init__(self, num_outputs: int) -> None:
         super().__init__()
         self.num_outputs = num_outputs
-        if embedding_dim is None:
-            # Placeholder; replaced on first call to `_ensure_initialized`.
-            self._linear = nn.Linear(1, 1, bias=True)
-        else:
-            self._linear = nn.Linear(embedding_dim, num_outputs, bias=True)
-        self._initialized = embedding_dim is not None
+        # Placeholder; replaced on first call to `_ensure_initialized`.
+        self._linear = nn.Linear(1, 1, bias=True)
+        self._initialized = False
 
     def _ensure_initialized(self, embedding_dim: int, device: torch.device) -> None:
         if self._initialized:
@@ -105,10 +99,9 @@ class RegressionHead(SupervisedHead):
         loss: str = "l2",
         target_mean: float | None = None,
         target_std: float | None = None,
-        embedding_dim: int | None = None,
     ) -> None:
         """Initialize with output dimension, loss type, and optional target stats."""
-        super().__init__(num_outputs=num_outputs, embedding_dim=embedding_dim)
+        super().__init__(num_outputs=num_outputs)
         if loss not in {"l1", "l2"}:
             raise ValueError(f"Unsupported regression loss: {loss}")
         self.loss = loss
@@ -177,11 +170,11 @@ class ClassificationHead(SupervisedHead):
 
     task_type = TaskType.CLASSIFICATION
 
-    def __init__(self, num_classes: int, embedding_dim: int | None = None) -> None:
+    def __init__(self, num_classes: int) -> None:
         """Initialize with the number of target classes (>= 2)."""
         if num_classes < 2:
             raise ValueError("ClassificationHead requires num_classes >= 2")
-        super().__init__(num_outputs=num_classes, embedding_dim=embedding_dim)
+        super().__init__(num_outputs=num_classes)
         self.num_classes = num_classes
 
     def compute_loss(
@@ -215,11 +208,11 @@ class MultiLabelClassificationHead(SupervisedHead):
 
     task_type = TaskType.CLASSIFICATION
 
-    def __init__(self, num_classes: int, embedding_dim: int | None = None) -> None:
+    def __init__(self, num_classes: int) -> None:
         """Initialize with the number of label classes (>= 1)."""
         if num_classes < 1:
             raise ValueError("MultiLabelClassificationHead requires num_classes >= 1")
-        super().__init__(num_outputs=num_classes, embedding_dim=embedding_dim)
+        super().__init__(num_outputs=num_classes)
         self.num_classes = num_classes
 
     def compute_loss(
@@ -271,7 +264,6 @@ def build_head(
     regression_loss: str = "l2",
     target_mean: float | None = None,
     target_std: float | None = None,
-    embedding_dim: int | None = None,
 ) -> SupervisedHead:
     """Construct the right head for a given (task_type, is_multilabel) pair."""
     task_type = TaskType(task_type)
@@ -282,16 +274,13 @@ def build_head(
             loss=regression_loss,
             target_mean=target_mean,
             target_std=target_std,
-            embedding_dim=embedding_dim,
         )
     if task_type == TaskType.CLASSIFICATION:
         if num_classes is None:
             raise ValueError("ClassificationHead requires num_classes")
         if is_multilabel:
-            return MultiLabelClassificationHead(
-                num_classes=num_classes, embedding_dim=embedding_dim
-            )
-        return ClassificationHead(num_classes=num_classes, embedding_dim=embedding_dim)
+            return MultiLabelClassificationHead(num_classes=num_classes)
+        return ClassificationHead(num_classes=num_classes)
     raise ValueError(
         f"Unsupported task type for ERA5 supervised pretraining: {task_type}. "
         "Per-pixel segmentation tasks are not supported by the time-only "
