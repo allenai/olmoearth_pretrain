@@ -1,7 +1,7 @@
 """Translate the eval windows' product embeddings into the universal latent (J.F.'s scorer layout).
 
   python export.py --run <run>            # z_<src> for each source, plus the fused latent
-  python export.py --baselines --run <run>  # raw products, concat, concat+PCA (uses the run's stats)
+  python export.py --baselines             # raw products, concat, concat+PCA (pair-set train stats)
 
 Inputs, one <dataset>.npz (ids, emb) per source:
   aef   favyen's products/gse (read-only): power-dequantised, rows of all -1 are nodata;
@@ -19,7 +19,8 @@ Outputs under ROOT/eval_embeddings/<name>/step<N>/<dataset>.npz:
   <run>_z<src>   T(A_src(x_src)), unit norm (score with --quantization aef_power)
   <run>_zfused   mean of the three latents, renormalised
   raw_<src>      the product itself on the common windows (quantization: none; tess: tessera)
-  concat         the three products standardised with the run's train stats, each block scaled
+  concat         the three products standardised with the pair-set train stats (the ones every
+                 run standardises with), each block scaled
                  to unit total variance (none)
   concat_pca128  PCA of concat fit on 1M pair-set train pixels, unit norm (aef_power)
 PASTIS (dense, ~40M pixels) is done one source at a time to bound memory; its raw_<src> files
@@ -32,6 +33,7 @@ import time
 
 import numpy as np
 import torch
+from train import nan_stats
 from vec2vec import DIMS, Vec2Vec
 
 ROOT = "/weka/dfive-default/hadriens/platonic_space"
@@ -222,13 +224,20 @@ def export_dense(model, run, step, ds, device, pca, baselines) -> None:  # noqa:
 def main() -> None:
     """Export one run's latents, or the baselines."""
     p = argparse.ArgumentParser()
-    p.add_argument("--run", required=True)
+    p.add_argument("--run", default=None)
     p.add_argument("--datasets", default=",".join(DATASETS))
     p.add_argument("--baselines", action="store_true")
     p.add_argument("--pca_k", type=int, default=128)
     a = p.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, step = load_model(a.run, device)
+    if a.baselines:
+        # Only the standardisation is used: the pair-set train stats, as train.py computes them.
+        model, step = Vec2Vec(DIMS, latent=8, width=8, depth=0, backbone_depth=0), 0
+        z = np.load(f"{ROOT}/pairs2024/train.npz")
+        model.set_stats({m: nan_stats(torch.from_numpy(z[m])) for m in DIMS})
+        del z
+    else:
+        model, step = load_model(a.run, device)
     models = list(model.dims)
     pca = fit_pca(model, a.pca_k) if a.baselines else None
     for ds in a.datasets.split(","):
