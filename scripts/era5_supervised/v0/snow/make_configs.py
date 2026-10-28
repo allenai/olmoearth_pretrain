@@ -48,9 +48,12 @@ TARGETS = {
 }
 OPTIONAL = ("sad_anom", "season_anom")
 # Supervised-training flavours on the full 'all_<family>' groups.
-FULL: tuple[tuple[str, str], ...] = (("sdd_anom", "l30"),)
-# Probe inputs (registry ``probe_pooling``).
-PROBE_POOLINGS: dict[str, str] = {}
+FULL: tuple[tuple[str, str], ...] = (("sdd_anom", "l0"), ("sdd_anom", "p30"))
+# Probe inputs (registry ``probe_pooling``): the anomaly at the usual melt-out
+# date is read from the window's end (target lab on the 20 v1.4-v1.6 arms x 3
+# seeds, 2026-10-28: ridge val R2 floor 0.13 -> 1601 0.15 and F 1.0 on the
+# pooled vector, 0.25 -> 0.29 and F 4.0 on the last 4 tokens).
+PROBE_POOLINGS: dict[str, str] = {"snow_sdd_anom_l0_eval": "last4"}
 # Plateau of the step-50k probe-LR sweep (median val), per task and pooling.
 PROBE_LRS: dict[str, float] = {}
 DEFAULT_PROBE_LR = 0.01

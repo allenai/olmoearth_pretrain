@@ -742,6 +742,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -30.560401,
+      "target_std": 10.838079,
       "task_type": "regression",
       "test_groups": [
         "eval_p30"
@@ -771,6 +773,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -60.560401,
+      "target_std": 10.838079,
       "task_type": "regression",
       "test_groups": [
         "eval_p60"
@@ -882,6 +886,37 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
     },
+    "snow_sdd_anom_l0": {
+      "groups": [
+        "all_l0"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending on the cell's climatological melt-out date. Full 'all_l0' group for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.511449,
+      "target_std": 10.603058,
+      "task_type": "regression",
+      "test_groups": [
+        "all_l0"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "all_l0"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
     "snow_sdd_anom_l0_eval": {
       "groups": [
         "eval_l0"
@@ -893,6 +928,7 @@
       "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending on the cell's climatological melt-out date. 'eval_l0' group: 4000 / 1500 / 1500 (cell, water year) keys shared by every family, spread over cells. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
       "num_classes": 1,
       "probe_lr": 0.01,
+      "probe_pooling": "last4",
       "tags": {
         "split": "train"
       },
@@ -907,35 +943,6 @@
       },
       "val_groups": [
         "eval_l0"
-      ],
-      "val_tags": {
-        "split": "val"
-      },
-      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
-    },
-    "snow_sdd_anom_l30": {
-      "groups": [
-        "all_l30"
-      ],
-      "height_width": 1,
-      "label_extractor_name": "default_regression",
-      "modality_layer_name": "era5_daily",
-      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
-      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 30 days before the cell's climatological melt-out date. Full 'all_l30' group for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
-      "num_classes": 1,
-      "probe_lr": 0.01,
-      "tags": {
-        "split": "train"
-      },
-      "task_type": "regression",
-      "test_groups": [
-        "all_l30"
-      ],
-      "test_tags": {
-        "split": "test"
-      },
-      "val_groups": [
-        "all_l30"
       ],
       "val_tags": {
         "split": "val"
@@ -1035,6 +1042,37 @@
       },
       "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
     },
+    "snow_sdd_anom_p30": {
+      "groups": [
+        "all_p30"
+      ],
+      "height_width": 1,
+      "label_extractor_name": "default_regression",
+      "modality_layer_name": "era5_daily",
+      "model_yaml_path": "configs/snow_sdd_anom_era5d.yaml",
+      "notes": "Snow melt-timing eval (MODIS/Terra MOD10A2 8-day snow cover 2000-2026 on seasonal-snow ERA5-Land cells, per water year): snow disappearance date anomaly (days; SDD minus the cell's leave-one-year-out mean), from the 448-day ERA5-Land history of the window ending 30 days after the cell's climatological melt-out date. Full 'all_p30' group for supervised training. Splits cross 3 deg blocks (70/15/15 % of cells within 5 regions) with water years (WY % 5: 2 test, 4 val), so no test window shares a cell or a season with training. Built by olmoearth_pretrain/dataset_creation/snow.",
+      "num_classes": 1,
+      "probe_lr": 0.01,
+      "tags": {
+        "split": "train"
+      },
+      "target_mean": -0.455437,
+      "target_std": 10.607149,
+      "task_type": "regression",
+      "test_groups": [
+        "all_p30"
+      ],
+      "test_tags": {
+        "split": "test"
+      },
+      "val_groups": [
+        "all_p30"
+      ],
+      "val_tags": {
+        "split": "val"
+      },
+      "weka_path": "/weka/dfive-default/rslearn-eai/datasets/snow/rslearn_dataset"
+    },
     "snow_sdd_anom_p30_eval": {
       "groups": [
         "eval_p30"
@@ -1049,6 +1087,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
       "task_type": "regression",
       "test_groups": [
         "eval_p30"
@@ -1078,6 +1118,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": -0.56164,
+      "target_std": 10.837567,
       "task_type": "regression",
       "test_groups": [
         "eval_p60"
@@ -1262,6 +1304,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
       "task_type": "regression",
       "test_groups": [
         "eval_p30"
@@ -1291,6 +1335,8 @@
       "tags": {
         "split": "train"
       },
+      "target_mean": 223.503849,
+      "target_std": 33.537166,
       "task_type": "regression",
       "test_groups": [
         "eval_p60"

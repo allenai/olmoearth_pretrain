@@ -20,8 +20,8 @@ set -euo pipefail
 SUBCMD="${SUBCMD:-launch}"
 RUN="${RUN:-era5enc_1105_sup_snow}"
 CLUSTER="${CLUSTER:-ai2/saturn}"
-TASKS="${TASKS:-snow_sdd_anom_l30}"
-EVALS="${EVALS:-snow_sdd_anom_l30_eval,snow_sdd_anom_l60_eval,snow_sdd_anom_post_eval}"
+TASKS="${TASKS:-snow_sdd_anom_l0,snow_sdd_anom_p30}"
+EVALS="${EVALS:-snow_sdd_anom_l0_eval,snow_sdd_anom_p30_eval,snow_scd_post_eval,snow_sdd_dowy_post_eval}"
 PYTHON="${PYTHON:-.venv/bin/python}"
 
 "${PYTHON}" scripts/era5_supervised/v0/base.py "${SUBCMD}" "${RUN}" "${CLUSTER}" \
