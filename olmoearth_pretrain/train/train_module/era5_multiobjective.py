@@ -113,6 +113,11 @@ class Era5MultiObjectiveModel(nn.Module):
                 if objective.name in objective_modules:
                     raise KeyError(f"Objective {objective.name!r} already registered")
                 objective_modules[objective.name] = module
+            if isinstance(module, SupervisedHeadRegistry):
+                # Before the optimizer and the checkpoint loader read the parameters.
+                module.materialize(
+                    encoder.pooled_size, next(encoder.parameters()).device
+                )
         self.objectives = nn.ModuleDict(objective_modules)
         # Plain python attribute (not a parameter container) so DDP doesn't
         # try to treat the `_Objective` instances as submodules.
@@ -130,6 +135,10 @@ class Era5MultiObjectiveModel(nn.Module):
         module = objective.get_module()
         if module is not None:
             self.objectives[objective.name] = module
+        if isinstance(module, SupervisedHeadRegistry):
+            module.materialize(
+                self.encoder.pooled_size, next(self.encoder.parameters()).device
+            )
         self._objective_list.append(objective)
 
     # -- DDP / compile plumbing ------------------------------------------------
