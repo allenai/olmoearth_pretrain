@@ -42,13 +42,15 @@ TARGET_ONLY = [
 # Same weight as the other regression heads (base.py: base_weight 1.0 x 1.0), as in N3.
 TARGET_WEIGHT = 1.0
 
-# The osm_sampling H5 rebuilt on 2026-10-28 with naip_10, viirs and open_buildings.
+# The osm_sampling H5 rebuilt on 2026-10-28 with naip_10, viirs, open_buildings, glo30
+# and meta_canopy_height (the last two unused by these arms).
 HIRES_H5_DIR = (
     "/weka/dfive-default/helios/dataset/osm_sampling/"
     "h5py_data_w_missing_timesteps_zstd_3_128_x_4/"
-    "cdl_gse_landsat_naip_10_open_buildings_openstreetmap_raster_sentinel1_"
-    "sentinel2_l2a_srtm_viirs_worldcereal_worldcover_worldpop_wri_canopy_height_map/"
-    "TODO_NUM_SAMPLES"
+    "cdl_glo30_gse_landsat_meta_canopy_height_naip_10_open_buildings_"
+    "openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_viirs_worldcereal_worldcover_"
+    "worldpop_wri_canopy_height_map/"
+    "1138828"
 )
 
 build_common_components = partial(naip_common.build_common_components, TARGET_ONLY)
