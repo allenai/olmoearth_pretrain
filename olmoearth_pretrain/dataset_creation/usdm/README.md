@@ -95,16 +95,23 @@ its water year has the same split, else `none` (unused). Test water years:
 
 - `all`: every candidate of the train / val / test splits on a 12-week anchor
   grid (random phase per cell), for supervised training (registry `usdm_sev`,
-  `usdm_dpast8`, `usdm_dfut8`). Supervised ceiling
-  (`scripts/era5_supervised/v0/usdm/launch_sup_ceiling.sh`,
-  `era5enc_1104_sup_usdm_r2`: the 1601 recipe trained from scratch on heads
-  for `sev`, `dpast8`, `dpast26`; single seed, 29k steps, probed on `eval`):
-  `dpast26` (last4) 0.214 / 0.219 val / test vs 0.168 / 0.224 for the
-  self-supervised 1601, so self-supervision is near the ceiling on the
-  headline; `sev` (pooled) 0.397 / 0.535 vs 0.184 / 0.263, so the drought
-  state is learnable from the window but not linear in self-supervised
-  embeddings. That run's heads were frozen at their random init (they were
-  created after the optimizer; fixed in `SupervisedHeadRegistry.materialize`).
+  `usdm_dpast8`, `usdm_dpast26`). Supervised ceiling
+  (`scripts/era5_supervised/v0/usdm/launch_sup_ceiling.sh`: the 1601 recipe
+  trained from scratch on heads for `sev`, `dpast8`, `dpast26`; one seed,
+  30k steps). `era5enc_1104_sup_usdm_r3` (trainable heads), on `evalu`
+  val / test: `sev` (pooled) 0.462 / 0.555 vs 0.226 / 0.301 for the
+  self-supervised 1601 and 0.150 / 0.254 at random init, so the drought state
+  is learnable from the window but not linear in self-supervised embeddings;
+  `dpast26` (last4) 0.076 / 0.263 vs 0.131 / 0.226 (pooled 0.130 / 0.281),
+  so supervision sets no clear ceiling above self-supervision on the
+  headline. Training R² on `dpast26` is about 0.65 against 0.1-0.3 held out:
+  the 162k windows hold few independent drought events. `r2` had its heads
+  frozen at their random init (created after the optimizer; fixed in
+  `SupervisedHeadRegistry.materialize`) and lands close on `sev`
+  (0.423 / 0.550), better on `dpast26` (0.127 / 0.311, pooled 0.164 / 0.312;
+  one seed each). Final checkpoints of both runs probed offline on both
+  groups and poolings: `probe_results_sup/{u0,eval}_{mean,last4}/`
+  (embeddings `embeddings_sup{,_u0}/`, queue `queues/sup_ceiling.json`).
 - `evalu`: the in-loop eval group (registry `usdm_*_eval`): 4000 train / 1500
   val / 1500 test windows, an unstratified draw (round-robin over cells and
   water years within each split, so the natural mix of drought states; keys
@@ -136,6 +143,7 @@ CPU-only Beaker jobs on one Jupiter node each (48 workers), from
 | All windows | 01M5ZPTZXP9KFG803Y3V811XYH | 8ce5917e8 | `all` group: 185,772 windows (train 162,526 / val 10,417 / test 12,829). |
 | Eval windows (unstratified) | 01M5ZV0YJ38TTRZT1A5MFB0F9V | d0adc7d77 | `evalu` group: 7,000 windows from `windows_eval_u0` (alt_eval_tables, uniform, seed 0, excluding `eval`). |
 | Tower labels | (weka session) | 4670fdcb1 | `fluxnet_drought.parquet`: 33,098 FLUXNET windows at 266 CONUS towers. |
+| Ceiling probes | 01M60VBS6WQ7GAVHGTDHQ19S5J | dfe91bd35 | Supervised-ceiling checkpoints (r2@29250, r3@27000, r3@30000) embedded on `eval` and `evalu` and probed with both poolings: `embeddings_sup{,_u0}/`, `probe_results_sup/`. |
 
 Final state: 3,457 cells, `evalu` 7,000 windows (registry), `eval` 7,000 windows (first, stratified), `all` 185,772 windows;
 `meta/label_stats.json` holds the per-split target statistics (registry
