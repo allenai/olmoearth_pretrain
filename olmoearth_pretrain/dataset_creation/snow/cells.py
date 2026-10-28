@@ -4,9 +4,10 @@ Eligible cells have seasonal snow every year in the MODIS record and a
 well-observed melt (``eligible``): a snow season in at least
 ``MIN_SEASON_SHARE`` of the water years, an SDD in at least ``MIN_SDD_YEARS``,
 a climatological season of at least ``MIN_CLIM_SEASON_DAYS``, and a cell that
-is land in ERA5-Land. Neighbouring cells share weather and snow, so one
-eligible cell per ``BLOCK_CELLS x BLOCK_CELLS`` block (0.5 deg) is drawn at
-random (seeded): a jittered grid, up to four cells per mirror chunk.
+is land in ERA5-Land (checked on the series read: a cell with no data at all
+is dropped). Neighbouring cells share weather and snow, so one eligible cell
+per ``BLOCK_CELLS x BLOCK_CELLS`` block (0.5 deg) is drawn at random (seeded):
+a jittered grid, up to four cells per mirror chunk.
 
 Series are read from the weka ERA5-Land mirror one 10 x 10 cell chunk column at
 a time (every sampled cell of a chunk from a single read), with the band order,
@@ -88,7 +89,11 @@ def era5_indices(
 
 
 def sample_cells(root: Path, mirror: Era5Mirror, seed: int) -> pd.DataFrame:
-    """One random eligible, ERA5-land cell per 0.5 deg block.
+    """One random eligible cell per 0.5 deg block.
+
+    ERA5-Land's land mask is checked by the extraction workers on the chunks they
+    read anyway (a cell whose series is all no-data is dropped there): 8.6k
+    separate 10 x 10 mask reads here took longer than the whole extraction.
 
     Args:
         root: Dataset root (reads ``meta/modis_cells.parquet``).
@@ -103,29 +108,16 @@ def sample_cells(root: Path, mirror: Era5Mirror, seed: int) -> pd.DataFrame:
     cand["ilat"], cand["ilon"] = era5_indices(mirror, cand["lat10"].to_numpy(),
                                               cand["lon10"].to_numpy())  # fmt: skip
     cand = cand[(cand["ilat"] >= 0) & (cand["ilon"] >= 0)]
-    land = np.zeros(len(cand), bool)
-    # ERA5-Land land mask, read one chunk-aligned block at a time.
-    chunk = (cand["ilat"] // MIRROR_CHUNK) * 10_000 + cand["ilon"] // MIRROR_CHUNK
-    for key, rows in cand.groupby(chunk).indices.items():
-        i0, j0 = (key // 10_000) * MIRROR_CHUNK, (key % 10_000) * MIRROR_CHUNK
-        block = np.asarray(
-            mirror.valid[i0 : i0 + MIRROR_CHUNK, j0 : j0 + MIRROR_CHUNK], bool
-        )
-        sub = cand.iloc[rows]
-        land[rows] = block[sub["ilat"].to_numpy() - i0, sub["ilon"].to_numpy() - j0]
-    cand = cand[land]
-    cand["block"] = (cand["lat10"] // BLOCK_CELLS) * 10_000 + cand[
-        "lon10"
-    ] // BLOCK_CELLS
+    block = (cand["lat10"] // BLOCK_CELLS) * 10_000 + cand["lon10"] // BLOCK_CELLS
     rng = np.random.default_rng(seed)
     cand["_key"] = rng.random(len(cand))
-    cells = cand.sort_values("_key").groupby("block").head(1)
-    cells = cells.drop(columns=["_key", "block"]).sort_values(["lat10", "lon10"])
+    cells = cand.assign(_block=block).sort_values("_key").groupby("_block").head(1)
+    cells = cells.drop(columns=["_key", "_block"]).sort_values(["lat10", "lon10"])
     cells = cells.rename(columns={"cell": "cell_id"}).reset_index(drop=True)
     logger.info(
-        "%d MODIS cells, %d eligible, %d ERA5-Land land; %d sampled (one per %d x %d block) "
-        "in %d chunk columns",
-        len(modis), int(eligible(modis).sum()), len(cand), len(cells), BLOCK_CELLS, BLOCK_CELLS,
+        "%d MODIS cells, %d eligible on the ERA5-Land grid; %d sampled (one per %d x %d "
+        "block) in %d chunk columns",
+        len(modis), len(cand), len(cells), BLOCK_CELLS, BLOCK_CELLS,
         int(((cells["ilat"] // MIRROR_CHUNK) * 10_000 + cells["ilon"] // MIRROR_CHUNK).nunique()),
     )  # fmt: skip
     return cells
@@ -179,8 +171,9 @@ def extract_chunk(job: tuple[list[dict[str, Any]], str]) -> list[dict[str, Any]]
         job: ``(cell rows sharing a chunk, output dir)``.
 
     Returns:
-        Per cell: ``cell_id``, its count of days with any no-data band and its
-        mean surface pressure (hPa, an elevation proxy).
+        Per cell: ``cell_id``, ``land`` (any data at all: ERA5-Land's land mask),
+        its count of days with any no-data band and its mean surface pressure
+        (hPa, an elevation proxy). Non-land cells get no series file.
     """
     cells, out_dir = job
     assert _MIRROR is not None
@@ -193,10 +186,13 @@ def extract_chunk(job: tuple[list[dict[str, Any]], str]) -> list[dict[str, Any]]
     out = []
     for c in cells:
         series = np.ascontiguousarray(block[:, :, c["ilat"] - i0, c["ilon"] - j0])
-        np.save(Path(out_dir) / f"{c['cell_id']}.npy", series)
         sp = series[:, sp_band]
+        land = bool((series != NODATA).any())
+        if land:
+            np.save(Path(out_dir) / f"{c['cell_id']}.npy", series)
         out.append(dict(
-            cell_id=c["cell_id"], n_nodata_days=int((series == NODATA).any(axis=1).sum()),
+            cell_id=c["cell_id"], land=land,
+            n_nodata_days=int((series == NODATA).any(axis=1).sum()),
             sp_hpa=float(sp[sp != NODATA].mean() / 100) if (sp != NODATA).any() else np.nan,
         ))  # fmt: skip
     return out
@@ -230,8 +226,9 @@ def run(root: Path, workers: int, seed: int) -> None:
             if k % 200 == 0:
                 logger.info("[%d/%d chunks]", k, len(todo))
     cells = cells.merge(pd.DataFrame(rows), on="cell_id", how="left")
+    cells = cells[cells["land"]].drop(columns="land").reset_index(drop=True)
     cells.to_parquet(meta / "cells.parquet")
-    logger.info("wrote %d cells", len(cells))
+    logger.info("wrote %d cells (land in ERA5-Land)", len(cells))
 
 
 def main() -> None:
