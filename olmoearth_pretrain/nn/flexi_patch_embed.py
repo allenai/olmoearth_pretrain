@@ -8,7 +8,6 @@ import logging
 from collections.abc import Iterable
 
 import torch.nn as nn
-import torch.utils.checkpoint
 import torch.nn.functional as F
 from einops import rearrange
 from torch import Tensor
@@ -45,7 +44,6 @@ class FlexiPatchEmbed(nn.Module):
         use_linear_patch_embed: bool = True,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        checkpoint_activations: bool = False,
     ) -> None:
         """2D image to patch embedding w/ flexible patch sizes.
 
@@ -77,13 +75,8 @@ class FlexiPatchEmbed(nn.Module):
                 applied AFTER the patch projection (``self.proj``). Each entry adds a
                 ReLU -> Linear(prev, h) layer. Applied before the norm layer.
                 Only supported when use_linear_patch_embed=True.
-            checkpoint_activations: If True, recompute the linear projection (pixel
-                MLP, patchify, proj, post-proj) in backward instead of keeping its
-                activations. Same outputs and gradients; for modalities with a large
-                image_tile_size_factor (naip_10: 1024 pixels x h[-1] features per token).
         """
         super().__init__()
-        self.checkpoint_activations = checkpoint_activations
 
         self.embedding_size = embedding_size
         self.use_linear_patch_embed = use_linear_patch_embed
@@ -263,18 +256,7 @@ class FlexiPatchEmbed(nn.Module):
         p_h, p_w = self.base_patch_size
         h_patches, w_patches = x.shape[-2] // p_h, x.shape[-1] // p_w
 
-        if self.use_linear_patch_embed and self.checkpoint_activations:
-            x = torch.utils.checkpoint.checkpoint(
-                self._project_linear,
-                x,
-                h_patches,
-                w_patches,
-                batch_size,
-                has_time_dim,
-                num_timesteps,
-                use_reentrant=False,
-            )
-        elif self.use_linear_patch_embed:
+        if self.use_linear_patch_embed:
             x = self._project_linear(
                 x, h_patches, w_patches, batch_size, has_time_dim, num_timesteps
             )

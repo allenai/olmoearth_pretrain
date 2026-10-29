@@ -16,9 +16,10 @@ Run A (``nisar_naip.py``) with a different shape sampler and masking:
   (exact; avoids the ``T x T`` cost of the larger crops);
 * every rank draws the same shape per step (``sync_shapes_across_ranks``), so a step
   does not wait on whichever rank drew the most expensive shape;
-* naip_10's patch embedding recomputes in backward (exact): at ``e = 1`` and
-  ``hw = 32`` its per-pixel features are 4 GiB per activation at microbatch 32, which
-  ran out of memory at step 862 of the first launch.
+* the grid is capped at v1.3's largest (``hw <= 20``; v1.3's budget allows hw^2 <= 512),
+  so larger crops at ``e = 1`` come from more timesteps, not more area. The first launch
+  allowed hw 24-32 at ``e = 1`` and ran out of memory (naip_10's per-pixel patch-embed
+  features are 4 GiB per activation at hw = 32, microbatch 32).
 """
 
 import logging
@@ -29,8 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claude_findings"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import nisar_naip_common  # noqa: E402
-from common import build_model_config as build_base_model_config  # noqa: E402
-from common import build_visualize_config  # noqa: E402
+from common import build_model_config, build_visualize_config  # noqa: E402
 
 from olmoearth_pretrain.internal.experiment import main  # noqa: E402
 
@@ -43,19 +43,13 @@ MIN_ENCODER_TOKENS = 38  # = the control's hw^2 t >= 38 at e = 2
 MAX_NUM_VISIBLE = 4
 # Predicted encode-decode tokens per sample (maps excluded).
 MAX_DECODE_TOKENS = 1024
+MAX_GRID = 20  # v1.3's largest sampled grid (hw^2 <= 512)
 build_common_components = nisar_naip_common.build_common_components
 
 
 def _set_masking(masking_config) -> None:
     nisar_naip_common.set_masking(masking_config, MAX_DECODE_TOKENS)
     masking_config.strategy_config["decode_cap_skips_decode_only"] = True
-
-
-def build_model_config(common):
-    """The v1.3 model, with naip_10's patch embedding checkpointed."""
-    config = build_base_model_config(common)
-    config.encoder_config.checkpoint_patch_embed_modalities = ["naip_10"]
-    return config
 
 
 def build_train_module_config(common):
@@ -75,6 +69,7 @@ def build_dataloader_config(common):
     config.max_num_visible = MAX_NUM_VISIBLE
     config.encoder_budget_half_t = True
     config.sync_shapes_across_ranks = True
+    config.sampled_hw_p_list = [h for h in config.sampled_hw_p_list if h <= MAX_GRID]
     return config
 
 

@@ -227,7 +227,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        checkpoint_patch_embed_modalities: list[str] | None = None,
     ):
         """Initialize the patch embeddings.
 
@@ -261,8 +260,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm. Only applies
                 to the spatial branch (FlexiPatchEmbed).
-            checkpoint_patch_embed_modalities: Modalities whose FlexiPatchEmbed
-                recomputes its projection in backward (activation checkpointing).
         """
         super().__init__()
         self.max_patch_size = max_patch_size
@@ -275,7 +272,6 @@ class MultiModalPatchEmbeddings(nn.Module):
         self.band_dropout_modalities = band_dropout_modalities
         self.patch_embed_hidden_sizes = patch_embed_hidden_sizes
         self.post_proj_hidden_sizes = post_proj_hidden_sizes
-        self.checkpoint_patch_embed_modalities = checkpoint_patch_embed_modalities or []
         # TODO: want to be able to remove certain bands and modalities
         self.per_modality_embeddings = nn.ModuleDict({})
 
@@ -341,9 +337,6 @@ class MultiModalPatchEmbeddings(nn.Module):
                         use_linear_patch_embed=self.use_linear_patch_embed,
                         patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
                         post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-                        checkpoint_activations=(
-                            modality in self.checkpoint_patch_embed_modalities
-                        ),
                     )
                     for idx, channel_set_idxs in enumerate(bandset_indices)
                 }
@@ -1983,7 +1976,6 @@ class Encoder(FlexiVitBase):
         band_dropout_modalities: list[str] | None = None,
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
-        checkpoint_patch_embed_modalities: list[str] | None = None,
         position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
@@ -2037,8 +2029,6 @@ class Encoder(FlexiVitBase):
             post_proj_hidden_sizes: Optional list of hidden layer widths for an MLP
                 applied AFTER the patch projection. Each entry adds a
                 ReLU -> Linear(prev, h) layer, applied before the norm.
-            checkpoint_patch_embed_modalities: Modalities whose patch embedding
-                recomputes its projection in backward (saves memory, same gradients).
             position_encoding: Position encoding mode; one of the
                 ``PositionEncoding`` values.
             rope_base: Frequency base for axial RoPE.
@@ -2110,7 +2100,6 @@ class Encoder(FlexiVitBase):
             band_dropout_modalities=self.band_dropout_modalities,
             patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
             post_proj_hidden_sizes=self.post_proj_hidden_sizes,
-            checkpoint_patch_embed_modalities=checkpoint_patch_embed_modalities,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -3315,7 +3304,6 @@ class EncoderConfig(Config):
     band_dropout_modalities: list[str] | None = None
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
-    checkpoint_patch_embed_modalities: list[str] | None = None
     position_encoding: str = "absolute"
     rope_base: float = 10000.0
     rope_coordinate_scale: float = 1.0
