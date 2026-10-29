@@ -22,8 +22,11 @@ Tiles are 128 x 128 px at 10 m (1.28 km) on the same UTM grid as pretraining,
 sampled population-weighted over CONUS (a uniform sample is mostly empty land,
 where income is barely defined). Splits are spatially blocked on a BLOCK_DEG grid
 so neighbouring tiles never straddle train and test. Imagery is the twelve monthly
-S2 / S1 / Landsat layers of the year-aligned evals for IMAGERY_YEAR, the centre of
-the ACS 2020-2024 period.
+S2 / S1 / Landsat layers for IMAGERY_YEAR, the centre of the ACS 2020-2024 period,
+copied verbatim from a registered year-aligned eval's config.json (LAYERS_FROM):
+Planetary Computer S2/S1 and the AWS Landsat bucket, so the imagery is fetched
+exactly as the other year-aligned evals' was. The repo's pretraining configs moved
+to the olmoearth_datasets service in July (24ffe0737) and are deliberately not used.
 
 Sources (all US Census Bureau, public domain; no API key needed):
   ACS table-based summary files  www2.census.gov/programs-surveys/acs/summary_file
@@ -34,8 +37,12 @@ Usage (on a weka-mounted machine; ``build`` downloads ~150 MB)::
     python scripts/tools/build_us_socioeconomic_eval.py build \
         --ds_path /weka/dfive-default/rslearn-eai/datasets/olmoearth_evals/us_socioeconomic \
         --cache_dir /weka/dfive-default/helios/dataset_creation/us_socioeconomic_src
-    rslearn dataset prepare --root $DS_PATH --workers 64
+    rslearn dataset prepare --root $DS_PATH --workers 16 --retry-backoff-seconds 2
     rslearn dataset materialize --root $DS_PATH --workers 64
+
+Landsat materialize needs AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (requester-pays
+bucket). ``write_config`` rewrites config.json on an existing dataset, e.g. after
+changing LAYERS_FROM, as long as no imagery has been prepared yet.
 """
 
 import argparse
@@ -44,7 +51,6 @@ import hashlib
 import json
 import logging
 import math
-import sys
 import urllib.request
 import zipfile
 from collections import Counter
@@ -62,10 +68,6 @@ from rslearn.utils import Projection, STGeometry, get_utm_ups_crs
 from rslearn.utils.feature import Feature
 from rslearn.utils.vector_format import GeojsonVectorFormat
 from upath import UPath
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from reanchor_year_aligned_dataset import build_monthly_layers  # noqa: E402
-from setup_extra_layers import build_landsat_layers  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +96,13 @@ MIN_VALID_FRAC = 0.5
 BLOCK_DEG = 0.5
 SPLIT_FRACS = (("train", 0.6), ("val", 0.2), ("test", 0.2))
 SEED = 20261029
+
+# The registered year-aligned eval whose imagery layers are copied.
+LAYERS_FROM = (
+    "/weka/dfive-default/olmoearth/eval_datasets/us_trees_year_aligned/config.json"
+)
+IMAGERY_LAYER_PREFIXES = ("sentinel2_l2a_mo", "sentinel1_mo", "landsat_mo")
+NUM_IMAGERY_LAYERS = 36
 
 WINDOW_GROUP = "default"
 LABEL_LAYER = "label"
@@ -240,9 +249,25 @@ def split_for(lon: float, lat: float) -> str:
     return SPLIT_FRACS[-1][0]
 
 
-def write_config(ds_path: UPath) -> None:
+def imagery_layers_from(config_path: UPath) -> dict:
+    """The 36 monthly S2 / S1 / Landsat layers of another dataset's config.json."""
+    config = json.loads(config_path.read_text())
+    layers = {
+        name: layer
+        for name, layer in config["layers"].items()
+        if name.startswith(IMAGERY_LAYER_PREFIXES)
+    }
+    if len(layers) != NUM_IMAGERY_LAYERS:
+        raise ValueError(
+            f"expected {NUM_IMAGERY_LAYERS} monthly imagery layers in {config_path}, "
+            f"found {len(layers)}"
+        )
+    return layers
+
+
+def write_config(ds_path: UPath, layers_from: UPath) -> None:
     """config.json: the year-aligned monthly imagery plus the vector label layer."""
-    layers = {**build_monthly_layers(), **build_landsat_layers()}
+    layers = imagery_layers_from(layers_from)
     layers[LABEL_LAYER] = {"type": "vector"}
     ds_path.mkdir(parents=True, exist_ok=True)
     (ds_path / "config.json").write_text(json.dumps({"layers": layers}, indent=2))
@@ -309,14 +334,28 @@ def summarize(labels: pd.DataFrame) -> None:
 def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["build"])
+    parser.add_argument("command", choices=["build", "write_config"])
     parser.add_argument("--ds_path", required=True)
-    parser.add_argument("--cache_dir", required=True)
+    parser.add_argument("--cache_dir")
     parser.add_argument("--num_tiles", type=int, default=NUM_TILES)
+    parser.add_argument("--layers_from", default=LAYERS_FROM)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
     ds_path = UPath(args.ds_path)
+    layers_from = UPath(args.layers_from)
+    if args.command == "write_config":
+        prepared = list((ds_path / "windows").glob("*/*/items.json"))
+        if prepared:
+            raise SystemExit(
+                f"{len(prepared)} windows already have prepared imagery; "
+                "refusing to swap their data sources"
+            )
+        write_config(ds_path, layers_from)
+        print(f"wrote {ds_path / 'config.json'} from {layers_from}")
+        return
+    if args.cache_dir is None:
+        raise SystemExit("build needs --cache_dir")
     if (ds_path / "windows").exists():
         raise SystemExit(f"{ds_path} already has windows; refusing to add more")
     bgs = load_block_groups(Path(args.cache_dir))
@@ -324,7 +363,7 @@ def main() -> None:
     labels = tile_labels(bgs, tiles)
     labels.to_csv(Path(args.cache_dir) / "tile_labels.csv", index=False)
     summarize(labels)
-    write_config(ds_path)
+    write_config(ds_path, layers_from)
     splits = write_windows(ds_path, labels)
     print("splits:", dict(splits))
 

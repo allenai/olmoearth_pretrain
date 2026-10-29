@@ -109,14 +109,56 @@ def test_split_is_blocked_and_deterministic(mod: ModuleType) -> None:
     assert splits == {"train", "val", "test"}
 
 
+def _source_config(tmp_path: Path, months: int = 12) -> UPath:
+    """A year-aligned-style config.json with the monthly layers plus extras."""
+    layers: dict[str, Any] = {
+        "label_raster": {"type": "raster"},
+        "gse": {"type": "raster"},
+    }
+    for prefix, cls in [
+        ("sentinel2_l2a_mo", "rslearn.data_sources.planetary_computer.Sentinel2"),
+        ("sentinel1_mo", "rslearn.data_sources.planetary_computer.Sentinel1"),
+        ("landsat_mo", "rslearn.data_sources.aws_landsat.LandsatOliTirs"),
+    ]:
+        for m in range(1, months + 1):
+            layers[f"{prefix}{m:02d}"] = {
+                "type": "raster",
+                "band_sets": [{"bands": ["b1"], "dtype": "uint16"}],
+                "data_source": {"class_path": cls, "time_offset": f"{(m - 1) * 30}d"},
+            }
+    path = tmp_path / "source_config.json"
+    path.write_text(json.dumps({"layers": layers}))
+    return UPath(path)
+
+
+def test_write_config_copies_only_imagery_layers(
+    mod: ModuleType, tmp_path: Path
+) -> None:
+    """The 36 monthly layers are copied verbatim; the source's other layers are not."""
+    source = _source_config(tmp_path)
+    ds_path = UPath(tmp_path / "ds")
+    mod.write_config(ds_path, source)
+    layers = json.loads((ds_path / "config.json").read_text())["layers"]
+    expected = json.loads(source.read_text())["layers"]
+    assert len(layers) == 37
+    assert layers[mod.LABEL_LAYER] == {"type": "vector"}
+    assert "gse" not in layers and "label_raster" not in layers
+    for name in ("sentinel2_l2a_mo01", "sentinel1_mo06", "landsat_mo12"):
+        assert layers[name] == expected[name]
+
+
+def test_write_config_rejects_incomplete_source(
+    mod: ModuleType, tmp_path: Path
+) -> None:
+    """A source config missing monthly layers is refused rather than half-copied."""
+    with pytest.raises(ValueError, match="expected 36"):
+        mod.write_config(UPath(tmp_path / "ds"), _source_config(tmp_path, months=11))
+
+
 def test_write_windows_round_trip(mod: ModuleType, tmp_path: Path) -> None:
     """Windows land on the 128 px grid with their labels as vector properties."""
     ds_path = UPath(tmp_path / "ds")
-    mod.write_config(ds_path)
-    config = json.loads((ds_path / "config.json").read_text())
-    assert config["layers"][mod.LABEL_LAYER] == {"type": "vector"}
-    assert "sentinel2_l2a_mo01" in config["layers"]
-    assert "landsat_mo12" in config["layers"]
+    mod.write_config(ds_path, _source_config(tmp_path))
 
     crs, col, row = mod.tile_for_point(-98.3, 38.1)
     labels = mod.pd.DataFrame(
