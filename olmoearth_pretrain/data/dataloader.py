@@ -214,8 +214,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 one, overlapping storage waits with CPU work. 0 = off. Each sample then
                 draws from its own seed (deterministic, but a different random stream
                 than with 0).
-            tile_reuse: Per-modality-timestamps datasets only: each worker keeps a pool
-                of whole h5 files in memory and draws every sample from it, using a
+            tile_reuse: Each worker keeps a pool of files (per-modality-timestamps
+                datasets: whole h5 files in memory; others: indices, read per
+                sample) and draws every sample from it, using a
                 file ``tile_reuse`` times (fresh crop / time range / composite draws
                 each time) before replacing it with a new read. One large read per
                 ``tile_reuse`` samples instead of many small reads per sample. An
@@ -957,9 +958,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         )
         per_capture = getattr(self.dataset, "per_modality_timestamps", False)
         dl = self.data_loader
-        if dl.tile_reuse > 1 and per_capture:
+        if dl.tile_reuse > 1:
             # Files come from ONE permutation (this worker's share of it); the
-            # instance count follows the tile_reuse-times repeated epoch.
+            # instance count follows the tile_reuse-times repeated epoch. Without
+            # per-modality timestamps the pool holds indices and reads per sample:
+            # the same reuse pattern, for comparing against per-capture runs.
             unique = global_indices[: dl.total_unique_size]
             files = dl._get_local_instance_indices(
                 unique,
@@ -1030,6 +1033,11 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             cursor += 1
             return idx
 
+        per_capture = getattr(self.dataset, "per_modality_timestamps", False)
+
+        def read_file(idx: int) -> bytes | None:
+            return self.dataset.read_tile_bytes(idx) if per_capture else None
+
         rng = np.random.default_rng(int(np.random.randint(2**31 - 1)))
         executor = ThreadPoolExecutor(max_workers=4)
         fetched: deque[tuple[int, Future]] = deque()
@@ -1037,9 +1045,7 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
         def fetch_more(n: int) -> None:
             for _ in range(n):
                 idx = next_file()
-                fetched.append(
-                    (idx, executor.submit(self.dataset.read_tile_bytes, idx))
-                )
+                fetched.append((idx, executor.submit(read_file, idx)))
 
         buffered = 8  # files fetched ahead of need, beyond the pool
         try:
@@ -1068,9 +1074,12 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     composite,
                     seed=int(np.random.randint(2**31 - 1)),
                 )
-                yield self.dataset.finish_item(
-                    args, self.dataset.read_item(args, raw=slot[1])
-                )
+                if per_capture:
+                    yield self.dataset.finish_item(
+                        args, self.dataset.read_item(args, raw=slot[1])
+                    )
+                else:
+                    yield self.dataset[args]
                 slot[2] -= 1
                 if slot[2] == 0:
                     idx, future = fetched.popleft()

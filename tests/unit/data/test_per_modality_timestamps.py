@@ -1179,6 +1179,7 @@ def test_tile_pool_reuses_files_and_keeps_batches_distinct() -> None:
         return str(idx).encode()
 
     dataset = SimpleNamespace(
+        per_modality_timestamps=True,
         read_tile_bytes=read_tile_bytes,
         read_item=lambda args, raw=None: raw,
         finish_item=lambda args, read: (args.patch_size, (args.idx, read)),
@@ -1205,6 +1206,41 @@ def test_tile_pool_reuses_files_and_keeps_batches_distinct() -> None:
         assert items[b][1][0] != items[b + 1][1][0]
     # ~1 read per 3 samples once the pool is full (plus the pool and its buffer)
     assert len(reads) <= 60 // 3 + 4 + 8
+
+
+def test_tile_pool_without_per_capture_reads_each_sample() -> None:
+    """The v1.3 path gets the same reuse pattern, reading each sample by index."""
+    from collections import Counter
+    from types import SimpleNamespace
+
+    from olmoearth_pretrain.data.dataloader import _IterableDatasetWrapper
+
+    class Dataset:
+        per_modality_timestamps = False
+
+        def __getitem__(self, args: Any) -> Any:
+            return args.patch_size, args.idx
+
+    loader = SimpleNamespace(
+        tile_reuse=3,
+        tile_pool_size=4,
+        rank_batch_size=2,
+        _get_item_args=lambda idx, ps, hw, t, d, c, seed=None: SimpleNamespace(
+            idx=idx, patch_size=ps
+        ),
+    )
+    wrapper = SimpleNamespace(data_loader=loader, dataset=Dataset())
+    params = [(0, 2, 4, None, None, None)] * 60
+    np.random.seed(0)
+    items: list[Any] = list(
+        _IterableDatasetWrapper._tile_pool_items(wrapper, iter(params), range(100))  # type: ignore[arg-type]
+    )
+    assert len(items) == 60
+    uses = Counter(idx for _, idx in items)
+    assert max(uses.values()) <= 3
+    assert len(uses) <= 60 // 3 + 4
+    for b in range(0, 60, 2):
+        assert items[b][1] != items[b + 1][1]
 
 
 @pytest.mark.parametrize("thin", [False, True])
