@@ -245,18 +245,7 @@ def resolve_spec(
 
 
 class NoS2ScenesError(ValueError):
-    """A fetch window's S2 layer was prepared but matched zero scenes.
-
-    Zero S2 over a window is a real archive outcome, not only a pipeline
-    failure: glance has 4 windows hard against the antimeridian (Chukotka /
-    Wrangel Island, UTM zones 1 and 60) where Planetary Computer returns no
-    S2 for the whole year -- and the same gap hit their monthly eval layers,
-    so no eval reads those windows either. ``infer`` records them as
-    coverage gaps in the manifest (no imagery means no product, exactly like
-    a published product's coverage hole) rather than failures, which would
-    hard-block register_embedding_products.py. An *unmaterialized* S2 layer
-    still raises a plain ValueError and counts as a failure.
-    """
+    """A fetch window's S2 layer was prepared but matched zero scenes."""
 
 
 def scl_to_valid_mask(scl: np.ndarray) -> np.ndarray:
