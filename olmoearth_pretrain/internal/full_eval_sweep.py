@@ -1355,6 +1355,12 @@ def build_commands(args: argparse.Namespace, extra_cli: list[str]) -> list[str]:
 # product name) they read.
 PRECOMPUTED_MODEL_TO_MODALITY = {
     BaselineModelName.AEF: (Modality.GSE.name, "aef"),
+    # tessera_v2 is baked by our own v2 inference run
+    # (evals/datasets/tessera_v2_export.py), not by the embedding materializer.
+    BaselineModelName.TESSERA_V2_PRECOMPUTED: (
+        Modality.TESSERA_V2.name,
+        "tessera_v2",
+    ),
 }
 
 
