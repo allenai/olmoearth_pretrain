@@ -2,7 +2,19 @@
 
 Writes the JSON the Studio ``text-search`` lab loads: which transformers.js model to embed
 the query with, its prompt prefix and output, and the dense layers that map that
-embedding into OlmoEarth's native embedding space (row-major float16, base64).
+embedding into OlmoEarth's native embedding space (row-major float16, base64). A run
+trained with ``--center`` also writes ``center``: per width, the global mean unit vector
+(float32, base64) the lab subtracts from each pixel's unit vector before scoring.
+
+A run trained with ``--context`` also writes ``context``: the window (px) whose mean of
+unit pixel vectors is a pixel's context, and per width the linear head (float16, base64)
+the lab adds to the pixel's (centred) unit vector before normalizing:
+``normalize(x + W c + b)``, with ``c`` the context mean renormalized (and centred) at that
+width as ``x`` is.
+
+``--vocabulary <file>`` (one phrase per line) also writes ``vocabulary``: the phrases and,
+per width, their projected unit vectors (row-major float16, base64), so the lab can list
+the phrases that best match a clicked pixel without downloading the text model.
 
 Run:
   python -m olmoearth_pretrain.clipearth.export_text_head
@@ -17,6 +29,11 @@ import json
 
 import numpy as np
 import torch
+
+from olmoearth_pretrain.clipearth.calibrate import encode_with, load_model
+
+# Side of the square whose mean is a pixel's context in training (2.56 km at 10 m).
+CONTEXT_WINDOW = 256
 
 
 def encode(array: torch.Tensor) -> str:
@@ -47,6 +64,7 @@ def main() -> None:
         "--background",
         help="npz of mean_<dims>, cov_<dims>; needed for z-score calibrations",
     )
+    parser.add_argument("--vocabulary", help="phrases, one per line, for pixel lookup")
     args = parser.parse_args()
 
     ckpt = torch.load(args.aligner, map_location="cpu", weights_only=False)
@@ -103,6 +121,34 @@ def main() -> None:
                 "mean": encode32(stats[f"mean_{dims}"]),
                 "cov": encode32(stats[f"cov_{dims}"]),
             }
+    context = {
+        key.split(".")[1]: {
+            "weight": encode(value),
+            "bias": encode(ckpt["state_dict"][key.removesuffix("weight") + "bias"]),
+        }
+        for key, value in ckpt["state_dict"].items()
+        if key.startswith("context.") and key.endswith(".weight")
+    }
+    if context:
+        head["context"] = {"windowPixels": CONTEXT_WINDOW, "heads": context}
+    center = ckpt.get("center") or {}
+    if center:
+        head["center"] = {
+            str(d): encode32(center[d]) for d in head["matryoshkaDims"] if d in center
+        }
+    if args.vocabulary:
+        phrases = list(
+            dict.fromkeys(
+                line.strip() for line in open(args.vocabulary) if line.strip()
+            )
+        )
+        raw = encode_with(train_args, phrases)
+        model = load_model(ckpt, head["layers"][-1]["outFeatures"], raw.shape[1])
+        vectors = {}
+        with torch.no_grad():
+            for dims in head["matryoshkaDims"]:
+                vectors[str(dims)] = encode(model.embed_text(raw, dims))
+        head["vocabulary"] = {"phrases": phrases, "vectors": vectors}
     if calibration:
         head["calibration"] = calibration
     if background:
