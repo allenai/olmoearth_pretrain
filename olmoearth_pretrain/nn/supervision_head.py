@@ -61,6 +61,8 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
+        detach_input: If True, the head reads detached location tokens, so it is a
+            probe trained alongside the model and its loss never reaches the encoder.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -70,6 +72,7 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    detach_input: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -209,11 +212,16 @@ class SupervisionHead(nn.Module):
         mps = self.max_patch_size
         predictions: dict[str, Tensor] = {}
         for sup_name, head in self.heads.items():
+            tokens = (
+                location_tokens.detach()
+                if self.modality_configs[sup_name].detach_input
+                else location_tokens
+            )
             if sup_name in self._non_spatial_modalities:
-                output = head(location_tokens.mean(dim=(1, 2)))  # [B, C]
+                output = head(tokens.mean(dim=(1, 2)))  # [B, C]
             else:
                 num_channels = self.modality_configs[sup_name].num_output_channels
-                raw = head(location_tokens.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
+                raw = head(tokens.unsqueeze(3))  # [B, n_h, n_w, 1, mps^2 * C]
                 output = rearrange(
                     raw,
                     "b ph pw t (c i j) -> b (ph i) (pw j) t c",

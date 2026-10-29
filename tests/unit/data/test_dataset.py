@@ -509,3 +509,11 @@ class TestComputeSDB:
         )
         assert depth[0, 1, 0, 0] == SDB_FILL_DEPTH
         assert valid_fraction == 0.75
+
+    def test_fill_value(self) -> None:
+        """Invalid pixels take the given fill value, e.g. MISSING_VALUE."""
+        s2 = self._clear_water(2, 2, 2, 600, 500)
+        s2[0, 0, :, 3] = 3000  # bright NIR: land
+        depth, _ = compute_sdb(s2, fill_value=MISSING_VALUE)
+        assert depth[0, 0, 0, 0] == MISSING_VALUE
+        assert depth[1, 1, 0, 0] > 0

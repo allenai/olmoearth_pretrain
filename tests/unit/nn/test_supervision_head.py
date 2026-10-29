@@ -153,6 +153,24 @@ class TestSupervisionHead:
         assert preds["latlon"].shape == (B, NON_SPATIAL_CHANNELS)
         assert preds["latlon"].requires_grad
 
+    @pytest.mark.parametrize("detach_input", [False, True])
+    def test_detach_input(self, detach_input: bool) -> None:
+        """A detached head trains its own weights but sends no gradient to the tokens."""
+        cfg = {
+            "srtm": SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                detach_input=detach_input,
+            ),
+        }
+        head = SupervisionHead(cfg, embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        tokens = _make_location_token_grid()
+        batch = _make_batch_with_srtm()
+        loss, _ = compute_supervision_loss(head(tokens, batch), batch, head)
+        loss.backward()
+        assert head.heads["srtm"].weight.grad.abs().sum() > 0
+        assert (tokens.grad is None) == detach_input
+
 
 class TestBuildValidMask:
     """Test _build_valid_mask helper."""

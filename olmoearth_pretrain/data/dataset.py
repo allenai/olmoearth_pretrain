@@ -61,7 +61,9 @@ SDB_DEEP_WATER_ELEVATION = -30
 
 
 def compute_sdb(
-    s2_data: np.ndarray, deep_water: np.ndarray | None = None
+    s2_data: np.ndarray,
+    deep_water: np.ndarray | None = None,
+    fill_value: float = SDB_FILL_DEPTH,
 ) -> tuple[np.ndarray, float]:
     """Compute a satellite-derived depth map from a raw S2 L2A time series.
 
@@ -76,9 +78,10 @@ def compute_sdb(
         s2_data: Raw (un-normalized) S2 L2A data, shape [H, W, T, C].
         deep_water: Optional boolean [H, W], True where the water is known to be too
             deep for the bottom to be visible. Those pixels are invalid.
+        fill_value: Value written to invalid pixels.
 
     Returns:
-        Tuple of (depth array [H, W, 1, 1] with SDB_FILL_DEPTH where invalid,
+        Tuple of (depth array [H, W, 1, 1] with fill_value where invalid,
         fraction of valid pixels).
     """
     s2 = s2_data.astype(np.float32)
@@ -100,7 +103,7 @@ def compute_sdb(
     valid = has_obs & np.isfinite(depth) & (depth >= 0) & (depth <= _SDB_MAX_DEPTH)
     if deep_water is not None:
         valid &= ~deep_water
-    depth = np.where(valid, depth, SDB_FILL_DEPTH)
+    depth = np.where(valid, depth, fill_value)
     return depth[:, :, None, None], float(valid.mean())
 
 
@@ -468,6 +471,7 @@ class OlmoEarthDataset(Dataset):
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
         sdb_gebco_patches_file: str | None = None,
+        sdb_invalid_as_missing: bool = False,
     ):
         """Initialize the dataset.
 
@@ -497,6 +501,10 @@ class OlmoEarthDataset(Dataset):
                 GEBCO elevation on a coarse grid aligned with each sample. Pixels deeper
                 than SDB_DEEP_WATER_ELEVATION get no sdb target. Only used when sdb is a
                 training modality.
+            sdb_invalid_as_missing: Write MISSING_VALUE instead of SDB_FILL_DEPTH to
+                pixels without a usable depth. For pixel-level losses that skip missing
+                pixels (the supervision head); the token-level latent-MIM path needs the
+                fill value.
 
         Returns:
             None
@@ -538,6 +546,7 @@ class OlmoEarthDataset(Dataset):
             self.indices_to_filter = None
         self.sdb_gebco_patches_file = sdb_gebco_patches_file
         self._sdb_gebco_patches: np.ndarray | None = None
+        self.sdb_invalid_as_missing = sdb_invalid_as_missing
 
     @property
     def fingerprint_version(self) -> str:
@@ -1006,6 +1015,9 @@ class OlmoEarthDataset(Dataset):
             sdb, valid_fraction = compute_sdb(
                 sample_dict["sentinel2_l2a"],
                 self._sdb_deep_water(index, sample_dict["sentinel2_l2a"].shape[0]),
+                fill_value=(
+                    MISSING_VALUE if self.sdb_invalid_as_missing else SDB_FILL_DEPTH
+                ),
             )
             if valid_fraction >= SDB_MIN_VALID_FRACTION:
                 sample_dict[Modality.SDB.name] = sdb.astype(self.dtype)
@@ -1090,6 +1102,7 @@ class OlmoEarthDatasetConfig(Config):
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
     sdb_gebco_patches_file: str | None = None
+    sdb_invalid_as_missing: bool = False
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
