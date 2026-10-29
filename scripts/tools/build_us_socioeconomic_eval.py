@@ -45,6 +45,8 @@ bucket). ``write_config`` rewrites config.json on an existing dataset, e.g. afte
 changing LAYERS_FROM, as long as no imagery has been prepared yet.
 """
 
+from __future__ import annotations
+
 import argparse
 import functools
 import hashlib
@@ -56,8 +58,8 @@ import zipfile
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import shapely
@@ -68,6 +70,9 @@ from rslearn.utils import Projection, STGeometry, get_utm_ups_crs
 from rslearn.utils.feature import Feature
 from rslearn.utils.vector_format import GeojsonVectorFormat
 from upath import UPath
+
+if TYPE_CHECKING:
+    import geopandas as gpd
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +142,9 @@ def load_acs_table(path: Path, column: str) -> pd.Series:
 
 def load_block_groups(cache_dir: Path) -> gpd.GeoDataFrame:
     """CONUS block groups in EPSG:5070 with income, home_value and pop columns."""
+    # Imported here so write_config runs in images without geopandas.
+    import geopandas as gpd
+
     cache_dir.mkdir(parents=True, exist_ok=True)
     zip_path = _download(
         BG_URL.format(year=ACS_YEAR), cache_dir / f"cb_{ACS_YEAR}_us_bg_500k.zip"
