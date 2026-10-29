@@ -98,3 +98,21 @@ def test_encode_needs_a_key(client, monkeypatch):
     r = post(client, ["rice"])
     assert r.status_code == 401
     assert client.encoder.batches == []
+
+
+def test_a_staging_staff_token_is_accepted(monkeypatch):
+    """A token production Studio refuses is checked against staging next."""
+    import asyncio
+
+    import auth
+
+    answers = {auth.STUDIO_APIS[0]: 401, auth.STUDIO_APIS[1]: 200}
+    asked = []
+
+    async def ask_one(self, api, key):
+        asked.append(api)
+        return answers[api]
+
+    monkeypatch.setattr(auth.Auth, "_ask_one", ask_one)
+    asyncio.run(auth.Auth().check("Bearer staging-token"))
+    assert asked == auth.STUDIO_APIS

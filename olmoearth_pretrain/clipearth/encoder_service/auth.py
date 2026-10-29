@@ -15,7 +15,11 @@ import time
 
 import aiohttp
 
-STUDIO_API = os.environ.get("STUDIO_API", "https://olmoearth.allenai.org/api/v1")
+# Production first; a staging token is tried against staging.
+STUDIO_APIS = os.environ.get(
+    "STUDIO_APIS",
+    "https://olmoearth.allenai.org/api/v1,https://staging.olmoearth.allenai.org/api/v1",
+).split(",")
 OK_TTL = 600.0
 NO_TTL = 60.0
 
@@ -53,10 +57,17 @@ class Auth:
             self.session = None
 
     async def _ask(self, key: str) -> int:
-        """200 for staff, 403 for another role, 401 for a key Studio refuses."""
+        """200 for staff, 403 for another role, 401 for a key no Studio accepts."""
+        for api in STUDIO_APIS:
+            status = await self._ask_one(api, key)
+            if status != 401:
+                return status
+        return 401
+
+    async def _ask_one(self, api: str, key: str) -> int:
         assert self.session is not None
         async with self.session.get(
-            f"{STUDIO_API}/users/me", headers={"Authorization": f"Bearer {key}"}
+            f"{api}/users/me", headers={"Authorization": f"Bearer {key}"}
         ) as r:
             if r.status in (401, 403):
                 return 401
