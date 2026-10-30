@@ -493,3 +493,55 @@ class TestSubsetBands:
         """A typo in model.yaml must not be silently ignored."""
         with pytest.raises(ValueError, match="not in its canonical band order"):
             self._dataset({Modality.SENTINEL2_L2A.name: ["B02", "NOPE"]})
+
+
+def make_scalar_sample(size: int, value: float) -> tuple[dict, dict]:
+    """(input_dict, target) mimicking an rslearn window-regression sample."""
+    input_dict, _ = make_sample(size, {})
+    return input_dict, {"value": torch.tensor(value), "valid": torch.tensor(1.0)}
+
+
+class TestTileSamplesScalarLabel:
+    """tile_samples over per-sample labels (e.g. us_socioeconomic tile regression)."""
+
+    def build(self, values: list[float], size: int = 32) -> RslearnToOlmoEarthDataset:
+        """A tiling wrapper over one fake window-regression sample per value."""
+        model_dataset = [(*make_scalar_sample(size, v), None) for v in values]
+        return build_dataset(
+            window_size=16,
+            tile_samples=True,
+            sample_size=32,
+            target_task_type=TaskType.WINDOW_REGRESSION,
+            model_dataset=model_dataset,
+        )
+
+    def test_every_tile_carries_the_sample_label(self) -> None:
+        """All four tiles of a sample emit its scalar label; the next sample's differ."""
+        ds = self.build([2.5, -1.0])
+        assert len(ds) == 8
+        labels = [ds[i][1] for i in range(8)]
+        assert all(label.ndim == 0 for label in labels)
+        assert [label.item() for label in labels] == [2.5] * 4 + [-1.0] * 4
+
+    def test_imagery_is_tiled(self) -> None:
+        """Imagery is cut into window_size tiles, row-major, as for dense labels."""
+        ds = self.build([1.0])
+        raw = ds.dataset[0][0][S2].image.clone()
+        masked_sample, _ = ds[1]  # tile (0, 1)
+        s2 = getattr(masked_sample, S2)
+        assert s2.shape[:2] == (16, 16)
+        expected = ds.normalizer_computed.normalize(
+            Modality.get(S2), raw[:, :, :16, 16:].permute(2, 3, 1, 0).numpy()
+        )
+        assert np.allclose(np.asarray(s2), expected)
+
+    def test_short_imagery_raises(self) -> None:
+        """Without a label raster, a sample smaller than sample_size still fails loudly."""
+        ds = self.build([1.0], size=16)
+        with pytest.raises(ValueError, match="tile_samples expects"):
+            ds[1]
+
+    def test_window_size_without_tiling_still_rejected(self) -> None:
+        """A center crop of a per-sample label stays a config error."""
+        with pytest.raises(ValueError, match="segmentation"):
+            build_dataset(window_size=16, target_task_type=TaskType.WINDOW_REGRESSION)
