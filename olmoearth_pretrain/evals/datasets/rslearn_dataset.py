@@ -141,8 +141,14 @@ def _window_key(metadata: Any) -> str | None:
 
 
 def _window_latlon(metadata: Any) -> np.ndarray | None:
-    """Window centre as raw [lat, lon] degrees (for the sun-clock time code); None unless OE_EVAL_LATLON=1."""
-    if os.environ.get("OE_EVAL_LATLON") != "1" or metadata is None:
+    """Window centre [lat, lon], or None unless OE_EVAL_LATLON is set.
+
+    ``OE_EVAL_LATLON=1``: raw degrees (the sun-clock time code). ``OE_EVAL_LATLON=norm``:
+    min-max normalized to [0, 1] like the pretraining dataset's latlon (predefined norm
+    config: lat over [-90, 90], lon over [-180, 180]), for the location-encoder input.
+    """
+    mode = os.environ.get("OE_EVAL_LATLON")
+    if mode not in ("1", "norm") or metadata is None:
         return None
     import shapely
     from rslearn.const import WGS84_PROJECTION
@@ -151,6 +157,10 @@ def _window_latlon(metadata: Any) -> np.ndarray | None:
     b = metadata.window_bounds
     pt = shapely.Point((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
     g = STGeometry(metadata.projection, pt, None).to_projection(WGS84_PROJECTION)
+    if mode == "norm":
+        return np.array(
+            [(g.shp.y + 90.0) / 180.0, (g.shp.x + 180.0) / 360.0], dtype=np.float32
+        )
     return np.array([g.shp.y, g.shp.x], dtype=np.float32)
 
 
@@ -997,7 +1007,12 @@ class RslearnToOlmoEarthDataset(Dataset):
                 input_dict, target, metadata = self.dataset[base_idx]
                 self._cached_base = (
                     base_idx,
-                    (input_dict, target, _window_key(metadata), _window_latlon(metadata)),
+                    (
+                        input_dict,
+                        target,
+                        _window_key(metadata),
+                        _window_latlon(metadata),
+                    ),
                 )
             input_dict, target, window_key, latlon = self._cached_base[1]
             return self._transform_sample(
