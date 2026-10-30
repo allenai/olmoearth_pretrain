@@ -1603,6 +1603,24 @@ EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13cdnzarr_ws16_ps1"] = replace(
     dataset="pastis_year_aligned_oe13cdnzarr",
 )
 
+# Window retrieval: the same pastis_year_aligned windows, with per-pixel embeddings
+# for one time range each, baked by scripts/tools/window_retrieval_pastis_bake.py:
+# the calendar-2019 floor, fresh inference on Sep 2018 - Aug 2019 and on Mar - Aug
+# 2019 (the ceilings), the naive cross-year mean, and the retrieved crop year and
+# Mar - Aug window. Only --model=olmoearth_precomputed runs them.
+for _variant in (
+    "annual2019",
+    "fresh_sepaug",
+    "avg_sepaug",
+    "ret_sepaug",
+    "fresh_maraug",
+    "ret_maraug",
+):
+    EMBEDDING_EVAL_TASKS[f"pastis_tw_{_variant}_ws16_ps1"] = replace(
+        EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"],
+        dataset=f"pastis_tw_{_variant}",
+    )
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
