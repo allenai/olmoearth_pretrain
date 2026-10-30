@@ -551,6 +551,14 @@ def timestamps_to_ordinals(timestamps: np.ndarray) -> np.ndarray:
     )
 
 
+def _ordinals_to_timestamps(ordinals: np.ndarray) -> np.ndarray:
+    """``(T,)`` proleptic ordinal days -> ``(T, 3)`` ``[day, month-1, year]``."""
+    days = [date.fromordinal(int(o)) for o in ordinals]
+    return np.array(
+        [[d.day, d.month - 1, d.year] for d in days], dtype=np.int64
+    ).reshape(-1, 3)
+
+
 def _months(timestamps: np.ndarray) -> np.ndarray:
     """``(T, 3)`` ``[day, month-1, year]`` -> calendar month index per step."""
     if len(timestamps) == 0:
@@ -655,6 +663,7 @@ class OlmoEarthDataset(Dataset):
         per_modality_timestamps: bool = False,
         load_s2_cloud_mask: bool = False,
         composite_selection: str = "median",
+        shared_time_axis: bool = False,
         budget_before_read: bool = False,
         max_s2_cloud_fraction: float | None = None,
         scene_cloud_cover_paths: dict[str, str] | None = None,
@@ -700,6 +709,10 @@ class OlmoEarthDataset(Dataset):
                 (the bin's capture with the lowest scene cloud cover, as v1.3's
                 monthly layers were built; modalities without a
                 ``scene_cloud_cover_paths`` sidecar pick at random).
+            shared_time_axis: Composite samples only: every multitemporal modality
+                sits on one shared axis of consecutive bins (MISSING where it has
+                no capture), each bin dated by its start, as v1.3's monthly layers
+                are; instead of each modality's own captures dated by capture.
             budget_before_read: With composites, choose the token-budget run of bins
                 from the timestamps before reading, and read only those bins'
                 captures (without composites the run is always chosen first). Same
@@ -767,6 +780,7 @@ class OlmoEarthDataset(Dataset):
         if composite_selection == "least_cloudy" and not scene_cloud_cover_paths:
             raise ValueError("least_cloudy needs scene_cloud_cover_paths")
         self.composite_selection = composite_selection
+        self.shared_time_axis = shared_time_axis
         self.budget_before_read = budget_before_read
         if max_s2_cloud_fraction is not None and not load_s2_cloud_mask:
             raise ValueError("max_s2_cloud_fraction needs load_s2_cloud_mask")
@@ -1719,6 +1733,12 @@ class OlmoEarthDataset(Dataset):
         )
         scl, scl_timestamps = read["scl"], read["scl_timestamps"]
 
+        shared = self.shared_time_axis and _is_composite(args)
+        if shared:
+            starts = [ordinals[m][k] for m, k in kept.items() if len(k) > 0]
+            origin = read["origin"]
+            if origin is None and starts:
+                origin = min(int(o.min()) for o in starts)
         if _is_composite(args):
             data, timestamps, kept, s2_no_clear = self._composite(
                 data,
@@ -1735,6 +1755,14 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             s2_no_clear = None
+        if shared and origin is not None:
+            # Date every bin by its start, so modalities in one bin share a step.
+            days = int(args.composite_days)  # type: ignore[arg-type]
+            for modality, ts in timestamps.items():
+                if len(ts) == 0:
+                    continue
+                bins = (timestamps_to_ordinals(ts) - origin) // days
+                timestamps[modality] = _ordinals_to_timestamps(origin + bins * days)
         union_ts, step_index = build_union_timeline(
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
@@ -1748,6 +1776,22 @@ class OlmoEarthDataset(Dataset):
         sample_dict: dict[str, Any] = {
             "timestamps": union_ts[first_step : last_step + 1]
         }
+        # Shared axis: every bin from the run's first to last, each modality's
+        # captures at their bin (``slot``), the rest MISSING.
+        slot: dict[str, np.ndarray] = {}
+        n_slots = 0
+        if shared and last_step >= first_step:
+            days = int(args.composite_days)  # type: ignore[arg-type]
+            run_ordinals = timestamps_to_ordinals(sample_dict["timestamps"])
+            n_slots = int((run_ordinals[-1] - run_ordinals[0]) // days) + 1
+            sample_dict["timestamps"] = _ordinals_to_timestamps(
+                run_ordinals[0] + np.arange(n_slots) * days
+            )
+            slot = {
+                m: (run_ordinals[np.clip(st - first_step, 0, None)] - run_ordinals[0])
+                // days
+                for m, st in step_index.items()
+            }
         for modality in self.training_modalities:
             spec = Modality.get(modality)
             if spec.image_tile_size_factor != 1:
@@ -1765,7 +1809,30 @@ class OlmoEarthDataset(Dataset):
                 s2_cloud = (
                     self.load_s2_cloud_mask and modality == Modality.SENTINEL2_L2A.name
                 )
-                if in_run.any():
+                if n_slots:
+                    values = np.full(
+                        (sampled_hw, sampled_hw, n_slots, spec.num_bands),
+                        MISSING_VALUE,
+                        dtype=self.dtype,
+                    )
+                    captures = (
+                        kept[modality][in_run] if in_run.any() else np.zeros(0, int)
+                    )
+                    where = slot[modality][in_run] if in_run.any() else captures
+                    if len(captures):
+                        values[:, :, where] = prepare(
+                            modality, data[modality][:, :, captures]
+                        )
+                    sample_dict[modality] = values
+                    sample_dict[time_index_field(modality)] = np.arange(n_slots)
+                    if s2_cloud:
+                        flags = np.zeros((sampled_hw, sampled_hw, n_slots), np.uint8)
+                        if len(captures) and s2_no_clear is not None:
+                            flags[:, :, where] = s2_no_clear.astype(np.uint8)[
+                                :, :, captures
+                            ]
+                        sample_dict[S2_CLOUD_FIELD] = flags
+                elif in_run.any():
                     captures = kept[modality][in_run]
                     sample_dict[modality] = prepare(
                         modality, data[modality][:, :, captures]
@@ -1948,6 +2015,7 @@ class OlmoEarthDatasetConfig(Config):
     per_modality_timestamps: bool = False
     load_s2_cloud_mask: bool = False
     composite_selection: str = "median"
+    shared_time_axis: bool = False
     budget_before_read: bool = False
     max_s2_cloud_fraction: float | None = None
     scene_cloud_cover_paths: dict[str, str] | None = None

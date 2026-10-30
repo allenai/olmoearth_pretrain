@@ -1086,6 +1086,51 @@ def test_random_clear_composites_are_real_captures(allcap_h5py_dir: UPath) -> No
     _assert_same_item((1, sample), dataset[args])
 
 
+@pytest.mark.parametrize("budget_before_read", [False, True])
+def test_shared_time_axis_puts_every_modality_on_consecutive_bins(
+    allcap_h5py_dir: UPath, budget_before_read: bool
+) -> None:
+    """shared_time_axis: one axis of consecutive bin starts for all modalities.
+
+    Each modality has a slot per bin (identity time index, MISSING where it has no
+    capture), and its real slots hold the same captures as without the shared axis.
+    """
+    kwargs: dict[str, Any] = dict(
+        load_s2_cloud_mask=True,
+        composite_selection="random_clear",
+        budget_before_read=budget_before_read,
+    )
+    own = _dataset(allcap_h5py_dir, **kwargs)
+    shared = _dataset(allcap_h5py_dir, shared_time_axis=True, **kwargs)
+    for seed in range(4):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=2,
+            sampled_hw_p=3,
+            token_budget=400,
+            tokenization_config=S2_SINGLE,
+            composite_days=30.0,
+            budget_exclude_modalities=frozenset({"srtm"}),
+            seed=seed,
+        )
+        _, a = own[args]
+        _, b = shared[args]
+        ords = timestamps_to_ordinals(b.timestamps)
+        assert (np.diff(ords) == 30).all()
+        n = len(ords)
+        for m in ("sentinel2_l2a", "sentinel1", "landsat_l2"):
+            values = _field(b, m)
+            assert values.shape[2] == n
+            np.testing.assert_array_equal(_field(b, f"{m}_time_index"), np.arange(n))
+            real = ~(values == MISSING_VALUE).all(axis=(0, 1, 3))
+            own_values = _field(a, m)
+            own_real = ~(own_values == MISSING_VALUE).all(axis=(0, 1, 3))
+            np.testing.assert_array_equal(
+                values[:, :, real], own_values[:, :, own_real]
+            )
+        assert _field(b, "sentinel2_l2a_cloud").shape[2] == n
+
+
 def test_budget_before_read_without_a_budget_changes_nothing(
     allcap_h5py_dir: UPath,
 ) -> None:
