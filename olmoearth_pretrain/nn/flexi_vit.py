@@ -46,6 +46,7 @@ from olmoearth_pretrain.nn.joint_latent import (
     sort_tokens_by_cell,
     token_mix_attention_kwargs,
 )
+from olmoearth_pretrain.nn.location_encoders import LocationConditioning
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -2467,6 +2468,9 @@ class Encoder(FlexiVitBase):
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
         perceiver_config: PerceiverConfig | JointLatentConfig | None = None,
+        location_encoder: str | None = None,
+        location_encoder_weights: str | None = None,
+        location_dropout: float = 0.5,
     ):
         """Initialize the encoder.
 
@@ -2530,6 +2534,13 @@ class Encoder(FlexiVitBase):
                 :class:`PerceiverConfig`. Requires a RoPE position encoding. A
                 :class:`JointLatentConfig` instead produces the register grid by joint
                 token-latent attention (no ViT blocks, no reads; use ``depth=0``).
+            location_encoder: If set (``"tte"`` or ``"satclip_l40"``), a frozen
+                pretrained location encoder maps the sample's ``latlon`` to a vector
+                that is added (LayerNorm + zero-init Linear) to every encoder token;
+                see :class:`LocationConditioning`.
+            location_encoder_weights: Path of the frozen encoder's tensor dict.
+            location_dropout: Fraction of training samples given the learned
+                "no location" vector instead of their location.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2663,6 +2674,20 @@ class Encoder(FlexiVitBase):
                 p.requires_grad = False
         if self.has_register_tokens:
             self._init_register_tokens()
+
+        # Built last (after the custom init) so every other weight initializes exactly
+        # as without it; its projection stays zero-initialized.
+        self.location_conditioning: LocationConditioning | None = None
+        if location_encoder is not None:
+            if location_encoder_weights is None:
+                raise ValueError("location_encoder needs location_encoder_weights")
+            self.location_conditioning = LocationConditioning(
+                location_encoder,
+                location_encoder_weights,
+                embedding_size=self.embedding_size,
+                dropout=location_dropout,
+            )
+            self.location_conditioning.proj._skip_custom_init = True  # type: ignore[assignment]
 
     def enable_band_dropout(self) -> None:
         """Enable band dropout using the configured rate.
@@ -2931,8 +2956,13 @@ class Encoder(FlexiVitBase):
         input_res: int,
         token_exit_cfg: dict[str, int] | None = None,
         fast_pass: bool = False,
+        location_cond: Tensor | None = None,
     ) -> tuple[dict[str, Tensor], dict[str, Any] | None, dict[str, Any] | None]:
-        """Apply the attention to the tokens and masks."""
+        """Apply the attention to the tokens and masks.
+
+        ``location_cond`` (B, D), if given, is added to every token after the
+        position/time encodings.
+        """
         tokens_only_dict, original_masks_dict, modalities_to_dims_dict = (
             self.split_tokens_masks_and_dims(x)
         )
@@ -2949,6 +2979,10 @@ class Encoder(FlexiVitBase):
             patch_size,
             input_res,
         )
+        if location_cond is not None:
+            for name, toks in tokens_dict.items():
+                shape = (toks.shape[0],) + (1,) * (toks.ndim - 2) + (toks.shape[-1],)
+                tokens_dict[name] = toks + location_cond.view(shape).to(toks.dtype)
         positions = self.build_rope_positions(
             tokens_only_dict,
             original_masks_dict,
@@ -3161,6 +3195,13 @@ class Encoder(FlexiVitBase):
         if token_exit_cfg is None or any(
             [exit_depth > 0 for exit_depth in token_exit_cfg.values()]
         ):
+            location_cond = None
+            if self.location_conditioning is not None:
+                location_cond = self.location_conditioning(
+                    getattr(x, "latlon", None),
+                    batch_size=x.timestamps.shape[0],
+                    device=x.timestamps.device,
+                )
             patchified_tokens_and_masks, token_norm_stats, register_output = (
                 self.apply_attn(
                     x=patchified_tokens_and_masks,
@@ -3169,6 +3210,7 @@ class Encoder(FlexiVitBase):
                     input_res=input_res,
                     token_exit_cfg=token_exit_cfg,
                     fast_pass=fast_pass,
+                    location_cond=location_cond,
                 )
             )
         else:
@@ -3932,6 +3974,10 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str | None = None
     # Perceiver-style spatial Perceiver; None -> plain encoder.
     perceiver_config: PerceiverConfig | JointLatentConfig | None = None
+    # Frozen pretrained location encoder ("tte" / "satclip_l40") added to every token.
+    location_encoder: str | None = None
+    location_encoder_weights: str | None = None
+    location_dropout: float = 0.5
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
