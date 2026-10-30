@@ -593,3 +593,54 @@ class TestFootprintLoss:
         }
         with pytest.raises(ValueError):
             SupervisionModalityConfig(**{**base, **kwargs})
+
+
+class TestMlpHead:
+    """decoder='mlp': the per-cell head as Linear -> LayerNorm -> ReLU -> Linear."""
+
+    def _head(self, decoder: str) -> SupervisionHead:
+        wc = SupervisionModalityConfig(
+            task_type=SupervisionTaskType.CLASSIFICATION,
+            num_output_channels=11,
+            class_values=[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0],
+            decoder=decoder,
+        )
+        return SupervisionHeadConfig(modality_configs={"worldcover": wc}).build(
+            embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+        )
+
+    def test_same_output_shape_as_linear(self) -> None:
+        """Swapping the head depth leaves the prediction layout unchanged."""
+        batch = _make_batch_with_worldcover()
+        grid = _make_register_grid()
+        linear = self._head("linear")(grid, batch)["worldcover"]
+        mlp = self._head("mlp")(grid, batch)["worldcover"]
+        assert mlp.shape == linear.shape
+
+    def test_is_a_two_layer_mlp_and_trains(self) -> None:
+        """The head has the hidden layer and backpropagates into the register grid."""
+        from olmoearth_pretrain.nn.supervision_head import MLP_HEAD_HIDDEN
+
+        head = self._head("mlp")
+        layers = list(head.heads["worldcover"])
+        assert [type(m).__name__ for m in layers] == [
+            "Linear",
+            "LayerNorm",
+            "ReLU",
+            "Linear",
+        ]
+        assert layers[0].out_features == MLP_HEAD_HIDDEN
+        batch = _make_batch_with_worldcover()
+        grid = _make_register_grid()
+        total, _ = compute_supervision_loss(head(grid, batch), batch, head)
+        total.backward()
+        assert grid.grad is not None and grid.grad.abs().sum() > 0
+
+    def test_unknown_decoder_rejected(self) -> None:
+        """Only linear / mlp / upsample are decoders."""
+        with pytest.raises(ValueError, match="decoder"):
+            SupervisionModalityConfig(
+                task_type=SupervisionTaskType.REGRESSION,
+                num_output_channels=1,
+                decoder="transformer",
+            )

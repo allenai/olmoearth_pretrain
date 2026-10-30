@@ -76,13 +76,19 @@ def build_dataset_config(common) -> OlmoEarthDatasetConfig:
 
 
 def build_model_config(
-    common, hires_decoder: str, viirs_footprint_loss: str | None = None
+    common,
+    hires_decoder: str,
+    viirs_footprint_loss: str | None = None,
+    mlp_heads: bool = False,
 ):
     """N2's model (naip_10 encoded) plus open_buildings / viirs regression heads.
 
     ``viirs_footprint_loss`` (N7: ``"log1p"``) scores the VIIRS head on footprint
     means of its 10 m predictions instead of per pixel; see
     ``SupervisionModalityConfig.footprint_loss``. None keeps N5/N6's per-pixel L1.
+    ``mlp_heads`` (N7) turns every per-cell linear head (the six map targets and
+    VIIRS) into a 2-layer MLP (``decoder="mlp"``); Open Buildings keeps
+    ``hires_decoder``.
     """
     config = naip_common.build_model_config(common, ENCODED_MODALITIES)
     assert config.supervision_head_config is not None
@@ -102,6 +108,10 @@ def build_model_config(
         regression_loss_type="l1",
         footprint_loss=viirs_footprint_loss,
     )
+    if mlp_heads:
+        for cfg in heads.values():
+            if cfg.decoder == "linear":
+                cfg.decoder = "mlp"
     return config
 
 

@@ -1,12 +1,19 @@
-"""High-res target arm N7: N6 with the VIIRS head scored on footprint means.
+"""Arm N7: N6 + MLP supervision heads + the VIIRS head scored on footprint means.
 
-VIIRS pixels are ~460 m, stored nearest-resampled onto the 10 m grid, so N5/N6's
-per-pixel L1 asks the head to paint flat ~46 x 46 px blocks whose edges no input can
-show. N7 keeps N6 exactly (upsample decoder for Open Buildings) and changes only the
-VIIRS loss: the head's 10 m predictions are averaged over each VIIRS footprint in
-radiance space and that mean is scored (``footprint_loss="log1p"``). N7 vs N6
-isolates the VIIRS loss. See ``hires_targets_common.py``. Trained as
-``v1_3_naip_n7_viirs_fp``.
+Two changes on top of N6 (upsample decoder for Open Buildings), combined in one arm
+by choice, so N7 vs N6 measures them together:
+
+* MLP heads: every per-cell linear supervision head (WorldCover, CDL, WorldCereal,
+  OSM, SRTM, canopy height, VIIRS) becomes Linear -> LayerNorm -> ReLU -> Linear
+  (hidden 256, as the mlpgram1 back-projection head), so the targets need not be
+  linearly readable from the tokens (cf. SimCLR's nonlinear projection head).
+* VIIRS footprint loss: VIIRS pixels are ~460 m, stored nearest-resampled onto the
+  10 m grid, so a per-pixel L1 asks the head to paint flat ~46 x 46 px blocks whose
+  edges no input can show. The head's 10 m predictions are instead averaged over
+  each VIIRS footprint in radiance space and that mean is scored
+  (``footprint_loss="log1p"``).
+
+See ``hires_targets_common.py``. Trained as ``v1_3_naip_n7_mlp_viirsfp``.
 """
 
 import sys
@@ -28,12 +35,13 @@ build_train_module_config = hires_targets_common.build_train_module_config
 build_dataloader_config = hires_targets_common.build_dataloader_config
 build_dataset_config = hires_targets_common.build_dataset_config
 
-MODULE_PATH = "scripts/official/v1_3/naip/n7_viirs_footprint.py"
+MODULE_PATH = "scripts/official/v1_3/naip/n7_mlp_viirs_footprint.py"
 
 build_model_config = partial(
     hires_targets_common.build_model_config,
     hires_decoder="upsample",
     viirs_footprint_loss="log1p",
+    mlp_heads=True,
 )
 
 

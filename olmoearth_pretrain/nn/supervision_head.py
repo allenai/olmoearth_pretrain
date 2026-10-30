@@ -31,6 +31,9 @@ from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
 
+# Hidden width of decoder="mlp" heads (as mlpgram1's back-projection head).
+MLP_HEAD_HIDDEN = 256
+
 
 class SupervisionTaskType(StrEnum):
     """Type of supervision task for a modality."""
@@ -86,7 +89,11 @@ class SupervisionModalityConfig(Config):
             one combined loss (Table 9: 80.7 vs 80.2 kNN on RESISC-45) and that the
             high-frequency target matters most (low-only 74.3).
         decoder: ``"linear"`` (default): the per-cell linear head + bilinear resize.
-            ``"upsample"`` (spatial modalities on a finer grid only): a small
+            ``"mlp"``: the same per-cell head as a 2-layer MLP
+            (``Linear -> LayerNorm -> ReLU -> Linear``, hidden ``MLP_HEAD_HIDDEN``,
+            the shape of the mlpgram1 back-projection head), so the target need not
+            be linearly readable from the tokens (cf. SimCLR's nonlinear projection
+            head). ``"upsample"`` (spatial modalities on a finer grid only): a small
             progressive-upsampling decoder (``UpsampleHead``) in the spirit of
             Scale-MAE's Laplacian decoder, whose upsampling decoder alone gave
             +1.8 kNN over a vanilla MAE decoder (Table 6: 79.6 vs 77.8). A linear
@@ -140,9 +147,9 @@ class SupervisionModalityConfig(Config):
                 f"target_transform must be None or 'subpixel_stats', got "
                 f"{self.target_transform!r}"
             )
-        if self.decoder not in ("linear", "upsample"):
+        if self.decoder not in ("linear", "mlp", "upsample"):
             raise ValueError(
-                f"decoder must be 'linear' or 'upsample', got {self.decoder!r}"
+                f"decoder must be 'linear', 'mlp' or 'upsample', got {self.decoder!r}"
             )
         if self.laplacian_loss and (
             self.task_type != SupervisionTaskType.REGRESSION
@@ -380,7 +387,15 @@ class SupervisionHead(nn.Module):
             else:
                 out_dim = cfg.num_output_channels
                 self._non_spatial_modalities.add(name)
-            self.heads[name] = nn.Linear(embedding_dim, out_dim)
+            if cfg.decoder == "mlp":
+                self.heads[name] = nn.Sequential(
+                    nn.Linear(embedding_dim, MLP_HEAD_HIDDEN),
+                    nn.LayerNorm(MLP_HEAD_HIDDEN),
+                    nn.ReLU(),
+                    nn.Linear(MLP_HEAD_HIDDEN, out_dim),
+                )
+            else:
+                self.heads[name] = nn.Linear(embedding_dim, out_dim)
 
         for name, cfg in modality_configs.items():
             if cfg.class_values is not None:
