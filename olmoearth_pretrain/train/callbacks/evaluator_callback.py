@@ -65,6 +65,12 @@ from olmoearth_pretrain.evals.linear_probe import (
     train_and_eval_probe,
 )
 from olmoearth_pretrain.evals.metrics import EvalMetric, EvalResult, EvalTaskResult
+from olmoearth_pretrain.evals.tile_regression import (
+    pool_tiles,
+    ridge_readouts,
+    tile_ridge_task_name,
+    window_label_matrix,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.callbacks.wandb import OlmoEarthWandBCallback
 
@@ -161,6 +167,15 @@ class DownstreamTaskConfig:
     # windows (the pastis convention above) instead of center-cropping one
     # window per sample. Mutually exclusive with label_at_center_pixel.
     tile_samples: bool = False
+    # With tile_samples, for datasets whose label describes the whole stored sample
+    # (e.g. us_socioeconomic): mean-pool each sample's tile embeddings back to one
+    # row before probing, so the probe sees one embedding per labeled sample.
+    pool_tiles: bool = False
+    # With pool_tiles: additionally fit a closed-form ridge per listed property of
+    # the windows' vector label layer (tile_label_layer), reusing this task's one
+    # embedding pass. Each is reported as ``{task}_tile_ridge_{property}``.
+    tile_label_properties: list[str] = field(default_factory=list)
+    tile_label_layer: str = "label"
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -369,6 +384,13 @@ class DownstreamEvaluator:
         self.primary_metric_class = task.primary_metric_class
         self.balanced_trial = task.balanced_trial
         self.classifier_probes = task.classifier_probes
+        self.pool_tiles = task.pool_tiles
+        self.tile_label_properties = list(task.tile_label_properties)
+        self.tile_label_layer = task.tile_label_layer
+        if self.pool_tiles and not self.tile_samples:
+            raise ValueError("pool_tiles requires tile_samples")
+        if self.tile_label_properties and not self.pool_tiles:
+            raise ValueError("tile_label_properties requires pool_tiles")
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
@@ -751,6 +773,38 @@ class DownstreamEvaluator:
                 if test_embeddings is not None:
                     test_embeddings = dequantize_embeddings(test_embeddings)
 
+        tile_windows: dict[str, list] = {}
+        if self.pool_tiles:
+            # After the int8 round-trip, so the mean is over real-valued embeddings.
+            # Unshuffled loaders keep a sample's tiles consecutive and in the order
+            # of the rslearn dataset's examples.
+            loaders = {"train": train_loader, "val": val_loader}
+            if self.run_on_test:
+                loaders["test"] = test_loader
+            pooled = {}
+            for split, loader in loaders.items():
+                tiles = loader.dataset._tiles_per_side**2  # type: ignore[attr-defined]
+                tile_windows[split] = loader.dataset.dataset.get_dataset_examples()  # type: ignore[attr-defined]
+                emb, labels = {
+                    "train": (train_embeddings, train_labels),
+                    "val": (val_embeddings, val_labels),
+                    "test": (test_embeddings, test_labels),
+                }[split]
+                pooled[split] = pool_tiles(emb, labels, tiles)
+                if pooled[split][0].shape[0] != len(tile_windows[split]):
+                    raise ValueError(
+                        f"{split}: {pooled[split][0].shape[0]} pooled samples but "
+                        f"{len(tile_windows[split])} windows"
+                    )
+            train_embeddings, train_labels = pooled["train"]
+            val_embeddings, val_labels = pooled["val"]
+            if "test" in pooled:
+                test_embeddings, test_labels = pooled["test"]
+            logger.info(
+                f"Pooled tiles for {self.dataset}: train {tuple(train_embeddings.shape)}, "
+                f"val {tuple(val_embeddings.shape)}"
+            )
+
         # Reduce embedding dimensionality via PCA if specified
         if self.embedding_dim is not None:
             original_dim = train_embeddings.shape[-1]
@@ -823,6 +877,33 @@ class DownstreamEvaluator:
             logger.info(
                 f"Balanced trials for {self.dataset} took "
                 f"{time.time() - trial_start:.2f}s"
+            )
+
+        if self.tile_label_properties:
+            # Same pooled embeddings the host probe saw; one ridge per label.
+            ridge_start = time.time()
+            ridge_results = ridge_readouts(
+                embeddings_by_split={
+                    "train": train_embeddings,
+                    "val": val_embeddings,
+                    "test": test_embeddings,
+                },
+                labels_by_split={
+                    split: window_label_matrix(
+                        windows, self.tile_label_layer, self.tile_label_properties
+                    )
+                    for split, windows in tile_windows.items()
+                },
+                properties=self.tile_label_properties,
+            )
+            for prop, (val_result, test_result) in ridge_results.items():
+                name = tile_ridge_task_name(self.evaluation_name, prop)
+                result.extra_results[name] = val_result
+                if test_result is not None:
+                    result.extra_test_results[name] = test_result
+            logger.info(
+                f"Tile ridge readouts for {self.dataset} took "
+                f"{time.time() - ridge_start:.2f}s"
             )
 
         if self.classifier_probes.names:
