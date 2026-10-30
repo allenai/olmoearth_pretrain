@@ -387,12 +387,20 @@ class RslearnToOlmoEarthDataset(Dataset):
                 f"Unsupported target task type: {self.target_task_type.value}"
             )
 
+        # A per-sample label (window regression / classification) can still be
+        # tiled: every tile of a sample carries the sample's label.
+        tiles_scalar_label = tile_samples and self.target_task_type in {
+            TaskType.WINDOW_REGRESSION,
+            TaskType.CLASSIFICATION,
+        }
         if (
-            window_size is not None or label_at_center_pixel
+            (window_size is not None and not tiles_scalar_label)
+            or label_at_center_pixel
         ) and self.target_task_type != TaskType.SEGMENTATION:
             raise ValueError(
                 "window_size and label_at_center_pixel require a segmentation "
-                f"target, got {self.target_task_type.value}"
+                f"target (or tile_samples with a per-sample label), got "
+                f"{self.target_task_type.value}"
             )
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
@@ -718,9 +726,12 @@ class RslearnToOlmoEarthDataset(Dataset):
         label = self._parse_label(target)
         crop_rows: slice | None = None
         crop_cols: slice | None = None
+        # A per-sample (scalar) label is kept whole for every tile; a label raster
+        # is cropped with the imagery.
+        dense_label = label.ndim == 2
         if tile is not None:
             assert self.window_size is not None
-            if label.shape != (self.sample_size, self.sample_size):
+            if dense_label and label.shape != (self.sample_size, self.sample_size):
                 raise ValueError(
                     f"tile_samples expects {self.sample_size}x{self.sample_size} "
                     f"label rasters, got {tuple(label.shape)}"
@@ -729,7 +740,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             ws = self.window_size
             crop_rows = slice(tile_row * ws, (tile_row + 1) * ws)
             crop_cols = slice(tile_col * ws, (tile_col + 1) * ws)
-            label = label[crop_rows, crop_cols]
+            if dense_label:
+                label = label[crop_rows, crop_cols]
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
 
@@ -763,6 +775,21 @@ class RslearnToOlmoEarthDataset(Dataset):
             arr = rearrange(img, "c t h w -> h w t c")
             if crop_rows is not None and crop_cols is not None:
                 arr = arr[crop_rows, crop_cols]
+            if (
+                tile is not None
+                and not dense_label
+                and arr.shape[:2]
+                != (
+                    self.window_size,
+                    self.window_size,
+                )
+            ):
+                # No label raster to check the stored size against, so check
+                # the imagery: a short raster would yield a short tile.
+                raise ValueError(
+                    f"tile_samples expects {self.sample_size}x{self.sample_size} "
+                    f"{modality} rasters, got a {tuple(arr.shape[:2])} tile"
+                )
 
             if modality == Modality.SENTINEL1.name:
                 arr = convert_to_db(arr)
