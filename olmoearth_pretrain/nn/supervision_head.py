@@ -22,6 +22,11 @@ from torch import Tensor
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import MISSING_VALUE, Modality
+from olmoearth_pretrain.data.normalize import (
+    Normalizer,
+    Strategy,
+    load_computed_config,
+)
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -86,6 +91,22 @@ class SupervisionModalityConfig(Config):
             Scale-MAE's Laplacian decoder, whose upsampling decoder alone gave
             +1.8 kNN over a vanilla MAE decoder (Table 6: 79.6 vs 77.8). A linear
             head + bilinear resize can hardly express sharp sub-pixel edges.
+        footprint_loss: For regression on a coarse sensor stored nearest-resampled
+            onto the 10 m grid (e.g. VIIRS, ~460 m pixels). Such a target is constant
+            over each source pixel's footprint, so scoring every 10 m pixel asks the
+            head to paint flat blocks with edges it cannot see. Instead the head's
+            fine predictions are averaged over each footprint -- the pixels of one
+            sample and timestep sharing an identical target value (two adjacent
+            same-valued source pixels merge into one region with the same target,
+            a weaker but still correct constraint) -- and that mean is scored with
+            ``regression_loss_type``. Each pixel carries its footprint's error, so a
+            footprint weighs by its visible area (footprints cut by the crop edge
+            count less). ``"identity"`` averages normalized values as they are;
+            ``"log1p"`` is for targets stored as log1p of a physical quantity
+            (VIIRS radiance): predictions are de-normalized with the computed
+            stats, mapped to that quantity with expm1, averaged, and mapped back with
+            log1p, since the sensor averages radiance, not its log. Single-channel
+            spatial regression only.
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -98,6 +119,7 @@ class SupervisionModalityConfig(Config):
     target_transform: str | None = None
     laplacian_loss: bool = False
     decoder: str = "linear"
+    footprint_loss: str | None = None
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -131,6 +153,23 @@ class SupervisionModalityConfig(Config):
             raise ValueError(
                 "laplacian_loss needs a plain regression target (no norm_pix_loss, "
                 "target_transform or cosine loss)"
+            )
+        if self.footprint_loss not in (None, "identity", "log1p"):
+            raise ValueError(
+                f"footprint_loss must be None, 'identity' or 'log1p', got "
+                f"{self.footprint_loss!r}"
+            )
+        if self.footprint_loss is not None and (
+            self.task_type != SupervisionTaskType.REGRESSION
+            or self.num_output_channels != 1
+            or self.norm_pix_loss
+            or self.laplacian_loss
+            or self.target_transform is not None
+            or self.regression_loss_type == "cosine"
+        ):
+            raise ValueError(
+                "footprint_loss needs a plain single-channel regression target (no "
+                "norm_pix_loss, laplacian_loss, target_transform or cosine loss)"
             )
 
 
@@ -349,10 +388,31 @@ class SupervisionHead(nn.Module):
                     f"_class_values_{name}",
                     torch.tensor(cfg.class_values, dtype=torch.float32),
                 )
+            if cfg.footprint_loss is not None:
+                if not Modality.get(name).is_spatial:
+                    raise ValueError(
+                        f"footprint_loss needs a spatial modality ({name})"
+                    )
+                scale, offset = (
+                    _computed_norm_affine(name)
+                    if cfg.footprint_loss == "log1p"
+                    else (1.0, 0.0)
+                )
+                # Not persistent: derived from the norm config, and keeping it out of
+                # the state dict leaves checkpoints loadable either way.
+                self.register_buffer(
+                    f"_footprint_affine_{name}",
+                    torch.tensor([scale, offset], dtype=torch.float32),
+                    persistent=False,
+                )
 
     def get_class_values(self, name: str) -> Tensor:
         """Retrieve the cached class_values buffer for a modality."""
         return getattr(self, f"_class_values_{name}")
+
+    def get_footprint_affine(self, name: str) -> Tensor:
+        """``[scale, offset]`` mapping a normalized value back to the stored one."""
+        return getattr(self, f"_footprint_affine_{name}")
 
     @staticmethod
     def _maybe_interpolate_to_target(
@@ -466,6 +526,18 @@ def _compute_per_modality_losses(
         elif cfg.task_type == SupervisionTaskType.BINARY_CLASSIFICATION:
             loss = _binary_classification_loss(
                 pred, raw_target, valid_mask, pos_weight=cfg.pos_weight
+            )
+        elif (
+            cfg.task_type == SupervisionTaskType.REGRESSION
+            and cfg.footprint_loss is not None
+        ):
+            loss = _footprint_regression_loss(
+                pred,
+                raw_target,
+                valid_mask,
+                affine=supervision_head.get_footprint_affine(name),
+                log1p=cfg.footprint_loss == "log1p",
+                regression_loss_type=cfg.regression_loss_type,
             )
         elif cfg.task_type == SupervisionTaskType.REGRESSION:
             loss = _regression_loss(
@@ -730,3 +802,78 @@ def _laplacian_regression_loss(
     high_elementwise = high_diff.abs() if regression_loss_type == "l1" else high_diff**2
     high_loss = _masked_mean(high_elementwise, high_mask)
     return (low_loss + high_loss).to(pred.dtype)
+
+
+def _computed_norm_affine(name: str) -> tuple[float, float]:
+    """``(scale, offset)`` with ``stored = normalized * scale + offset``.
+
+    Inverts the computed-stats normalization the dataset applies first
+    (``Normalizer._normalize_computed``): ``(x - (mean - k std)) / (2 k std)``.
+    """
+    (band,) = Modality.get(name).band_order
+    stats = load_computed_config()[name][band]
+    k = Normalizer(Strategy.COMPUTED).std_multiplier
+    if k is None:
+        raise ValueError("computed normalization without a std_multiplier")
+    return 2 * k * stats["std"], stats["mean"] - k * stats["std"]
+
+
+def _footprint_regression_loss(
+    pred: Tensor,
+    raw_target: Tensor,
+    valid_mask: Tensor,
+    affine: Tensor,
+    log1p: bool,
+    regression_loss_type: str,
+) -> Tensor:
+    """Score per-footprint means of the prediction against a nearest-resampled target.
+
+    See ``SupervisionModalityConfig.footprint_loss``. ``pred`` and ``raw_target`` are
+    ``[B, H, W, T, 1]`` in normalized units, ``valid_mask`` is ``[B, H, W, T]`` and
+    ``affine`` is ``[scale, offset]`` back to the stored units.
+    """
+    b, h, w, t, _ = pred.shape
+    target = raw_target.float()[..., 0]
+    zeros = torch.zeros_like(target)
+    safe_target = torch.where(valid_mask, target, zeros)
+
+    # A footprint = the pixels of one (sample, timestep) sharing an exact target
+    # value; nearest resampling copies values bit for bit. Invalid pixels all go to
+    # (-1, 0), a group that is never scored.
+    sample_t = torch.arange(b * t, device=pred.device).reshape(b, 1, 1, t)
+    sample_t = torch.where(valid_mask, sample_t.expand(b, h, w, t), -1)
+    value_bits = safe_target.view(torch.int32).long()
+    keys = torch.stack([sample_t.reshape(-1), value_bits.reshape(-1)], dim=1)
+    groups, group_of = torch.unique(keys, dim=0, return_inverse=True)
+
+    scale, offset = affine[0], affine[1]
+    value = torch.where(valid_mask, pred.float()[..., 0] * scale + offset, zeros)
+    value = value.reshape(-1)
+    validf = valid_mask.to(value.dtype).reshape(-1)
+    n_groups = groups.shape[0]
+    counts = torch.zeros(n_groups, device=value.device, dtype=value.dtype)
+    counts = counts.index_add(0, group_of, validf).clamp(min=1.0)
+    if log1p:
+        # The sensor averages radiance, not its log. With radiance = expm1(v),
+        # log1p(mean radiance) = log(mean exp(v)): a per-footprint log-mean-exp,
+        # computed around the (detached) footprint max so it neither overflows nor
+        # underflows to log1p(-1) for any prediction, and needs no non-negativity
+        # squashing (whose flat region would stall the head at init).
+        peak = torch.full_like(counts, float("-inf")).scatter_reduce(
+            0, group_of, value.detach(), reduce="amax", include_self=True
+        )
+        peak = torch.where(torch.isfinite(peak), peak, torch.zeros_like(peak))
+        shifted = torch.exp(value - peak[group_of]) * validf
+        sums = torch.zeros_like(counts).index_add(0, group_of, shifted)
+        # A scored footprint's sum is >= 1 (its peak pixel); the floor only touches
+        # the never-scored group of invalid pixels.
+        mean = peak + torch.log(sums.clamp(min=1e-30)) - torch.log(counts)
+    else:
+        sums = torch.zeros_like(counts).index_add(0, group_of, value * validf)
+        mean = sums / counts
+    footprint_pred = ((mean - offset) / scale)[group_of].reshape(b, h, w, t)
+
+    # Each pixel carries its footprint's error, so a footprint weighs by its area.
+    loss_fn = F.l1_loss if regression_loss_type == "l1" else F.mse_loss
+    elementwise = loss_fn(footprint_pred, safe_target, reduction="none")
+    return _masked_mean(elementwise, valid_mask).to(pred.dtype)

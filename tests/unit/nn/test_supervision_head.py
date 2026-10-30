@@ -434,3 +434,162 @@ class TestHighResTargets:
             SupervisionHeadConfig(modality_configs={"srtm": cfg}).build(
                 embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
             )
+
+
+def _viirs_head(mode: str = "log1p", loss_type: str = "l1") -> SupervisionHead:
+    cfg = SupervisionModalityConfig(
+        task_type=SupervisionTaskType.REGRESSION,
+        num_output_channels=1,
+        regression_loss_type=loss_type,
+        footprint_loss=mode,
+    )
+    return SupervisionHeadConfig(modality_configs={"viirs": cfg}).build(
+        embedding_dim=D, max_patch_size=MAX_PATCH_SIZE
+    )
+
+
+def _footprint_batch(stored: torch.Tensor) -> MaskedOlmoEarthSample:
+    """A VIIRS-like batch: per-sample 2x2 footprints of 16x16 px, one stored value each.
+
+    ``stored`` is ``[B, 2, 2]`` in normalized units.
+    """
+    target = stored.repeat_interleave(16, dim=1).repeat_interleave(16, dim=2)
+    target = target[..., None, None]  # [B, 32, 32, 1, 1]
+    timestamps = torch.tensor([[1, 1, 2023]], dtype=torch.long).expand(B, -1, -1)
+    return MaskedOlmoEarthSample(
+        timestamps=timestamps,
+        viirs=target,
+        viirs_mask=torch.full_like(target, MaskValue.DECODER.value),
+    )
+
+
+class TestFootprintLoss:
+    """footprint_loss: score footprint means of a coarse, nearest-resampled target."""
+
+    def _affine(self) -> tuple[float, float]:
+        scale, offset = _viirs_head().get_footprint_affine("viirs").tolist()
+        return scale, offset
+
+    def _to_norm(self, log1p_value: torch.Tensor) -> torch.Tensor:
+        scale, offset = self._affine()
+        return (log1p_value - offset) / scale
+
+    def test_computed_affine_inverts_the_dataset_normalizer(self) -> None:
+        """The stored [scale, offset] undo Normalizer's computed-stats mapping."""
+        import numpy as np
+
+        from olmoearth_pretrain.data.constants import Modality
+        from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+
+        x = np.array([0.0, 1.0, 3.5])
+        normed = Normalizer(Strategy.COMPUTED).normalize(Modality.VIIRS, x)
+        scale, offset = self._affine()
+        assert np.allclose(normed * scale + offset, x, atol=1e-5)
+
+    def test_zero_when_radiance_means_match_despite_subpixel_structure(self) -> None:
+        """Lights placed anywhere inside a footprint cost nothing if the mean is right."""
+        radiance = torch.tensor([[[5.0, 20.0], [8.0, 50.0]], [[6.0, 9.0], [30.0, 7.0]]])
+        batch = _footprint_batch(self._to_norm(torch.log1p(radiance)))
+        # Inside each footprint: left half at 0.5r, right half at 1.5r (mean r).
+        fine = radiance.repeat_interleave(16, dim=1).repeat_interleave(16, dim=2)
+        stripes = torch.tensor([0.5] * 8 + [1.5] * 8).repeat(2)  # over W
+        pred = self._to_norm(torch.log1p(fine * stripes))[..., None, None]
+
+        _, footprint = compute_supervision_loss({"viirs": pred}, batch, _viirs_head())
+        plain_head = SupervisionHeadConfig(
+            modality_configs={
+                "viirs": SupervisionModalityConfig(
+                    task_type=SupervisionTaskType.REGRESSION,
+                    num_output_channels=1,
+                    regression_loss_type="l1",
+                )
+            }
+        ).build(embedding_dim=D, max_patch_size=MAX_PATCH_SIZE)
+        _, plain = compute_supervision_loss({"viirs": pred}, batch, plain_head)
+        assert footprint["viirs"].item() == pytest.approx(0.0, abs=1e-4)
+        assert plain["viirs"].item() > 0.05
+
+    def test_log1p_mode_averages_radiance_not_its_log(self) -> None:
+        """Matching the mean of log1p values is not enough: the sensor averages radiance."""
+        log_target = torch.full((B, 2, 2), 2.0)
+        batch = _footprint_batch(self._to_norm(log_target))
+        # Half the pixels at log1p 1, half at 3: the log mean is 2, the radiance mean
+        # (e^1 - 1 + e^3 - 1) / 2 is well above e^2 - 1.
+        stripes = torch.tensor([1.0] * 8 + [3.0] * 8).repeat(2)
+        pred = self._to_norm(stripes.expand(B, 32, 32))[..., None, None]
+        _, losses = compute_supervision_loss({"viirs": pred}, batch, _viirs_head())
+        assert losses["viirs"].item() > 0.01
+
+    def test_identity_mode_matches_manual(self) -> None:
+        """identity: each pixel is scored by |footprint mean of pred - target|."""
+        stored = torch.tensor([[[0.1, 0.2], [0.3, 0.4]], [[0.5, 0.6], [0.7, 0.8]]])
+        batch = _footprint_batch(stored)
+        pred = torch.randn(B, 32, 32, 1, 1)
+        _, losses = compute_supervision_loss(
+            {"viirs": pred}, batch, _viirs_head(mode="identity")
+        )
+        block_means = pred[..., 0, 0].unfold(1, 16, 16).unfold(2, 16, 16).mean((-2, -1))
+        expected = (block_means - stored).abs().mean()  # equal-size footprints
+        assert losses["viirs"].item() == pytest.approx(expected.item(), abs=1e-5)
+
+    def test_same_value_in_different_samples_is_not_one_footprint(self) -> None:
+        """Footprints never span samples, even when their stored values coincide."""
+        batch = _footprint_batch(torch.full((B, 2, 2), 0.5))
+        pred = torch.full((B, 32, 32, 1, 1), 0.5)
+        pred[1] += 0.2  # sample 0 exact, sample 1 off by 0.2 everywhere
+        _, losses = compute_supervision_loss(
+            {"viirs": pred}, batch, _viirs_head(mode="identity", loss_type="mse")
+        )
+        # Per sample: (0 + 0.2^2) / 2. Pooled across samples it would be 0.1^2.
+        assert losses["viirs"].item() == pytest.approx(0.02, abs=1e-5)
+
+    def test_missing_pixels_are_ignored(self) -> None:
+        """Missing target pixels neither join a footprint nor get scored."""
+        stored = torch.tensor([[[0.1, 0.2], [0.3, 0.4]], [[0.5, 0.6], [0.7, 0.8]]])
+        batch = _footprint_batch(stored)
+        assert batch.viirs is not None
+        batch.viirs[0, :4, :4] = MISSING_VALUE
+        pred = batch.viirs.clone()
+        pred[0, :4, :4] = 1e6  # garbage under the missing pixels
+        _, losses = compute_supervision_loss(
+            {"viirs": pred}, batch, _viirs_head(mode="identity")
+        )
+        assert losses["viirs"].item() == pytest.approx(0.0, abs=1e-6)
+
+    def test_gradients_reach_register_grid_at_init(self) -> None:
+        """End to end through a freshly built head, the loss has a usable gradient."""
+        head = _viirs_head()
+        batch = _footprint_batch(torch.rand(B, 2, 2))
+        grid = _make_register_grid()
+        total, _ = compute_supervision_loss(head(grid, batch), batch, head)
+        total.backward()
+        assert grid.grad is not None and torch.isfinite(grid.grad).all()
+        assert grid.grad.abs().sum() > 1e-3
+
+    @pytest.mark.parametrize("wild", [1e4, -1e4])
+    def test_wild_predictions_stay_finite(self, wild: float) -> None:
+        """Far outside the data range, expm1 neither overflows nor yields NaN."""
+        batch = _footprint_batch(torch.rand(B, 2, 2))
+        pred = torch.full((B, 32, 32, 1, 1), wild, requires_grad=True)
+        total, _ = compute_supervision_loss({"viirs": pred}, batch, _viirs_head())
+        total.backward()
+        assert torch.isfinite(total)
+        assert pred.grad is not None and torch.isfinite(pred.grad).all()
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"footprint_loss": "mean"},
+            {"footprint_loss": "log1p", "laplacian_loss": True},
+            {"footprint_loss": "log1p", "num_output_channels": 3},
+            {"footprint_loss": "log1p", "regression_loss_type": "cosine"},
+        ],
+    )
+    def test_invalid_configs_are_rejected(self, kwargs: dict[str, Any]) -> None:
+        """Only plain single-channel regression can use footprint_loss."""
+        base: dict[str, Any] = {
+            "task_type": SupervisionTaskType.REGRESSION,
+            "num_output_channels": 1,
+        }
+        with pytest.raises(ValueError):
+            SupervisionModalityConfig(**{**base, **kwargs})
