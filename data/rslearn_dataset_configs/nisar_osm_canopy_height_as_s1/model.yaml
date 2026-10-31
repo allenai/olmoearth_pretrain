@@ -35,7 +35,9 @@ data:
         tasks:
           eval_task:
             class_path: rslearn.train.tasks.per_pixel_regression.PerPixelRegressionTask
-            init_args: {}
+            init_args:
+              # WRI canopy height map nodata (uint8 255) -> invalid, masked from loss/metrics.
+              nodata_value: 255
         input_mapping:
           eval_task:
             targets: targets
