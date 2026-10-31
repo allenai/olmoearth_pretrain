@@ -14,8 +14,14 @@ Only masking and band dropout differ from the control ``v1_3_rc_ld1_pixtgt_pix51
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
+
+# The 300-step smoke (01M67TT7D15Y0RXA325MPCN6RR) reserved 75.9 of 80 GiB with 31 CUDA
+# allocation-retry warnings (control: 3): the per-sample visible-token spread fragments
+# the caching allocator. Expandable segments avoid that; numerics are unchanged.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claude_findings"))
 
