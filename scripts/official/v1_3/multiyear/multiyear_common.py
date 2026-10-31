@@ -63,6 +63,9 @@ OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/helios/dataset/osm_recent
 _Q4Y_MODALITIES = "landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map"
 OSM_QUARTERLY4Y_PILOT_H5_DIR = f"/weka/dfive-default/helios/dataset/osm_quarterly4y_pilot/h5py_data_w_missing_timesteps_zstd_3_128_x_4/{_Q4Y_MODALITIES}/1200"
 OSM_QUARTERLY4Y_H5_DIR = OSM_QUARTERLY4Y_PILOT_H5_DIR
+# With the pilot H5, the one-year half is cut to 1200 random samples of the random-time subset so smoke
+# tests see the full run's ~50/50 one-year / four-year mix (otherwise the aux loss almost never fires).
+SMOKE_OSM_SAMPLING_FILTER_IDX_FILE = "/weka/dfive-default/agent/favyen/2026-10-30-favyen-multiyear-pretrain/filters/smoke_osm_sampling_1200_idx.npy"
 # Quarterly samples: 4 steps per year, subsampled as a years x quarters grid.
 YEAR_SPREAD_STEPS_PER_YEAR = 4
 # Both corpora are padded to 16 steps (the one-year samples get 4 MISSING slots) so
@@ -92,7 +95,11 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
             OlmoEarthDatasetConfig(
                 h5py_dir=OSM_SAMPLING_H5_DIR,
                 training_modalities=common.training_modalities,
-                filter_idx_file=OSM_RANDOM_TIME_FILTER_IDX_FILE,
+                filter_idx_file=(
+                    SMOKE_OSM_SAMPLING_FILTER_IDX_FILE
+                    if OSM_QUARTERLY4Y_H5_DIR == OSM_QUARTERLY4Y_PILOT_H5_DIR
+                    else OSM_RANDOM_TIME_FILTER_IDX_FILE
+                ),
             ),
             OlmoEarthDatasetConfig(
                 h5py_dir=OSM_QUARTERLY4Y_H5_DIR,
