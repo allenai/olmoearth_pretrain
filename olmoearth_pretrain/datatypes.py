@@ -113,6 +113,11 @@ class OlmoEarthSample(NamedTuple):
     )
     # meta_canopy_height (Meta Canopy Height V2): canopy_height band.
     meta_canopy_height: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    hand: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    hydro: ArrayTensor | None = None  # [B, H, W, 1, 2]
+    ghsl: ArrayTensor | None = None  # [B, H, W, 1, 2]
+    # lidar_height is 4x the height/width of sentinel2_l2a, like open_buildings.
+    lidar_height: ArrayTensor | None = None  # [B, 4H, 4W, 1, 3]
     # era5_10 is not spatially varying, so it has no height/width dimensions.
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
@@ -409,6 +414,14 @@ class MaskedOlmoEarthSample(NamedTuple):
     open_buildings_mask: Tensor | None = None
     meta_canopy_height: Tensor | None = None
     meta_canopy_height_mask: Tensor | None = None
+    hand: Tensor | None = None
+    hand_mask: Tensor | None = None
+    hydro: Tensor | None = None
+    hydro_mask: Tensor | None = None
+    ghsl: Tensor | None = None
+    ghsl_mask: Tensor | None = None
+    lidar_height: Tensor | None = None
+    lidar_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
@@ -561,6 +574,14 @@ class TokensAndMasks(NamedTuple):
     open_buildings_mask: Tensor | None = None
     meta_canopy_height: Tensor | None = None
     meta_canopy_height_mask: Tensor | None = None
+    hand: Tensor | None = None
+    hand_mask: Tensor | None = None
+    hydro: Tensor | None = None
+    hydro_mask: Tensor | None = None
+    ghsl: Tensor | None = None
+    ghsl_mask: Tensor | None = None
+    lidar_height: Tensor | None = None
+    lidar_height_mask: Tensor | None = None
     era5_10: Tensor | None = None
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None

@@ -623,6 +623,52 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Height above nearest drainage, from GLO-30 HAND v1 (ASF, CC0, 30 m), stored
+    # as log1p(clip(HAND m, 0, 200)) at 10 m. Target only (card t-v3sdsf).
+    HAND = ModalitySpec(
+        name="hand",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["log1p_hand"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # HydroSHEDS v1 (3", 15" ACA above 60N) at 10 m: log10 upstream area (km^2)
+    # and log1p distance (m, capped at 5 km) to the nearest cell with >= 10 km^2
+    # upstream. Target only (card t-v3sdsf).
+    HYDRO = ModalitySpec(
+        name="hydro",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["log10_upa", "log1p_dist_river"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # GHSL R2023A, epoch 2018: GHS-BUILT-S 10 m built-up fraction and log1p of
+    # GHS-BUILT-H ANBH (100 m, average net building height in m). Target only
+    # (card t-v3sdsf).
+    GHSL = ModalitySpec(
+        name="ghsl",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["built_frac", "log1p_anbh"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # National lidar (US 3DEP, NL AHN, FR LiDAR HD, England EA) height above
+    # ground at 2.5 m/pixel (like open_buildings): mean and max height (m, clipped
+    # to [0, 100]) and the fraction of the cell above 2 m, aggregated from the
+    # native 0.5-2 m grids. Present for ~15-20% of samples. Target only (card
+    # t-v3sdsf).
+    LIDAR_HEIGHT = ModalitySpec(
+        name="lidar_height",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["hag_mean", "hag_max", "cover_2m"], 4)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+        image_tile_size_factor=4,
+    )
+
     NDVI = ModalitySpec(
         name="ndvi",
         tile_resolution_factor=16,

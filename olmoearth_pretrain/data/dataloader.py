@@ -562,6 +562,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict[Modality.OPEN_BUILDINGS.name] = mock_open_buildings
+        for extra in (Modality.HAND, Modality.HYDRO, Modality.GHSL, Modality.LIDAR_HEIGHT):
+            if extra.name in self.dataset.training_modalities:
+                extra_hw = standard_hw * extra.image_tile_size_factor
+                output_dict[extra.name] = rng.random(
+                    (extra_hw, extra_hw, 1, extra.num_bands), dtype=np.float32
+                )
         if Modality.ERA5_10.name in self.dataset.training_modalities:
             mock_era5_10 = rng.random(
                 (12, Modality.ERA5_10.num_bands), dtype=np.float32
