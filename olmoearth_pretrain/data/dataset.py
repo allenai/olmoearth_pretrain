@@ -254,6 +254,217 @@ def subset_sample_default(
     return OlmoEarthSample(**new_data_dict)
 
 
+# Present timesteps spanning more than this many days mark a multi-year sample. A
+# monthly one-year sample spans at most 330 days (12 x 30 d period starts).
+MULTIYEAR_MIN_SPAN_DAYS = 340
+
+
+def timestamps_to_ordinal_days(timestamps: np.ndarray) -> np.ndarray:
+    """Convert (T, 3) [day, month-1, year] timestamps to proleptic ordinal days."""
+    from datetime import date
+
+    return np.array(
+        [date(int(y), int(m) + 1, int(d)).toordinal() for d, m, y in timestamps],
+        dtype=np.int64,
+    )
+
+
+def present_timesteps(
+    num_timesteps: int, missing_timesteps_masks: dict[str, Any] | None
+) -> np.ndarray:
+    """Boolean [num_timesteps] array: timesteps where any modality has data.
+
+    Without masks (old H5 files) every timestep counts as present. Masks shorter than
+    ``num_timesteps`` are treated as False beyond their length.
+    """
+    if not missing_timesteps_masks:
+        return np.ones(num_timesteps, dtype=bool)
+    present = np.zeros(num_timesteps, dtype=bool)
+    for mask in missing_timesteps_masks.values():
+        mask = np.asarray(mask, dtype=bool)[:num_timesteps]
+        present[: len(mask)] |= mask
+    return present
+
+
+def is_multiyear_sample(
+    timestamps: np.ndarray,
+    missing_timesteps_masks: dict[str, Any] | None,
+    min_span_days: int = MULTIYEAR_MIN_SPAN_DAYS,
+) -> bool:
+    """Whether the present timesteps of a sample span more than ``min_span_days``."""
+    present = present_timesteps(len(timestamps), missing_timesteps_masks)
+    if present.sum() < 2:
+        return False
+    days = timestamps_to_ordinal_days(timestamps[present])
+    return bool(days.max() - days.min() > min_span_days)
+
+
+def choose_year_spread_timesteps(
+    present: np.ndarray,
+    num_timesteps: int,
+    steps_per_year: int = 4,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """Choose a years x quarter-slots grid of timesteps from a multi-year sequence.
+
+    Slot ``s`` of the sequence belongs to year ``s // steps_per_year`` at quarter
+    position ``s % steps_per_year``. With ``T = num_timesteps`` this picks ``n`` years
+    and ``q`` quarter positions with ``n * q <= T`` maximizing ``n * q`` (preferring
+    ``n >= 2``, random among the remaining factorizations), then a random subset of
+    ``n`` years and of ``q`` quarter positions, preferring years / quarter positions
+    that have data. The chosen slots are returned in year-major (chronological)
+    order and padded with -1 (MISSING) up to ``T``.
+
+    Invariant: every chosen year has the same quarter positions, and the earliest
+    *present* chosen slot has the smallest chosen quarter position. Quarter positions
+    smaller than that of the earliest present slot are dropped (padded instead), so
+    for present timesteps at days d (period length P days, earliest at d0),
+    ``round((d - d0) / P) // steps_per_year`` recovers the year grouping. The first
+    returned slot is also always the earliest grid point of the chosen set, so the
+    same holds with d0 = the first returned timestamp.
+
+    Args:
+        present: bool [L] array, True where any modality has data at that slot.
+        num_timesteps: T, the number of timesteps to return (including padding).
+        steps_per_year: periods per year (4 for quarterly).
+        rng: random generator (defaults to the global numpy RNG).
+
+    Returns:
+        int array [T] of slot indices into the sequence, -1 for padded timesteps.
+    """
+    present = np.asarray(present, dtype=bool)
+    length = len(present)
+    num_years = -(-length // steps_per_year)
+    choice = rng.choice if rng is not None else np.random.choice
+    permutation = rng.permutation if rng is not None else np.random.permutation
+
+    def slot_present(s: int) -> bool:
+        return s < length and bool(present[s])
+
+    factorizations = [
+        (n, q)
+        for n in range(1, num_years + 1)
+        for q in range(1, steps_per_year + 1)
+        if n * q <= num_timesteps
+    ]
+    if not factorizations:
+        raise ValueError(f"num_timesteps must be >= 1, got {num_timesteps}")
+    best = max(n * q for n, q in factorizations)
+    factorizations = [(n, q) for n, q in factorizations if n * q == best]
+    if any(n >= 2 for n, _ in factorizations):
+        factorizations = [(n, q) for n, q in factorizations if n >= 2]
+    n, q = factorizations[int(choice(len(factorizations)))]
+
+    def pick(candidates: list[int], has_data: list[bool], k: int) -> list[int]:
+        # Random order, then (stable) prefer candidates with data.
+        order = [int(i) for i in permutation(len(candidates))]
+        order.sort(key=lambda i: not has_data[i])
+        return sorted(candidates[i] for i in order[:k])
+
+    years = list(range(num_years))
+    year_has_data = [
+        any(slot_present(y * steps_per_year + j) for j in range(steps_per_year))
+        for y in years
+    ]
+    chosen_years = pick(years, year_has_data, n)
+    quarters = list(range(steps_per_year))
+    quarter_has_data = [
+        any(slot_present(y * steps_per_year + j) for y in chosen_years)
+        for j in quarters
+    ]
+    chosen_quarters = pick(quarters, quarter_has_data, q)
+
+    def slots_for(qs: list[int]) -> list[int]:
+        return [y * steps_per_year + j for y in chosen_years for j in qs]
+
+    present_slots = [s for s in slots_for(chosen_quarters) if slot_present(s)]
+    if present_slots:
+        first_quarter = present_slots[0] % steps_per_year
+        chosen_quarters = [j for j in chosen_quarters if j >= first_quarter]
+    slots = [s if s < length else -1 for s in slots_for(chosen_quarters)]
+    slots += [-1] * (num_timesteps - len(slots))
+    return np.array(slots, dtype=np.int64)
+
+
+def subset_sample_year_spread(
+    sample: OlmoEarthSample,
+    patch_size: int,
+    max_tokens_per_instance: int | None,
+    sampled_hw_p: int,
+    current_length: int,
+    missing_timesteps_masks: dict[str, Any] | None = None,
+    tokenization_config: TokenizationConfig | None = None,
+    target_t: int | None = None,
+    budget_exclude_modalities: frozenset[str] = frozenset(),
+    steps_per_year: int = 4,
+) -> OlmoEarthSample:
+    """Subset a multi-year OlmoEarthSample with a years x quarter-slots time grid.
+
+    Same token budget and rectangular spatial crop as subset_sample_default, but the
+    ``max_t`` timesteps are chosen by choose_year_spread_timesteps over the first
+    ``current_length`` timesteps instead of as a contiguous slice. Padded timesteps
+    are MISSING_VALUE in every spacetime / time-only modality and repeat the last
+    chosen timestamp (like _pad_timestamps).
+
+    The sample's timestep index must equal its period index on a regular grid (H5
+    built with ConvertToH5pyConfig.time_grid_*), and it must not have been cropped
+    to its first present timestep, so that slot // steps_per_year is the year.
+    """
+    if max_tokens_per_instance is None:
+        return sample
+    max_t = _get_max_t_within_token_budget(
+        sample,
+        sampled_hw_p,
+        max_tokens_per_instance,
+        tokenization_config,
+        exclude_modalities=budget_exclude_modalities,
+    )
+    if target_t is not None:
+        max_t = min(max_t, target_t)
+    present = present_timesteps(current_length, missing_timesteps_masks)
+    slots = choose_year_spread_timesteps(present, max_t, steps_per_year)
+    is_pad = slots < 0
+    real = slots[~is_pad]
+    # Pads take the last chosen slot's timestamp; their data is set to MISSING.
+    gather = np.where(is_pad, real[-1], slots)
+
+    sampled_hw = sampled_hw_p * patch_size
+    start_h = np.random.choice(sample.height - sampled_hw + 1)
+    start_w = np.random.choice(sample.width - sampled_hw + 1)
+
+    new_data_dict: dict[str, ArrayTensor] = {}
+    for attribute, modality in sample.as_dict().items():
+        assert modality is not None
+        if attribute == "timestamps":
+            new_data_dict[attribute] = modality[gather]
+            continue
+        if attribute == "latlon":
+            new_data_dict[attribute] = modality
+            continue
+        modality_spec = Modality.get(attribute)
+        f = modality_spec.image_tile_size_factor
+        if modality_spec.is_spacetime_varying:
+            data = modality[
+                start_h * f : (start_h + sampled_hw) * f,
+                start_w * f : (start_w + sampled_hw) * f,
+            ][:, :, gather].copy()
+            data[:, :, is_pad] = MISSING_VALUE
+            new_data_dict[attribute] = data
+        elif modality_spec.is_space_only_varying:
+            new_data_dict[attribute] = modality[
+                start_h * f : (start_h + sampled_hw) * f,
+                start_w * f : (start_w + sampled_hw) * f,
+            ]
+        elif modality_spec.is_time_only_varying:
+            data = modality[gather].copy()
+            data[is_pad] = MISSING_VALUE
+            new_data_dict[attribute] = data
+        elif modality_spec.is_static_in_space_and_time:
+            new_data_dict[attribute] = modality
+
+    return OlmoEarthSample(**new_data_dict)
+
+
 def subset_sample_cutmix(
     sample: OlmoEarthSample,
     patch_size: int,
@@ -404,6 +615,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        year_spread_steps_per_year: int | None = None,
     ):
         """Initialize the dataset.
 
@@ -429,6 +641,12 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            year_spread_steps_per_year: If set (e.g. 4 for quarterly), multi-year
+                samples (present timesteps spanning > MULTIYEAR_MIN_SPAN_DAYS) are
+                not cropped to their present timesteps and are subset with
+                subset_sample_year_spread (years x quarter-slots) instead of a
+                contiguous slice. Other samples are unaffected. Requires an H5 built
+                on a regular time grid. None (default) disables it.
 
         Returns:
             None
@@ -460,6 +678,11 @@ class OlmoEarthDataset(Dataset):
         self.sample_indices: np.ndarray | None = None
         self.latlon_distribution: np.ndarray | None = None
         self.apply_cutmix = apply_cutmix
+        self.year_spread_steps_per_year = year_spread_steps_per_year
+        if apply_cutmix and year_spread_steps_per_year is not None:
+            raise ValueError(
+                "apply_cutmix is not supported with year_spread_steps_per_year"
+            )
         self.filter_idx_file = filter_idx_file
         if filter_idx_file is not None:
             self.indices_to_filter: np.ndarray | None = np.load(filter_idx_file)
@@ -561,7 +784,9 @@ class OlmoEarthDataset(Dataset):
             m for m in spacetime_varying_training_modalities if m not in metadata_df
         ]
         if absent:
-            logger.info(f"Modalities not in metadata CSV, not used for filter: {absent}")
+            logger.info(
+                f"Modalities not in metadata CSV, not used for filter: {absent}"
+            )
             spacetime_varying_training_modalities = [
                 m for m in spacetime_varying_training_modalities if m not in absent
             ]
@@ -892,12 +1117,13 @@ class OlmoEarthDataset(Dataset):
         """Crop the timestamps to the first and last valid timestep of the present modalities."""
         # Assumes that the missing timesteps masks has already been filtered for training modalities
         # get first present timestep
+        num_timesteps = len(timestamps)
         if not missing_timesteps_masks:
             first_valid_timestep = 0
-            last_valid_timestep = MAX_SEQUENCE_LENGTH
+            last_valid_timestep = num_timesteps - 1
         else:
             # Timestep masks are the same length as the timestamps
-            first_valid_timestep = MAX_SEQUENCE_LENGTH
+            first_valid_timestep = num_timesteps
             last_valid_timestep = 0
             for timestep_mask in missing_timesteps_masks.values():
                 valid_timesteps = np.where(timestep_mask)[0]
@@ -920,17 +1146,37 @@ class OlmoEarthDataset(Dataset):
         h5_file_path = self._get_h5_file_path(index)
 
         sample_dict, missing_timesteps_masks = self.read_h5_file(h5_file_path)
-        timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
-            sample_dict["timestamps"], missing_timesteps_masks
+        year_spread = self.year_spread_steps_per_year is not None and (
+            is_multiyear_sample(sample_dict["timestamps"], missing_timesteps_masks)
         )
-        sample_dict["timestamps"] = timestamps
+        if not year_spread:
+            # Multi-year samples keep their full grid so that index // steps_per_year
+            # is the year (see subset_sample_year_spread).
+            timestamps, missing_timesteps_masks = self._crop_timestamps_and_masks(
+                sample_dict["timestamps"], missing_timesteps_masks
+            )
+            sample_dict["timestamps"] = timestamps
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
         )
 
-        if self.apply_cutmix:
+        if year_spread:
+            assert self.year_spread_steps_per_year is not None
+            subset_sample = subset_sample_year_spread(
+                sample,
+                patch_size=args.patch_size,
+                max_tokens_per_instance=args.token_budget,
+                sampled_hw_p=args.sampled_hw_p,
+                current_length=current_length,
+                missing_timesteps_masks=missing_timesteps_masks,
+                tokenization_config=args.tokenization_config,
+                target_t=args.target_t,
+                budget_exclude_modalities=args.budget_exclude_modalities,
+                steps_per_year=self.year_spread_steps_per_year,
+            )
+        elif self.apply_cutmix:
             subset_sample = subset_sample_cutmix(
                 sample,
                 patch_size=args.patch_size,
@@ -1005,6 +1251,11 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    # Pad every sample's time axis to this many timesteps. All datasets mixed in one
+    # run (OlmoEarthConcatDatasetConfig) must use the same value so batches stack.
+    max_sequence_length: int = MAX_SEQUENCE_LENGTH
+    # See OlmoEarthDataset: years x quarter-slots subsetting of multi-year samples.
+    year_spread_steps_per_year: int | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
@@ -1027,6 +1278,12 @@ class OlmoEarthDatasetConfig(Config):
         # Validate supported_modalities
         if not isinstance(self.training_modalities, list):
             raise ValueError("training_modalities must be a list")
+        if self.max_sequence_length < 1:
+            raise ValueError("max_sequence_length must be positive")
+        if self.apply_cutmix and self.year_spread_steps_per_year is not None:
+            raise ValueError(
+                "apply_cutmix is not supported with year_spread_steps_per_year"
+            )
 
     @property
     def h5py_dir_upath(self) -> UPath:

@@ -190,6 +190,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
         self.temporal_bias = temporal_bias
         self.min_tokens_per_instance = min_tokens_per_instance
         self.max_timesteps = max_timesteps
+        dataset_max_t = getattr(self.dataset, "max_sequence_length", None)
+        if dataset_max_t is not None and max_timesteps > dataset_max_t:
+            raise ValueError(
+                f"max_timesteps={max_timesteps} exceeds the dataset's "
+                f"max_sequence_length={dataset_max_t}"
+            )
         self.tile_size = tile_size
         if max_location_queries is not None and max_location_queries < 1:
             raise ValueError(

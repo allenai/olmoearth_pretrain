@@ -143,7 +143,7 @@ def convert_period_mosaic(
     images: dict[BandSet, list[npt.NDArray]] = {
         band_set: [] for band_set in modality.band_sets
     }
-    time_ranges: list[tuple[datetime, datetime] | None] = []
+    time_ranges: list[tuple[datetime, datetime]] = []
     for group_idx in range(len(layer_data.serialized_item_groups)):
         if not window.is_layer_completed(layer_name, group_idx):
             if missing_okay:
@@ -185,6 +185,11 @@ def convert_period_mosaic(
         if all(_is_blank_mosaic(modality, image) for image in cur_images.values()):
             continue
 
+        if modality in NAN_NODATA_MODALITIES and any(
+            np.isnan(image).any() for image in cur_images.values()
+        ):
+            continue
+
         cur_time_range = (
             group_time_ranges[group_idx]
             if group_time_ranges is not None and group_idx < len(group_time_ranges)
@@ -205,6 +210,15 @@ def convert_period_mosaic(
 
     if len(time_ranges) == 0:
         return
+
+    # Stack in chronological order regardless of the layer's group order (the H5
+    # builder matches timesteps across modalities by period start date).
+    order = sorted(range(len(time_ranges)), key=lambda i: time_ranges[i][0])
+    time_ranges = [time_ranges[i] for i in order]
+    images = {
+        band_set: [band_set_images[i] for i in order]
+        for band_set, band_set_images in images.items()
+    }
 
     for band_set, band_set_images in images.items():
         adjusted_projection, adjusted_bounds = get_adjusted_projection_and_bounds(
@@ -386,3 +400,30 @@ def convert_monthly(
                         end_time=end_time,
                     )
                 )
+
+
+def convert_multitemporal(
+    window: Window,
+    olmoearth_path: UPath,
+    layer_prefix: str,
+    modality: ModalitySpec,
+    layout: str = "monthly",
+) -> None:
+    """Convert a multitemporal raster modality using the given rslearn layer layout.
+
+    Args:
+        window: the rslearn window to read data from.
+        olmoearth_path: OlmoEarth Pretrain dataset path to write to.
+        layer_prefix: the layer prefix (monthly) or layer name (period_mosaic).
+        modality: the modality.
+        layout: "monthly" for twelve <prefix>_moNN single-mosaic layers (see
+            convert_monthly), or "period_mosaic" for one MOSAIC layer with one item
+            group per period (see convert_period_mosaic). Both write under
+            TimeSpan.YEAR (the "_monthly" directories), which the H5 builder reads.
+    """
+    if layout == "monthly":
+        convert_monthly(window, olmoearth_path, layer_prefix, modality)
+    elif layout == "period_mosaic":
+        convert_period_mosaic(window, olmoearth_path, layer_prefix, modality)
+    else:
+        raise ValueError(f"unknown multitemporal layout {layout!r}")

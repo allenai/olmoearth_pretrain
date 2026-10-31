@@ -100,6 +100,20 @@ class OlmoEarthConcatDataset(ConcatDataset):
                     "expected all sub datasets to have same training modalities"
                 )
 
+        # Every sample is padded to its sub dataset's max_sequence_length and a rank
+        # batch can mix sub datasets, so they must agree for the batch to stack.
+        self.max_sequence_length = getattr(
+            self.datasets[0], "max_sequence_length", None
+        )
+        for dataset in self.datasets:
+            if getattr(dataset, "max_sequence_length", None) != (
+                self.max_sequence_length
+            ):
+                raise ValueError(
+                    "expected all sub datasets to have the same max_sequence_length, got "
+                    f"{[getattr(d, 'max_sequence_length', None) for d in self.datasets]}"
+                )
+
 
 @dataclass
 class OlmoEarthConcatDatasetConfig(Config):
@@ -110,6 +124,9 @@ class OlmoEarthConcatDatasetConfig(Config):
     # Optional overrides for each sub dataset
     dataset_percentage: float | None = None
     seed: int | None = None
+    # e.g. 16 to mix 12-step monthly and 16-step quarterly H5s (monthly samples are
+    # padded with 4 missing timesteps).
+    max_sequence_length: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -126,6 +143,8 @@ class OlmoEarthConcatDatasetConfig(Config):
                 dataset_config.dataset_percentage = self.dataset_percentage
             if self.seed is not None:
                 dataset_config.seed = self.seed
+            if self.max_sequence_length is not None:
+                dataset_config.max_sequence_length = self.max_sequence_length
             dataset = dataset_config.build()
             # Dataset must be prepared before passing to OlmoEarthConcatDataset so it has
             # a defined length.

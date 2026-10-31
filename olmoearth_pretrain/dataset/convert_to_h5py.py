@@ -5,6 +5,7 @@ import logging
 import multiprocessing as mp
 import os
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 import h5py
@@ -63,9 +64,28 @@ class ConvertToH5pyConfig(Config):
     required_modality_names: list[str] = field(
         default_factory=lambda: list()
     )  # Samples without all of these are skipped
+    # Samples whose longest spacetime-varying series has fewer timesteps are skipped.
+    min_num_timesteps: int = YEAR_NUM_TIMESTEPS
+    # Optional regular time grid (e.g. 91 days x 16 for 4-year quarterly period
+    # mosaics). When set, every sample's timestamps are the full grid starting at the
+    # window start (period k starts at window_start + k * time_grid_period_days), and
+    # each modality's missing_timesteps_mask marks the grid periods it has. Periods
+    # with no data in any modality stay in the sequence (all masks False), so the
+    # timestep index equals the grid period index. When None, the timestamps are
+    # those of the spacetime modality with the most timesteps (the default).
+    time_grid_period_days: int | None = None
+    time_grid_num_periods: int | None = None
+
+    def validate(self) -> None:
+        """Validate the configuration."""
+        if (self.time_grid_period_days is None) != (self.time_grid_num_periods is None):
+            raise ValueError(
+                "time_grid_period_days and time_grid_num_periods must be set together"
+            )
 
     def build(self) -> "ConvertToH5py":
         """Build the ConvertToH5py object."""
+        self.validate()
         return ConvertToH5py(
             tile_path=UPath(self.tile_path),
             supported_modalities=get_modality_specs_from_names(
@@ -81,6 +101,9 @@ class ConvertToH5pyConfig(Config):
             required_modalities=get_modality_specs_from_names(
                 self.required_modality_names
             ),
+            min_num_timesteps=self.min_num_timesteps,
+            time_grid_period_days=self.time_grid_period_days,
+            time_grid_num_periods=self.time_grid_num_periods,
         )
 
 
@@ -107,6 +130,9 @@ class ConvertToH5py:
         tile_size: int = IMAGE_TILE_SIZE,
         reserved_cores: int = 10,
         required_modalities: list[ModalitySpec] = [],
+        min_num_timesteps: int = YEAR_NUM_TIMESTEPS,
+        time_grid_period_days: int | None = None,
+        time_grid_num_periods: int | None = None,
     ) -> None:
         """Initialize the ConvertToH5py object.
 
@@ -127,6 +153,12 @@ class ConvertToH5py:
                 higher-resolution modalities like NAIP would be split up correspondingly.
             reserved_cores: The number of cores to reserve and not use for multiprocessing.
             required_modalities: Samples without all of these modalities will be skipped.
+            min_num_timesteps: Samples whose longest spacetime-varying series has
+                fewer timesteps are skipped.
+            time_grid_period_days: If set (with time_grid_num_periods), write every
+                sample on a regular time grid of this period length starting at the
+                window start; see ConvertToH5pyConfig.
+            time_grid_num_periods: Number of periods in the regular time grid.
         """
         self.tile_path = tile_path
         self.supported_modalities = supported_modalities
@@ -148,6 +180,13 @@ class ConvertToH5py:
         self.num_subtiles_per_dim = IMAGE_TILE_SIZE // tile_size
         self.num_subtiles = self.num_subtiles_per_dim**2
         self.reserved_cores = reserved_cores
+        self.min_num_timesteps = min_num_timesteps
+        if (time_grid_period_days is None) != (time_grid_num_periods is None):
+            raise ValueError(
+                "time_grid_period_days and time_grid_num_periods must be set together"
+            )
+        self.time_grid_period_days = time_grid_period_days
+        self.time_grid_num_periods = time_grid_num_periods
 
     @property
     def compression_settings_suffix(self) -> str:
@@ -298,6 +337,73 @@ class ConvertToH5py:
             missing_timesteps_masks_data[mod_spec.name] = mask
         return missing_timesteps_masks_data
 
+    def _get_time_grid(self, sample: SampleInformation) -> np.ndarray:
+        """Return the regular time grid of a sample as (T, 3) [day, month-1, year] rows.
+
+        The grid starts at the window start, recovered from the tile's center time
+        (the rslearn_to_olmoearth converters write tile_time = window start +
+        WINDOW_DURATION / 2).
+        """
+        from olmoearth_pretrain.dataset_creation.constants import WINDOW_DURATION
+
+        assert self.time_grid_period_days is not None
+        assert self.time_grid_num_periods is not None
+        center_times = {
+            tile.center_time
+            for modality, tile in sample.modalities.items()
+            if modality.is_spacetime_varying
+        }
+        if len(center_times) != 1:
+            raise ValueError(
+                f"expected one tile time across spacetime modalities, got {center_times}"
+            )
+        start = center_times.pop() - WINDOW_DURATION // 2
+        dts = [
+            start + timedelta(days=k * self.time_grid_period_days)
+            for k in range(self.time_grid_num_periods)
+        ]
+        return np.array([[dt.day, dt.month - 1, dt.year] for dt in dts])
+
+    def get_timestamps_and_masks(
+        self, sample: SampleInformation
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+        """Compute the sample's timestamps and per-modality missing-timestep masks.
+
+        Raises:
+            ValueError: in time-grid mode, if a modality has a timestep that is not
+                on the grid or its timesteps are not strictly increasing (its data
+                frames could then not be placed on the grid).
+        """
+        spacetime_varying_modalities = {
+            modality: timestamps
+            for modality, timestamps in sample.get_timestamps().items()
+            if modality.is_spacetime_varying
+        }
+        if self.time_grid_period_days is None:
+            # Note that with the longest timestamps array, we cut all modalities to
+            # this range. Anything outside of this range is considered missing.
+            timestamps = self._find_longest_timestamps_array(
+                spacetime_varying_modalities
+            )
+        else:
+            timestamps = self._get_time_grid(sample)
+            for modality, mod_timestamps in spacetime_varying_modalities.items():
+                idx = [
+                    int(np.flatnonzero(np.all(timestamps == ts, axis=1))[0])
+                    if np.any(np.all(timestamps == ts, axis=1))
+                    else -1
+                    for ts in mod_timestamps
+                ]
+                if min(idx) < 0 or any(b <= a for a, b in zip(idx, idx[1:])):
+                    raise ValueError(
+                        f"{modality.name} timestamps {mod_timestamps.tolist()} are not "
+                        f"strictly increasing points of the time grid {timestamps.tolist()}"
+                    )
+        masks = self._create_missing_timesteps_masks(
+            spacetime_varying_modalities, timestamps
+        )
+        return timestamps, masks
+
     def _remove_bad_modalities_from_sample(
         self, sample: SampleInformation
     ) -> SampleInformation:
@@ -368,26 +474,13 @@ class ConvertToH5py:
         """Create the h5 file."""
         sample_dict = {}
         sample_dict["latlon"] = sample.get_latlon().astype(np.float32)
-        multi_temporal_timestamps_dict = sample.get_timestamps()
 
-        # Compute longest timestamps from only spacetime varying modalities
-        # This is used to deal with the case that when ERA5 is available, it always has full 12 months
-        # But other spacetime varying modalities may have way less months
-        spacetime_varying_modalities = {
-            modality: timestamps
-            for modality, timestamps in multi_temporal_timestamps_dict.items()
-            if modality.is_spacetime_varying
-        }
-        # Note that with the longest timestamps array, we cut all modalities to this range
-        # Anything outside of this range is considered missing
-        longest_timestamps_array = self._find_longest_timestamps_array(
-            spacetime_varying_modalities
-        )
-        missing_timesteps_masks_data = self._create_missing_timesteps_masks(
-            spacetime_varying_modalities, longest_timestamps_array
-        )
-
-        sample_dict["timestamps"] = longest_timestamps_array
+        # Timestamps come from only spacetime varying modalities (longest series, or
+        # the regular time grid if configured). This is used to deal with the case
+        # that when ERA5 is available, it always has full 12 months, but other
+        # spacetime varying modalities may have way less months.
+        timestamps, missing_timesteps_masks_data = self.get_timestamps_and_masks(sample)
+        sample_dict["timestamps"] = timestamps
 
         # Load image data for all modalities in the sample
         for modality in sample.modalities:
@@ -632,15 +725,24 @@ class ConvertToH5py:
 
             # To align with ERA5, which either missing (for ocean) or has 12 timesteps
             # We require at least one spacetime varying modality to have 12 timesteps
+            # (min_num_timesteps, default 12)
             # e.g., for Presto dataset, only 43 samples not meeting this requirement
             longest_timestamps_array = self._find_longest_timestamps_array(
                 spacetime_varying_modalities
             )
-            if len(longest_timestamps_array) < YEAR_NUM_TIMESTEPS:
+            if len(longest_timestamps_array) < self.min_num_timesteps:
                 logger.info(
-                    "Skipping sample because it does not have at least 12 timesteps"
+                    "Skipping sample because it does not have at least "
+                    f"{self.min_num_timesteps} timesteps"
                 )
                 continue
+
+            if self.time_grid_period_days is not None:
+                try:
+                    self.get_timestamps_and_masks(sample)
+                except ValueError as e:
+                    logger.warning(f"Skipping sample {sample.grid_tile}: {e}")
+                    continue
 
             filtered_samples.append(sample)
 
