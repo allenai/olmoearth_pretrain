@@ -57,9 +57,14 @@ drop_async_checkpoint_duration_metric()
 
 OSM_SAMPLING_H5_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
 OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/helios/dataset/osm_recent/filters/osm_sampling_random_time_100k_sample_idx.npy"
-# TODO(multiyear data build): replace with the real 16-step quarterly H5 dir (the last
-# path component is the sample count) once osm_quarterly4y is converted.
-OSM_QUARTERLY4Y_H5_DIR = "/weka/dfive-default/helios/dataset/osm_quarterly4y/h5py_data_w_missing_timesteps_zstd_3_128_x_4/TODO_MODALITIES/TODO_NUM_SAMPLES"
+# 16-step quarterly H5 (time grid 16 x 91 d; no cdl / gse / worldcereal: year-dependent maps).
+# The last path component is the sample count. Until the full 100K-window H5 is built this
+# points at the 300-window pilot (1200 samples), which is only for smoke tests.
+_Q4Y_MODALITIES = "landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map"
+OSM_QUARTERLY4Y_PILOT_H5_DIR = f"/weka/dfive-default/helios/dataset/osm_quarterly4y_pilot/h5py_data_w_missing_timesteps_zstd_3_128_x_4/{_Q4Y_MODALITIES}/1200"
+OSM_QUARTERLY4Y_H5_DIR = OSM_QUARTERLY4Y_PILOT_H5_DIR
+# Quarterly samples: 4 steps per year, subsampled as a years x quarters grid.
+YEAR_SPREAD_STEPS_PER_YEAR = 4
 # Both corpora are padded to 16 steps (the one-year samples get 4 MISSING slots) so
 # rank batches stack.
 MAX_SEQUENCE_LENGTH = 16
@@ -82,9 +87,6 @@ build_common_components = _build_common_components
 
 def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConfig:
     """random-time osm_sampling subset (12 monthly) + osm_quarterly4y (16 quarterly)."""
-    # TODO(multiyear data branch): pass max_sequence_length=MAX_SEQUENCE_LENGTH to BOTH
-    # sub-configs once OlmoEarthDatasetConfig exposes it (the other agent's change in
-    # data/dataset.py); until then the 16-step H5 fails the 12-step length assert.
     return OlmoEarthConcatDatasetConfig(
         dataset_configs=[
             OlmoEarthDatasetConfig(
@@ -95,16 +97,17 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
             OlmoEarthDatasetConfig(
                 h5py_dir=OSM_QUARTERLY4Y_H5_DIR,
                 training_modalities=common.training_modalities,
+                year_spread_steps_per_year=YEAR_SPREAD_STEPS_PER_YEAR,
             ),
         ],
+        max_sequence_length=MAX_SEQUENCE_LENGTH,
     )
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """The v1.3 control dataloader."""
+    """The v1.3 control dataloader, up to 16 timesteps per rank batch."""
     config = _build_dataloader_config(common)
-    # TODO(multiyear data branch): config.max_timesteps = MAX_SEQUENCE_LENGTH and the
-    # "years x quarters" timestep sampler for multi-year samples.
+    config.max_timesteps = MAX_SEQUENCE_LENGTH
     return config
 
 
