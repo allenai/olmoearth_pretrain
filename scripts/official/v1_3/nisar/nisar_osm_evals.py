@@ -23,13 +23,13 @@ ASC = Modality.NISAR_ASC.name
 TASKS = ("wind_turbine", "storage_tank", "building", "canopy_height")
 
 
-def nisar_osm_eval_tasks(native_slot: bool) -> dict:
+def nisar_osm_eval_tasks(native_slot: bool, only: tuple[str, ...] = TASKS) -> dict:
     """ws16 ps1 / ps4 student (d128) LP tasks: S1 slot always, NISAR slot if the model has one."""
     slots = {"nisar_as_s1": ("_as_s1", [S1])}
     if native_slot:
         slots["nisar_slot"] = ("", [ASC])
     tasks = {}
-    for task in TASKS:
+    for task in only:
         for suffix, (ds_suffix, modalities) in slots.items():
             base = replace(
                 _pastis_ps1_task(modalities, window_size=16),
