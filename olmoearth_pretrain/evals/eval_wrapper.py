@@ -1,9 +1,11 @@
 """Eval wrapper contract to be able to run evals on a model."""
 
+import os
 from logging import getLogger
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 from einops import rearrange, reduce
 from torch import nn
 
@@ -27,12 +29,76 @@ from olmoearth_pretrain.nn.flexi_vit import (
     FlexiVitBase,
     TokensAndMasks,
 )
+from olmoearth_pretrain.nn.location_encoders import (
+    build_location_encoder,
+    denormalize_latlon,
+)
 from olmoearth_pretrain.nn.pooled_modality_predictor import EncodeEarlyAttnPool
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.st_model import STBase
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, MaskValue
 
 logger = getLogger(__name__)
+
+# Post-hoc location baselines: "<mode>:<encoder kind>:<weights path>", mode "only" (the
+# frozen location vector is the embedding; the model is not run) or "concat" (it is
+# appended to the model's embedding, scaled to the same norm, so cosine kNN weighs the
+# two halves equally). Needs the eval samples' latlon (OE_EVAL_LATLON=norm).
+POSTHOC_LOCATION_ENV = "OE_EVAL_LOC_POSTHOC"
+_posthoc_location_encoders: dict[tuple[str, str], nn.Module] = {}
+
+
+def posthoc_location_spec() -> tuple[str, str, str] | None:
+    """Parse ``OE_EVAL_LOC_POSTHOC`` into (mode, kind, weights path), or None."""
+    spec = os.environ.get(POSTHOC_LOCATION_ENV)
+    if not spec:
+        return None
+    mode, kind, path = spec.split(":", 2)
+    if mode not in ("only", "concat"):
+        raise ValueError(f"{POSTHOC_LOCATION_ENV} mode must be only/concat: {spec!r}")
+    return mode, kind, path
+
+
+def posthoc_location_vectors(
+    latlon: torch.Tensor | None, kind: str, path: str, device: torch.device
+) -> torch.Tensor:
+    """(B, 2) [0, 1]-normalized latlon -> (B, D) unit frozen location vectors.
+
+    Samples without a location get a zero vector.
+    """
+    if latlon is None:
+        raise ValueError(
+            f"{POSTHOC_LOCATION_ENV} needs eval latlon (set OE_EVAL_LATLON=norm)"
+        )
+    latlon = latlon.reshape(latlon.shape[0], -1)[:, :2].float().to(device)
+    has_loc = ((latlon >= 0) & (latlon <= 1)).all(dim=-1)
+    if not bool(has_loc.all()):
+        logger.warning(
+            "%d of %d eval samples have no latlon; zero location vector",
+            int((~has_loc).sum()),
+            len(has_loc),
+        )
+    key = (kind, path)
+    if key not in _posthoc_location_encoders:
+        _posthoc_location_encoders[key] = build_location_encoder(kind, path).eval()
+    encoder = _posthoc_location_encoders[key].to(device)
+    safe = torch.where(has_loc.unsqueeze(-1), latlon, torch.full_like(latlon, 0.5))
+    with torch.no_grad(), torch.autocast(device_type=device.type, enabled=False):
+        vec = F.normalize(encoder(denormalize_latlon(safe)).float(), dim=-1)
+    return vec * has_loc.unsqueeze(-1)
+
+
+def concat_location(embeddings: torch.Tensor, location: torch.Tensor) -> torch.Tensor:
+    """Append (B, D_loc) unit location vectors to (B, ..., D) embeddings.
+
+    Each location vector is scaled to the norm of the embedding it joins (per sample,
+    per spatial cell), so under cosine similarity the two halves count equally; the
+    embedding half itself is unchanged.
+    """
+    norm = embeddings.float().norm(dim=-1, keepdim=True)
+    shape = (location.shape[0],) + (1,) * (embeddings.ndim - 2) + (location.shape[-1],)
+    loc = location.view(shape) * norm
+    return torch.cat([embeddings, loc.to(embeddings.dtype)], dim=-1)
 
 
 class EvalWrapper:
@@ -211,7 +277,31 @@ class OlmoEarthEvalWrapper(EvalWrapper):
         labels: torch.Tensor,
         is_train: bool = True,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass through the model produces the embedding specified by initialization."""
+        """Forward pass through the model produces the embedding specified by initialization.
+
+        With ``OE_EVAL_LOC_POSTHOC`` set, the embedding is replaced by or concatenated
+        with a frozen location vector (see ``posthoc_location_spec``).
+        """
+        posthoc = posthoc_location_spec()
+        if posthoc is None:
+            return self._embed(masked_olmoearth_sample, labels)
+        mode, kind, path = posthoc
+        location = posthoc_location_vectors(
+            masked_olmoearth_sample.latlon, kind, path, self.device
+        )
+        if mode == "only":
+            if self.spatial_pool:
+                raise ValueError("location-only embeddings are per sample, not spatial")
+            return location, labels
+        batch_embeddings, labels = self._embed(masked_olmoearth_sample, labels)
+        return concat_location(batch_embeddings, location), labels
+
+    def _embed(
+        self,
+        masked_olmoearth_sample: MaskedOlmoEarthSample,
+        labels: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """The model's embedding for the sample."""
         if not self.use_pooled_tokens:
             fast_pass = not self._has_missing_tokens(masked_olmoearth_sample)
             encoder_output = self.model(

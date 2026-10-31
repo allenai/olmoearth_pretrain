@@ -120,3 +120,34 @@ def test_denormalize_latlon() -> None:
         denormalize_latlon(torch.tensor([[0.5, 0.5], [1.0, 0.0]])),
         torch.tensor([[0.0, 0.0], [90.0, -180.0]]),
     )
+
+
+def test_posthoc_location_concat_equal_cosine_weight(tmp_path) -> None:  # noqa: ANN001
+    """Post-hoc concat weighs the two halves equally under cosine similarity.
+
+    Unit location vectors are scaled to the embedding norm, so the cosine of the
+    concatenation is the mean of the two halves' cosines.
+    """
+    from olmoearth_pretrain.evals.eval_wrapper import (
+        concat_location,
+        posthoc_location_vectors,
+    )
+
+    path = _tte_weights(str(tmp_path / "tte.pt"))
+    latlon = torch.tensor([[0.7, 0.3], [0.2, 0.9], [-99999.0, -99999.0]])
+    loc = posthoc_location_vectors(latlon, "tte", path, torch.device("cpu"))
+    assert loc.shape == (3, 512)
+    torch.testing.assert_close(loc[:2].norm(dim=-1), torch.ones(2))
+    assert float(loc[2].abs().max()) == 0.0  # missing latlon -> zero vector
+    emb = torch.randn(3, 128) * torch.tensor([[1.0], [5.0], [2.0]])
+    out = concat_location(emb, loc)
+    assert out.shape == (3, 640)
+    torch.testing.assert_close(out[:, :128], emb)
+    cos = torch.nn.functional.cosine_similarity
+    expected = (cos(emb[0], emb[1], dim=0) + cos(loc[0], loc[1], dim=0)) / 2
+    torch.testing.assert_close(cos(out[0], out[1], dim=0), expected)
+    # Spatial embeddings (B, H, W, D) get the vector in every cell.
+    grid = torch.randn(3, 4, 4, 128)
+    out = concat_location(grid, loc)
+    assert out.shape == (3, 4, 4, 640)
+    torch.testing.assert_close(out[0, 1, 2, 128:], loc[0] * grid[0, 1, 2].norm())
