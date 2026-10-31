@@ -228,6 +228,7 @@ class MultiModalPatchEmbeddings(nn.Module):
         band_dropout_mode: str = "rate",
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        band_drop_embedding: bool = False,
     ):
         """Initialize the patch embeddings.
 
@@ -252,6 +253,14 @@ class MultiModalPatchEmbeddings(nn.Module):
                 see above) or "count": with probability ``band_dropout_rate`` a
                 sample keeps ``k ~ U{1..N}`` of the band set's ``N`` bands (uniform
                 subset), otherwise all of them.
+            band_drop_embedding: If True, every multi-band band set of a band-dropout
+                modality gets a learned, zero-initialized ``(num_bands, embedding_size)``
+                table. Per sample, the rows of the bands that are all-zero over the whole
+                sample (zeroed by band dropout, or zero-filled because a dataset lacks
+                them) are added to every token of that band set. With a linear patch
+                projection this equals giving the projection one "band dropped" indicator
+                input per band. Applied in train and eval (no dropout at eval, so only
+                genuinely zero-filled bands are flagged there).
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial
                 FlexiPatchEmbed. If None or empty, the projection is a single nn.Linear
@@ -289,6 +298,27 @@ class MultiModalPatchEmbeddings(nn.Module):
             self.per_modality_embeddings[modality] = (
                 self._get_patch_embedding_module_for_modality(modality)
             )
+
+        self.band_drop_embedding = band_drop_embedding
+        self.band_drop_embeddings = nn.ParameterDict({})
+        # Eval-time log of which bands get flagged as dropped (logged when it changes).
+        self._logged_dropped_bands: dict[str, tuple[int, ...]] = {}
+        if band_drop_embedding:
+            for modality in self.supported_modality_names:
+                if (
+                    self.band_dropout_modalities is not None
+                    and modality not in self.band_dropout_modalities
+                ):
+                    continue
+                for idx, bandset_indices in enumerate(
+                    self.tokenization_config.get_bandset_indices(modality)
+                ):
+                    if len(bandset_indices) > 1:
+                        self.band_drop_embeddings[
+                            self._get_embedding_module_name(modality, idx)
+                        ] = nn.Parameter(
+                            torch.zeros(len(bandset_indices), self.embedding_size)
+                        )
 
         # For every patch embedding module we want to create a unique buffer
         # for selecting the correct band indices from the data tensor
@@ -412,10 +442,41 @@ class MultiModalPatchEmbeddings(nn.Module):
                 self._get_embedding_module_name(modality, idx)
             ]
             patchified_data = embedding_module(inp_data, **modality_specific_kwargs)
+            embedding_name = self._get_embedding_module_name(modality, idx)
+            if embedding_name in self.band_drop_embeddings:
+                patchified_data = self._add_band_drop_embedding(
+                    patchified_data, inp_data, embedding_name
+                )
 
             modality_tokens.append(patchified_data)
             modality_masks.append(token_mask)
         return torch.stack(modality_tokens, dim=-2), torch.stack(modality_masks, dim=-1)
+
+    def _add_band_drop_embedding(
+        self, tokens: Tensor, inp_data: Tensor, embedding_name: str
+    ) -> Tensor:
+        """Add the learned embedding of each band that is all-zero over the sample.
+
+        Args:
+            tokens: [b, h, w, (t), d] (spatial) or [b, (t), d] band-set tokens.
+            inp_data: [b, h, w, (t), c] or [b, (t), c] band-set input after band dropout.
+            embedding_name: key into ``self.band_drop_embeddings``.
+        """
+        batch_size, num_bands = inp_data.shape[0], inp_data.shape[-1]
+        dropped = inp_data.reshape(batch_size, -1, num_bands).abs().amax(dim=1) == 0
+        if not self.training:
+            flagged = tuple(dropped.any(dim=0).nonzero().flatten().tolist())
+            if flagged and self._logged_dropped_bands.get(embedding_name) != flagged:
+                logger.info(
+                    f"band_drop_embedding: {embedding_name} flags zero-filled bands "
+                    f"{flagged} in {dropped.any(dim=1).float().mean().item():.0%} of samples"
+                )
+                self._logged_dropped_bands[embedding_name] = flagged
+        table = self.band_drop_embeddings[embedding_name]
+        # Always computed (also when nothing is dropped) so the parameter is in every graph.
+        offset = dropped.to(table.dtype) @ table
+        view_shape = [batch_size] + [1] * (tokens.dim() - 2) + [tokens.shape[-1]]
+        return tokens + offset.view(*view_shape).to(tokens.dtype)
 
     @staticmethod
     def _apply_band_count_dropout(data: Tensor, apply_prob: float) -> Tensor:
@@ -2011,6 +2072,7 @@ class Encoder(FlexiVitBase):
         band_dropout_mode: str = "rate",
         patch_embed_hidden_sizes: list[int] | None = None,
         post_proj_hidden_sizes: list[int] | None = None,
+        band_drop_embedding: bool = False,
         position_encoding: str = "absolute",
         rope_base: float = 10000.0,
         rope_coordinate_scale: float = 1.0,
@@ -2054,6 +2116,8 @@ class Encoder(FlexiVitBase):
             band_dropout_modalities: If provided, only apply band dropout to these
                 modalities. If None, apply to all modalities. Default: None.
             band_dropout_mode: "rate" or "count"; see MultiModalPatchEmbeddings.
+            band_drop_embedding: Learned per-band "dropped" embedding added to the
+                tokens of all-zero bands; see MultiModalPatchEmbeddings.
             patch_embed_hidden_sizes: Optional list of hidden layer widths for a
                 per-pixel MLP applied BEFORE patchification in the spatial patch
                 projection. If None or empty, the projection is a single nn.Linear
@@ -2142,6 +2206,7 @@ class Encoder(FlexiVitBase):
             band_dropout_mode=self.band_dropout_mode,
             patch_embed_hidden_sizes=self.patch_embed_hidden_sizes,
             post_proj_hidden_sizes=self.post_proj_hidden_sizes,
+            band_drop_embedding=band_drop_embedding,
         )
         self.output_embedding_size = output_embedding_size
         # If output_embedding_size is set, project tokens to that size after attention
@@ -3345,6 +3410,7 @@ class EncoderConfig(Config):
     random_band_dropout: bool = False
     band_dropout_modalities: list[str] | None = None
     band_dropout_mode: str = "rate"
+    band_drop_embedding: bool = False
     patch_embed_hidden_sizes: list[int] | None = None
     post_proj_hidden_sizes: list[int] | None = None
     position_encoding: str = "absolute"
