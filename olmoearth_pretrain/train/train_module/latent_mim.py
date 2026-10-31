@@ -24,9 +24,11 @@ from olmoearth_pretrain.nn.pixel_targets import (
     spatial_token_grid,
 )
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
+from olmoearth_pretrain.nn.temporal_aux import TEMPORAL_AUX_OUTPUT_KEY
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.temporal_aux import TemporalAuxConfig, TemporalAuxPlan
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -48,6 +50,9 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
             cell instead of on the whole patch (see
             ``olmoearth_pretrain.nn.pixel_targets``). Same number of decode
             queries; requires the projection-only target.
+        temporal_aux_config: Optional time-hidden temporal aux loss on multi-year
+            samples (``olmoearth_pretrain.train.temporal_aux``); needs the model's
+            ``temporal_aux_head_config``. None = off.
     """
 
     loss_config: LossConfig = field(
@@ -63,6 +68,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
+    temporal_aux_config: TemporalAuxConfig | None = None
 
     def build(
         self,
@@ -132,6 +138,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
+        temporal_aux_config: TemporalAuxConfig | None = None,
     ):
         """Initialize the training module.
 
@@ -161,6 +168,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 its cell (decoder query at that pixel's center, target = the frozen
                 projection of that pixel). Requires the projection-only target: a
                 full target encoder would need a per-pixel forward.
+            temporal_aux_config: Optional time-hidden temporal aux loss on the year
+                chunks of multi-year samples (needs ``model.temporal_aux_head``).
         """
         super().__init__(
             model=model,
@@ -208,6 +217,26 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
             self.model.target_encoder, FrozenTargetProjection
         ):
             raise ValueError("pixel_targets requires projection_only_target=True")
+
+        self.temporal_aux = None
+        if temporal_aux_config is not None:
+            head = getattr(self.model, "temporal_aux_head", None)
+            if head is None:
+                raise ValueError(
+                    "temporal_aux_config needs LatentMIMConfig.temporal_aux_head_config"
+                )
+            if temporal_aux_config.variant == "ordering" and not head.has_ordering_head:
+                raise ValueError(
+                    "the ordering variant needs temporal_aux_head_config.ordering_dims"
+                )
+            if self.is_fsdp:
+                # The aux encoder pass only runs on ranks with eligible samples, which
+                # would desynchronize FSDP's per-forward all-gathers.
+                raise ValueError("the temporal aux loss does not support FSDP")
+            self.temporal_aux = temporal_aux_config.build()
+            self.total_loss_name = (
+                f"{self.total_loss_name}+temporal_aux_{temporal_aux_config.variant}"
+            )
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -262,6 +291,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     f"Training microbatch {microbatch_idx} of {num_microbatches} "
                     f"with batch size {microbatch_masked.batch_size} on rank {get_local_rank()}"
                 )
+                # The temporal aux plan only reads timestamps and masks: draw it on
+                # the CPU copy, before the transfer, to avoid a device sync.
+                temporal_aux_plan = self._plan_temporal_aux(
+                    microbatch_masked, patch_size
+                )
                 masked_batch = microbatch_masked.to_device(self.device)
 
                 # Run Encoder and decoder on the augmented input
@@ -271,6 +305,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                         patch_size,
                         self.token_exit_cfg,
                         location_query_patch_size=location_query_patch_size,
+                        temporal_aux_plan=temporal_aux_plan,
                     )
                 )
                 if extra_metrics is not None:
@@ -326,12 +361,25 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     f"{name} has {tokenization.get_num_bandsets(name)}"
                 )
 
+    def _encoder_modalities(self) -> list[str] | None:
+        specs = getattr(self.model.encoder, "supported_modalities", None)
+        return [spec.name for spec in specs] if specs is not None else None
+
+    def _plan_temporal_aux(
+        self, batch: MaskedOlmoEarthSample, patch_size: int
+    ) -> TemporalAuxPlan | None:
+        """The temporal aux plan of a microbatch (None when the aux loss is off)."""
+        if self.temporal_aux is None:
+            return None
+        return self.temporal_aux.plan(batch, patch_size, self._encoder_modalities())
+
     def model_forward(
         self,
         batch: MaskedOlmoEarthSample,
         patch_size: int,
         token_exit_cfg: dict[str, int],
         location_query_patch_size: int | None = None,
+        temporal_aux_plan: TemporalAuxPlan | None = None,
     ) -> tuple[
         torch.Tensor,
         TokensAndMasks,
@@ -343,6 +391,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
         ``location_query_patch_size``: pixels per location query along each side, drawn by
         the dataloader (None = one location query per token).
+
+        ``temporal_aux_plan``: the microbatch's temporal aux plan (drawn here when the
+        aux loss is on and none is given).
         """
         # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
         # the pixel, so the standard path is already pixel-resolution.
@@ -356,6 +407,14 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 device=self.device,
             )
             query_pixel_shift = offsets_to_query_shift(pixel_offsets, patch_size)
+        temporal_aux_input = None
+        if self.temporal_aux is not None:
+            if temporal_aux_plan is None:
+                temporal_aux_plan = self._plan_temporal_aux(batch, patch_size)
+            assert temporal_aux_plan is not None
+            temporal_aux_input = self.temporal_aux.model_input(
+                batch, temporal_aux_plan, patch_size, self._encoder_modalities()
+            )
         with self._model_forward_context():
             (
                 latent,
@@ -370,7 +429,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 patch_size,
                 query_pixel_shift=query_pixel_shift,
                 location_query_patch_size=location_query_patch_size,
+                temporal_aux=temporal_aux_input,
             )
+            temporal_aux_outputs = None
+            if extra_metrics is not None:
+                temporal_aux_outputs = extra_metrics.pop(TEMPORAL_AUX_OUTPUT_KEY, None)
 
             with torch.no_grad():
                 logger.info("Target Encoder forward pass...")
@@ -432,5 +495,21 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics.update(distill_metrics)
+
+                if self.temporal_aux is not None:
+                    assert temporal_aux_outputs is not None
+                    assert temporal_aux_plan is not None
+                    # Already weighted; includes a zero anchor on every head
+                    # parameter so all ranks have the same set of gradients.
+                    aux_term, aux_metrics = self.temporal_aux.compute(
+                        temporal_aux_outputs,
+                        temporal_aux_plan,
+                        self.model.temporal_aux_head,
+                        process_group=self.dp_process_group,
+                    )
+                    loss = loss + aux_term
+                    if extra_metrics is None:
+                        extra_metrics = {}
+                    extra_metrics.update(aux_metrics)
 
             return loss, latent, decoded, target_output, extra_metrics

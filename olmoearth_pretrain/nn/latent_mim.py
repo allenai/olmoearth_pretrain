@@ -26,6 +26,13 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
 )
+from olmoearth_pretrain.nn.temporal_aux import (
+    TEMPORAL_AUX_OUTPUT_KEY,
+    TemporalAuxHead,
+    TemporalAuxHeadConfig,
+    TemporalAuxInput,
+    pool_chunk_embeddings,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -89,6 +96,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_head: SupervisionHead | None = None,
         location_token_distillation_head: LocationTokenDistillationHead | None = None,
         projection_only_target: bool = False,
+        temporal_aux_head: TemporalAuxHead | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -107,6 +115,10 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            temporal_aux_head: Optional projector (+ ordering head) of the time-hidden
+                temporal aux loss on multi-year samples (``nn/temporal_aux.py``).
+                Training-only; it reads the online encoder's encoding of each year
+                chunk, which ``forward`` computes when given ``temporal_aux``.
         """
         super().__init__()
         self.encoder = encoder
@@ -114,6 +126,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
         self.location_token_distillation_head = location_token_distillation_head
+        self.temporal_aux_head = temporal_aux_head
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -127,6 +140,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         patch_size: int,
         query_pixel_shift: torch.Tensor | None = None,
         location_query_patch_size: int | None = None,
+        temporal_aux: TemporalAuxInput | None = None,
     ) -> tuple[
         TokensAndMasks,
         TokensAndMasks,
@@ -147,6 +161,13 @@ class LatentMIM(nn.Module, DistributedMixins):
                 the patch grid.
             location_query_patch_size: Pixels per location query along each side (see
                 ``Encoder.forward``). None = one location query per token.
+            temporal_aux: Optional aux batch of the time-hidden temporal loss (one
+                element per (view, year chunk) of the multi-year samples; see
+                ``olmoearth_pretrain.train.temporal_aux``). When given, the online
+                encoder encodes it in a second pass (gradients flow), the head pools
+                and projects one embedding per (chunk, location), and the outputs are
+                returned in ``extra_metrics[TEMPORAL_AUX_OUTPUT_KEY]``. The return
+                tuple is unchanged.
 
         Returns:
             latent: embeddings from encoder
@@ -210,6 +231,11 @@ class LatentMIM(nn.Module, DistributedMixins):
                 student_location_tokens, "b h w d -> b (h w) d"
             )
 
+        if temporal_aux is not None:
+            extra_metrics[TEMPORAL_AUX_OUTPUT_KEY] = self.temporal_aux_forward(
+                temporal_aux, patch_size
+            )
+
         return (
             latent,
             decoded,
@@ -219,6 +245,36 @@ class LatentMIM(nn.Module, DistributedMixins):
             supervision_preds,
             student_outputs,
         )
+
+    def temporal_aux_forward(
+        self, temporal_aux: TemporalAuxInput, patch_size: int
+    ) -> dict[str, Any]:
+        """Encode the year-chunk aux batch and run the temporal aux head on it.
+
+        Each chunk is its own batch element, so attention (and 3D RoPE) only ever sees
+        within-year time gaps. One location query per token (``location_query_patch_size``
+        None). With ``temporal_aux.batch`` None (no eligible sample in this
+        microbatch) only the zero parameter anchor is returned.
+        """
+        if self.temporal_aux_head is None:
+            raise ValueError("temporal_aux was given but the model has no aux head")
+        if temporal_aux.batch is None:
+            out = self.temporal_aux_head(None)
+            out["valid"] = None
+            return out
+        aux_output = self.encoder(
+            temporal_aux.batch,
+            patch_size=patch_size,
+            location_query_patch_size=None,
+        )
+        pooled, valid = pool_chunk_embeddings(
+            aux_output, self.temporal_aux_head.embedding_source
+        )
+        out = self.temporal_aux_head(
+            pooled, pair_a=temporal_aux.pair_a, pair_b=temporal_aux.pair_b
+        )
+        out["valid"] = valid
+        return out
 
     def apply_fsdp(
         self,
@@ -247,6 +303,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             fully_shard(self.supervision_head, **fsdp_config)
         if self.location_token_distillation_head is not None:
             fully_shard(self.location_token_distillation_head, **fsdp_config)
+        if self.temporal_aux_head is not None:
+            fully_shard(self.temporal_aux_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -280,6 +338,8 @@ class LatentMIMConfig(Config):
         LocationTokenDistillationHeadConfig | None
     ) = None
     projection_only_target: bool = False
+    # Time-hidden temporal aux loss head (multi-year samples); see nn/temporal_aux.py.
+    temporal_aux_head_config: TemporalAuxHeadConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -340,6 +400,27 @@ class LatentMIMConfig(Config):
                     "location_token_distillation_head_config requires an AttentionPooler with a "
                     "student (attention_pooler_config.student_dims)"
                 )
+        if self.temporal_aux_head_config is not None:
+            self.temporal_aux_head_config.validate()
+            if (
+                self.temporal_aux_head_config.embedding_source == "location_tokens"
+                and not encoder_uses_location_tokens
+            ):
+                raise ValueError(
+                    "temporal_aux_head_config.embedding_source='location_tokens' "
+                    "requires the encoder AttentionPooler"
+                )
+
+    def _temporal_aux_in_dim(self) -> int:
+        """Width of the pooled chunk embedding the temporal aux head reads."""
+        assert self.temporal_aux_head_config is not None
+        if self.temporal_aux_head_config.embedding_source == "location_tokens":
+            assert self.encoder_config.attention_pooler_config is not None
+            return self.encoder_config.attention_pooler_config.pooler_dim
+        return (
+            self.encoder_config.output_embedding_size
+            or self.encoder_config.embedding_size
+        )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -371,6 +452,11 @@ class LatentMIMConfig(Config):
                     student_dims=attention_pooler_config.sorted_student_dims,
                 )
             )
+        temporal_aux_head = None
+        if self.temporal_aux_head_config is not None:
+            temporal_aux_head = self.temporal_aux_head_config.build(
+                in_dim=self._temporal_aux_in_dim()
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
@@ -378,4 +464,5 @@ class LatentMIMConfig(Config):
             supervision_head=supervision_head,
             location_token_distillation_head=location_token_distillation_head,
             projection_only_target=self.projection_only_target,
+            temporal_aux_head=temporal_aux_head,
         )
