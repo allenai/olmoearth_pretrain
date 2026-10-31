@@ -76,6 +76,11 @@ WANDB_PROJECT = "2026_10_31_multiyear_pretrain"
 # Same step count as the v1.3 control (667,200 steps).
 MAX_STEPS = 667_200
 
+# Rank microbatch 32 (2 accumulation steps of the 64-per-rank batch; global batch 512 unchanged): at the v1.3
+# control's 64, 200-step smokes with 16-step batches peaked at 75-77 GiB reserved with 4-5 CUDA allocation
+# retries (with and without the aux pass), too close to 80 GB for 667,200 steps.
+RANK_MICROBATCH_SIZE = 32
+
 # --- temporal aux loss -------------------------------------------------------------------
 AUX_WEIGHT = {"ordering": 0.1, "gated_contrast": 0.1}
 AUX_MAX_GRID = 4
@@ -140,6 +145,7 @@ def build_train_module_config_fn(variant: str):
         common: CommonComponents,
     ) -> LatentMIMTrainModuleConfig:
         config = _build_train_module_config(common, pixel_targets=True)
+        config.rank_microbatch_size = RANK_MICROBATCH_SIZE
         config.temporal_aux_config = TemporalAuxConfig(
             variant=variant,
             weight=AUX_WEIGHT[variant],
