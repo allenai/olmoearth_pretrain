@@ -139,6 +139,24 @@ def _window_key(metadata: Any) -> str | None:
     return f"{group}/{name}" if group else str(name)
 
 
+# Linear backscatter inputs, converted to dB as in pretraining (convert_to_h5py).
+SAR_DB_MODALITIES = (
+    Modality.SENTINEL1.name,
+    Modality.NISAR_ASC.name,
+    Modality.NISAR_DESC.name,
+)
+# convert_to_db clips linear values at 1e-10, so an all-zero image loads as -100 dB.
+SAR_DB_FLOOR = -100.0
+
+
+# Foreign bands that may be fed through a modality's slot, mapped to the canonical
+# band they stand in for: NISAR HH/HV through the Sentinel-1 vv/vh slot (the
+# *_as_s1 eval configs, for models pretrained without NISAR).
+SLOT_BAND_ALIASES: dict[str, dict[str, str]] = {
+    "sentinel1": {"HHHH": "vv", "HVHV": "vh"},
+}
+
+
 class RslearnToOlmoEarthDataset(Dataset):
     """Convert rslearn ModelDataset to OlmoEarth Pretrain MaskedOlmoEarthSample dataset.
 
@@ -154,6 +172,8 @@ class RslearnToOlmoEarthDataset(Dataset):
         Modality.SENTINEL2_L2A.name,
         Modality.SENTINEL1.name,
         Modality.LANDSAT.name,
+        Modality.NISAR_ASC.name,
+        Modality.NISAR_DESC.name,
         # Precomputed embedding products, baked in as layers by the embedding
         # materializer (olmoearth_pretrain/evals/embedding_materializer) or a
         # dataset export/inference script (tessera_v2).
@@ -268,12 +288,21 @@ class RslearnToOlmoEarthDataset(Dataset):
                 f"Unsupported target task type: {self.target_task_type.value}"
             )
 
-        if (
-            window_size is not None or label_at_center_pixel
-        ) and self.target_task_type != TaskType.SEGMENTATION:
+        # Cropping/tiling (window_size) only slices the (H, W) label raster, so
+        # it works for dense regression too; label_at_center_pixel needs the
+        # segmentation ignore label to find the labeled pixel.
+        if window_size is not None and self.target_task_type not in {
+            TaskType.SEGMENTATION,
+            TaskType.PER_PIXEL_REGRESSION,
+        }:
             raise ValueError(
-                "window_size and label_at_center_pixel require a segmentation "
+                "window_size requires a segmentation or per-pixel regression "
                 f"target, got {self.target_task_type.value}"
+            )
+        if label_at_center_pixel and self.target_task_type != TaskType.SEGMENTATION:
+            raise ValueError(
+                "label_at_center_pixel requires a segmentation target, "
+                f"got {self.target_task_type.value}"
             )
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
@@ -633,7 +662,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             if crop_rows is not None and crop_cols is not None:
                 arr = arr[crop_rows, crop_cols]
 
-            if modality == Modality.SENTINEL1.name:
+            if modality in SAR_DB_MODALITIES:
                 arr = convert_to_db(arr)
             if modality in self.band_scatter:
                 arr = self._scatter_bands(modality, arr)
@@ -677,6 +706,35 @@ class RslearnToOlmoEarthDataset(Dataset):
                 canonical_t,
             )
             ragged_missing[modality] = missing
+
+        # NISAR GCOV marks pixels outside the swath as NaN. Pretraining drops every
+        # month with any NaN pixel (multitemporal_raster.NAN_NODATA_MODALITIES), so
+        # do the same here: such timesteps become MISSING instead of NaN inputs.
+        for modality in imagery:
+            nan_slots = np.flatnonzero(np.isnan(raw[modality]).any(axis=(0, 1, 3)))
+            if len(nan_slots) == 0:
+                continue
+            raw[modality][:, :, nan_slots] = 0.0
+            ragged_missing[modality] = sorted(
+                set(ragged_missing.get(modality, [])) | set(nan_slots.tolist())
+            )
+
+        # Pretraining also skips every all-blank (all-zero) image when converting
+        # (multitemporal_raster's all_images_blank check). For the SAR modalities a
+        # zero image is the constant convert_to_db floor (-100 dB) after loading, so
+        # mark such timesteps MISSING too instead of feeding a frame never seen in
+        # pretraining (e.g. NISAR GCOV months that cover the window only as zeros).
+        for modality in imagery:
+            if modality not in SAR_DB_MODALITIES:
+                continue
+            blank_slots = np.flatnonzero(
+                (raw[modality] <= SAR_DB_FLOOR).all(axis=(0, 1, 3))
+            )
+            if len(blank_slots) == 0:
+                continue
+            ragged_missing[modality] = sorted(
+                set(ragged_missing.get(modality, [])) | set(blank_slots.tolist())
+            )
 
         for modality in self.input_modalities:
             x = raw[modality]
@@ -875,6 +933,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             if modality not in self.input_modalities:
                 continue
             canonical = list(Modality.get(modality).band_order)
+            aliases = SLOT_BAND_ALIASES.get(modality, {})
+            bands = [aliases.get(band, band) for band in bands]
             unknown = [band for band in bands if band not in canonical]
             if unknown:
                 raise ValueError(

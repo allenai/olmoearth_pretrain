@@ -249,6 +249,26 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # NISAR L-band L2 GCOV backscatter (linear gamma0 in the rslearn data, converted to
+    # dB in the H5 files like Sentinel-1). Ascending and descending passes are separate
+    # modalities since their look geometries differ. The band names are the GCOV
+    # covariance terms; 20 MHz (20 m) scenes are resampled to 10 m.
+    NISAR_ASC = ModalitySpec(
+        name="nisar_asc",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["HHHH", "HVHV"], 16)],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
+    NISAR_DESC = ModalitySpec(
+        name="nisar_desc",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["HHHH", "HVHV"], 16)],
+        is_multitemporal=True,
+        ignore_when_parsing=False,
+    )
+
     SENTINEL2 = ModalitySpec(
         name="sentinel2",
         tile_resolution_factor=16,
