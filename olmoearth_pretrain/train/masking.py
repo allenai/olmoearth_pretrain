@@ -2055,6 +2055,230 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         return mask
 
 
+@MASKING_STRATEGY_REGISTRY.register("flex_modality_with_decode")
+class FlexModalityMaskingStrategy(MaskingStrategy):
+    """Variable visible-modality count with random / temporal / spatial masking.
+
+    Per instance, over the present band sets of the encodable (not decode-only)
+    modalities:
+
+    1. Decode-only modalities (maps) are DECODER on every non-missing token.
+    2. ``e`` band sets are visible and the rest hidden (uniform random subset). With
+       ``num_visible_per_call`` (default) ``e ~ U{1..K}`` is drawn once per
+       ``apply_mask`` call (one rank batch), ``K`` = number of encodable band sets in
+       the batch, and an instance with ``n < e`` present band sets draws its own
+       ``e ~ U{1..n}``, so every instance's ``e`` is uniform over ``1..n``. Otherwise
+       ``e ~ U{1..n}`` per instance. ``e = n`` (everything visible) is allowed.
+    3. A mask type (random / temporal / spatial, weighted by ``mode_weights``) and a
+       mask ratio ``r ~ U(min_mask_ratio, max_mask_ratio)`` are drawn per instance and
+       shared by all its band sets. A visible band set encodes its unmasked tokens and
+       decodes its masked ones; a hidden band set decodes its masked tokens and leaves
+       the rest TARGET_ENCODER_ONLY. Of ``N`` candidates, ``clamp(round(r * N), 1,
+       N - 1)`` are masked.
+
+       * random: an independent subset of the band set's non-missing tokens.
+       * temporal: one shared subset of the union of present timesteps.
+       * spatial: per band set, an independent subset of the patch grid, masked
+         through all timesteps.
+
+    Fallbacks to random (per band set): temporal with < 2 present timesteps, or a
+    visible (hidden) band set without data at the encoded (masked) timesteps;
+    spatial on a 1-cell grid or a non-spatial modality; and any visible band set left
+    with no encoded token.
+    """
+
+    MODES = ("random", "temporal", "spatial")
+
+    def __init__(
+        self,
+        min_mask_ratio: float = 0.3,
+        max_mask_ratio: float = 0.7,
+        mode_weights: list[float] = [1.0, 1.0, 1.0],
+        only_decode_modalities: list[str] = [],
+        num_visible_per_call: bool = True,
+    ):
+        """Initialize the strategy (see the class docstring)."""
+        if not 0 < min_mask_ratio <= max_mask_ratio < 1:
+            raise ValueError(
+                f"need 0 < min_mask_ratio <= max_mask_ratio < 1, got "
+                f"{min_mask_ratio}, {max_mask_ratio}"
+            )
+        if len(mode_weights) != len(self.MODES) or min(mode_weights) < 0:
+            raise ValueError(
+                f"mode_weights must be 3 non-negative floats: {mode_weights}"
+            )
+        self.min_mask_ratio = min_mask_ratio
+        self.max_mask_ratio = max_mask_ratio
+        total = float(sum(mode_weights))
+        self.mode_probs = [w / total for w in mode_weights]
+        self.only_decode_modalities = only_decode_modalities
+        self.num_visible_per_call = num_visible_per_call
+        # Mean ratios, for code that reads encode_ratio / decode_ratio.
+        self._decode_ratio = (min_mask_ratio + max_mask_ratio) / 2
+        self._encode_ratio = 1 - self._decode_ratio
+
+    @staticmethod
+    def _num_masked(n: int, r: float, visible: bool) -> int:
+        """How many of ``n`` candidates to mask (one token: encode if visible)."""
+        if n <= 1:
+            return 0 if visible else n
+        return min(max(int(round(r * n)), 1), n - 1)
+
+    def _token_view(
+        self, mask: torch.Tensor, modality: ModalitySpec, patch_size: int
+    ) -> tuple[torch.Tensor, int]:
+        """One instance/band-set mask (per pixel) -> per-token view and its stride."""
+        if modality.is_spatial:
+            stride = patch_size * modality.image_tile_size_factor
+            return mask[::stride, ::stride].clone(), stride
+        return mask.clone(), 1
+
+    def _random_masked(
+        self, tokens: torch.Tensor, r: float, visible: bool
+    ) -> torch.Tensor:
+        """Random subset of the non-missing tokens."""
+        present = (tokens != MaskValue.MISSING.value).flatten()
+        idx = torch.nonzero(present).flatten()
+        k = self._num_masked(len(idx), r, visible)
+        masked = torch.zeros_like(present)
+        masked[idx[torch.randperm(len(idx), device=idx.device)[:k]]] = True
+        return masked.view(tokens.shape)
+
+    def _spatial_masked(
+        self, tokens: torch.Tensor, r: float, visible: bool
+    ) -> torch.Tensor | None:
+        """Random subset of patch-grid cells, through all time (None if 1 cell)."""
+        h, w = tokens.shape[0], tokens.shape[1]
+        if h * w < 2:
+            return None
+        k = self._num_masked(h * w, r, visible)
+        cells = torch.zeros(h * w, dtype=torch.bool, device=tokens.device)
+        cells[torch.randperm(h * w, device=tokens.device)[:k]] = True
+        cells = cells.view(h, w, *([1] * (tokens.dim() - 2)))
+        return cells.expand_as(tokens).clone()
+
+    def apply_mask(
+        self,
+        batch: OlmoEarthSample,
+        patch_size: int | None = None,
+        **kwargs: Any,
+    ) -> MaskedOlmoEarthSample:
+        """Mask one batch; see the class docstring."""
+        if patch_size is None:
+            raise ValueError("patch_size must be provided for flex masking")
+        output_dict: dict[str, ArrayTensor | None] = {"timestamps": batch.timestamps}
+        present_modalities: list[str] = []
+        for modality_name in batch.modalities:
+            if modality_name == "timestamps":
+                continue
+            instance = getattr(batch, modality_name)
+            masked_name = MaskedOlmoEarthSample.get_masked_modality_name(modality_name)
+            if instance is None:
+                output_dict[modality_name] = None
+                output_dict[masked_name] = None
+                continue
+            device = instance.device if isinstance(instance, torch.Tensor) else None
+            modality = Modality.get(modality_name)
+            mask_shape = instance.shape[:-1] + (self._get_num_bandsets(modality_name),)
+            mask = torch.full(
+                mask_shape, fill_value=MaskValue.DECODER.value, device=device
+            )
+            output_dict[modality_name] = instance
+            output_dict[masked_name] = self.fill_mask_with_missing_values(
+                instance, mask, modality
+            )
+            present_modalities.append(modality_name)
+
+        encodable = [
+            m for m in present_modalities if m not in self.only_decode_modalities
+        ]
+        num_encodable_bandsets = sum(self._get_num_bandsets(m) for m in encodable)
+        call_e: int | None = None
+        if self.num_visible_per_call and num_encodable_bandsets >= 1:
+            call_e = int(np.random.randint(1, num_encodable_bandsets + 1))
+
+        for i in range(batch.batch_size):
+            bandsets: list[tuple[str, int]] = []
+            present_t: torch.Tensor | None = None
+            for modality_name in encodable:
+                masked_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                not_missing = output_dict[masked_name][i] != MaskValue.MISSING.value  # type: ignore
+                modality = Modality.get(modality_name)
+                for b in range(not_missing.shape[-1]):
+                    if not not_missing[..., b].any():
+                        continue
+                    bandsets.append((modality_name, b))
+                    if modality.is_spacetime_varying:
+                        t_any = not_missing[..., b].flatten(0, 1).any(dim=0)  # T
+                        present_t = t_any if present_t is None else (present_t | t_any)
+            n = len(bandsets)
+            if n == 0:
+                continue
+            if call_e is not None and n >= call_e:
+                e = call_e
+            else:
+                e = int(np.random.randint(1, n + 1))
+            r = float(np.random.uniform(self.min_mask_ratio, self.max_mask_ratio))
+            mode = self.MODES[int(np.random.choice(len(self.MODES), p=self.mode_probs))]
+
+            masked_ts = encode_ts = None
+            if mode == "temporal":
+                if present_t is None or int(present_t.sum()) < 2:
+                    mode = "random"
+                else:
+                    ts = torch.nonzero(present_t).flatten()
+                    ts = ts[torch.randperm(len(ts), device=ts.device)]
+                    k = self._num_masked(len(ts), r, visible=True)
+                    masked_ts, encode_ts = ts[:k], ts[k:]
+
+            order = np.random.permutation(n)
+            for rank, j in enumerate(order):
+                modality_name, b = bandsets[j]
+                visible = rank < e
+                modality = Modality.get(modality_name)
+                masked_name = MaskedOlmoEarthSample.get_masked_modality_name(
+                    modality_name
+                )
+                full = output_dict[masked_name]
+                assert isinstance(full, torch.Tensor)
+                tokens, stride = self._token_view(full[i, ..., b], modality, patch_size)
+                not_missing = tokens != MaskValue.MISSING.value
+
+                masked: torch.Tensor | None = None
+                if mode == "temporal" and modality.is_spacetime_varying:
+                    assert masked_ts is not None and encode_ts is not None
+                    needed = encode_ts if visible else masked_ts
+                    if not_missing[..., needed].any():
+                        masked = torch.zeros_like(not_missing)
+                        masked[..., masked_ts] = True
+                elif mode == "spatial" and modality.is_spatial:
+                    masked = self._spatial_masked(tokens, r, visible)
+                unmasked_value = (
+                    MaskValue.ONLINE_ENCODER.value
+                    if visible
+                    else MaskValue.TARGET_ENCODER_ONLY.value
+                )
+                if masked is not None and visible and not (not_missing & ~masked).any():
+                    masked = None  # nothing left to encode
+                if masked is None:
+                    masked = self._random_masked(tokens, r, visible)
+                tokens = torch.where(
+                    masked,
+                    torch.full_like(tokens, MaskValue.DECODER.value),
+                    torch.full_like(tokens, unmasked_value),
+                )
+                tokens[~not_missing] = MaskValue.MISSING.value
+                if stride > 1:
+                    tokens = tokens.repeat_interleave(stride, dim=0).repeat_interleave(
+                        stride, dim=1
+                    )
+                full[i, ..., b] = tokens
+
+        return MaskedOlmoEarthSample(**output_dict)
+
+
 def propagate_tokenization_config(
     masking_strategy: MaskingStrategy,
     tokenization_config: "TokenizationConfig",
