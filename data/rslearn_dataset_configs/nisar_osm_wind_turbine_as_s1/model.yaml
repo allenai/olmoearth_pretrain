@@ -1,0 +1,46 @@
+# NISAR OSM eval wind_turbine (card t-grl7q6, PLAN_NISAR_EVALS.md; nisar_osm_evals/bin/build_windows.py in
+# /weka/dfive-default/agent/favyen/2026-10-27-favyen-nisar-naip-pretrain). 64x64 crops at 10 m of osm_sampling
+# tiles held out from both NISAR pretraining selections; label: OSM generator_wind (points dilated to 3x3 at 10 m). Input: NISAR ascending
+# HH/HV, layers mo09-mo12 (2026-06-17..10-15, the osm_recent periods), fed through the sentinel1 (vv/vh) slot.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/helios/dataset_creation/nisar_osm_evals/wind_turbine
+    inputs:
+      sentinel1:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - nisar_asc_mo09
+        - nisar_asc_mo10
+        - nisar_asc_mo11
+        - nisar_asc_mo12
+        load_all_layers: true
+        bands:
+        - HHHH
+        - HVHV
+        passthrough: true
+        required: true
+      targets:
+        data_type: raster
+        layers:
+        - label_raster
+        bands:
+        - label
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.multi_task.MultiTask
+      init_args:
+        tasks:
+          eval_task:
+            class_path: rslearn.train.tasks.segmentation.SegmentationTask
+            init_args:
+              num_classes: 2
+              nodata_value: 255
+              metric_kwargs:
+                average: macro
+        input_mapping:
+          eval_task:
+            targets: targets
+    batch_size: 8
+    num_workers: 16

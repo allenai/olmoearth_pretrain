@@ -145,6 +145,8 @@ SAR_DB_MODALITIES = (
     Modality.NISAR_ASC.name,
     Modality.NISAR_DESC.name,
 )
+# convert_to_db clips linear values at 1e-10, so an all-zero image loads as -100 dB.
+SAR_DB_FLOOR = -100.0
 
 
 # Foreign bands that may be fed through a modality's slot, mapped to the canonical
@@ -286,12 +288,21 @@ class RslearnToOlmoEarthDataset(Dataset):
                 f"Unsupported target task type: {self.target_task_type.value}"
             )
 
-        if (
-            window_size is not None or label_at_center_pixel
-        ) and self.target_task_type != TaskType.SEGMENTATION:
+        # Cropping/tiling (window_size) only slices the (H, W) label raster, so
+        # it works for dense regression too; label_at_center_pixel needs the
+        # segmentation ignore label to find the labeled pixel.
+        if window_size is not None and self.target_task_type not in {
+            TaskType.SEGMENTATION,
+            TaskType.PER_PIXEL_REGRESSION,
+        }:
             raise ValueError(
-                "window_size and label_at_center_pixel require a segmentation "
+                "window_size requires a segmentation or per-pixel regression "
                 f"target, got {self.target_task_type.value}"
+            )
+        if label_at_center_pixel and self.target_task_type != TaskType.SEGMENTATION:
+            raise ValueError(
+                "label_at_center_pixel requires a segmentation target, "
+                f"got {self.target_task_type.value}"
             )
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
@@ -706,6 +717,23 @@ class RslearnToOlmoEarthDataset(Dataset):
             raw[modality][:, :, nan_slots] = 0.0
             ragged_missing[modality] = sorted(
                 set(ragged_missing.get(modality, [])) | set(nan_slots.tolist())
+            )
+
+        # Pretraining also skips every all-blank (all-zero) image when converting
+        # (multitemporal_raster's all_images_blank check). For the SAR modalities a
+        # zero image is the constant convert_to_db floor (-100 dB) after loading, so
+        # mark such timesteps MISSING too instead of feeding a frame never seen in
+        # pretraining (e.g. NISAR GCOV months that cover the window only as zeros).
+        for modality in imagery:
+            if modality not in SAR_DB_MODALITIES:
+                continue
+            blank_slots = np.flatnonzero(
+                (raw[modality] <= SAR_DB_FLOOR).all(axis=(0, 1, 3))
+            )
+            if len(blank_slots) == 0:
+                continue
+            ragged_missing[modality] = sorted(
+                set(ragged_missing.get(modality, [])) | set(blank_slots.tolist())
             )
 
         for modality in self.input_modalities:
