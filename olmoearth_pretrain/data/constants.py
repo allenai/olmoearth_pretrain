@@ -256,6 +256,18 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # One NISAR slot for both passes: built at load time from the stored nisar_asc /
+    # nisar_desc arrays (OlmoEarthDataset.read_h5_file), taking for each month one of
+    # the passes present, uniformly at random when both are (as Sentinel-1, whose
+    # monthly layers take whichever orbit is available). Not stored in the H5 files.
+    NISAR = ModalitySpec(
+        name="nisar",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["HHHH", "HVHV"], 16)],
+        is_multitemporal=True,
+        ignore_when_parsing=True,
+    )
+
     SENTINEL2 = ModalitySpec(
         name="sentinel2",
         tile_resolution_factor=16,

@@ -16,6 +16,7 @@ RSLEARN_TO_OLMOEARTH: dict[str, ModalitySpec] = {
     "landsat": Modality.LANDSAT,
     "nisar_asc": Modality.NISAR_ASC,
     "nisar_desc": Modality.NISAR_DESC,
+    "nisar": Modality.NISAR,
     # Precomputed embedding products, baked into eval datasets as layers by
     # the embedding materializer or a dataset export script.
     "gse": Modality.GSE,

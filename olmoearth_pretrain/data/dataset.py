@@ -347,6 +347,70 @@ def subset_sample_cutmix(
     return OlmoEarthSample(**new_data_dict)
 
 
+NISAR_PASS_MODALITIES = (Modality.NISAR_ASC.name, Modality.NISAR_DESC.name)
+
+
+def _dense_months(data: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Index a stored (H, W, T_stored, C) array by month: row t holds month t's data.
+
+    Stored arrays are ragged (only present months, in order) or dense (all months);
+    ``mask`` (one bool per month) says which months are present.
+    """
+    if data.shape[2] == len(mask):
+        return data
+    present = np.flatnonzero(mask)
+    out = np.zeros((*data.shape[:2], len(mask), data.shape[3]), dtype=data.dtype)
+    n = min(len(present), data.shape[2])
+    out[:, :, present[:n]] = data[:, :, :n]
+    return out
+
+
+def merge_nisar_passes(
+    arrays: dict[str, np.ndarray],
+    masks: dict[str, np.ndarray],
+    rng: np.random.Generator | None = None,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Merge the stored nisar_asc / nisar_desc passes into one ``nisar`` array.
+
+    For each month, takes one of the passes present: uniformly at random when both
+    are, else the one that is. Returns the merged array in the stored ragged layout
+    (present months only, in order) and its month mask (the union of the passes'
+    masks), or None if neither pass is stored.
+    """
+    passes = [m for m in NISAR_PASS_MODALITIES if m in arrays]
+    if not passes:
+        return None
+    num_months = None
+    pass_masks = {}
+    for m in passes:
+        if m in masks:
+            pass_masks[m] = np.asarray(masks[m]).astype(bool)
+        else:
+            # No mask stored: every stored timestep is present.
+            pass_masks[m] = np.ones(arrays[m].shape[2], dtype=bool)
+        num_months = len(pass_masks[m]) if num_months is None else num_months
+        assert len(pass_masks[m]) == num_months, (m, len(pass_masks[m]), num_months)
+    union = np.zeros(num_months, dtype=bool)
+    for m in passes:
+        union |= pass_masks[m]
+    present = np.flatnonzero(union)
+    first = arrays[passes[0]]
+    merged = np.zeros(
+        (first.shape[0], first.shape[1], len(present), first.shape[3]),
+        dtype=first.dtype,
+    )
+    dense = {m: _dense_months(arrays[m], pass_masks[m]) for m in passes}
+    if rng is None:
+        rng = np.random.default_rng(np.random.randint(0, 2**31))
+    for i, t in enumerate(present):
+        options = [m for m in passes if pass_masks[m][t]]
+        pick = (
+            options[int(rng.integers(len(options)))] if len(options) > 1 else options[0]
+        )
+        merged[:, :, i] = dense[pick][:, :, t]
+    return merged, union
+
+
 def one_hot_worldcover(raw: np.ndarray, dtype: np.dtype) -> np.ndarray:
     """One-hot encode raw ESA WorldCover class codes.
 
@@ -557,6 +621,14 @@ class OlmoEarthDataset(Dataset):
             if Modality.get(modality).is_spacetime_varying
             and not Modality.get(modality).ignore_when_parsing
         ]
+        # ``nisar`` is derived from the stored nisar_asc / nisar_desc passes (no
+        # metadata column of its own): filter on the pass columns, as the two-slot runs do.
+        if Modality.NISAR.name in self.training_modalities:
+            spacetime_varying_training_modalities += [
+                m
+                for m in NISAR_PASS_MODALITIES
+                if m not in spacetime_varying_training_modalities
+            ]
         # A sub-dataset of a concat dataset may lack some training modalities entirely
         # (e.g. NISAR in osm_sampling); those samples are filled with missing values at
         # read time, so just leave the absent modalities out of the filter.
@@ -564,7 +636,9 @@ class OlmoEarthDataset(Dataset):
             m for m in spacetime_varying_training_modalities if m not in metadata_df
         ]
         if absent:
-            logger.info(f"Modalities not in metadata CSV, not used for filter: {absent}")
+            logger.info(
+                f"Modalities not in metadata CSV, not used for filter: {absent}"
+            )
             spacetime_varying_training_modalities = [
                 m for m in spacetime_varying_training_modalities if m not in absent
             ]
@@ -851,12 +925,14 @@ class OlmoEarthDataset(Dataset):
                     f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
                 )
                 # timestamps should not be a floating string
+                merge_nisar = Modality.NISAR.name in self.training_modalities
                 sample_dict = {
                     k: v[()]
                     for k, v in h5file.items()
                     if k in self.training_modalities
                     # TODO: Fix the floating string issue
                     or k in ["timestamps"]
+                    or (merge_nisar and k in NISAR_PASS_MODALITIES)
                 }
 
                 # worldcover_onehot is derived from the raw worldcover band: it is not
@@ -878,11 +954,38 @@ class OlmoEarthDataset(Dataset):
                         k: v[()]
                         for k, v in h5file[missing_mask_group_name].items()
                         if k in self.training_modalities
+                        or (merge_nisar and k in NISAR_PASS_MODALITIES)
                     }
                 else:
                     # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
                     missing_timesteps_masks = {}
+        if merge_nisar:
+            self._merge_nisar_passes(sample_dict, missing_timesteps_masks)
         return sample_dict, missing_timesteps_masks
+
+    def _merge_nisar_passes(
+        self, sample_dict: dict[str, Any], missing_timesteps_masks: dict[str, Any]
+    ) -> None:
+        """Replace the stored nisar_asc / nisar_desc entries with one ``nisar`` entry, in place.
+
+        Pass entries are dropped unless they are training modalities themselves.
+        """
+        arrays = {m: sample_dict[m] for m in NISAR_PASS_MODALITIES if m in sample_dict}
+        masks = {
+            m: missing_timesteps_masks[m]
+            for m in NISAR_PASS_MODALITIES
+            if m in missing_timesteps_masks
+        }
+        merged = merge_nisar_passes(arrays, masks)
+        for m in NISAR_PASS_MODALITIES:
+            if m not in self.training_modalities:
+                sample_dict.pop(m, None)
+                missing_timesteps_masks.pop(m, None)
+        if merged is None:
+            return
+        sample_dict[Modality.NISAR.name], mask = merged
+        if masks:
+            missing_timesteps_masks[Modality.NISAR.name] = mask
 
     def _get_h5_file_path(self, index: int) -> UPath:
         """Get the h5 file path."""

@@ -144,6 +144,7 @@ SAR_DB_MODALITIES = (
     Modality.SENTINEL1.name,
     Modality.NISAR_ASC.name,
     Modality.NISAR_DESC.name,
+    Modality.NISAR.name,
 )
 
 
@@ -172,6 +173,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         Modality.LANDSAT.name,
         Modality.NISAR_ASC.name,
         Modality.NISAR_DESC.name,
+        Modality.NISAR.name,
         # Precomputed embedding products, baked in as layers by the embedding
         # materializer (olmoearth_pretrain/evals/embedding_materializer) or a
         # dataset export/inference script (tessera_v2).

@@ -86,6 +86,9 @@ class OlmoEarthSample(NamedTuple):
     sentinel1: ArrayTensor | None = None  # [B, H, W, T, len(S1_bands)]
     nisar_asc: ArrayTensor | None = None  # [B, H, W, T, len(NISAR_bands)]
     nisar_desc: ArrayTensor | None = None  # [B, H, W, T, len(NISAR_bands)]
+    nisar: ArrayTensor | None = (
+        None  # [B, H, W, T, len(NISAR_bands)], asc or desc per month
+    )
     worldcover: ArrayTensor | None = None  # [B, H, W, 1, len(WC_bands)]
     # worldcover_onehot is derived from worldcover at load time (one channel per class).
     worldcover_onehot: ArrayTensor | None = (
@@ -366,6 +369,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     nisar_asc_mask: Tensor | None = None
     nisar_desc: Tensor | None = None
     nisar_desc_mask: Tensor | None = None
+    nisar: Tensor | None = None
+    nisar_mask: Tensor | None = None
     worldcover: Tensor | None = None
     worldcover_mask: Tensor | None = None
     worldcover_onehot: Tensor | None = None
@@ -526,6 +531,8 @@ class TokensAndMasks(NamedTuple):
     nisar_asc_mask: Tensor | None = None
     nisar_desc: Tensor | None = None
     nisar_desc_mask: Tensor | None = None
+    nisar: Tensor | None = None
+    nisar_mask: Tensor | None = None
     worldcover: Tensor | None = None
     worldcover_mask: Tensor | None = None
     worldcover_onehot: Tensor | None = None
