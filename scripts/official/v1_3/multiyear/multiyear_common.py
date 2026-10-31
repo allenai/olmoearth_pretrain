@@ -58,11 +58,11 @@ drop_async_checkpoint_duration_metric()
 OSM_SAMPLING_H5_DIR = "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828"
 OSM_RANDOM_TIME_FILTER_IDX_FILE = "/weka/dfive-default/helios/dataset/osm_recent/filters/osm_sampling_random_time_100k_sample_idx.npy"
 # 16-step quarterly H5 (time grid 16 x 91 d; no cdl / gse / worldcereal: year-dependent maps).
-# The last path component is the sample count. Until the full 100K-window H5 is built this
-# points at the 300-window pilot (1200 samples), which is only for smoke tests.
+# The last path component is the sample count. The full build (2026-10-31) has 396,636 samples; set
+# OSM_QUARTERLY4Y_H5_DIR = OSM_QUARTERLY4Y_PILOT_H5_DIR for smoke tests on the 300-window pilot (1200 samples).
 _Q4Y_MODALITIES = "landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcover_worldpop_wri_canopy_height_map"
 OSM_QUARTERLY4Y_PILOT_H5_DIR = f"/weka/dfive-default/helios/dataset/osm_quarterly4y_pilot/h5py_data_w_missing_timesteps_zstd_3_128_x_4/{_Q4Y_MODALITIES}/1200"
-OSM_QUARTERLY4Y_H5_DIR = OSM_QUARTERLY4Y_PILOT_H5_DIR
+OSM_QUARTERLY4Y_H5_DIR = f"/weka/dfive-default/helios/dataset/osm_quarterly4y/h5py_data_w_missing_timesteps_zstd_3_128_x_4/{_Q4Y_MODALITIES}/396636"
 # With the pilot H5, the one-year half is cut to 1200 random samples of the random-time subset so smoke
 # tests see the full run's ~50/50 one-year / four-year mix (otherwise the aux loss almost never fires).
 SMOKE_OSM_SAMPLING_FILTER_IDX_FILE = "/weka/dfive-default/agent/favyen/2026-10-30-favyen-multiyear-pretrain/filters/smoke_osm_sampling_1200_idx.npy"
@@ -82,7 +82,8 @@ MAX_STEPS = 667_200
 RANK_MICROBATCH_SIZE = 32
 
 # --- temporal aux loss -------------------------------------------------------------------
-AUX_WEIGHT = {"ordering": 0.1, "gated_contrast": 0.1}
+# 0.2 (favyen 2026-10-31): at 0.1 the aux term is <1% of a ~9 total loss.
+AUX_WEIGHT = {"ordering": 0.2, "gated_contrast": 0.2}
 AUX_MAX_GRID = 4
 AUX_KEEP_RATIO = 0.75
 AUX_PROJECTOR_DIMS = [512, 128]
