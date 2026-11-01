@@ -27,6 +27,10 @@ from olmoearth_pretrain.data.constants import (
     Modality,
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.per_modality_timestamps import (
+    PER_MODALITY_TIMESTAMP_MODALITIES,
+    pack_per_modality_timestamps,
+)
 from olmoearth_pretrain.data.utils import convert_to_db
 from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.evals.constants import (
@@ -52,6 +56,10 @@ from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample, OlmoEarthSam
 from .normalize import normalize_bands
 
 logger = logging.getLogger(__name__)
+
+# "1" = pack each modality's own acquisition dates into extra timestamp columns
+# (see _pack_per_modality_timestamps); for per-modality-timestamp checkpoints.
+PER_MODALITY_TIMESTAMPS_ENV = "OE_EVAL_PER_MODALITY_TIMESTAMPS"
 
 # Fallback imagery time range for timestamp synthesis, used when the imagery
 # carries no acquisition times of its own and the registry entry does not
@@ -269,6 +277,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         self.max_timesteps = num_timesteps  # Max expected timesteps (for validation)
         self._warned_synthesized_timestamps = False
         self._warned_ragged = False
+        self._logged_per_modality_timestamps = False
 
         # Target parsing config - derived from Task structure
         self.target_task_name = target_task_name  # For MultiTask, e.g., "segment"
@@ -726,6 +735,10 @@ class RslearnToOlmoEarthDataset(Dataset):
         sample_dict["timestamps"] = self._build_timestamps(
             sample_timesteps, stored_time_ranges
         )
+        if os.environ.get(PER_MODALITY_TIMESTAMPS_ENV) == "1":
+            sample_dict["timestamps"] = self._pack_per_modality_timestamps(
+                sample_dict["timestamps"], stored_time_ranges
+            )
 
         olmoearth_sample = OlmoEarthSample(**sample_dict)
         masked_sample = MaskedOlmoEarthSample.from_olmoearthsample(olmoearth_sample)
@@ -810,6 +823,43 @@ class RslearnToOlmoEarthDataset(Dataset):
                 "acquisition dates; padded positionally"
             )
         return aligned, sorted(set(range(canonical_t)) - filled)
+
+    def _pack_per_modality_timestamps(
+        self,
+        shared: torch.Tensor,
+        stored_time_ranges: dict[str, list[tuple[datetime, datetime]]],
+    ) -> torch.Tensor:
+        """(T, 3) shared stamps -> (T, 3 + 3K) packed per-modality stamps.
+
+        For models pretrained with ``allcap_per_modality_timestamps`` (the "v1.3 +
+        per-modality DOY" run): each modality of
+        ``PER_MODALITY_TIMESTAMP_MODALITIES`` gets its own block holding its own
+        acquisition dates (range start, as in ``timestamps_from_time_ranges``), so
+        an S1 token is stamped with its S1 capture date instead of the shared one.
+        Columns 0:3 are the stock shared stamp, unchanged. A modality whose stored
+        ranges are missing or do not cover every timestep (ragged/absent imagery,
+        e.g. Landsat) keeps the shared stamp in its block, as pretraining does for
+        modalities without a capture. Every sample is packed, so a batch has one
+        width. Enabled by ``OE_EVAL_PER_MODALITY_TIMESTAMPS=1``.
+        """
+        num_timesteps = shared.shape[0]
+        per_modality: dict[str, np.ndarray] = {}
+        for modality in self.input_modalities:
+            if modality not in PER_MODALITY_TIMESTAMP_MODALITIES:
+                continue
+            ranges = stored_time_ranges.get(modality)
+            if ranges is None or len(ranges) != num_timesteps:
+                continue
+            per_modality[modality] = timestamps_from_time_ranges(ranges).numpy()
+        if not self._logged_per_modality_timestamps:
+            logger.info(
+                "per-modality eval timestamps: packing %s; own dates for %s",
+                list(PER_MODALITY_TIMESTAMP_MODALITIES),
+                sorted(per_modality),
+            )
+            self._logged_per_modality_timestamps = True
+        packed = pack_per_modality_timestamps(shared.numpy(), per_modality)
+        return torch.as_tensor(packed, dtype=shared.dtype)
 
     def _build_timestamps(
         self,
