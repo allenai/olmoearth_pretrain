@@ -176,6 +176,10 @@ class DownstreamTaskConfig:
     # embedding pass. Each is reported as ``{task}_tile_ridge_{property}``.
     tile_label_properties: list[str] = field(default_factory=list)
     tile_label_layer: str = "label"
+    # One of tile_label_properties: its ridge becomes the task's own result and the
+    # host probe is skipped (a fixed-lr SGD probe is a worse readout of the same
+    # pooled embeddings than a closed-form ridge with alpha picked on val).
+    tile_primary_property: str | None = None
     # For registry (rslearn) segmentation datasets with a single labeled pixel
     # per sample (the AEF supplemental sets): emit the labeled pixel's class as
     # a scalar label and run the task as classification, so only the token that
@@ -387,10 +391,19 @@ class DownstreamEvaluator:
         self.pool_tiles = task.pool_tiles
         self.tile_label_properties = list(task.tile_label_properties)
         self.tile_label_layer = task.tile_label_layer
+        self.tile_primary_property = task.tile_primary_property
         if self.pool_tiles and not self.tile_samples:
             raise ValueError("pool_tiles requires tile_samples")
         if self.tile_label_properties and not self.pool_tiles:
             raise ValueError("tile_label_properties requires pool_tiles")
+        if (
+            self.tile_primary_property is not None
+            and self.tile_primary_property not in self.tile_label_properties
+        ):
+            raise ValueError(
+                f"tile_primary_property {self.tile_primary_property!r} is not in "
+                f"tile_label_properties {self.tile_label_properties}"
+            )
         self.h5py_dir = task.h5py_dir
         self.pretrain_max_samples = task.pretrain_max_samples
         self.pretrain_target_modality = task.pretrain_target_modality
@@ -833,7 +846,11 @@ class DownstreamEvaluator:
             "n_bootstrap": self.n_bootstrap,
             "bootstrap_seed": self.bootstrap_seed,
         }
-        result = self.eval_function(**kwargs)  # type: ignore
+        if self.tile_primary_property is None:
+            result = self.eval_function(**kwargs)  # type: ignore
+        else:
+            # Filled from the ridge readouts below.
+            result = EvalTaskResult(val_result=None, test_result=None)
 
         if diagnostics:
             # Measured on the train split's pipeline: raw_* is what the model
@@ -901,6 +918,10 @@ class DownstreamEvaluator:
                 result.extra_results[name] = val_result
                 if test_result is not None:
                     result.extra_test_results[name] = test_result
+            if self.tile_primary_property is not None:
+                result.val_result, result.test_result = ridge_results[
+                    self.tile_primary_property
+                ]
             logger.info(
                 f"Tile ridge readouts for {self.dataset} took "
                 f"{time.time() - ridge_start:.2f}s"
