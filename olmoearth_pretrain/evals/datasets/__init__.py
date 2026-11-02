@@ -145,7 +145,7 @@ def get_eval_dataset(
             # AnySat a 16-month window no other model sees.
             date_range=kwargs.get("date_range", (20190101, 20191231)),
         )
-    elif eval_dataset in ("pastis", "pastis128"):
+    elif eval_dataset in ("pastis", "pastis128", "pastis_codes"):
         pastis_kwargs = {
             "split": split,
             "label_fraction": label_fraction,
@@ -155,7 +155,9 @@ def get_eval_dataset(
             "dir_partition": paths.PASTIS_DIR_PARTITION,
             "window_size": kwargs.get("window_size"),
         }
-        if "128" in eval_dataset:
+        if eval_dataset == "pastis_codes":
+            pastis_kwargs["path_to_splits"] = paths.PASTIS_CODES_DIR
+        elif "128" in eval_dataset:
             # "pastis128"
             pastis_kwargs["path_to_splits"] = paths.PASTIS_DIR_ORIG
         else:

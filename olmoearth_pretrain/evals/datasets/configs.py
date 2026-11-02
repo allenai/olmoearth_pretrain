@@ -462,6 +462,17 @@ DATASET_TO_CONFIG = {
         ],
         timeseries=True,
     ),
+    # PASTIS patches/pixels with the original RPG 2019 CODE_CULTU as labels: 53 codes that
+    # PASTIS maps to a crop class (>= 1000 train / 100 test px) + background; rarer codes ignored.
+    "pastis_codes": EvalDatasetConfig(
+        task_type=TaskType.SEGMENTATION,
+        imputes=[],
+        num_classes=54,
+        is_multilabel=False,
+        height_width=64,
+        supported_modalities=[Modality.SENTINEL2_L2A.name, Modality.SENTINEL1.name],
+        timeseries=True,
+    ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # 13 semantic classes (the two nodata/background colors are mapped to the
     # segmentation ignore label by FiftyCitiesProcessor; see colormap.json).
