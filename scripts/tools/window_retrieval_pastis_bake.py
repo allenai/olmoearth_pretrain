@@ -105,6 +105,17 @@ VARIANTS = (
 # Interchangeability: train-split windows from the first variant, val/test windows
 # from the second, so the standard LP task trains on fresh embeddings and is scored
 # on retrieved (or annual / naive) ones.
+# With --tag, bake and hybrid write only what depends on the retriever, under
+# tagged names (pastis_tw_ret_maraug_<tag>, pastis_twx_maraug_fresh2ret_<tag>, ...),
+# so a new retriever gets its own datasets and the existing ones stay untouched.
+RETRIEVED_VARIANTS = ("ret_sepaug", "ret_maraug")
+
+
+def tagged(name: str, tag: str | None) -> str:
+    """A dataset name with the retriever tag appended."""
+    return f"{name}_{tag}" if tag else name
+
+
 HYBRIDS = {
     "maraug_fresh2ret": ("fresh_maraug", "ret_maraug"),
     "maraug_fresh2annual": ("fresh_maraug", "annual2019"),
@@ -270,9 +281,10 @@ def bake(args: argparse.Namespace) -> None:
         "cuda" if torch.cuda.is_available() else "cpu"
     )
     logger.info(f"retriever on {next(model.parameters(), torch.empty(0)).device}")
+    variants = RETRIEVED_VARIANTS if args.tag else VARIANTS
     targets = {}
-    for v in VARIANTS:
-        name = f"pastis_tw_{v}"
+    for v in variants:
+        name = tagged(f"pastis_tw_{v}", args.tag)
         dst_path = UPath(f"{EVAL_DATASETS}/{name}")
         if dst_path.exists() and not args.resume:
             raise SystemExit(f"{dst_path} exists (pass --resume to continue)")
@@ -298,6 +310,8 @@ def bake(args: argparse.Namespace) -> None:
             return
         out = variants_for({s: np.load(f) for s, f in files.items()}, model)
         for v, emb in out.items():
+            if v not in targets:
+                continue
             emb = dequantize_embeddings(quantize_embeddings(emb))  # store parity
             dataset, provider = targets[v]
             dst = copy_window(w, dataset)
@@ -319,9 +333,9 @@ def bake(args: argparse.Namespace) -> None:
         "baked": len(windows) - len(missing),
         "excluded_missing_source": sorted(missing),
     }
-    for v in VARIANTS:
+    for v in variants:
         (
-            UPath(f"{EVAL_DATASETS}/pastis_tw_{v}")
+            UPath(f"{EVAL_DATASETS}/{tagged(f'pastis_tw_{v}', args.tag)}")
             / "window_retrieval_bake_manifest.json"
         ).write_text(
             json.dumps(
@@ -330,7 +344,7 @@ def bake(args: argparse.Namespace) -> None:
             )
         )
     logger.info(
-        f"baked {manifest['baked']} windows into {len(VARIANTS)} datasets; excluded {len(missing)}"
+        f"baked {manifest['baked']} windows into {len(variants)} datasets; excluded {len(missing)}"
     )
     if len(missing) > args.max_missing:
         raise SystemExit(
@@ -342,7 +356,9 @@ def hybrid(args: argparse.Namespace) -> None:
     """Write the interchangeability datasets (``pastis_twx_*``) from the baked variants."""
     layer = Modality.OLMOEARTH_EMB.name
     for name, (train_v, eval_v) in HYBRIDS.items():
-        dst_name = f"pastis_twx_{name}"
+        if args.tag and eval_v not in RETRIEVED_VARIANTS:
+            continue
+        dst_name = tagged(f"pastis_twx_{name}", args.tag)
         dst_path = UPath(f"{EVAL_DATASETS}/{dst_name}")
         if dst_path.exists() and not args.resume:
             raise SystemExit(f"{dst_path} exists (pass --resume to continue)")
@@ -357,7 +373,7 @@ def hybrid(args: argparse.Namespace) -> None:
         eval_windows = {
             (w.group, w.name): w
             for w in Dataset(
-                UPath(f"{EVAL_DATASETS}/pastis_tw_{eval_v}")
+                UPath(f"{EVAL_DATASETS}/{tagged(f'pastis_tw_{eval_v}', args.tag)}")
             ).storage.get_windows()
         }
         counts = {"train": 0, "eval": 0}
@@ -407,6 +423,10 @@ def main() -> int:
     parser.add_argument("--retriever_dir")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--tag",
+        help="bake / hybrid: only the retrieved variants, under <name>_<tag> (a new retriever)",
+    )
     parser.add_argument(
         "--max_missing", type=int, default=20, help="fail if more windows lack a source"
     )

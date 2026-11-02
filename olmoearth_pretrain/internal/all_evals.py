@@ -1635,6 +1635,20 @@ for _hybrid in (
         dataset=f"pastis_twx_{_hybrid}",
     )
 
+# A newer retriever's variants, baked under a tag (window_retrieval_pastis_bake.py
+# --tag): c87k = the 69M FiLM trained on 20k + 67k calendar-year samples.
+for _tag in ("c87k",):
+    for _name in (
+        "tw_ret_maraug",
+        "tw_ret_sepaug",
+        "twx_maraug_fresh2ret",
+        "twx_sepaug_fresh2ret",
+    ):
+        EMBEDDING_EVAL_TASKS[f"pastis_{_name}_{_tag}_ws16_ps1"] = replace(
+            EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"],
+            dataset=f"pastis_{_name}_{_tag}",
+        )
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",
