@@ -571,6 +571,16 @@ class Modality:
         ignore_when_parsing=True,
     )
 
+    # NOAA BlueTopo survey bathymetry (US waters), precomputed per sample on its 10 m grid.
+    # Depth in metres, 0-40.
+    BLUETOPO = ModalitySpec(
+        name="bluetopo",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["depth"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+    )
+
     EUROCROPS = ModalitySpec(
         name="eurocrops",
         tile_resolution_factor=16,

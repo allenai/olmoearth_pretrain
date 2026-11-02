@@ -58,6 +58,7 @@ SDB_MIN_VALID_FRACTION = 0.01
 # Pixels where reference bathymetry (GEBCO) is deeper than this are optically deep: the
 # blue/green ratio there saturates and returns spurious depths.
 SDB_DEEP_WATER_ELEVATION = -30
+BLUETOPO_MIN_VALID_FRACTION = 0.01
 
 
 def compute_sdb(
@@ -472,6 +473,7 @@ class OlmoEarthDataset(Dataset):
         filter_idx_file: str | None = None,
         sdb_gebco_patches_file: str | None = None,
         sdb_invalid_as_missing: bool = False,
+        bluetopo_dir: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -505,6 +507,11 @@ class OlmoEarthDataset(Dataset):
                 pixels without a usable depth. For pixel-level losses that skip missing
                 pixels (the supervision head); the token-level latent-MIM path needs the
                 fill value.
+            bluetopo_dir: Directory with idx.npy (sorted sample indices) and depth_dm.npy
+                (int16 [M, h, w], BlueTopo depth in decimetres on each sample's grid, -1 =
+                no label). Only used when bluetopo is a training modality; samples not in
+                idx.npy, or with under BLUETOPO_MIN_VALID_FRACTION labelled pixels, treat
+                it as missing.
 
         Returns:
             None
@@ -547,6 +554,8 @@ class OlmoEarthDataset(Dataset):
         self.sdb_gebco_patches_file = sdb_gebco_patches_file
         self._sdb_gebco_patches: np.ndarray | None = None
         self.sdb_invalid_as_missing = sdb_invalid_as_missing
+        self.bluetopo_dir = bluetopo_dir
+        self._bluetopo: tuple[np.ndarray, np.ndarray] | None = None
 
     @property
     def fingerprint_version(self) -> str:
@@ -739,6 +748,26 @@ class OlmoEarthDataset(Dataset):
         deep = self._sdb_gebco_patches[index] < SDB_DEEP_WATER_ELEVATION
         scale = size // deep.shape[0]
         return np.repeat(np.repeat(deep, scale, axis=0), scale, axis=1)
+
+    def _bluetopo_depth(self, index: int) -> np.ndarray | None:
+        """BlueTopo depth [h, w, 1, 1] in metres (MISSING_VALUE where unlabelled), if any."""
+        if self.bluetopo_dir is None:
+            return None
+        if self._bluetopo is None:
+            root = UPath(self.bluetopo_dir)
+            self._bluetopo = (
+                np.load(root / "idx.npy"),
+                np.load(root / "depth_dm.npy", mmap_mode="r"),
+            )
+        idx, depth_dm = self._bluetopo
+        pos = int(np.searchsorted(idx, index))
+        if pos == len(idx) or idx[pos] != index:
+            return None
+        d = np.asarray(depth_dm[pos])
+        if (d >= 0).mean() < BLUETOPO_MIN_VALID_FRACTION:
+            return None
+        depth = np.where(d >= 0, d.astype(np.float32) / 10, MISSING_VALUE)
+        return depth[:, :, None, None]
 
     def _compute_ndvi(
         self,
@@ -1021,6 +1050,10 @@ class OlmoEarthDataset(Dataset):
             )
             if valid_fraction >= SDB_MIN_VALID_FRACTION:
                 sample_dict[Modality.SDB.name] = sdb.astype(self.dtype)
+        if Modality.BLUETOPO.name in self.training_modalities:
+            bluetopo = self._bluetopo_depth(index)
+            if bluetopo is not None:
+                sample_dict[Modality.BLUETOPO.name] = bluetopo.astype(self.dtype)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
@@ -1103,6 +1136,7 @@ class OlmoEarthDatasetConfig(Config):
     filter_idx_file: str | None = None
     sdb_gebco_patches_file: str | None = None
     sdb_invalid_as_missing: bool = False
+    bluetopo_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

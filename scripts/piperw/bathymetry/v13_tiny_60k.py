@@ -14,6 +14,10 @@ in one flag:
 - ``sdb_probe``: the sdb head reads detached tokens (a probe trained alongside).
 - ``sdb_sup``: the sdb head's L1 loss reaches the encoder (direct supervision).
 
+``bluetopo=True`` adds NOAA BlueTopo survey depth (US waters) as a second supervised depth
+head, decode-only like sdb. Its labels exclude the 1-degree cells held out for the BlueTopo
+depth eval.
+
 See /weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/.
 """
 
@@ -52,7 +56,8 @@ from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
 
 WANDB_PROJECT = "2026_10_29_bathymetry_direct_supervision"
 SDB_GEBCO_PATCHES = "/weka/dfive-default/agent/piperbots/2026-10-26-piperw-bathymetry-target/gebco_patches.npy"
-ONLY_DECODE_MODALITIES = base.ONLY_DECODE_MODALITIES + [Modality.SDB.name]
+BLUETOPO_DIR = "/weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/bluetopo_train"
+DEPTH_MODALITIES = [Modality.SDB.name, Modality.BLUETOPO.name]
 
 POOLER_DEPTH = 4
 DECODER_POSITION_ENCODING = PositionEncoding.AXIAL_2D_ROPE.value
@@ -106,21 +111,32 @@ SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
 RANK_MICROBATCH_SIZE = 64
 
 
-def build_common_components(*args, **kwargs) -> CommonComponents:
-    """v1.2 modalities plus sdb."""
+def build_common_components(
+    *args, bluetopo: bool = False, **kwargs
+) -> CommonComponents:
+    """v1.2 modalities plus sdb (and bluetopo)."""
     config = base.build_common_components(*args, **kwargs)
-    config.training_modalities = config.training_modalities + [Modality.SDB.name]
+    extra = [Modality.SDB.name] + ([Modality.BLUETOPO.name] if bluetopo else [])
+    config.training_modalities = config.training_modalities + extra
     return config
 
 
-def build_supervision_head_config(sdb_detach: bool) -> SupervisionHeadConfig:
-    """v1.3's map heads plus an sdb depth head."""
+def only_decode_modalities(common: CommonComponents) -> list[str]:
+    """v1.2's decode-only modalities plus the depth targets in use."""
+    depth = [m for m in DEPTH_MODALITIES if m in common.training_modalities]
+    return base.ONLY_DECODE_MODALITIES + depth
+
+
+def build_supervision_head_config(
+    sdb_detach: bool, bluetopo: bool = False
+) -> SupervisionHeadConfig:
+    """v1.3's map heads plus depth heads."""
 
     def _weight(task_type: SupervisionTaskType) -> float:
         return TASK_TYPE_WEIGHTS[task_type]
 
     regression = SupervisionTaskType.REGRESSION
-    return SupervisionHeadConfig(
+    config = SupervisionHeadConfig(
         modality_configs={
             "worldcover": SupervisionModalityConfig(
                 task_type=SupervisionTaskType.CLASSIFICATION,
@@ -167,14 +183,22 @@ def build_supervision_head_config(sdb_detach: bool) -> SupervisionHeadConfig:
             ),
         }
     )
+    if bluetopo:
+        config.modality_configs[Modality.BLUETOPO.name] = SupervisionModalityConfig(
+            task_type=regression,
+            num_output_channels=1,
+            weight=_weight(regression),
+            regression_loss_type="l1",
+        )
+    return config
 
 
 def build_model_config(common: CommonComponents, sdb_detach: bool) -> LatentMIMConfig:
-    """v1.2 tiny + AttentionPooler + supervision heads; sdb never enters the encoder."""
+    """v1.2 tiny + AttentionPooler + supervision heads; depth never enters the encoder."""
     model_common = replace(
         common,
         training_modalities=[
-            m for m in common.training_modalities if m != Modality.SDB.name
+            m for m in common.training_modalities if m not in DEPTH_MODALITIES
         ],
     )
     config = tiny.build_model_config(model_common)
@@ -191,7 +215,9 @@ def build_model_config(common: CommonComponents, sdb_detach: bool) -> LatentMIMC
     decoder_config.pooler_dim = width
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
     config.projection_only_target = True
-    config.supervision_head_config = build_supervision_head_config(sdb_detach)
+    config.supervision_head_config = build_supervision_head_config(
+        sdb_detach, Modality.BLUETOPO.name in common.training_modalities
+    )
     return config
 
 
@@ -220,7 +246,7 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
     )
     config.optim_config.fused = True
     config.masking_config.strategy_config["only_decode_modalities"] = (
-        ONLY_DECODE_MODALITIES
+        only_decode_modalities(common)
     )
     return config
 
@@ -235,7 +261,7 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.time_priority_prob = TIME_PRIORITY_PROB
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     config.masking_config.strategy_config["only_decode_modalities"] = (
-        ONLY_DECODE_MODALITIES
+        only_decode_modalities(common)
     )
     return config
 
@@ -245,6 +271,8 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
     config = base.build_dataset_config(common)
     config.sdb_gebco_patches_file = SDB_GEBCO_PATCHES
     config.sdb_invalid_as_missing = True
+    if Modality.BLUETOPO.name in common.training_modalities:
+        config.bluetopo_dir = BLUETOPO_DIR
     return config
 
 
@@ -255,10 +283,12 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return config
 
 
-def run(sdb_detach: bool) -> None:
+def run(sdb_detach: bool, bluetopo: bool = False) -> None:
     """Run one arm."""
     main(
-        common_components_builder=build_common_components,
+        common_components_builder=lambda *a, **k: build_common_components(
+            *a, bluetopo=bluetopo, **k
+        ),
         model_config_builder=lambda common: build_model_config(common, sdb_detach),
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,

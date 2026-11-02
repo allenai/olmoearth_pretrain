@@ -108,6 +108,8 @@ class OlmoEarthSample(NamedTuple):
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
     # sdb is computed from the S2 L2A time series, not loaded from file.
     sdb: ArrayTensor | None = None  # [B, H, W, 1, 1]
+    # bluetopo is NOAA survey depth, precomputed per sample (bluetopo_dir).
+    bluetopo: ArrayTensor | None = None  # [B, H, W, 1, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
@@ -396,6 +398,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     ndvi_mask: Tensor | None = None
     sdb: Tensor | None = None
     sdb_mask: Tensor | None = None
+    bluetopo: Tensor | None = None
+    bluetopo_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
 
@@ -552,6 +556,8 @@ class TokensAndMasks(NamedTuple):
     ndvi_mask: Tensor | None = None
     sdb: Tensor | None = None
     sdb_mask: Tensor | None = None
+    bluetopo: Tensor | None = None
+    bluetopo_mask: Tensor | None = None
     eurocrops: Tensor | None = None
     eurocrops_mask: Tensor | None = None
     latlon: Tensor | None = None
