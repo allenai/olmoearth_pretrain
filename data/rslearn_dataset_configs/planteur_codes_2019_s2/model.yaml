@@ -1,0 +1,86 @@
+# PLANTEUR 2019 with original RPG crop codes (29 classes, tenure-only variants merged).
+# Copy of pastis2_drom_bg8void_2019_s2 reading label_codes from /weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset
+    inputs:
+      sentinel2_l2a:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - sentinel2_l2a_mo01
+        - sentinel2_l2a_mo02
+        - sentinel2_l2a_mo03
+        - sentinel2_l2a_mo04
+        - sentinel2_l2a_mo05
+        - sentinel2_l2a_mo06
+        - sentinel2_l2a_mo07
+        - sentinel2_l2a_mo08
+        - sentinel2_l2a_mo09
+        - sentinel2_l2a_mo10
+        - sentinel2_l2a_mo11
+        - sentinel2_l2a_mo12
+        load_all_layers: true
+        bands:
+        - B02
+        - B03
+        - B04
+        - B08
+        - B05
+        - B06
+        - B07
+        - B8A
+        - B11
+        - B12
+        - B01
+        - B09
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+        - label_codes
+        bands:
+        - class_id
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        num_classes: 29
+        nodata_value: 255
+        enable_miou_metric: true
+        enable_f1_metric: true
+        report_metric_per_class: true
+        class_names:
+        - "Background"
+        - "AGR Agrume"
+        - "ANA Ananas"
+        - "BC* Banane créole (BCF, BCP, BCR, BCI)"
+        - "BCA Banane (hors export)"
+        - "BE* Banane export (BEF, BEP, BEA, BEI, BER)"
+        - "BOP Bois pâturé (prairie herbacée sous couvert d’arbres)"
+        - "CCN Concombre, cornichon et courgette"
+        - "CCT Courgette / Citrouille"
+        - "CHU Chou"
+        - "CS* Canne à sucre (CSA, CSF, CSP, CSR, CSI)"
+        - "CSS Cultures sous serre hors sol"
+        - "FLA Autre légume ou fruit annuel"
+        - "FLP Autre légume ou fruit pérenne (hors petits fruits à baie"
+        - "HPC Horticulture ornementale"
+        - "HSA Horticulture ornementale sous abri"
+        - "LSA Légume sous abri"
+        - "MLO Melon et pastèque"
+        - "OIG Oignon et échalote"
+        - "PAS Pastèque"
+        - "PEP Pépinière (plants laissés en terre plus d’un an)"
+        - "PPH Prairie de 6 ans et plus (couvert herbacé)"
+        - "PRL Prairie en rotation longue (6 ans ou plus)"
+        - "PTR Prairie temporaire de 5 ans ou moins et autre mélange av"
+        - "SPH Prairie avec herbe prédominante et ressources fourragère"
+        - "TBT Tubercule tropical"
+        - "TOM Tomate (en pleine terre)"
+        - "VGD Verger (DOM)"
+        - "VRG Autre verger (y compris DOM)"
+    batch_size: 8
+    num_workers: 8

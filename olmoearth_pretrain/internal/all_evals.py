@@ -3885,6 +3885,15 @@ _PLANTEUR_2019_PROBE = _pastis_ps1_task(
 )
 EVAL_TASKS["planteur_2019_probe_sentinel2"] = _PLANTEUR_2019_PROBE
 
+# PLANTEUR 2019 labelled with the original RPG crop codes (29 classes): same windows,
+# imagery and splits, tenure-only code variants merged.
+EVAL_TASKS["planteur_codes_2019_probe_sentinel2"] = _pastis_ps1_task(
+    [Modality.SENTINEL2_L2A.name], window_size=16, dataset="planteur_codes_2019_s2"
+)
+FT_EVAL_TASKS["planteur_codes_2019_ft_ws16_ps1_sentinel2"] = _pastis_ft_task(
+    [Modality.SENTINEL2_L2A.name], dataset="planteur_codes_2019_s2"
+)
+
 # OlmoEarth v1.3 is read out three ways (paper Table 4): the base task above
 # probes the full d768 register grid, and these duplicates probe a Matryoshka
 # prefix of the detached linear student at each shipped width. Same windows,
