@@ -1131,6 +1131,36 @@ def test_shared_time_axis_puts_every_modality_on_consecutive_bins(
         assert _field(b, "sentinel2_l2a_cloud").shape[2] == n
 
 
+@pytest.mark.parametrize("budget_before_read", [False, True])
+@pytest.mark.parametrize("target_t", [1, 2, 3])
+def test_respect_target_t_caps_the_shared_axis_span(
+    allcap_h5py_dir: UPath, budget_before_read: bool, target_t: int
+) -> None:
+    """respect_target_t: a shared-axis sample spans at most target_t bins."""
+    dataset = _dataset(
+        allcap_h5py_dir,
+        load_s2_cloud_mask=True,
+        composite_selection="random_clear",
+        budget_before_read=budget_before_read,
+        shared_time_axis=True,
+        respect_target_t=True,
+    )
+    for seed in range(4):
+        args = GetItemArgs(
+            idx=seed % 2,
+            patch_size=1,
+            sampled_hw_p=2,
+            token_budget=10_000,
+            tokenization_config=S2_SINGLE,
+            target_t=target_t,
+            composite_days=30.0,
+            seed=seed,
+        )
+        _, sample = dataset[args]
+        assert sample.timestamps is not None
+        assert 1 <= len(sample.timestamps) <= target_t
+
+
 def test_budget_before_read_without_a_budget_changes_nothing(
     allcap_h5py_dir: UPath,
 ) -> None:

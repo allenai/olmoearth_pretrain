@@ -664,6 +664,7 @@ class OlmoEarthDataset(Dataset):
         load_s2_cloud_mask: bool = False,
         composite_selection: str = "median",
         shared_time_axis: bool = False,
+        respect_target_t: bool = False,
         budget_before_read: bool = False,
         max_s2_cloud_fraction: float | None = None,
         scene_cloud_cover_paths: dict[str, str] | None = None,
@@ -713,6 +714,10 @@ class OlmoEarthDataset(Dataset):
                 sits on one shared axis of consecutive bins (MISSING where it has
                 no capture), each bin dated by its start, as v1.3's monthly layers
                 are; instead of each modality's own captures dated by capture.
+            respect_target_t: Per-modality-timestamps datasets: the budget run spans
+                at most the loader's ``target_t`` steps (composites: bins), as
+                v1.3 draws its number of months; instead of always the longest run
+                that fits the budget.
             budget_before_read: With composites, choose the token-budget run of bins
                 from the timestamps before reading, and read only those bins'
                 captures (without composites the run is always chosen first). Same
@@ -781,6 +786,7 @@ class OlmoEarthDataset(Dataset):
             raise ValueError("least_cloudy needs scene_cloud_cover_paths")
         self.composite_selection = composite_selection
         self.shared_time_axis = shared_time_axis
+        self.respect_target_t = respect_target_t
         self.budget_before_read = budget_before_read
         if max_s2_cloud_fraction is not None and not load_s2_cloud_mask:
             raise ValueError("max_s2_cloud_fraction needs load_s2_cloud_mask")
@@ -1456,6 +1462,10 @@ class OlmoEarthDataset(Dataset):
             months = grown
         return keep
 
+    def _max_span(self, args: GetItemArgs) -> int | None:
+        """The run's longest span in steps or bins: ``target_t`` if respected."""
+        return args.target_t if self.respect_target_t else None
+
     @staticmethod
     def _budget_run(
         args: GetItemArgs,
@@ -1464,6 +1474,8 @@ class OlmoEarthDataset(Dataset):
         step_index: dict[str, np.ndarray],
         rng: Any,
         step_months: np.ndarray,
+        max_span: int | None = None,
+        step_bins: np.ndarray | None = None,
     ) -> tuple[int, int]:
         """The kept run of union steps under the budgets (real tokens).
 
@@ -1471,8 +1483,15 @@ class OlmoEarthDataset(Dataset):
         input and trunk budgets (always at least one step); if it reaches the last
         step with budget left, it extends backward from its start, so a run is only
         short when the budget (not the series end) stops it. ``step_months``: each
-        step's calendar month (for the trunk budget).
+        step's calendar month (for the trunk budget). ``max_span``: the run also
+        spans at most this many bins (``step_bins``: each step's bin; None = one
+        bin per step), as v1.3 takes ``target_t`` consecutive windows.
         """
+        pos = np.arange(n_steps) if step_bins is None else step_bins
+
+        def spans(lo: int, hi: int) -> bool:
+            return max_span is None or int(pos[hi] - pos[lo]) + 1 <= max_span
+
         step_tokens, fixed_tokens = OlmoEarthDataset._step_tokens(
             args, modalities, n_steps, step_index
         )
@@ -1482,7 +1501,7 @@ class OlmoEarthDataset(Dataset):
             first = last = int(rng.randint(n_steps))
             total = fixed_tokens + step_tokens[first]
             months = {int(step_months[first])}
-            while last + 1 < n_steps:
+            while last + 1 < n_steps and spans(first, last + 1):
                 grown = months | {int(step_months[last + 1])}
                 if not OlmoEarthDataset._fits(
                     args, total + step_tokens[last + 1], grown
@@ -1491,7 +1510,7 @@ class OlmoEarthDataset(Dataset):
                 last += 1
                 total += step_tokens[last]
                 months = grown
-            while last + 1 == n_steps and first > 0:
+            while last + 1 == n_steps and first > 0 and spans(first - 1, last):
                 grown = months | {int(step_months[first - 1])}
                 if not OlmoEarthDataset._fits(
                     args, total + step_tokens[first - 1], grown
@@ -1578,7 +1597,13 @@ class OlmoEarthDataset(Dataset):
                     )
                 else:
                     first_step, last_step = self._budget_run(
-                        args, present, len(union_ts), step_index, rng, _months(union_ts)
+                        args,
+                        present,
+                        len(union_ts),
+                        step_index,
+                        rng,
+                        _months(union_ts),
+                        self._max_span(args),
                     )
                     keep_step = np.zeros(len(union_ts), dtype=bool)
                     keep_step[first_step : last_step + 1] = True
@@ -1704,7 +1729,14 @@ class OlmoEarthDataset(Dataset):
             ]
         )
         first, last = self._budget_run(
-            args, present, len(bins), step_index, rng, bin_months
+            args,
+            present,
+            len(bins),
+            step_index,
+            rng,
+            bin_months,
+            self._max_span(args),
+            bins,
         )
         lo, hi = bins[first], bins[last]
         return origin, {
@@ -1767,8 +1799,17 @@ class OlmoEarthDataset(Dataset):
             {m: timestamps[m][kept[m]] for m in timestamps}
         )
         if _is_composite(args) and read["origin"] is None:
+            days = int(args.composite_days)  # type: ignore[arg-type]
+            union_ordinals = timestamps_to_ordinals(union_ts)
             first_step, last_step = self._budget_run(
-                args, list(data), len(union_ts), step_index, rng, _months(union_ts)
+                args,
+                list(data),
+                len(union_ts),
+                step_index,
+                rng,
+                _months(union_ts),
+                self._max_span(args),
+                (union_ordinals - union_ordinals.min(initial=0)) // days,
             )
         else:
             # The captures were already cut to the budget run before reading.
@@ -1788,7 +1829,10 @@ class OlmoEarthDataset(Dataset):
                 run_ordinals[0] + np.arange(n_slots) * days
             )
             slot = {
-                m: (run_ordinals[np.clip(st - first_step, 0, None)] - run_ordinals[0])
+                m: (
+                    run_ordinals[np.clip(st - first_step, 0, len(run_ordinals) - 1)]
+                    - run_ordinals[0]
+                )
                 // days
                 for m, st in step_index.items()
             }
@@ -2016,6 +2060,7 @@ class OlmoEarthDatasetConfig(Config):
     load_s2_cloud_mask: bool = False
     composite_selection: str = "median"
     shared_time_axis: bool = False
+    respect_target_t: bool = False
     budget_before_read: bool = False
     max_s2_cloud_fraction: float | None = None
     scene_cloud_cover_paths: dict[str, str] | None = None
