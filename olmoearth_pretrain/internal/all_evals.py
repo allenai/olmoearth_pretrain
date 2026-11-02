@@ -1579,9 +1579,10 @@ EMBEDDING_EVAL_TASKS.update(
 # us_socioeconomic (scripts/tools/build_us_socioeconomic_eval.py): one label per
 # 128x128 tile (ACS income, home value, population density). Each tile is cut into
 # ws16 ps1 crops like PASTIS, then the crops are mean-pooled back to one embedding
-# per tile, and that single pass serves all three labels: the LP reads
-# log_pop_density (the label every tile has) and a closed-form ridge is fit per
-# label. One tile per embedding batch keeps each tile's crops on one worker.
+# per tile, and that single pass serves all three labels: a closed-form ridge is
+# fit per label, and the log_pop_density ridge (the label every tile has) is the
+# task's own score. One tile per embedding batch keeps each tile's crops on one
+# worker.
 EMBEDDING_EVAL_TASKS["us_socioeconomic_ws16_ps1_sentinel1_sentinel2_landsat"] = replace(
     _pastis_ps1_task(
         [Modality.SENTINEL1.name, Modality.SENTINEL2_L2A.name, Modality.LANDSAT.name],
@@ -1592,6 +1593,7 @@ EMBEDDING_EVAL_TASKS["us_socioeconomic_ws16_ps1_sentinel1_sentinel2_landsat"] = 
     primary_metric=EvalMetric.R2,
     pool_tiles=True,
     tile_label_properties=["log_income", "log_home_value", "log_pop_density"],
+    tile_primary_property="log_pop_density",
 )
 
 EMBED_DIAG_TASKS = {
