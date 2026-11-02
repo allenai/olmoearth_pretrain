@@ -1621,6 +1621,20 @@ for _variant in (
         dataset=f"pastis_tw_{_variant}",
     )
 
+# Interchangeability: train-split windows carry fresh-window embeddings, val/test
+# windows the retrieved / annual / naive ones (window_retrieval_pastis_bake.py hybrid).
+for _hybrid in (
+    "maraug_fresh2ret",
+    "maraug_fresh2annual",
+    "sepaug_fresh2ret",
+    "sepaug_fresh2annual",
+    "sepaug_fresh2avg",
+):
+    EMBEDDING_EVAL_TASKS[f"pastis_twx_{_hybrid}_ws16_ps1"] = replace(
+        EMBEDDING_EVAL_TASKS["pastis_year_aligned_oe13zarr_ws16_ps1"],
+        dataset=f"pastis_twx_{_hybrid}",
+    )
+
 EMBED_DIAG_TASKS = {
     "pretrain_subset": DownstreamTaskConfig(
         dataset="pretrain_subset",

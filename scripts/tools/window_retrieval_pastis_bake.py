@@ -102,6 +102,16 @@ VARIANTS = (
     "fresh_maraug",
     "ret_maraug",
 )
+# Interchangeability: train-split windows from the first variant, val/test windows
+# from the second, so the standard LP task trains on fresh embeddings and is scored
+# on retrieved (or annual / naive) ones.
+HYBRIDS = {
+    "maraug_fresh2ret": ("fresh_maraug", "ret_maraug"),
+    "maraug_fresh2annual": ("fresh_maraug", "annual2019"),
+    "sepaug_fresh2ret": ("fresh_sepaug", "ret_sepaug"),
+    "sepaug_fresh2annual": ("fresh_sepaug", "annual2019"),
+    "sepaug_fresh2avg": ("fresh_sepaug", "avg_sepaug"),
+}
 
 
 def key_to_file(key: str) -> str:
@@ -328,6 +338,58 @@ def bake(args: argparse.Namespace) -> None:
         )
 
 
+def hybrid(args: argparse.Namespace) -> None:
+    """Write the interchangeability datasets (``pastis_twx_*``) from the baked variants."""
+    layer = Modality.OLMOEARTH_EMB.name
+    for name, (train_v, eval_v) in HYBRIDS.items():
+        dst_name = f"pastis_twx_{name}"
+        dst_path = UPath(f"{EVAL_DATASETS}/{dst_name}")
+        if dst_path.exists() and not args.resume:
+            raise SystemExit(f"{dst_path} exists (pass --resume to continue)")
+        dst_path.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(
+            CONFIG_ROOT / dst_name / "config.json", str(dst_path / "config.json")
+        )
+        dst_dataset = Dataset(dst_path)
+        train_windows = Dataset(
+            UPath(f"{EVAL_DATASETS}/pastis_tw_{train_v}")
+        ).storage.get_windows()
+        eval_windows = {
+            (w.group, w.name): w
+            for w in Dataset(
+                UPath(f"{EVAL_DATASETS}/pastis_tw_{eval_v}")
+            ).storage.get_windows()
+        }
+        counts = {"train": 0, "eval": 0}
+
+        def handle(w: Window) -> None:
+            is_train = (w.options or {}).get("eval_split") == "train"
+            src = w if is_train else eval_windows[(w.group, w.name)]
+            dst = copy_window(w, dst_dataset)
+            src_dir, dst_dir = src.get_layer_dir(layer), dst.get_layer_dir(layer)
+            if dst_dir.exists():
+                shutil.rmtree(str(dst_dir))
+            shutil.copytree(str(src_dir), str(dst_dir))
+            dst.mark_layer_completed(layer)
+            counts["train" if is_train else "eval"] += 1
+
+        with ThreadPoolExecutor(args.workers) as pool:
+            list(pool.map(handle, train_windows))
+        manifest = {
+            "baked": len(train_windows),
+            "excluded_missing_source": [],
+            "train_from": train_v,
+            "eval_from": eval_v,
+            **counts,
+        }
+        (dst_path / "window_retrieval_bake_manifest.json").write_text(
+            json.dumps(manifest, indent=2)
+        )
+        logger.info(
+            f"{dst_name}: {counts['train']} train windows from {train_v}, {counts['eval']} val/test from {eval_v}"
+        )
+
+
 def main() -> int:
     """CLI entry point."""
     logging.basicConfig(
@@ -338,7 +400,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("command", choices=["embed", "bake"])
+    parser.add_argument("command", choices=["embed", "bake", "hybrid"])
     parser.add_argument("--work_dir", required=True)
     parser.add_argument("--source", choices=sorted(SOURCES))
     parser.add_argument("--checkpoint", help="converted v1.3 checkpoint dir (embed)")
@@ -353,8 +415,10 @@ def main() -> int:
         if not args.checkpoint:
             parser.error("embed needs --checkpoint")
         embed_source(args)
-    else:
+    elif args.command == "bake":
         bake(args)
+    else:
+        hybrid(args)
     return 0
 
 
