@@ -3894,6 +3894,15 @@ FT_EVAL_TASKS["planteur_codes_2019_ft_ws16_ps1_sentinel2"] = _pastis_ft_task(
     [Modality.SENTINEL2_L2A.name], dataset="planteur_codes_2019_s2"
 )
 
+# PASTIS changed-year benchmark: train on the pastis_rslearn 2019 folds, test on the same
+# places re-imaged in a year when their crop changed (plus the 2019 test fold as reference).
+EVAL_TASKS["pastis_changed_probe_sentinel2"] = _pastis_ps1_task(
+    [Modality.SENTINEL2_L2A.name], window_size=16, dataset="pastis_changed_s2"
+)
+FT_EVAL_TASKS["pastis_changed_ft_ws16_ps1_sentinel2"] = _pastis_ft_task(
+    [Modality.SENTINEL2_L2A.name], dataset="pastis_changed_s2"
+)
+
 # OlmoEarth v1.3 is read out three ways (paper Table 4): the base task above
 # probes the full d768 register grid, and these duplicates probe a Matryoshka
 # prefix of the detached linear student at each shipped width. Same windows,
