@@ -1,5 +1,7 @@
 """The location-conditioned text head of clipearth.geo_train."""
 
+from pathlib import Path
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -14,6 +16,7 @@ from olmoearth_pretrain.clipearth.geo_train import (
     build_batch,
     condition,
     condition_dim,
+    load_head,
     make_frequencies,
 )
 from olmoearth_pretrain.clipearth.train import Aligner
@@ -143,3 +146,32 @@ def test_batch_loss_by_hand() -> None:
     torch.testing.assert_close(t2i, expected_t2i)
     single = torch.tensor([[7, -1, -1, -1, 9], [-1] * 5, [-1] * 5, [-1] * 5])
     assert batch_loss(logits, single, torch.tensor([0, -1, -1, -1]), 4, 1)[1] is None
+
+
+def test_context_heads_start_neutral_and_round_trip(tmp_path: Path) -> None:
+    """A geo head with context scores like one without until trained, and reloads whole."""
+    freqs = make_frequencies((4000.0, 500.0), 4, 0)
+    plain = GeoTextHead(768, 32, 128, freqs)
+    with_context = GeoTextHead(768, 32, 128, freqs, context_widths=[128, 64])
+    image, context = torch.randn(3, 128), torch.randn(3, 128)
+
+    for dims in (None, 64):
+        torch.testing.assert_close(
+            with_context.image_side(image, context, dims),
+            plain.image_side(image, None, dims),
+        )
+    torch.nn.init.normal_(with_context.context["64"].weight)
+    path = tmp_path / "geo_head.pt"
+    torch.save(
+        {
+            "state_dict": with_context.state_dict(),
+            "frequencies": freqs,
+            "cond_hidden": 256,
+        },
+        path,
+    )
+    loaded, _ = load_head(str(path))
+    torch.testing.assert_close(
+        loaded.image_side(image, context, 64),
+        with_context.image_side(image, context, 64),
+    )

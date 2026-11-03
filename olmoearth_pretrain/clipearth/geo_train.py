@@ -50,6 +50,7 @@ from torch import Tensor, nn
 
 from olmoearth_pretrain.clipearth.train import (
     LEVEL_FALLBACK,
+    add_synonyms,
     encode_texts,
     load_distractors,
     load_pixel_samples,
@@ -136,9 +137,17 @@ class GeoTextHead(nn.Module):
         out_dim: int,
         frequencies: np.ndarray,
         cond_hidden: int = 256,
+        context_widths: list[int] | None = None,
     ) -> None:
-        """Build the layers; the FiLM output starts at zero."""
+        """Build the layers; the FiLM output and any context heads start at zero."""
         super().__init__()
+        # train.Aligner's context heads, same keys: image side normalize(x + W c + b).
+        self.context = nn.ModuleDict()
+        for width in context_widths or []:
+            head = nn.Linear(width, width)
+            nn.init.zeros_(head.weight)
+            nn.init.zeros_(head.bias)
+            self.context[str(width)] = head
         self.register_buffer(
             "frequencies", torch.from_numpy(np.asarray(frequencies, np.float64))
         )
@@ -156,6 +165,17 @@ class GeoTextHead(nn.Module):
         self.logit_scale = nn.Parameter(
             torch.tensor(np.log(1 / 0.07), dtype=torch.float32)
         )
+
+    def image_side(
+        self, image: Tensor, context: Tensor | None, dims: int | None
+    ) -> Tensor:
+        """Image vectors as scored: renormalized at ``dims``, plus the context head."""
+        x = native_unit(image, dims)
+        if context is not None and str(x.shape[-1]) in self.context:
+            x = F.normalize(
+                x + self.context[str(x.shape[-1])](native_unit(context, dims)), dim=-1
+            )
+        return x
 
     def hidden(self, text: Tensor) -> Tensor:
         """First layer, before modulation: ``[..., hidden]``."""
@@ -185,10 +205,14 @@ def load_init(model: GeoTextHead, path: str) -> dict:
     state = {
         k: v
         for k, v in ckpt["state_dict"].items()
-        if k.startswith("text.") or k == "logit_scale"
+        if k.startswith("text.")
+        or k == "logit_scale"
+        or (k.startswith("context.") and k.split(".")[1] in model.context)
     }
     missing, _ = model.load_state_dict(state, strict=False)
-    assert all(k.startswith("film.") or k == "frequencies" for k in missing), missing
+    assert all(
+        k.startswith(("film.", "context.")) or k == "frequencies" for k in missing
+    ), missing
     return ckpt["args"]
 
 
@@ -204,6 +228,7 @@ def pair_logits(
     cond: Tensor,
     image: Tensor,
     prefixes: list[int | None],
+    context: Tensor | None = None,
 ) -> list[Tensor]:
     """Cosine logits of each image against its candidate texts under its condition.
 
@@ -214,13 +239,17 @@ def pair_logits(
         cond: ``[B, C]`` condition of each image.
         image: ``[B, D]`` image vectors.
         prefixes: Matryoshka widths to score (None for all).
+        context: ``[B, D]`` context means, for a model with context heads.
 
     Returns one ``[B, K]`` tensor per Matryoshka prefix, unscaled.
     """
     gamma, beta = model.modulation(cond)
     y = model.output(hidden[cand], gamma[:, None], beta[:, None])  # [B, K, D]
     return [
-        (F.normalize(y[..., :dims], dim=-1) * native_unit(image, dims)[:, None]).sum(-1)
+        (
+            F.normalize(y[..., :dims], dim=-1)
+            * model.image_side(image, context, dims)[:, None]
+        ).sum(-1)
         for dims in prefixes
     ]
 
@@ -280,6 +309,7 @@ class Samples:
             k: []
             for k in (
                 "image",
+                "context",
                 "lat",
                 "lon",
                 "year",
@@ -321,15 +351,20 @@ class Samples:
         groups: np.ndarray,
         weight: float,
         cellable: bool,
+        context: np.ndarray | None = None,
     ) -> None:
-        """Append one source's samples."""
+        """Append one source's samples; ``context`` defaults to the image itself."""
         n = len(image)
         p = self.parts
-        p["image"].append(
-            (image / np.linalg.norm(image, axis=1, keepdims=True).clip(1e-6)).astype(
-                np.float16
+        for key, vectors in (
+            ("image", image),
+            ("context", image if context is None else context),
+        ):
+            p[key].append(
+                (
+                    vectors / np.linalg.norm(vectors, axis=1, keepdims=True).clip(1e-6)
+                ).astype(np.float16)
             )
-        )
         p["lat"].append(np.asarray(lat, np.float64))
         p["lon"].append(np.asarray(lon, np.float64))
         p["year"].append(np.asarray(year, np.int64))
@@ -376,6 +411,7 @@ def add_pixels(samples: Samples, npz_path: str, texts_path: str, weight: float) 
         groups,
         weight,
         True,
+        pixels["context"],
     )
 
 
@@ -579,6 +615,7 @@ def category_fit(
     text_emb: Tensor,
     target: np.ndarray,
     chunk: int = 32,
+    context: Tensor | None = None,
 ) -> float:
     """Top-1 of each image's softmax over all category texts under its condition."""
     hidden = model.hidden(text_emb)
@@ -593,6 +630,7 @@ def category_fit(
             cond[s : s + chunk],
             image[s : s + chunk],
             [None],
+            None if context is None else context[s : s + chunk],
         )[0]
         hits.append(logits.argmax(1).numpy() == target[s : s + chunk])
     return float(np.concatenate(hits).mean())
@@ -619,6 +657,8 @@ def train(args: argparse.Namespace) -> None:
         add_captions(samples, args.caption_chips, args.captions, 1.0, args.quads)
     if args.osm_regions:
         add_osm_regions(samples, args.osm_regions, args.osm_texts, args.osm_weight)
+    if args.synonyms:
+        add_synonyms(args.synonyms, samples.group_levels, samples.text_index, True)
     samples.distractors = load_distractors(
         args.distractors,
         args.distractor_holdout,
@@ -636,7 +676,16 @@ def train(args: argparse.Namespace) -> None:
         f"{len(samples.texts)} texts"
     )
 
-    model = GeoTextHead(768, 1024, 128, samples.frequencies, args.cond_hidden)
+    model = GeoTextHead(
+        768,
+        1024,
+        128,
+        samples.frequencies,
+        args.cond_hidden,
+        [128] + [int(d) for d in args.matryoshka.split(",") if d]
+        if args.context
+        else None,
+    )
     init_args = load_init(model, args.init)
     text_args = {
         k: init_args.get(k)
@@ -654,6 +703,7 @@ def train(args: argparse.Namespace) -> None:
         )
     )
     image = torch.from_numpy(samples.image)
+    context = torch.from_numpy(samples.context) if args.context else None
     prefixes: list[int | None] = [None] + [
         int(d) for d in args.matryoshka.split(",") if d
     ]
@@ -672,10 +722,11 @@ def train(args: argparse.Namespace) -> None:
         f"samples, {args.random_negatives} random negatives each"
     )
 
-    film_params = list(model.film.parameters())
+    # The FiLM and context heads are new (or newly paired with FiLM): the higher rate.
+    new_params = list(model.film.parameters()) + list(model.context.parameters())
     optimizer = torch.optim.AdamW(
         [
-            {"params": film_params, "lr": args.lr},
+            {"params": new_params, "lr": args.lr},
             {"params": list(model.text.parameters()), "lr": args.text_lr},
             {"params": [model.logit_scale], "lr": args.text_lr, "weight_decay": 0.0},
         ],
@@ -727,8 +778,13 @@ def train(args: argparse.Namespace) -> None:
         with torch.no_grad():
             for name, rows, ids, target, cond, blind in fit_sets:
                 img, emb = image[rows].float(), view_emb[ids]
-                out[f"fit_{name}"] = category_fit(model, img, cond, emb, target)
-                out[f"fit_{name}_noloc"] = category_fit(model, img, blind, emb, target)
+                ctx = None if context is None else context[rows].float()
+                out[f"fit_{name}"] = category_fit(
+                    model, img, cond, emb, target, context=ctx
+                )
+                out[f"fit_{name}_noloc"] = category_fit(
+                    model, img, blind, emb, target, context=ctx
+                )
                 out[f"num_categories_{name}"] = len(ids)
         model.train()
         return out
@@ -764,6 +820,7 @@ def train(args: argparse.Namespace) -> None:
             cond,
             image[rows.clip(min=0)],
             prefixes,
+            None if context is None else context[rows.clip(min=0)],
         ):
             i2t, t2i = batch_loss(
                 scale * logits, slot_text, target, args.cell_size, batch["n_cells"]
@@ -813,6 +870,12 @@ def load_head(path: str) -> tuple[GeoTextHead, dict]:
         state["text.2.weight"].shape[0],
         ckpt["frequencies"],
         ckpt["cond_hidden"],
+        sorted(
+            int(k.split(".")[1])
+            for k in state
+            if k.startswith("context.") and k.endswith(".weight")
+        )
+        or None,
     )
     model.load_state_dict(state)
     return model.eval(), ckpt
@@ -872,6 +935,15 @@ def export(args: argparse.Namespace) -> None:
             "film": [_dense(model.film[0]), _dense(model.film[2])],
         },
     }
+    if len(model.context):
+        # As export_text_head writes v5b's: the 2.56 km window and a head per width.
+        head["context"] = {
+            "windowPixels": 256,
+            "heads": {
+                width: {"weight": _f16(layer.weight), "bias": _f16(layer.bias)}
+                for width, layer in model.context.items()
+            },
+        }
     with open(args.out, "w") as f:
         json.dump(head, f, separators=(",", ":"))
     if not args.parity:
@@ -942,6 +1014,17 @@ def main() -> None:
         "member scored on its class name",
     )
     t.add_argument("--distractor_holdout", type=float, default=0.1)
+    t.add_argument(
+        "--synonyms",
+        default="",
+        help="jsonl of {name, synonyms}: extra name-level texts (last one held out)",
+    )
+    t.add_argument(
+        "--context",
+        action="store_true",
+        help="image side normalize(x + W c + b) with each sample's 2.56 km context mean "
+        "(captions and regions: their own mean), as train.py --context",
+    )
     t.add_argument("--wavelengths_km", default=",".join(map(str, WAVELENGTHS_KM)))
     t.add_argument("--per_scale", type=int, default=16)
     t.add_argument("--cond_hidden", type=int, default=256)

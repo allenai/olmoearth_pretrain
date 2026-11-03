@@ -341,14 +341,17 @@ def is_holdout(slug: str, fraction: float) -> bool:
 
 
 def load_related(
-    path: str, group_levels: list[dict[str, list[int]]], text_index: dict[str, int]
+    path: str,
+    group_levels: list[dict[str, list[int]]],
+    text_index: dict[str, int],
+    kinds: tuple[str, ...] = ("same", "broader", "narrower"),
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Class keys of groups and texts, and the related key pairs of ``path``.
 
     A group's class key numbers its first name-level text after ``norm_key``; a text takes
     the key of the first group using it (-1 for texts of no group, e.g. distractors).
-    ``path`` lines are {name, related: [{name, relation}]}; every listed pair counts both
-    ways. Returns (group_key, text_key, sorted pair codes ``a * n_keys + b``, n_keys).
+    ``path`` lines are {name, related: [{name, relation}]}; every listed pair whose
+    relation is one of ``kinds`` counts both ways. Returns (group_key, text_key, sorted pair codes ``a * n_keys + b``, n_keys).
     """
     text_of = {i: t for t, i in text_index.items()}
     keys: dict[str, int] = {}
@@ -370,6 +373,8 @@ def load_related(
             r = json.loads(line)
             a = keys.get(norm_key(r["name"]))
             for other in r["related"]:
+                if other["relation"] not in kinds:
+                    continue
                 b = keys.get(norm_key(other["name"]))
                 if a is not None and b is not None and a != b:
                     codes += [a * n + b, b * n + a]
@@ -732,6 +737,11 @@ def main() -> None:
         help="jsonl of {name, related: [{name, relation}]} (same/broader/narrower/overlapping)",
     )
     parser.add_argument(
+        "--related_kinds",
+        default="same,broader,narrower",
+        help="relations of --related that are masked",
+    )
+    parser.add_argument(
         "--synonyms",
         default="",
         help="jsonl of {name, synonyms}: extra name-level texts of each class",
@@ -1020,7 +1030,10 @@ def main() -> None:
     takes_distractors = np.isin(source_a, ["class", "osm", "pixel"])
     if args.mask_related:
         group_key, text_key, related_codes, n_keys = load_related(
-            args.related, group_levels, text_index
+            args.related,
+            group_levels,
+            text_index,
+            tuple(args.related_kinds.split(",")),
         )
 
     texts = [""] * len(text_index)
