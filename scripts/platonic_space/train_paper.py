@@ -2,7 +2,7 @@
 
   python train_paper.py --run paper_oe_aef_s0 --models oe,aef --seed 0
 
-Product j of --models only ever sees train tiles with tile % len(models) == j, so no pixel
+Train tiles are dealt out to the products in turn (by rank of tile id), so no pixel
 is seen by two products. The first product is the anchor that the latent GAN pulls the
 others towards. Every --eval_every steps it scores translation fidelity on the (paired) val
 split with train.fidelity, keeps the checkpoint with the best mean translation rank (the
@@ -75,13 +75,15 @@ def main() -> None:
     anchor = models[0]
     train = load_split(cfg.data_dir, "train", models, device)
     val = load_split(cfg.data_dir, "val", models, device)
+    # Deal tiles out by their rank among the unique ids: every footprint id in pilot2024 is
+    # even, so tile % 2 would hand one product of a pair nothing.
+    owner = torch.unique(train["tile"], return_inverse=True)[1] % len(models)
     own_idx = {
-        m: (
-            (train["tile"] % len(models) == j) & torch.isfinite(train[m][:, 0])
-        ).nonzero()[:, 0]
+        m: ((owner == j) & torch.isfinite(train[m][:, 0])).nonzero()[:, 0]
         for j, m in enumerate(models)
     }
     print({m: len(i) for m, i in own_idx.items()}, "pixels per product", flush=True)
+    assert all(len(i) for i in own_idx.values()), "a product has no training pixels"
     model = PaperVec2Vec({m: DIMS[m] for m in models}, cfg.d_model).to(device)
     discs = torch.nn.ModuleDict(
         {f"out_{m}": Discriminator(DIMS[m], cfg.d_model) for m in models}
