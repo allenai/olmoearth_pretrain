@@ -200,8 +200,14 @@ def load_pixel_samples(
         else np.full(n, "")
     )
     split = np.where(split == "", "train", split)
+    dataset = (
+        arrays["dataset_names"][arrays["dataset"][keep]].astype(str)
+        if "dataset" in arrays
+        else np.full(n, "")
+    )
     return {
         "id": arrays["id"][keep],
+        "dataset": dataset,
         "embedding": scaled("pixel"),
         "context": scaled("context"),
         "split": split,
@@ -209,6 +215,10 @@ def load_pixel_samples(
         "texts": texts,
     }
 
+
+# Unseen source datasets (windows and their pixels), OSM's 0.5-degree validation blocks,
+# GEA-17's test blocks and the geographic caption holdout.
+HOLDOUT_SPLITS = ["unseen", "osm_val", "test", "val_caption"]
 
 # Where a sample without a text at some level takes one from instead.
 LEVEL_FALLBACK = {
@@ -330,6 +340,124 @@ def is_holdout(slug: str, fraction: float) -> bool:
     )
 
 
+def load_related(
+    path: str, group_levels: list[dict[str, list[int]]], text_index: dict[str, int]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Class keys of groups and texts, and the related key pairs of ``path``.
+
+    A group's class key numbers its first name-level text after ``norm_key``; a text takes
+    the key of the first group using it (-1 for texts of no group, e.g. distractors).
+    ``path`` lines are {name, related: [{name, relation}]}; every listed pair counts both
+    ways. Returns (group_key, text_key, sorted pair codes ``a * n_keys + b``, n_keys).
+    """
+    text_of = {i: t for t, i in text_index.items()}
+    keys: dict[str, int] = {}
+    group_key = np.full(len(group_levels), -1)
+    for g, by_level in enumerate(group_levels):
+        if by_level.get("name"):
+            name = norm_key(text_of[by_level["name"][0]])
+            group_key[g] = keys.setdefault(name, len(keys))
+    text_key = np.full(len(text_index), -1)
+    for g, by_level in enumerate(group_levels):
+        for ids in by_level.values():
+            for t in ids:
+                if text_key[t] < 0:
+                    text_key[t] = group_key[g]
+    n = len(keys)
+    codes = []
+    if path:
+        for line in open(path):
+            r = json.loads(line)
+            a = keys.get(norm_key(r["name"]))
+            for other in r["related"]:
+                b = keys.get(norm_key(other["name"]))
+                if a is not None and b is not None and a != b:
+                    codes += [a * n + b, b * n + a]
+    codes_a = np.unique(np.array(codes, np.int64))
+    logger.info(f"related: {len(codes_a) // 2} class pairs over {n} class keys")
+    return group_key, text_key, codes_a, n
+
+
+def add_synonyms(
+    path: str,
+    group_levels: list[dict[str, list[int]]],
+    text_index: dict[str, int],
+    hold_last: bool,
+) -> int:
+    """Add each class's synonyms to the name level of its groups; returns groups changed.
+
+    A group's class is its first name-level text. With ``hold_last``, a class's last
+    synonym is left out when it has two or more, for a paraphrase check.
+    """
+    by_name = {}
+    for line in open(path):
+        r = json.loads(line)
+        synonyms = (
+            r["synonyms"][:-1]
+            if hold_last and len(r["synonyms"]) > 1
+            else r["synonyms"]
+        )
+        if synonyms:
+            by_name[norm_key(r["name"])] = synonyms
+    text_of = {i: t for t, i in text_index.items()}
+    changed = 0
+    for by_level in group_levels:
+        names = by_level.get("name")
+        found = names and by_name.get(norm_key(text_of[names[0]]))
+        if not found:
+            continue
+        own = {norm_key(text_of[i]) for i in names}
+        by_level["name"] = names + [
+            text_index.setdefault(t, len(text_index))
+            for t in found
+            if norm_key(t) not in own
+        ]
+        changed += 1
+    logger.info(f"synonyms: {len(by_name)} classes, {changed} groups")
+    return changed
+
+
+def load_distractors(
+    path: str,
+    holdout: float,
+    group_levels: list[dict[str, list[int]]],
+    text_index: dict[str, int],
+) -> np.ndarray:
+    """``[groups, W]`` distractor text ids per group, -1 padded; ``W`` is 0 without ``path``.
+
+    A group's class is its first name-level text. Distractor texts are added to
+    ``text_index``; a distractor matching one of the group's own names is dropped, and
+    ``holdout`` of the classes, by name hash, get none.
+    """
+    if not path:
+        return np.full((len(group_levels), 0), -1)
+    by_name = {}
+    for line in open(path):
+        r = json.loads(line)
+        key = norm_key(r["name"])
+        if not r.get("skip") and not is_holdout(key, holdout):
+            by_name[key] = r["easy"] + r["hard"]
+    width = max(map(len, by_name.values()), default=0)
+    out = np.full((len(group_levels), width), -1)
+    text_of = {i: t for t, i in text_index.items()}
+    for g, by_level in enumerate(group_levels):
+        names = by_level.get("name")
+        found = names and by_name.get(norm_key(text_of[names[0]]))
+        if not found:
+            continue
+        own = {norm_key(text_of[i]) for i in names}
+        ids = [
+            text_index.setdefault(t, len(text_index))
+            for t in found
+            if norm_key(t) not in own
+        ]
+        out[g, : len(ids)] = ids
+    logger.info(
+        f"distractors: {len(by_name)} classes, {(out >= 0).any(1).sum()} groups covered"
+    )
+    return out
+
+
 class Aligner(nn.Module):
     """Project image and text embeddings into a shared space.
 
@@ -420,7 +548,13 @@ def native_view(
 
 
 def contrastive_loss(
-    image: Tensor, text: Tensor, labels: Tensor, scale: Tensor
+    image: Tensor,
+    text: Tensor,
+    labels: Tensor,
+    scale: Tensor,
+    negatives: Tensor | None = None,
+    negative_mask: Tensor | None = None,
+    exclude: Tensor | None = None,
 ) -> Tensor:
     """Symmetric loss with all regions of a class as positives for its text.
 
@@ -429,12 +563,23 @@ def contrastive_loss(
         text: ``[U, D]`` normalized embeddings of the batch's ``U`` unique classes.
         labels: ``[B]`` index into ``text`` of each region's class.
         scale: logit scale.
+        negatives: ``[E, D]`` normalized extra texts, negatives on the image-to-text side
+            only.
+        negative_mask: ``[B, E]`` which regions each extra text is a negative for.
+        exclude: ``[B, U]`` region-text pairs that are neither positive nor negative
+            (related classes); never a region's own text.
     """
     logits = scale * image @ text.T  # [B, U]
-    image_to_text = F.cross_entropy(logits, labels)
+    if exclude is not None:
+        logits = logits.masked_fill(exclude, float("-inf"))
+    if negatives is not None and negative_mask is not None:
+        extra = (scale * image @ negatives.T).masked_fill(~negative_mask, float("-inf"))
+        image_to_text = F.cross_entropy(torch.cat([logits, extra], 1), labels)
+    else:
+        image_to_text = F.cross_entropy(logits, labels)
     positives = F.one_hot(labels, text.shape[0]).T.float()  # [U, B]
     log_prob = logits.T.log_softmax(dim=-1)  # over regions, per class
-    text_to_image = -(positives * log_prob).sum(-1) / positives.sum(-1)
+    text_to_image = -log_prob.masked_fill(positives == 0, 0).sum(-1) / positives.sum(-1)
     return (image_to_text + text_to_image.mean()) / 2
 
 
@@ -563,6 +708,40 @@ def main() -> None:
         help="with --native, the image side also takes each sample's 2.56 km context "
         "mean through a linear head per width",
     )
+    parser.add_argument(
+        "--distractors",
+        default="",
+        help="jsonl of {name, easy, hard[, skip]}: texts each class's region and pixel "
+        "samples are scored against as extra negatives at the name level",
+    )
+    parser.add_argument(
+        "--distractor_holdout",
+        type=float,
+        default=0.1,
+        help="fraction of distractor classes, by name hash, left out of training",
+    )
+    parser.add_argument(
+        "--mask_related",
+        action="store_true",
+        help="a batch text whose class has the sample's class key, or is related to it in "
+        "--related, is neither a positive nor a negative for that sample",
+    )
+    parser.add_argument(
+        "--related",
+        default="",
+        help="jsonl of {name, related: [{name, relation}]} (same/broader/narrower/overlapping)",
+    )
+    parser.add_argument(
+        "--synonyms",
+        default="",
+        help="jsonl of {name, synonyms}: extra name-level texts of each class",
+    )
+    parser.add_argument(
+        "--synonym_holdout_last",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="leave out each class's last synonym (when it has 2+) for evaluation",
+    )
     parser.add_argument("--min_visibility", type=float, default=0.5)
     parser.add_argument(
         "--caption_holdout_frac",
@@ -602,6 +781,12 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--weight_decay", type=float, default=0.05)
     parser.add_argument("--holdout_frac", type=float, default=0.1)
+    parser.add_argument(
+        "--holdout_eval",
+        action="store_true",
+        help="train on everything except the held-out splits (HOLDOUT_SPLITS), "
+        "overriding --train_on_all, so they can be scored as unseen data",
+    )
     parser.add_argument(
         "--train_on_all",
         action="store_true",
@@ -811,7 +996,11 @@ def main() -> None:
             sample_group += list(
                 groups[order][np.searchsorted(ids[order], pixels["text_id"])]
             )
-            split += list(pixels["split"])
+            # Pixels of the held-out source datasets are "unseen", like their windows.
+            split += [
+                "unseen" if s == "train" and is_holdout(d, args.holdout_frac) else s
+                for s, d in zip(pixels["split"], pixels["dataset"])
+            ]
             source += ["pixel"] * n
             weight += [pixel_weights[file_index]] * n
             origin += [file_index] * n
@@ -821,6 +1010,19 @@ def main() -> None:
     split_a, source_a = np.array(split), np.array(source)
     weight_a, origin_a = np.array(weight), np.array(origin)
     group_a = np.array(sample_group)
+    if args.synonyms:
+        # Before the distractors, so a distractor equal to a synonym is dropped.
+        add_synonyms(args.synonyms, group_levels, text_index, args.synonym_holdout_last)
+    # Only class, OSM and pixel samples use their group's distractors.
+    group_distractors = load_distractors(
+        args.distractors, args.distractor_holdout, group_levels, text_index
+    )
+    takes_distractors = np.isin(source_a, ["class", "osm", "pixel"])
+    if args.mask_related:
+        group_key, text_key, related_codes, n_keys = load_related(
+            args.related, group_levels, text_index
+        )
+
     texts = [""] * len(text_index)
     for t, i in text_index.items():
         texts[i] = t
@@ -849,7 +1051,12 @@ def main() -> None:
 
     emb = np.stack(embeddings).astype(np.float32)
     del embeddings
-    train = np.ones(len(split_a), bool) if args.train_on_all else split_a == "train"
+    if args.holdout_eval:
+        train = ~np.isin(split_a, HOLDOUT_SPLITS)
+    elif args.train_on_all:
+        train = np.ones(len(split_a), bool)
+    else:
+        train = split_a == "train"
     # Native mode scores raw embeddings, as a search over stored embeddings would.
     mean = np.zeros_like(emb[0]) if args.native else emb[train].mean(0)
     image = torch.from_numpy(emb - mean).to(device)
@@ -1008,13 +1215,19 @@ def main() -> None:
     # Fit only: a fixed subset of each --pixels file against the first-level texts in it.
     pixel_eval = []
     eval_rng = np.random.default_rng(args.seed + 1)
+    # "<file>_held" scores only the held-out splits (unseen data under --holdout_eval).
+    held_out = np.isin(split_a, HOLDOUT_SPLITS)
     for o, name in enumerate(pixel_names):
-        rows = np.flatnonzero((source_a == "pixel") & (origin_a == o))
-        rows = rows[[bool(candidates[g][levels[0]]) for g in group_a[rows]]]
-        rows = np.sort(eval_rng.choice(rows, min(len(rows), 5000), replace=False))
-        first = [candidates[g][levels[0]][0] for g in group_a[rows]]
-        text_ids, target = np.unique(first, return_inverse=True)
-        pixel_eval.append((name, rows, text_ids, target))
+        in_file = (source_a == "pixel") & (origin_a == o)
+        for label, mask in ((name, in_file), (name + "_held", in_file & held_out)):
+            rows = np.flatnonzero(mask)
+            rows = rows[[bool(candidates[g][levels[0]]) for g in group_a[rows]]]
+            if not len(rows):
+                continue
+            rows = np.sort(eval_rng.choice(rows, min(len(rows), 5000), replace=False))
+            first = [candidates[g][levels[0]][0] for g in group_a[rows]]
+            text_ids, target = np.unique(first, return_inverse=True)
+            pixel_eval.append((label, rows, text_ids, target))
 
     # The samples scored below; only these are projected at each evaluation.
     val_rows = np.flatnonzero(class_split == "val")
@@ -1136,15 +1349,39 @@ def main() -> None:
         for level in levels:
             unique_texts, targets = level_texts(batch, level)
             keep = unique_texts[targets] >= 0
+            level_rows = batch
             if not keep.all():
                 # Groups with no text at any level sit out this level.
                 unique_texts, targets = np.unique(
                     unique_texts[targets][keep], return_inverse=True
                 )
                 level_batch = batch_t[torch.from_numpy(keep).to(device)]
+                level_rows = batch[keep]
             else:
                 level_batch = batch_t
             targets_t = torch.from_numpy(targets).to(device)
+            negatives = negative_mask = None
+            if group_distractors.shape[1] and level == "name":
+                ids = group_distractors[group_a[level_rows]]
+                ids[~takes_distractors[level_rows]] = -1
+                # A distractor already among the batch's classes is scored there.
+                ids[np.isin(ids, unique_texts)] = -1
+                extra, inverse = np.unique(ids[ids >= 0], return_inverse=True)
+                if len(extra):
+                    mask = np.zeros((len(level_rows), len(extra)), bool)
+                    mask[np.nonzero(ids >= 0)[0], inverse] = True
+                    negative_mask = torch.from_numpy(mask).to(device)
+                    negatives = extra
+            exclude = None
+            if args.mask_related:
+                row_key = group_key[group_a[level_rows]][:, None]
+                col_key = text_key[unique_texts][None, :]
+                related = (row_key == col_key) | np.isin(
+                    row_key * n_keys + col_key, related_codes
+                )
+                related &= (row_key >= 0) & (col_key >= 0)
+                related[np.arange(len(targets)), targets] = False
+                exclude = torch.from_numpy(related).to(device)
             for dims in prefixes:
                 losses.append(
                     contrastive_loss(
@@ -1152,6 +1389,11 @@ def main() -> None:
                         model.embed_text(view_emb[unique_texts], dims),
                         targets_t,
                         scale,
+                        None
+                        if negatives is None
+                        else model.embed_text(view_emb[negatives], dims),
+                        negative_mask,
+                        exclude,
                     )
                 )
         loss = sum(losses) / len(losses)

@@ -51,6 +51,7 @@ from torch import Tensor, nn
 from olmoearth_pretrain.clipearth.train import (
     LEVEL_FALLBACK,
     encode_texts,
+    load_distractors,
     load_pixel_samples,
 )
 
@@ -291,6 +292,7 @@ class Samples:
         }
         self.origins: list[str] = []
         self._group_key: dict[str, int] = {}
+        self.distractors = np.full((0, 0), -1)
 
     def group(self, by_level: dict[str, list[str]]) -> int:
         """Group id of a text set; identical sets share one group."""
@@ -517,7 +519,17 @@ def build_batch(
     k = cell_size
     cell_texts = np.repeat(text.reshape(-1, k), k, axis=0)  # [B, k]
     random = unique[rng.integers(len(unique), size=(len(flat), n_random))]
-    slot_text = np.concatenate([cell_texts, random], 1)
+    slots = [cell_texts, random]
+    if samples.distractors.shape[1]:
+        # A pixel member scored on its class name also faces that class's distractors.
+        row_level = np.full(len(flat), -1)
+        row_level[real] = level[inverse]
+        named = (row_level == LEVELS.index("name")) & samples.cellable[flat.clip(min=0)]
+        own = samples.distractors[samples.group[flat.clip(min=0)]]
+        own[~named] = -1
+        slots.append(own)
+        unique = np.union1d(unique, own[own >= 0])
+    slot_text = np.concatenate(slots, 1)
     slot_text[~real] = -1
     # One usable slot per text: later repeats (and repeats of earlier slots) are masked.
     order = np.argsort(slot_text, axis=1, kind="stable")
@@ -607,6 +619,12 @@ def train(args: argparse.Namespace) -> None:
         add_captions(samples, args.caption_chips, args.captions, 1.0, args.quads)
     if args.osm_regions:
         add_osm_regions(samples, args.osm_regions, args.osm_texts, args.osm_weight)
+    samples.distractors = load_distractors(
+        args.distractors,
+        args.distractor_holdout,
+        samples.group_levels,
+        samples.text_index,
+    )
     samples.finish()
     samples.frequencies = make_frequencies(
         tuple(float(w) for w in args.wavelengths_km.split(",")),
@@ -917,6 +935,13 @@ def main() -> None:
     t.add_argument("--osm_texts", default="")
     t.add_argument("--osm_weight", type=float, default=1.0)
     t.add_argument("--text_cache", default="")
+    t.add_argument(
+        "--distractors",
+        default="",
+        help="jsonl of {name, easy, hard[, skip]}: extra negative slots for a pixel "
+        "member scored on its class name",
+    )
+    t.add_argument("--distractor_holdout", type=float, default=0.1)
     t.add_argument("--wavelengths_km", default=",".join(map(str, WAVELENGTHS_KM)))
     t.add_argument("--per_scale", type=int, default=16)
     t.add_argument("--cond_hidden", type=int, default=256)

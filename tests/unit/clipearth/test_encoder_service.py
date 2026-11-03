@@ -21,8 +21,8 @@ SERVICE = (
     Path(__file__).parents[3] / "olmoearth_pretrain" / "clipearth" / "encoder_service"
 )
 sys.path.insert(0, str(SERVICE))
-import app as service
-from encoder import DIMS, Encoder
+import app as service  # noqa: E402
+from encoder import DIMS, Encoder  # noqa: E402
 
 
 class CountingEncoder(Encoder):
