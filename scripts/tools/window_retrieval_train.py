@@ -1388,7 +1388,7 @@ def main() -> int:
     parser.add_argument(
         "--select_metric",
         choices=["cos", "local", "mean"],
-        default="cos",
+        default="mean",
         help="checkpoint selection on val: cosine, within-tile closed, or the mean of global and within-tile closed",
     )
     parser.add_argument(
