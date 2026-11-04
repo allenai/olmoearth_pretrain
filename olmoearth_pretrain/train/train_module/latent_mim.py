@@ -33,6 +33,7 @@ from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModuleConfig,
 )
 from olmoearth_pretrain.train.utils import split_masked_batch
+from olmoearth_pretrain.train.window_retrieval import window_retrieval_loss
 
 logger = getLogger(__name__)
 
@@ -52,6 +53,15 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         subpatch_offset_loss_weight: Weight on the sub-patch offset loss (see
             ``olmoearth_pretrain.train.subpatch_offset_loss``), applied when location
             queries are finer than the patch size.
+        window_retrieval_weight: Weight on the window-retrieval loss (see
+            ``olmoearth_pretrain.train.window_retrieval``); needs the model's
+            ``window_retriever``. 0 disables it.
+        window_retrieval_lengths: Shortest and longest window drawn, in steps.
+        window_retrieval_centered_weight: Weight on the window-retrieval MSE after
+            removing each sample's mean over location tokens (within-tile structure).
+        freeze_encoder_except_pooler: Train only the encoder's AttentionPooler (and
+            its student) plus the non-encoder modules; the rest of the encoder keeps
+            its initial weights.
     """
 
     loss_config: LossConfig = field(
@@ -68,6 +78,10 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
     subpatch_offset_loss_weight: float = 0.0
+    window_retrieval_weight: float = 0.0
+    window_retrieval_lengths: tuple[int, int] = (2, 11)
+    window_retrieval_centered_weight: float = 0.0
+    freeze_encoder_except_pooler: bool = False
 
     def build(
         self,
@@ -138,6 +152,10 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
         subpatch_offset_loss_weight: float = 0.0,
+        window_retrieval_weight: float = 0.0,
+        window_retrieval_lengths: tuple[int, int] = (2, 11),
+        window_retrieval_centered_weight: float = 0.0,
+        freeze_encoder_except_pooler: bool = False,
     ):
         """Initialize the training module.
 
@@ -168,7 +186,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 projection of that pixel). Requires the projection-only target: a
                 full target encoder would need a per-pixel forward.
             subpatch_offset_loss_weight: Weight on the sub-patch offset loss.
+            window_retrieval_weight: Weight on the window-retrieval loss.
+            window_retrieval_lengths: Shortest and longest window drawn, in steps.
+            window_retrieval_centered_weight: Weight on the within-tile retrieval MSE.
+            freeze_encoder_except_pooler: Freeze every encoder parameter outside the
+                AttentionPooler. Done before the optimizer is built.
         """
+        if freeze_encoder_except_pooler:
+            if model.encoder.attention_pooler is None:
+                raise ValueError(
+                    "freeze_encoder_except_pooler needs an AttentionPooler"
+                )
+            for name, param in model.encoder.named_parameters():
+                if not name.startswith("attention_pooler."):
+                    param.requires_grad = False
+        if window_retrieval_weight > 0 and model.window_retriever is None:
+            raise ValueError("window_retrieval_weight > 0 needs model.window_retriever")
         super().__init__(
             model=model,
             optim_config=optim_config,
@@ -218,6 +251,11 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         self.subpatch_offset_loss_weight = subpatch_offset_loss_weight
         if subpatch_offset_loss_weight > 0:
             self.total_loss_name = f"{self.total_loss_name}+subpatch_offset"
+        self.window_retrieval_weight = window_retrieval_weight
+        self.window_retrieval_lengths = window_retrieval_lengths
+        self.window_retrieval_centered_weight = window_retrieval_centered_weight
+        if window_retrieval_weight > 0:
+            self.total_loss_name = f"{self.total_loss_name}+window_retrieval"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -444,5 +482,22 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics["subpatch_offset_loss"] = offset_loss.detach()
+
+            if self.window_retrieval_weight > 0 and student_outputs is not None:
+                # Its window pass runs under autocast like the main pass; the loss
+                # itself is computed in fp32.
+                retrieval_loss, retrieval_metrics = window_retrieval_loss(
+                    self.model,
+                    batch,
+                    patch_size,
+                    location_query_patch_size,
+                    student_outputs["location_tokens"],
+                    *self.window_retrieval_lengths,
+                    centered_weight=self.window_retrieval_centered_weight,
+                )
+                loss = loss + self.window_retrieval_weight * retrieval_loss
+                if extra_metrics is None:
+                    extra_metrics = {}
+                extra_metrics.update(retrieval_metrics)
 
             return loss, latent, decoded, target_output, extra_metrics

@@ -27,6 +27,10 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHeadConfig,
 )
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
+from olmoearth_pretrain.nn.window_retriever import (
+    WindowRetriever,
+    WindowRetrieverConfig,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +93,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_head: SupervisionHead | None = None,
         location_token_distillation_head: LocationTokenDistillationHead | None = None,
         projection_only_target: bool = False,
+        window_retriever: WindowRetriever | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -107,6 +112,10 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            window_retriever: Optional retriever from a student embedding and a time
+                window to that window's embedding (see
+                ``olmoearth_pretrain.nn.window_retriever``). Trained by the train
+                module's window-retrieval loss; never run in the model's forward.
         """
         super().__init__()
         self.encoder = encoder
@@ -114,6 +123,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
         self.location_token_distillation_head = location_token_distillation_head
+        self.window_retriever = window_retriever
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -280,6 +290,11 @@ class LatentMIMConfig(Config):
         LocationTokenDistillationHeadConfig | None
     ) = None
     projection_only_target: bool = False
+    # Retriever from a student embedding and a time window to that window's embedding.
+    window_retriever_config: WindowRetrieverConfig | None = None
+    # Initialize from a flat weights.pth (e.g. a converted release checkpoint). Only
+    # window_retriever parameters may be missing from it.
+    init_weights_path: str | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -340,6 +355,22 @@ class LatentMIMConfig(Config):
                     "location_token_distillation_head_config requires an AttentionPooler with a "
                     "student (attention_pooler_config.student_dims)"
                 )
+        if self.window_retriever_config is not None:
+            attention_pooler_config = self.encoder_config.attention_pooler_config
+            student_dims = (
+                attention_pooler_config.sorted_student_dims
+                if attention_pooler_config is not None
+                else None
+            )
+            if not student_dims:
+                raise ValueError(
+                    "window_retriever_config requires an AttentionPooler student"
+                )
+            if self.window_retriever_config.dim != student_dims[0]:
+                raise ValueError(
+                    f"window_retriever_config.dim ({self.window_retriever_config.dim}) must be "
+                    f"the student width ({student_dims[0]})"
+                )
 
     def build(self) -> "LatentMIM":
         """Build the Latent Predictor."""
@@ -371,11 +402,38 @@ class LatentMIMConfig(Config):
                     student_dims=attention_pooler_config.sorted_student_dims,
                 )
             )
-        return LatentMIM(
+        model = LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
             supervision_head=supervision_head,
             location_token_distillation_head=location_token_distillation_head,
             projection_only_target=self.projection_only_target,
+            window_retriever=(
+                self.window_retriever_config.build()
+                if self.window_retriever_config is not None
+                else None
+            ),
         )
+        if self.init_weights_path is not None:
+            load_init_weights(model, self.init_weights_path)
+        return model
+
+
+def load_init_weights(model: LatentMIM, path: str) -> None:
+    """Load a flat weights.pth; only window_retriever parameters may be missing."""
+    from upath import UPath
+
+    with UPath(path).open("rb") as f:
+        state_dict = torch.load(f, map_location="cpu")
+    result = model.load_state_dict(state_dict, strict=False)
+    missing = [k for k in result.missing_keys if not k.startswith("window_retriever.")]
+    if missing or result.unexpected_keys:
+        raise ValueError(
+            f"init weights {path} do not match the model: missing {missing}, "
+            f"unexpected {result.unexpected_keys}"
+        )
+    logger.info(
+        f"Initialized from {path} ({len(state_dict)} tensors; "
+        f"{len(result.missing_keys)} window_retriever tensors left at init)"
+    )
