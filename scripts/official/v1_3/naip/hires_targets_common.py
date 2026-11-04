@@ -47,6 +47,10 @@ ENCODED_MODALITIES = [
     Modality.NAIP_10.name,
     *naip_common.CONTROL_MODALITIES[3:],
 ]
+# N9: the same targets on the control's own encoded set (no naip_10).
+ENCODED_MODALITIES_NO_NAIP = [
+    m for m in ENCODED_MODALITIES if m != Modality.NAIP_10.name
+]
 TARGET_ONLY = [Modality.OPEN_BUILDINGS.name, Modality.VIIRS.name]
 # Same weight as the other regression heads (base.py: base_weight 1.0 x 1.0), as in N3.
 TARGET_WEIGHT = 1.0
@@ -65,6 +69,9 @@ HIRES_H5_DIR = (
 build_common_components = partial(
     naip_common.build_common_components, [Modality.NAIP_10.name, *TARGET_ONLY]
 )
+build_common_components_no_naip = partial(
+    naip_common.build_common_components, TARGET_ONLY
+)
 
 
 def build_dataset_config(common) -> OlmoEarthDatasetConfig:
@@ -75,9 +82,26 @@ def build_dataset_config(common) -> OlmoEarthDatasetConfig:
     )
 
 
-def build_model_config(common, hires_decoder: str):
-    """N2's model (naip_10 encoded) plus open_buildings / viirs regression heads."""
-    config = naip_common.build_model_config(common, ENCODED_MODALITIES)
+def build_model_config(
+    common,
+    hires_decoder: str,
+    viirs_footprint_loss: str | None = None,
+    mlp_heads: bool = False,
+    naip: bool = True,
+):
+    """N2's model (naip_10 encoded) plus open_buildings / viirs regression heads.
+
+    ``viirs_footprint_loss`` (N7: ``"log1p"``) scores the VIIRS head on footprint
+    means of its 10 m predictions instead of per pixel; see
+    ``SupervisionModalityConfig.footprint_loss``. None keeps N5/N6's per-pixel L1.
+    ``mlp_heads`` (N7) turns every per-cell linear head (the six map targets and
+    VIIRS) into a 2-layer MLP (``decoder="mlp"``); Open Buildings keeps
+    ``hires_decoder``. ``naip=False`` (N9) drops naip_10 from the encoder/decoder,
+    leaving the control's encoded modalities.
+    """
+    config = naip_common.build_model_config(
+        common, ENCODED_MODALITIES if naip else ENCODED_MODALITIES_NO_NAIP
+    )
     assert config.supervision_head_config is not None
     heads = config.supervision_head_config.modality_configs
     heads[Modality.OPEN_BUILDINGS.name] = SupervisionModalityConfig(
@@ -93,7 +117,12 @@ def build_model_config(common, hires_decoder: str):
         num_output_channels=Modality.VIIRS.num_bands,
         weight=TARGET_WEIGHT,
         regression_loss_type="l1",
+        footprint_loss=viirs_footprint_loss,
     )
+    if mlp_heads:
+        for cfg in heads.values():
+            if cfg.decoder == "linear":
+                cfg.decoder = "mlp"
     return config
 
 
