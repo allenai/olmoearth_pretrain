@@ -127,21 +127,6 @@ def roundtrip_embeddings_tessera(embeddings: torch.Tensor) -> torch.Tensor:
     return dequantize_embeddings_tessera(quantized, scales)
 
 
-class QuantizationScheme(StrEnum):
-    """Which int8 scheme ``quantize_embeddings=True`` applies.
-
-    Per-product, because the point of the embedding-eval convention is to score
-    each arm at the precision it actually ships.
-    """
-
-    # AlphaEarth's published scheme (POWER/SCALE above). The default, and the
-    # right choice for AEF-geometry (unit-L2) embeddings.
-    AEF_POWER = "aef_power"
-    # Tessera's scheme: linear, per-vector scale, clip-free. Used for the
-    # tessera_v2 arm, which we bake ourselves in float32.
-    TESSERA_PER_VECTOR = "tessera_per_vector"
-
-
 # === Normalization ===
 
 
