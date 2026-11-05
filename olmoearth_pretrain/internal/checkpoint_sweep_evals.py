@@ -52,6 +52,7 @@ from olmoearth_pretrain.internal.all_evals import (
     EMBED_DIAG_TASKS,
     EMBEDDING_EVAL_TASKS,
     EVAL_TASKS,
+    FT_EVAL_TASKS,
     load_user_module,
 )
 from olmoearth_pretrain.internal.constants import EVAL_WANDB_PROJECT, WANDB_ENTITY
@@ -238,11 +239,15 @@ def evaluate_checkpoints(
 
 
 def _get_eval_tasks() -> dict:
-    """Select task set based on the EMBEDDING_* env vars."""
+    """Select task set based on the EMBEDDING_* / FINETUNE env vars."""
     if os.environ.get("EMBEDDING_DIAGNOSTICS_ONLY"):
         return EMBED_DIAG_TASKS
     if os.environ.get("EMBEDDING_EVALS"):
         return EMBEDDING_EVAL_TASKS
+    if os.environ.get("FINETUNE"):
+        # Fine-tune catalog, as all_evals.py uses under FINETUNE; lets converted
+        # weights.pth checkpoints be fine-tuned (all_evals only loads model_and_optim).
+        return FT_EVAL_TASKS
     return EVAL_TASKS
 
 
