@@ -5,6 +5,7 @@ import torch
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.embedding_transforms import roundtrip_embeddings_tessera
 from olmoearth_pretrain.evals.eval_wrapper import (
     PrecomputedEmbeddingEvalWrapper,
     get_eval_wrapper,
@@ -67,6 +68,20 @@ class TestPrecomputedEmbedding:
         gse = torch.randn(B, H, W, 3, C)
         out = model(_sample_with_gse(gse), spatial_pool=True)
         torch.testing.assert_close(out, gse.mean(dim=3))
+
+    def test_tessera_v2_is_int8_round_tripped_per_pixel(self) -> None:
+        """Tessera v2 (baked in float32) gets its product's int8 loss before pooling."""
+        model = PrecomputedEmbedding(modality=Modality.TESSERA_V2.name)
+        emb = torch.randn(B, H, W, 1, C)
+        sample = MaskedOlmoEarthSample(
+            timestamps=torch.zeros(B, 1, 3, dtype=torch.long), tessera_v2=emb
+        )
+        expected = roundtrip_embeddings_tessera(emb.squeeze(3))
+        assert not torch.equal(expected, emb.squeeze(3))
+        torch.testing.assert_close(model(sample, spatial_pool=True), expected)
+        torch.testing.assert_close(
+            model(sample, pooling=PoolingType.MEAN), expected.mean(dim=(1, 2))
+        )
 
     def test_has_baseline_interface(self) -> None:
         """The module exposes the attributes the eval harness expects."""
