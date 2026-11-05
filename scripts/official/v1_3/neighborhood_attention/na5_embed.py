@@ -88,8 +88,7 @@ def _masking_config(common: CommonComponents) -> MaskingConfig:
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
     """Fixed ps2, 12 timesteps, weighted 16-48 px inputs, size-scheduled masking."""
     config = _build_dataloader_config(common)
-    config.min_patch_size = PATCH_SIZE
-    config.max_patch_size = PATCH_SIZE
+    config.fixed_patch_size = PATCH_SIZE
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     config.sampled_hw_p_weights = list(SAMPLED_HW_P_WEIGHTS)
     config.fixed_timesteps = NUM_TIMESTEPS

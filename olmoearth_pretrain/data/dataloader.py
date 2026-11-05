@@ -84,6 +84,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_location_queries: int | None = None,
         sampled_hw_p_weights: list[float] | None = None,
         fixed_timesteps: int | None = None,
+        fixed_patch_size: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -154,6 +155,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 ``(sampled_hw_p * patch_size / s) ** 2`` fits the budget (``s ==
                 patch_size``, one location query per token, is always allowed). None leaves
                 it None (one location query per token).
+            sampled_hw_p_weights: Optional sampling weights for ``sampled_hw_p_list``
+                (fixed-shape mode, with ``fixed_timesteps``).
+            fixed_timesteps: If set, every instance has exactly this many timesteps and
+                grids are drawn by ``sampled_hw_p_weights``; the token-budget shape
+                sampler is bypassed.
+            fixed_patch_size: If set, every rank batch uses this patch size;
+                ``min_patch_size`` / ``max_patch_size`` still describe the model.
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -187,6 +195,15 @@ class OlmoEarthDataLoader(DataLoaderBase):
             logger.warning("No token budget provided ALL PIXELS WILL BE USED")
         self.token_budget = token_budget
         self.patch_sizes = np.arange(min_patch_size, max_patch_size + 1)
+        if fixed_patch_size is not None:
+            # Train at one patch size while the model keeps its min/max (the patch
+            # embedding is still defined at max_patch_size and resized).
+            if not min_patch_size <= fixed_patch_size <= max_patch_size:
+                raise ValueError(
+                    f"fixed_patch_size {fixed_patch_size} outside "
+                    f"[{min_patch_size}, {max_patch_size}]"
+                )
+            self.patch_sizes = np.array([fixed_patch_size])
         self.sampled_hw_p_list = sampled_hw_p_list
         self.time_priority_prob = time_priority_prob
         self.temporal_bias = temporal_bias
@@ -936,6 +953,8 @@ class OlmoEarthDataLoaderConfig(Config):
     # time_priority_prob / temporal_bias are ignored.
     sampled_hw_p_weights: list[float] | None = None
     fixed_timesteps: int | None = None
+    # Every rank batch uses this patch size (min/max_patch_size still match the model).
+    fixed_patch_size: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1019,6 +1038,7 @@ class OlmoEarthDataLoaderConfig(Config):
             max_location_queries=self.max_location_queries,
             sampled_hw_p_weights=self.sampled_hw_p_weights,
             fixed_timesteps=self.fixed_timesteps,
+            fixed_patch_size=self.fixed_patch_size,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

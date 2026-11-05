@@ -136,6 +136,7 @@ def _build_shape_sampling_dataloader(
     max_patch_size: int = 1,
     tile_size: int = 256,
     max_location_queries: int | None = None,
+    **kwargs,
 ) -> OlmoEarthDataLoader:
     """Build a dataloader exercising the (patch_size, hw_p, t) shape sampler."""
     training_modalities = [
@@ -186,6 +187,7 @@ def _build_shape_sampling_dataloader(
         max_location_queries=max_location_queries,
         masking_strategy=masking_strategy,
         num_masked_views=1,
+        **kwargs,
     )
 
 
@@ -307,6 +309,53 @@ def test_shape_sampler_emits_target_t_and_respects_budget(
     assert any(len(ts) > 1 for hw, ts in t_by_hw.items() if budget_max_t(hw) > 1)
     # And a full-year sequence is sampled for at least one feasible grid.
     assert any(dl.max_timesteps in ts for ts in t_by_hw.values())
+
+
+def test_fixed_shape_mode_patch_size_timesteps_and_weights(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """fixed_patch_size + fixed_timesteps + weighted grids (neighborhood-attention embedding run)."""
+    dl = _build_shape_sampling_dataloader(
+        tmp_path,
+        setup_h5py_dir,
+        token_budget=2 * 24 * 24 * 12,
+        sampled_hw_p_list=[8, 12, 16, 24],
+        time_priority_prob=0.5,
+        min_patch_size=1,
+        max_patch_size=8,
+        tile_size=128,
+        sampled_hw_p_weights=[2.0, 2.0, 2.0, 1.0],
+        fixed_timesteps=12,
+        fixed_patch_size=2,
+    )
+    dl.reshuffle()
+    items = list(
+        _IterableDatasetWrapper(dl)._get_batch_item_params_iterator(
+            np.arange(1400), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=1
+        )
+    )
+    assert {ps for _, ps, _, _, _ in items} == {2}
+    assert {t for _, _, _, t, _ in items} == {12}
+    hws = np.array([hw for _, _, hw, _, _ in items])
+    freq = {hw: float((hws == hw).mean()) for hw in (8, 12, 16, 24)}
+    for hw, expected in ((8, 2 / 7), (12, 2 / 7), (16, 2 / 7), (24, 1 / 7)):
+        assert abs(freq[hw] - expected) < 0.05, freq
+
+
+def test_fixed_patch_size_must_be_in_range(
+    tmp_path: Path, setup_h5py_dir: Path
+) -> None:
+    """A fixed patch size outside [min, max] is rejected."""
+    with pytest.raises(ValueError, match="fixed_patch_size"):
+        _build_shape_sampling_dataloader(
+            tmp_path,
+            setup_h5py_dir,
+            token_budget=4096,
+            sampled_hw_p_list=[8],
+            time_priority_prob=0.5,
+            max_patch_size=8,
+            fixed_patch_size=16,
+        )
 
 
 def test_min_tokens_floor_and_temporal_bias(
