@@ -16,6 +16,7 @@ from torch import nn
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.constants import EMBEDDING_PRODUCT_MODALITIES, Modality
+from olmoearth_pretrain.evals.embedding_transforms import roundtrip_embeddings_tessera
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
@@ -97,6 +98,12 @@ class PrecomputedEmbedding(nn.Module):
                 f"Expected (B, H, W, T, C) or (B, H, W, C) for modality "
                 f"'{self.modality}', got shape {tuple(embeddings.shape)}"
             )
+        if self.modality == Modality.TESSERA_V2.name:
+            # The other products are int8 at source and carry that loss already.
+            # Tessera v2 is baked by our own float32 inference run, so apply the
+            # released product's per-pixel int8 scheme here, before pooling, as
+            # a geotessera user would see it after dequantising.
+            embeddings = roundtrip_embeddings_tessera(embeddings)
         if not spatial_pool:
             embeddings = reduce(embeddings, "b h w c -> b c", pooling)
         return embeddings
