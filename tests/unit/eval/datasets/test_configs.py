@@ -145,3 +145,37 @@ def test_regression_allows_single_class(task_type: TaskType) -> None:
         supported_modalities=[],
     )
     assert config.num_classes == 1
+
+
+def test_planteur_config_and_tasks() -> None:
+    """PLANTEUR and its LOIO splits resolve; every planteur task points at one."""
+    from olmoearth_pretrain.evals.studio_ingest.provenance import (
+        packaged_model_yaml_path,
+    )
+    from olmoearth_pretrain.internal.all_evals import (
+        EMBEDDING_EVAL_TASKS,
+        EVAL_TASKS,
+        FT_EVAL_TASKS,
+        PLANTEUR_LOIO_DATASETS,
+    )
+
+    datasets = ("planteur", *PLANTEUR_LOIO_DATASETS)
+    for name in datasets:
+        cfg = dataset_to_config(name)
+        assert cfg.task_type == TaskType.SEGMENTATION
+        assert cfg.num_classes == 8
+        assert cfg.height_width == 128
+        assert set(cfg.supported_modalities) == {"sentinel2_l2a", "sentinel1"}
+    packaged_model_yaml_path("planteur")
+
+    for tasks, expected in (
+        (EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
+        (EMBEDDING_EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
+        (FT_EVAL_TASKS, 3 + len(PLANTEUR_LOIO_DATASETS)),
+    ):
+        planteur = [t for t in tasks.values() if t.dataset in datasets]
+        assert len(planteur) == expected
+        for task in planteur:
+            assert task.tile_samples
+            assert task.window_size is not None and 128 % task.window_size == 0
+            assert set(task.input_modalities) <= {"sentinel2_l2a", "sentinel1"}
