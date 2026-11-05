@@ -1,0 +1,41 @@
+# Canonical model/task config for the pangaea_ai4smallfarms eval dataset: the
+# PANGAEA-bench AI4SmallFarms split (sentinel-2-asia, Vietnam + Cambodia) with
+# the original PANGAEA imagery, exported by
+# olmoearth_pretrain/evals/datasets/pangaea_rslearn_export.py. Consumed by
+# studio_ingest and rslearn_builder.py; only the `data` block is read.
+# The imagery is a single monthly Sentinel-2 tile carrying only B02/B03/B04/B08;
+# the other S2 bands are zeroed after normalization by the eval loader.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/olmoearth/eval_datasets/pangaea_ai4smallfarms
+    inputs:
+      sentinel2_l2a:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - sentinel2_l2a
+        bands:
+          - B02
+          - B03
+          - B04
+          - B08
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+          - label
+        bands:
+          - label
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        # 0 background, 1 crop field; 255 marks pixels already scored by a
+        # neighbouring window (see pangaea_rslearn_export.py).
+        num_classes: 2
+        nodata_value: 255
+        enable_miou_metric: true
+    batch_size: 8
+    num_workers: 4

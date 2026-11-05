@@ -70,9 +70,14 @@ def _get_bands_by_modality(
         Dict mapping OlmoEarth modality name -> list of band names
     """
     bands_by_modality = {}
-    modality_layers = get_modality_layers(model_config)
+    inputs = model_config.get("data", {}).get("init_args", {}).get("inputs", {})
+    declared = {
+        cfg["layers"][0]: cfg.get("bands")
+        for cfg in inputs.values()
+        if not cfg.get("is_target") and cfg.get("layers")
+    }
 
-    for layer in modality_layers:
+    for layer in get_modality_layers(model_config):
         resolved = resolve_rslearn_layer_name(layer)
         if resolved is not None:
             modality = RSLEARN_TO_OLMOEARTH[resolved]
@@ -80,9 +85,32 @@ def _get_bands_by_modality(
             # normalization never applies to them, so no stats are needed.
             if modality.name in EMBEDDING_PRODUCT_MODALITIES:
                 continue
-            bands_by_modality[modality.name] = modality.band_order
+            # Channels arrive in the order model.yaml declares, which may be a
+            # subset of the canonical band order.
+            bands_by_modality[modality.name] = list(
+                declared.get(layer) or modality.band_order
+            )
 
     return bands_by_modality
+
+
+def _fill_absent_bands(band_stats: dict) -> dict:
+    """Give canonical bands a dataset does not store placeholder stats.
+
+    The eval loader requires stats for every canonical band and zeroes absent
+    bands after normalization, so these values never reach the model.
+    """
+    for modality, per_band in band_stats.items():
+        for band in DataModality.get(modality).band_order:
+            if band not in per_band:
+                per_band[band] = {
+                    "mean": 0.0,
+                    "std": 1.0,
+                    "min": 0.0,
+                    "max": 0.0,
+                    "absent": True,
+                }
+    return band_stats
 
 
 def compute_band_stats(
@@ -322,4 +350,4 @@ def compute_band_stats_from_model_config(
             if any(value is None for value in stats.values()):
                 raise ValueError(f"Stats for {modality} {band} are None {stats}")
 
-    return band_stats
+    return _fill_absent_bands(band_stats)

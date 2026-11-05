@@ -1169,15 +1169,21 @@ def ingest_dataset(config: IngestConfig) -> EvalDatasetEntry:
     for layer_name, layer_config in dataset_config.layers.items():
         if layer_config.data_source is None:
             # Directly-written layers (no data source): precomputed embedding
-            # products baked in by an export script are real input modalities
-            # (single-timestep); anything else (e.g. label rasters) is not.
+            # products baked in by an export script are single-timestep input
+            # modalities, and imagery written by an export script (e.g.
+            # pangaea_rslearn_export.py) holds one timestep per layer. Anything
+            # without a modality mapping (e.g. label rasters) is not an input.
             try:
                 mod_name = rslearn_to_olmoearth(layer_name).name
             except KeyError:
                 continue
+            modality_layer_names.append(layer_name)
             if mod_name in EMBEDDING_PRODUCT_MODALITIES:
-                modality_layer_names.append(layer_name)
                 modality_max_timesteps.setdefault(mod_name, 1)
+            else:
+                modality_max_timesteps[mod_name] = (
+                    modality_max_timesteps.get(mod_name, 0) + 1
+                )
             continue
         try:
             olmoearth_modality = rslearn_to_olmoearth(layer_name)

@@ -2429,6 +2429,259 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/oil_spill_detection/dataset",
       "window_size": 128
     },
+    "pangaea_ai4smallfarms": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "config_json_sha256": "ba0418e915c1ecda1ffdda4434e6ab62f996d7c2ec8497ba1d237f40483190f3",
+      "embedding_products": {},
+      "end_time": "2021-12-31",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a"
+      ],
+      "name": "pangaea_ai4smallfarms",
+      "norm_stats": {
+        "sentinel2_l2a": {
+          "B01": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B02": {
+            "max": 9880.0,
+            "mean": 711.4012686397252,
+            "min": 1.0,
+            "std": 292.367117651951
+          },
+          "B03": {
+            "max": 9512.0,
+            "mean": 1000.5066266349193,
+            "min": 9.0,
+            "std": 333.45985901929856
+          },
+          "B04": {
+            "max": 9992.0,
+            "mean": 1098.7831868718179,
+            "min": 1.0,
+            "std": 522.4022944966734
+          },
+          "B05": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B06": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B07": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B08": {
+            "max": 9713.0,
+            "mean": 2430.6518934614205,
+            "min": 66.0,
+            "std": 707.2425845310851
+          },
+          "B09": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B11": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B12": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B8A": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 1,
+      "packaged_config": "pangaea_ai4smallfarms",
+      "source_path": "/weka/dfive-default/agent/piperbots/pangaea_staging/rslearn/pangaea_ai4smallfarms",
+      "split_stats": {
+        "test": {
+          "count": 195
+        },
+        "train": {
+          "count": 890
+        },
+        "val": {
+          "count": 199
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2020-11-01",
+      "task_type": "segmentation",
+      "timeseries": false,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pangaea_ai4smallfarms",
+      "window_size": 128
+    },
+    "pangaea_croptypemapping": {
+      "classes": [
+        "0",
+        "1",
+        "2",
+        "3"
+      ],
+      "config_json_sha256": "c936c98276b9bcd1917440840fc2905db30dfba25f02bb6e0c8e279c92ece086",
+      "embedding_products": {},
+      "end_time": "2018-12-31",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel2_l2a",
+        "sentinel1"
+      ],
+      "name": "pangaea_croptypemapping",
+      "norm_stats": {
+        "sentinel1": {
+          "vh": {
+            "max": 1.514814019203186,
+            "mean": -15.968840642669715,
+            "min": -33.410888671875,
+            "std": 5.029151610274567
+          },
+          "vv": {
+            "max": 1.5334107875823975,
+            "mean": -10.16728453974718,
+            "min": -24.498157501220703,
+            "std": 3.7446683378454297
+          }
+        },
+        "sentinel2_l2a": {
+          "B01": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B02": {
+            "max": 12421.0,
+            "mean": 1214.0032617451911,
+            "min": 0.0,
+            "std": 1000.8173060834592
+          },
+          "B03": {
+            "max": 12368.0,
+            "mean": 1153.7240801098544,
+            "min": 0.0,
+            "std": 969.6711752366257
+          },
+          "B04": {
+            "max": 13221.0,
+            "mean": 1215.5233975443743,
+            "min": 0.0,
+            "std": 1033.8298618694903
+          },
+          "B05": {
+            "max": 13310.0,
+            "mean": 1369.9223946434784,
+            "min": 0.0,
+            "std": 1040.360898159104
+          },
+          "B06": {
+            "max": 13426.0,
+            "mean": 1744.8683810274238,
+            "min": 0.0,
+            "std": 1118.464455997044
+          },
+          "B07": {
+            "max": 13701.0,
+            "mean": 1978.5634736980342,
+            "min": 0.0,
+            "std": 1199.532385668007
+          },
+          "B08": {
+            "max": 13685.0,
+            "mean": 1940.6468902477718,
+            "min": 0.0,
+            "std": 1166.4142433470383
+          },
+          "B09": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B11": {
+            "max": 14354.0,
+            "mean": 2157.8396291354074,
+            "min": 0.0,
+            "std": 1067.966226885432
+          },
+          "B12": {
+            "max": 14447.0,
+            "mean": 1437.6638866658675,
+            "min": 0.0,
+            "std": 789.1571691732885
+          },
+          "B8A": {
+            "max": 13747.0,
+            "mean": 2210.399335767101,
+            "min": 0.0,
+            "std": 1259.795320902533
+          }
+        }
+      },
+      "num_classes": 4,
+      "num_timesteps": 6,
+      "packaged_config": "pangaea_croptypemapping",
+      "source_path": "/weka/dfive-default/agent/piperbots/pangaea_staging/rslearn/pangaea_croptypemapping",
+      "split_stats": {
+        "test": {
+          "count": 67
+        },
+        "train": {
+          "count": 554
+        },
+        "val": {
+          "count": 65
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2017-01-01",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pangaea_croptypemapping",
+      "window_size": 64
+    },
     "planteur": {
       "classes": [
         "0",
@@ -4330,6 +4583,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-10-22T15:32:29.369664",
+  "updated_at": "2026-11-04T23:52:39.325083",
   "version": "1.0"
 }

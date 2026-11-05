@@ -1,0 +1,69 @@
+# Canonical model/task config for the pangaea_croptypemapping eval dataset:
+# PANGAEA-bench CropTypeMappingSouthSudan (SustainBench, 2017) with the
+# original PANGAEA imagery, exported by
+# olmoearth_pretrain/evals/datasets/pangaea_rslearn_export.py. Consumed by
+# studio_ingest and rslearn_builder.py; only the `data` block is read.
+# Six Sentinel-2 (10 bands, no B01/B09) and six Sentinel-1 (VV, VH, dB)
+# acquisitions per window: the last six array entries PANGAEA keeps, each a
+# layer dated from the source json. Window geometry is synthetic.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/olmoearth/eval_datasets/pangaea_croptypemapping
+    inputs:
+      sentinel2_l2a:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - sentinel2_l2a_t0
+          - sentinel2_l2a_t1
+          - sentinel2_l2a_t2
+          - sentinel2_l2a_t3
+          - sentinel2_l2a_t4
+          - sentinel2_l2a_t5
+        load_all_layers: true
+        bands:
+          - B02
+          - B03
+          - B04
+          - B05
+          - B06
+          - B07
+          - B08
+          - B8A
+          - B11
+          - B12
+        passthrough: true
+      sentinel1:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - sentinel1_t0
+          - sentinel1_t1
+          - sentinel1_t2
+          - sentinel1_t3
+          - sentinel1_t4
+          - sentinel1_t5
+        load_all_layers: true
+        bands:
+          - vv
+          - vh
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+          - label
+        bands:
+          - label
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        # 0 sorghum, 1 maize, 2 rice, 3 groundnut; 255 is every other source
+        # label (unlabelled and the minor crops PANGAEA drops).
+        num_classes: 4
+        nodata_value: 255
+        enable_miou_metric: true
+    batch_size: 8
+    num_workers: 4
