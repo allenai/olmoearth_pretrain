@@ -85,6 +85,7 @@ class OlmoEarthDataLoader(DataLoaderBase):
         sampled_hw_p_weights: list[float] | None = None,
         fixed_timesteps: int | None = None,
         fixed_patch_size: int | None = None,
+        sync_shape_across_ranks: bool = False,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -162,6 +163,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 sampler is bypassed.
             fixed_patch_size: If set, every rank batch uses this patch size;
                 ``min_patch_size`` / ``max_patch_size`` still describe the model.
+            sync_shape_across_ranks: Fixed-shape mode only: draw the grid and the
+                location-query patch size from an RNG keyed by (seed, epoch, global
+                batch), so every DP rank trains the same shape in a step (a step costs
+                the slowest rank's batch).
             dp_world_size: Data parallel world size.
             dp_rank: Data parallel rank.
             fs_local_rank: File system local rank.
@@ -221,6 +226,9 @@ class OlmoEarthDataLoader(DataLoaderBase):
             raise ValueError("sampled_hw_p_weights must match sampled_hw_p_list")
         self.sampled_hw_p_weights = sampled_hw_p_weights
         self.fixed_timesteps = fixed_timesteps
+        if sync_shape_across_ranks and fixed_timesteps is None:
+            raise ValueError("sync_shape_across_ranks requires fixed_timesteps")
+        self.sync_shape_across_ranks = sync_shape_across_ranks
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -755,7 +763,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
             weights /= weights.sum()
             return int(rng.choice(ts, p=weights))
 
-        def sample_location_query_patch_size(patch_size: int, hw: int) -> int | None:
+        def sample_location_query_patch_size(
+            patch_size: int, hw: int, draw_rng: np.random.Generator
+        ) -> int | None:
             """Uniform over the location-query patch sizes that fit max_location_queries (see __init__).
 
             None without a budget, and then no draw is taken from ``rng``.
@@ -771,11 +781,17 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                     or (hw * patch_size // s) ** 2 <= max_location_queries
                 )
             ]
-            return int(rng.choice(allowed))
+            return int(draw_rng.choice(allowed))
 
         # TODO: We need to maintain state and reproducibility here
         worker_id = self.worker_info.id if self.worker_info is not None else 0
+        num_workers = (
+            self.worker_info.num_workers if self.worker_info is not None else 1
+        )
         rng = self.rngs[worker_id]
+        # Global batch index of this worker's k-th rank batch (the same on every DP
+        # rank; see _get_local_instance_indices).
+        first_batch = (dl.batches_processed or 0) + worker_id
 
         for idx in indices:
             if instances_processed % rank_batch_size == 0:
@@ -796,7 +812,18 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                         if dl.sampled_hw_p_weights is not None
                         else np.ones(len(hw_p_to_sample_array))
                     )[fits]
-                    sampled_hw_p = int(rng.choice(grids, p=weights / weights.sum()))
+                    shape_rng = rng
+                    if dl.sync_shape_across_ranks:
+                        global_batch = (
+                            first_batch
+                            + (instances_processed // rank_batch_size) * num_workers
+                        )
+                        shape_rng = np.random.default_rng(
+                            [dl.seed, dl._epoch or 0, global_batch]
+                        )
+                    sampled_hw_p = int(
+                        shape_rng.choice(grids, p=weights / weights.sum())
+                    )
                     target_t = int(dl.fixed_timesteps)
                 else:
                     # A grid is a candidate only if some timestep count satisfies both
@@ -847,7 +874,9 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                         lo, hi = windows[sampled_hw_p]
                         target_t = sample_t(lo, hi)
                 location_query_patch_size = sample_location_query_patch_size(
-                    int(patch_size), sampled_hw_p
+                    int(patch_size),
+                    sampled_hw_p,
+                    shape_rng if dl.fixed_timesteps is not None else rng,
                 )
             yield (
                 idx,
@@ -955,6 +984,8 @@ class OlmoEarthDataLoaderConfig(Config):
     fixed_timesteps: int | None = None
     # Every rank batch uses this patch size (min/max_patch_size still match the model).
     fixed_patch_size: int | None = None
+    # Fixed-shape mode: every DP rank draws the same grid / query patch size per step.
+    sync_shape_across_ranks: bool = False
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -1039,6 +1070,7 @@ class OlmoEarthDataLoaderConfig(Config):
             sampled_hw_p_weights=self.sampled_hw_p_weights,
             fixed_timesteps=self.fixed_timesteps,
             fixed_patch_size=self.fixed_patch_size,
+            sync_shape_across_ranks=self.sync_shape_across_ranks,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

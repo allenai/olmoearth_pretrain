@@ -166,9 +166,6 @@ def _build_shape_sampling_dataloader(
     return OlmoEarthDataLoader(
         dataset=dataset,
         work_dir=tmp_path,
-        global_batch_size=1,
-        dp_world_size=1,
-        dp_rank=0,
         fs_local_rank=0,
         seed=0,
         shuffle=True,
@@ -187,7 +184,7 @@ def _build_shape_sampling_dataloader(
         max_location_queries=max_location_queries,
         masking_strategy=masking_strategy,
         num_masked_views=1,
-        **kwargs,
+        **{"global_batch_size": 1, "dp_world_size": 1, "dp_rank": 0, **kwargs},
     )
 
 
@@ -340,6 +337,41 @@ def test_fixed_shape_mode_patch_size_timesteps_and_weights(
     freq = {hw: float((hws == hw).mean()) for hw in (8, 12, 16, 24)}
     for hw, expected in ((8, 2 / 7), (12, 2 / 7), (16, 2 / 7), (24, 1 / 7)):
         assert abs(freq[hw] - expected) < 0.05, freq
+
+
+@pytest.mark.parametrize("sync", [True, False])
+def test_sync_shape_across_ranks(
+    tmp_path: Path, setup_h5py_dir: Path, sync: bool
+) -> None:
+    """With sync on, every DP rank draws the same grid / query patch size per batch."""
+    shapes = []
+    for rank in (0, 1):
+        dl = _build_shape_sampling_dataloader(
+            tmp_path / str(rank),
+            setup_h5py_dir,
+            token_budget=2 * 24 * 24 * 12,
+            sampled_hw_p_list=[8, 12, 16, 24],
+            time_priority_prob=0.5,
+            max_patch_size=8,
+            tile_size=128,
+            max_location_queries=48 * 48,
+            sampled_hw_p_weights=[2.0, 2.0, 2.0, 1.0],
+            fixed_timesteps=12,
+            fixed_patch_size=2,
+            sync_shape_across_ranks=sync,
+            global_batch_size=8,
+            dp_world_size=2,
+            dp_rank=rank,
+        )
+        dl.reshuffle()
+        items = list(
+            _IterableDatasetWrapper(dl)._get_batch_item_params_iterator(
+                np.arange(400), dl.patch_sizes, dl.sampled_hw_p_list, rank_batch_size=4
+            )
+        )
+        shapes.append([(hw, lq) for _, _, hw, _, lq in items[::4]])
+    assert (shapes[0] == shapes[1]) is sync
+    assert len({hw for hw, _ in shapes[0]}) == 4
 
 
 def test_fixed_patch_size_must_be_in_range(

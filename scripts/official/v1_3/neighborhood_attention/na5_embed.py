@@ -89,6 +89,9 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     """Fixed ps2, 12 timesteps, weighted 16-48 px inputs, size-scheduled masking."""
     config = _build_dataloader_config(common)
     config.fixed_patch_size = PATCH_SIZE
+    # One shape per step on every rank: a step costs the slowest rank's batch, and
+    # independent draws put a 48 px batch in ~71% of 8-rank steps.
+    config.sync_shape_across_ranks = True
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     config.sampled_hw_p_weights = list(SAMPLED_HW_P_WEIGHTS)
     config.fixed_timesteps = NUM_TIMESTEPS
