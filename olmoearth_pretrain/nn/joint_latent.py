@@ -56,7 +56,32 @@ def flex_attention_cuda(q: Tensor, k: Tensor, v: Tensor, block_mask: Any) -> Ten
         # dynamic=True: sequence lengths change every batch, and a recompile per
         # length would dwarf the attention itself.
         _COMPILED_FLEX = torch.compile(flex_attention, dynamic=True)
-    return _COMPILED_FLEX(q, k, v, block_mask=block_mask)
+        _raise_recompile_limit()
+    # Contiguous inputs: a strided K/V (e.g. cross-attention projections) is its own
+    # guard, and once the recompile limit is hit Dynamo silently falls back to the
+    # unfused eager kernel (dense score matrix; ~25x slower here).
+    return _COMPILED_FLEX(
+        q.contiguous(), k.contiguous(), v.contiguous(), block_mask=block_mask
+    )
+
+
+def _raise_recompile_limit(limit: int = 64) -> None:
+    """Allow the few legitimate FlexAttention specializations to all stay compiled.
+
+    Even with ``dynamic=True`` Dynamo specializes on size-1 block counts (Q or KV of at
+    most one 128-block), switches to the flex-decoding kernel for short queries, and
+    guards on strides. Self-attention, pooler reads, pooler self-attention and decoder
+    cross-attention at varying shapes exceed the default limit of 8, after which every
+    call runs the eager reference implementation.
+    """
+    dynamo_config = torch._dynamo.config
+    for name in ("recompile_limit", "cache_size_limit"):
+        if hasattr(dynamo_config, name):
+            setattr(dynamo_config, name, max(getattr(dynamo_config, name), limit))
+    if hasattr(dynamo_config, "accumulated_recompile_limit"):
+        dynamo_config.accumulated_recompile_limit = max(
+            dynamo_config.accumulated_recompile_limit, 8 * limit
+        )
 
 
 _COMPILED_CREATE_BLOCK_MASK: Callable[..., Any] | None = None
@@ -89,6 +114,7 @@ def create_block_mask_cuda(
         from torch.nn.attention.flex_attention import create_block_mask
 
         _COMPILED_CREATE_BLOCK_MASK = torch.compile(create_block_mask, dynamic=True)
+        _raise_recompile_limit()
     return _COMPILED_CREATE_BLOCK_MASK(
         mask_mod, batch, None, length, length, device=device
     )

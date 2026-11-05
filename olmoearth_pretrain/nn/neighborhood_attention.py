@@ -17,8 +17,13 @@ Each token carries its ``(row, col)`` cell as a ``[B, N, 2]`` tensor built along
 RoPE positions (and reordered with them). A cell of ``-1`` marks a non-spatial token,
 which attends and is attended globally.
 
-On CUDA the mask is a FlexAttention ``BlockMask`` (no dense ``[B, Nq, Nk]`` tensor); on
-CPU it is a dense boolean mask for SDPA (tests and small checks).
+The mask is a dense ``[B, 1, Nq, Nk]`` boolean for SDPA (fused memory-efficient
+kernel) unless it would exceed ``DENSE_MASK_MAX_ELEMENTS``; then, on CUDA, it is a
+FlexAttention ``BlockMask``. Measured on an H100 (``agent/favyen/2026-11-05-favyen-
+neighborhood-attention-pretrain/bin/attn_bench.py``): dense SDPA costs ~1.2x the stock
+key-padding SDPA in fwd+bwd, while FlexAttention costs 3-5x at the release shapes
+(N ~ 0.9k-3k) and only wins at very long sequences (N ~ 9k-21k, where the dense mask
+would also take several GB).
 """
 
 from __future__ import annotations
@@ -32,6 +37,9 @@ from torch import Tensor
 
 # Half-width used for global (non-spatial) queries: wider than any grid.
 _GLOBAL_REACH = 1 << 20
+
+# Largest dense mask (B * Nq * Nk booleans) before switching to FlexAttention on CUDA.
+DENSE_MASK_MAX_ELEMENTS = 1 << 31
 
 
 def box_start(cell: Tensor, n: int, neighborhood_cells: int) -> Tensor:
@@ -56,6 +64,14 @@ def query_box_bounds(
     c0 = torch.where(is_global, -_GLOBAL_REACH, c0)
     span = torch.where(is_global, 2 * _GLOBAL_REACH, neighborhood_cells)
     return r0.int(), (r0 + span).int(), c0.int(), (c0 + span).int()
+
+
+def box_covers_grid(grid: tuple[int, int], neighborhood_cells: int) -> bool:
+    """True when every box is the whole grid, i.e. NA is exactly full attention.
+
+    Callers then keep their stock (full-attention) masks and kernels.
+    """
+    return grid[0] <= neighborhood_cells and grid[1] <= neighborhood_cells
 
 
 @dataclass
@@ -121,7 +137,10 @@ def _create_block_mask(
     if _COMPILED_CREATE_BLOCK_MASK is None:
         from torch.nn.attention.flex_attention import create_block_mask
 
+        from olmoearth_pretrain.nn.joint_latent import _raise_recompile_limit
+
         _COMPILED_CREATE_BLOCK_MASK = torch.compile(create_block_mask, dynamic=True)
+        _raise_recompile_limit()
     return _COMPILED_CREATE_BLOCK_MASK(
         mask_mod, batch, None, q_len, kv_len, device=device
     )
@@ -178,7 +197,8 @@ def neighborhood_mask(
         raise ValueError(
             f"neighborhood_cells must be a positive odd number, got {neighborhood_cells}"
         )
-    if q_cells.is_cuda:
+    dense_elements = q_cells.shape[0] * q_cells.shape[1] * k_cells.shape[1]
+    if q_cells.is_cuda and dense_elements > DENSE_MASK_MAX_ELEMENTS:
         return NeighborhoodMask(
             block_mask=flex_neighborhood_mask(
                 q_cells, k_cells, key_valid, grid, neighborhood_cells

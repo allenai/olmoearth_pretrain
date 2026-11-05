@@ -38,6 +38,7 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchReconstruction,
 )
 from olmoearth_pretrain.nn.neighborhood_attention import (
+    box_covers_grid,
     location_query_cells,
     neighborhood_mask,
 )
@@ -1834,7 +1835,9 @@ class AttentionPooler(nn.Module):
         )
         read_block_mask = None
         self_attn_kwargs: dict[str, Any] = {}
-        if neighborhood_cells is not None:
+        if neighborhood_cells is not None and not box_covers_grid(
+            spatial_grid, neighborhood_cells
+        ):
             if patch_cells is None:
                 raise ValueError("neighborhood_cells requires patch_cells")
             query_cells = location_query_cells(
@@ -2119,6 +2122,10 @@ class Encoder(FlexiVitBase):
             attention_pooler_config: If set, add an AttentionPooler: a dense spatial attention-pooling
                 bottleneck (and optionally its detached student readout); see
                 :class:`AttentionPoolerConfig`. Requires a RoPE position encoding.
+            neighborhood_attention_cells: If set (odd), the ViT self-attention and the
+                AttentionPooler's read and query self-attention only see the box of this
+                many patch cells around each query's cell (the Searchlight rule; see
+                :mod:`olmoearth_pretrain.nn.neighborhood_attention`).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -2621,19 +2628,20 @@ class Encoder(FlexiVitBase):
             patch_cells, na_grid = self.build_cell_coords(
                 tokens_only_dict, original_masks_dict
             )
-            visible_cells = patch_cells
-            if bool_mask is not None:
-                visible_cells, _, _, _, _ = self.remove_masked_tokens(
-                    patch_cells, bool_mask
+            if not box_covers_grid(na_grid, self.neighborhood_attention_cells):
+                visible_cells = patch_cells
+                if bool_mask is not None:
+                    visible_cells, _, _, _, _ = self.remove_masked_tokens(
+                        patch_cells, bool_mask
+                    )
+                na_mask = neighborhood_mask(
+                    visible_cells,
+                    visible_cells,
+                    new_mask.bool() if new_mask is not None else None,
+                    na_grid,
+                    self.neighborhood_attention_cells,
                 )
-            na_mask = neighborhood_mask(
-                visible_cells,
-                visible_cells,
-                new_mask.bool() if new_mask is not None else None,
-                na_grid,
-                self.neighborhood_attention_cells,
-            )
-            attn_mask, block_mask = na_mask.attn_mask, na_mask.block_mask
+                attn_mask, block_mask = na_mask.attn_mask, na_mask.block_mask
 
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
@@ -2915,6 +2923,9 @@ class PredictorBase(FlexiVitBase):
             use_attention_pooler: If True, the decoder cross-attends to the encoder
                 location-token grid instead of the visible patch tokens.
             pooler_dim: Width of the location-token grid; required when use_attention_pooler.
+            neighborhood_attention_cells: If set (odd), each decode query cross-attends
+                only to the location tokens in the box of this many patch cells around
+                its own cell (requires use_attention_pooler).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         super().__init__(
@@ -3259,29 +3270,30 @@ class Predictor(PredictorBase):
                 cells, na_grid = self.build_cell_coords(
                     tokens_only_dict, original_masks_dict
                 )
-                decode_cells, _ = self.split_x_y_positions(
-                    cells,
-                    indices,
-                    max_length_of_tokens_to_decode,
-                    max_length_of_unmasked_tokens,
-                )
-                context_cells = location_query_cells(
-                    batch_size,
-                    tuple(location_tokens.shape[1:3]),
-                    location_tokens.shape[1] // na_grid[0],
-                    context.device,
-                )
-                na_mask = neighborhood_mask(
-                    decode_cells,
-                    context_cells,
-                    None,
-                    na_grid,
-                    self.neighborhood_attention_cells,
-                )
-                context_attn_mask, context_block_mask = (
-                    na_mask.attn_mask,
-                    na_mask.block_mask,
-                )
+                if not box_covers_grid(na_grid, self.neighborhood_attention_cells):
+                    decode_cells, _ = self.split_x_y_positions(
+                        cells,
+                        indices,
+                        max_length_of_tokens_to_decode,
+                        max_length_of_unmasked_tokens,
+                    )
+                    context_cells = location_query_cells(
+                        batch_size,
+                        tuple(location_tokens.shape[1:3]),
+                        location_tokens.shape[1] // na_grid[0],
+                        context.device,
+                    )
+                    na_mask = neighborhood_mask(
+                        decode_cells,
+                        context_cells,
+                        None,
+                        na_grid,
+                        self.neighborhood_attention_cells,
+                    )
+                    context_attn_mask, context_block_mask = (
+                        na_mask.attn_mask,
+                        na_mask.block_mask,
+                    )
         else:
             if self.neighborhood_attention_cells is not None:
                 raise NotImplementedError(
