@@ -40,7 +40,6 @@ from olmoearth_pretrain.evals.embedding_diagnostics import (
 from olmoearth_pretrain.evals.embedding_transforms import (
     EmbeddingNormalization,
     EmbeddingNormalizer,
-    QuantizationScheme,
     dequantize_embeddings,
     dequantize_embeddings_percentile,
     load_quantile_config,
@@ -179,11 +178,6 @@ class DownstreamTaskConfig:
     quantize_bits: int | None = None
     # Path to HDF5 file with precomputed quantile boundaries for percentile quantization
     quantile_config_path: str | None = None
-    # Which int8 scheme quantize_embeddings applies. AEF_POWER (the default) is
-    # AlphaEarth's published scheme; TESSERA_PER_VECTOR is Tessera's, and is set
-    # for the tessera_v2 arm so each product is scored under its own
-    # quantization rather than under a competitor's (see QuantizationScheme).
-    quantization_scheme: QuantizationScheme = QuantizationScheme.AEF_POWER
     # Normalize the extracted embeddings before the int8 round-trip and the
     # probe. Nothing in pretraining pins an embedding head's output geometry
     # (see EmbeddingNormalization), and three consumers care: the int8 power
@@ -328,7 +322,6 @@ class DownstreamEvaluator:
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
         self.quantize_bits = task.quantize_bits
-        self.quantization_scheme = task.quantization_scheme
         self.quantile_config_path = task.quantile_config_path
         # Load quantile config if path is provided
         self.quantile_config: dict | None = None
@@ -567,7 +560,6 @@ class DownstreamEvaluator:
             quantize_bits=self.quantize_bits,
             quantile_config=self.quantile_config,
             sample_transform=sample_transform,
-            quantization_scheme=self.quantization_scheme,
             normalizer=normalizer,
             diagnostics_out=diagnostics_out,
         )
@@ -650,10 +642,7 @@ class DownstreamEvaluator:
         if test_labels is not None:
             logger.info(f"test labels shape for {self.dataset}: {test_labels.shape}")
 
-        if (
-            self.quantize_embeddings
-            and self.quantization_scheme != QuantizationScheme.TESSERA_PER_VECTOR
-        ):
+        if self.quantize_embeddings:
             logger.info(f"Dequantizing embeddings for {self.dataset}")
             if self.quantize_bits is not None and self.quantile_config is not None:
                 # Percentile-based dequantization
