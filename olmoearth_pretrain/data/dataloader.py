@@ -82,6 +82,8 @@ class OlmoEarthDataLoader(DataLoaderBase):
         max_timesteps: int = 12,
         tile_size: int = 128,
         max_location_queries: int | None = None,
+        sampled_hw_p_weights: list[float] | None = None,
+        fixed_timesteps: int | None = None,
         dp_world_size: int = 1,
         dp_rank: int = 0,
         fs_local_rank: int = 0,
@@ -196,6 +198,12 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 f"max_location_queries must be positive, got {max_location_queries}"
             )
         self.max_location_queries = max_location_queries
+        if sampled_hw_p_weights is not None and len(sampled_hw_p_weights) != len(
+            sampled_hw_p_list
+        ):
+            raise ValueError("sampled_hw_p_weights must match sampled_hw_p_list")
+        self.sampled_hw_p_weights = sampled_hw_p_weights
+        self.fixed_timesteps = fixed_timesteps
         self.collator = collator
         self.seed = seed
         self.shuffle = shuffle
@@ -760,53 +768,67 @@ class _IterableDatasetWrapper(torch.utils.data.IterableDataset[OlmoEarthSample])
                 grids = hw_p_to_sample_array[
                     (hw_p_to_sample_array > 0) & (hw_p_to_sample_array <= grid_cap)
                 ]
-                # A grid is a candidate only if some timestep count satisfies both
-                # the budget ceiling and the token floor: min_t_for <= max_t_for.
-                windows = {
-                    int(h): (min_t_for(int(h)), max_t_for(int(h))) for h in grids
-                }
-                candidates = np.array(
-                    [h for h in grids if windows[int(h)][0] <= windows[int(h)][1]],
-                    dtype=grids.dtype,
-                )
-                if len(candidates) == 0:
-                    raise ValueError(
-                        f"No feasible sampled_hw_p for patch_size={patch_size}, "
-                        f"token_budget={budget}, min_tokens={min_tokens}, "
-                        f"tile_size={dl.tile_size}. Check sampled_hw_p_list, "
-                        f"token_budget and min_tokens_per_instance."
+                if dl.fixed_timesteps is not None:
+                    # Fixed-shape mode: a weighted grid draw (among the grids that fit
+                    # the tile) and exactly fixed_timesteps timesteps.
+                    fits = (hw_p_to_sample_array > 0) & (
+                        hw_p_to_sample_array <= grid_cap
                     )
-
-                if rng.random() < time_priority_prob:
-                    # Time-first: draw t (biased to the full sequence) among the
-                    # timesteps some candidate grid supports, then a grid for it.
-                    achievable = [
-                        t
-                        for t in range(1, max_t_data + 1)
-                        if any(lo <= t <= hi for lo, hi in windows.values())
-                    ]
-                    target_t = sample_t(achievable[0], achievable[-1])
-                    while not any(
-                        windows[int(h)][0] <= target_t <= windows[int(h)][1]
-                        for h in candidates
-                    ):
-                        # target_t landed in a gap between per-grid windows; redraw.
-                        target_t = int(rng.choice(achievable))
-                    feasible = np.array(
-                        [
-                            h
-                            for h in candidates
-                            if windows[int(h)][0] <= target_t <= windows[int(h)][1]
-                        ],
-                        dtype=candidates.dtype,
-                    )
-                    sampled_hw_p = int(rng.choice(feasible))
+                    weights = (
+                        np.asarray(dl.sampled_hw_p_weights, dtype=float)
+                        if dl.sampled_hw_p_weights is not None
+                        else np.ones(len(hw_p_to_sample_array))
+                    )[fits]
+                    sampled_hw_p = int(rng.choice(grids, p=weights / weights.sum()))
+                    target_t = int(dl.fixed_timesteps)
                 else:
-                    # Space-first: pick a (possibly large) grid, then t within its
-                    # feasible [min_t, max_t] window.
-                    sampled_hw_p = int(rng.choice(candidates))
-                    lo, hi = windows[sampled_hw_p]
-                    target_t = sample_t(lo, hi)
+                    # A grid is a candidate only if some timestep count satisfies both
+                    # the budget ceiling and the token floor: min_t_for <= max_t_for.
+                    windows = {
+                        int(h): (min_t_for(int(h)), max_t_for(int(h))) for h in grids
+                    }
+                    candidates = np.array(
+                        [h for h in grids if windows[int(h)][0] <= windows[int(h)][1]],
+                        dtype=grids.dtype,
+                    )
+                    if len(candidates) == 0:
+                        raise ValueError(
+                            f"No feasible sampled_hw_p for patch_size={patch_size}, "
+                            f"token_budget={budget}, min_tokens={min_tokens}, "
+                            f"tile_size={dl.tile_size}. Check sampled_hw_p_list, "
+                            f"token_budget and min_tokens_per_instance."
+                        )
+
+                    if rng.random() < time_priority_prob:
+                        # Time-first: draw t (biased to the full sequence) among the
+                        # timesteps some candidate grid supports, then a grid for it.
+                        achievable = [
+                            t
+                            for t in range(1, max_t_data + 1)
+                            if any(lo <= t <= hi for lo, hi in windows.values())
+                        ]
+                        target_t = sample_t(achievable[0], achievable[-1])
+                        while not any(
+                            windows[int(h)][0] <= target_t <= windows[int(h)][1]
+                            for h in candidates
+                        ):
+                            # target_t landed in a gap between per-grid windows; redraw.
+                            target_t = int(rng.choice(achievable))
+                        feasible = np.array(
+                            [
+                                h
+                                for h in candidates
+                                if windows[int(h)][0] <= target_t <= windows[int(h)][1]
+                            ],
+                            dtype=candidates.dtype,
+                        )
+                        sampled_hw_p = int(rng.choice(feasible))
+                    else:
+                        # Space-first: pick a (possibly large) grid, then t within its
+                        # feasible [min_t, max_t] window.
+                        sampled_hw_p = int(rng.choice(candidates))
+                        lo, hi = windows[sampled_hw_p]
+                        target_t = sample_t(lo, hi)
                 location_query_patch_size = sample_location_query_patch_size(
                     int(patch_size), sampled_hw_p
                 )
@@ -908,6 +930,12 @@ class OlmoEarthDataLoaderConfig(Config):
     # Per-sample location-query budget: if set, each rank batch draws a
     # location_query_patch_size (pixels per location query along each side) that fits it.
     max_location_queries: int | None = None
+    # Fixed-shape mode (neighborhood-attention embedding run): grids are drawn from
+    # sampled_hw_p_list with these weights (fitting the tile), every instance has
+    # exactly fixed_timesteps timesteps, and token_budget / min_tokens /
+    # time_priority_prob / temporal_bias are ignored.
+    sampled_hw_p_weights: list[float] | None = None
+    fixed_timesteps: int | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -989,6 +1017,8 @@ class OlmoEarthDataLoaderConfig(Config):
             max_timesteps=self.max_timesteps,
             tile_size=self.tile_size,
             max_location_queries=self.max_location_queries,
+            sampled_hw_p_weights=self.sampled_hw_p_weights,
+            fixed_timesteps=self.fixed_timesteps,
             num_dataset_repeats_per_epoch=self.num_dataset_repeats_per_epoch,
             transform=transform,
             masking_strategy=masking_strategy,

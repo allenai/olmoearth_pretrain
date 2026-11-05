@@ -37,6 +37,10 @@ from olmoearth_pretrain.nn.flexi_patch_embed import (
     FlexiPatchEmbed,
     FlexiPatchReconstruction,
 )
+from olmoearth_pretrain.nn.neighborhood_attention import (
+    location_query_cells,
+    neighborhood_mask,
+)
 from olmoearth_pretrain.nn.pooling import PoolingType, pool_unmasked_tokens
 from olmoearth_pretrain.nn.tokenization import TokenizationConfig
 from olmoearth_pretrain.nn.utils import get_cumulative_sequence_lengths
@@ -1179,6 +1183,42 @@ class FlexiVitBase(nn.Module):
         positions, _ = self.collapse_and_combine_hwtc(position_dict)
         return positions
 
+    def build_cell_coords(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> tuple[Tensor, tuple[int, int]]:
+        """Per-token ``(row, col)`` patch cell for neighborhood attention.
+
+        Returns ``[B, N, 2]`` in the collapsed token order (the order of
+        :meth:`build_rope_positions`, so it is reordered exactly like the positions)
+        and the ``(h, w)`` patch grid. Cells are on the finest spatial grid; a coarser
+        modality's cell ``i`` maps to ``i * h_max // h``. Non-spatial tokens get ``-1``
+        (global; see ``nn/neighborhood_attention.py``).
+        """
+        grid = self._patch_grid_hw(tokens_only_dict)
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        cell_dict = {}
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            if not Modality.get(modality_name).is_spatial:
+                cell_dict[modality_name] = torch.full(
+                    (*tokens.shape[:-1], 2), -1.0, device=tokens.device
+                )
+                continue
+            h, w = tokens.shape[1:3]
+            rows = torch.arange(h, device=tokens.device) * grid[0] // h
+            cols = torch.arange(w, device=tokens.device) * grid[1] // w
+            cells = torch.stack(torch.meshgrid(rows, cols, indexing="ij"), dim=-1)
+            cells = cells.float().view(1, h, w, *[1] * (tokens.ndim - 4), 2)
+            cell_dict[modality_name] = cells.expand(*tokens.shape[:-1], 2)
+        cell_dict.update(original_masks_dict)
+        cells, _ = self.collapse_and_combine_hwtc(cell_dict)
+        return cells, grid
+
     def _patch_grid_hw(self, tokens_only_dict: dict[str, Tensor]) -> tuple[int, int]:
         """Spatial patch grid ``(h, w)`` of the (finest) spatial modality.
 
@@ -1706,6 +1746,8 @@ class AttentionPooler(nn.Module):
         patch_size: int,
         gsd_ratio: float,
         location_query_patch_size: int | None = None,
+        patch_cells: Tensor | None = None,
+        neighborhood_cells: int | None = None,
     ) -> tuple[Tensor, Tensor | None, Tensor | None]:
         """Pool the (visible) patch tokens onto the location-query grid.
 
@@ -1725,6 +1767,12 @@ class AttentionPooler(nn.Module):
                 (:meth:`build_location_query_positions`), so ``s = 1`` gives one query per
                 pixel. The reads are global, so only the grid and its positions
                 change. None = ``p``, one query per token.
+            patch_cells: ``[B, N, 2]`` patch cell of every patch token (see
+                ``FlexiVitBase.build_cell_coords``); required with ``neighborhood_cells``.
+            neighborhood_cells: If set (odd), the read and the query self-attention are
+                neighborhood attention: a location query attends to the visible patch
+                tokens, and to the location queries, in the box of this many cells
+                around its own cell (``nn/neighborhood_attention.py``).
 
         Returns:
             location_tokens: ``[B, n_h, n_w, pooler_dim]`` (with ``location_query_patch_size``,
@@ -1784,12 +1832,35 @@ class AttentionPooler(nn.Module):
         read_attn_mask: Tensor | None = (
             visible_mask.bool() if visible_mask is not None else None
         )
+        read_block_mask = None
+        self_attn_kwargs: dict[str, Any] = {}
+        if neighborhood_cells is not None:
+            if patch_cells is None:
+                raise ValueError("neighborhood_cells requires patch_cells")
+            query_cells = location_query_cells(
+                batch_size,
+                query_grid,
+                patch_size // location_query_patch_size,
+                reference_tokens.device,
+            )
+            read_na = neighborhood_mask(
+                query_cells,
+                patch_cells,
+                read_attn_mask,
+                spatial_grid,
+                neighborhood_cells,
+            )
+            read_attn_mask, read_block_mask = read_na.attn_mask, read_na.block_mask
+            self_attn_kwargs = neighborhood_mask(
+                query_cells, query_cells, None, spatial_grid, neighborhood_cells
+            ).kwargs()
 
         def read(queries: Tensor, i: int, blk: nn.Module, kv: Tensor) -> Tensor:
             out = blk(
                 x=queries,
                 y=kv,
                 attn_mask=read_attn_mask,
+                block_mask=read_block_mask,
                 rope_positions=location_query_positions,
                 rope_positions_y=patch_positions,
             )
@@ -1806,6 +1877,7 @@ class AttentionPooler(nn.Module):
             location_queries = self.self_attn_blocks[i](
                 x=location_queries,
                 rope_positions=location_query_positions,
+                **self_attn_kwargs,
             )
         # After every read + self-attention layer and the final norm, the location
         # queries are the location tokens.
@@ -1985,6 +2057,7 @@ class Encoder(FlexiVitBase):
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
         attention_pooler_config: AttentionPoolerConfig | None = None,
+        neighborhood_attention_cells: int | None = None,
     ):
         """Initialize the encoder.
 
@@ -2116,6 +2189,7 @@ class Encoder(FlexiVitBase):
             final_embedding_size = self.embedding_size
         self.norm = nn.LayerNorm(self.embedding_size)
 
+        self.neighborhood_attention_cells = neighborhood_attention_cells
         self.attention_pooler_config = attention_pooler_config
         self.use_attention_pooler = attention_pooler_config is not None
         self.attention_pooler: AttentionPooler | None = None
@@ -2534,6 +2608,33 @@ class Encoder(FlexiVitBase):
             fast_pass=fast_pass,
         )
 
+        # Neighborhood attention: every token attends only to the visible tokens in
+        # the box of cells around its own (nn/neighborhood_attention.py).
+        block_mask = None
+        patch_cells = None
+        if self.neighborhood_attention_cells is not None:
+            if self.use_flash_attn or self.has_register_tokens:
+                raise NotImplementedError(
+                    "neighborhood attention needs padded (non-flash) attention and no "
+                    "register tokens"
+                )
+            patch_cells, na_grid = self.build_cell_coords(
+                tokens_only_dict, original_masks_dict
+            )
+            visible_cells = patch_cells
+            if bool_mask is not None:
+                visible_cells, _, _, _, _ = self.remove_masked_tokens(
+                    patch_cells, bool_mask
+                )
+            na_mask = neighborhood_mask(
+                visible_cells,
+                visible_cells,
+                new_mask.bool() if new_mask is not None else None,
+                na_grid,
+                self.neighborhood_attention_cells,
+            )
+            attn_mask, block_mask = na_mask.attn_mask, na_mask.block_mask
+
         if self.has_register_tokens:
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if positions is not None:
@@ -2563,6 +2664,7 @@ class Encoder(FlexiVitBase):
                 max_seqlen=max_seqlen,
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
+                block_mask=block_mask,
                 rope_positions=positions,
             )
 
@@ -2612,6 +2714,8 @@ class Encoder(FlexiVitBase):
                     )
                     * self.rope_coordinate_scale,
                     location_query_patch_size=location_query_patch_size,
+                    patch_cells=patch_cells,
+                    neighborhood_cells=self.neighborhood_attention_cells,
                 )
             )
             location_token_output = {
@@ -2775,6 +2879,7 @@ class PredictorBase(FlexiVitBase):
         spatial_pos_encoding: str | None = None,
         use_attention_pooler: bool = False,
         pooler_dim: int | None = None,
+        neighborhood_attention_cells: int | None = None,
     ):
         """Initialize the predictor.
 
@@ -2853,6 +2958,7 @@ class PredictorBase(FlexiVitBase):
         self.norm = nn.LayerNorm(decoder_embedding_size)
 
         self.use_attention_pooler = use_attention_pooler
+        self.neighborhood_attention_cells = neighborhood_attention_cells
         self.location_tokens_to_decoder_embed: nn.Linear | None = None
         if use_attention_pooler:
             if pooler_dim is None:
@@ -3106,6 +3212,7 @@ class Predictor(PredictorBase):
             cu_seqlens_tokens_to_decode = None
             cu_seqlens_unmasked_tokens = None
 
+        context_block_mask = None
         # Decoder context: either the visible patch tokens (default) or, for the AttentionPooler,
         # the encoder location-token grid (projected to the decoder dim). The decode
         # queries are mask tokens at masked-patch coords; they attend only to this context.
@@ -3142,7 +3249,45 @@ class Predictor(PredictorBase):
                 cu_seqlens_context = None
             max_length_of_context = num_location_tokens
             context_attn_mask = None
+            if self.neighborhood_attention_cells is not None:
+                # Each decode query reads only the location tokens in the box of
+                # cells around its own cell (nn/neighborhood_attention.py).
+                if self.use_flash_attn:
+                    raise NotImplementedError(
+                        "neighborhood attention needs padded (non-flash) attention"
+                    )
+                cells, na_grid = self.build_cell_coords(
+                    tokens_only_dict, original_masks_dict
+                )
+                decode_cells, _ = self.split_x_y_positions(
+                    cells,
+                    indices,
+                    max_length_of_tokens_to_decode,
+                    max_length_of_unmasked_tokens,
+                )
+                context_cells = location_query_cells(
+                    batch_size,
+                    tuple(location_tokens.shape[1:3]),
+                    location_tokens.shape[1] // na_grid[0],
+                    context.device,
+                )
+                na_mask = neighborhood_mask(
+                    decode_cells,
+                    context_cells,
+                    None,
+                    na_grid,
+                    self.neighborhood_attention_cells,
+                )
+                context_attn_mask, context_block_mask = (
+                    na_mask.attn_mask,
+                    na_mask.block_mask,
+                )
         else:
+            if self.neighborhood_attention_cells is not None:
+                raise NotImplementedError(
+                    "decoder neighborhood attention is implemented for the "
+                    "AttentionPooler context only"
+                )
             context = unmasked_tokens
             context_positions = unmasked_positions
             cu_seqlens_context = cu_seqlens_unmasked_tokens
@@ -3158,6 +3303,7 @@ class Predictor(PredictorBase):
                 x=tokens_to_decode,
                 y=context,
                 attn_mask=context_attn_mask,
+                block_mask=context_block_mask,
                 cu_seqlens_q=cu_seqlens_tokens_to_decode,
                 cu_seqlens_k=cu_seqlens_context,
                 max_seqlen_q=max_length_of_tokens_to_decode,
@@ -3317,6 +3463,9 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str | None = None
     # Dense spatial attention pooler (see AttentionPoolerConfig); None -> plain encoder.
     attention_pooler_config: AttentionPoolerConfig | None = None
+    # Neighborhood attention box (odd, in patch cells) for the ViT and the
+    # AttentionPooler; None = full attention (nn/neighborhood_attention.py).
+    neighborhood_attention_cells: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
@@ -3443,6 +3592,9 @@ class PredictorConfig(Config):
     # encoder location-token grid (of width pooler_dim) instead of the visible patch tokens.
     use_attention_pooler: bool = False
     pooler_dim: int | None = None
+    # Neighborhood attention box (odd, in patch cells) for the decoder's
+    # cross-attention to the location tokens; None = full attention.
+    neighborhood_attention_cells: int | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to TokenizationConfig for old checkpoint compatibility."""

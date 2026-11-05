@@ -1788,6 +1788,8 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: float = 0.5,
         random_ratio: float = 0.5,
         only_decode_modalities: list[str] = [],
+        bandset_encode_ratio: float | None = None,
+        time_decode_uses_decode_ratio: bool = False,
     ):
         """Random masking strategy except for decode modalities, which only get decoded.
 
@@ -1796,11 +1798,18 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         decode_ratio: how many encode-decode modalities get decode, **and** the random / time
                       decode ratio applied.
         random_ratio: how often to apply random masking vs time masking.
+        bandset_encode_ratio: if set, the share of band sets that are encode-only
+            (default: ``encode_ratio``, which then also sets the token / timestep ratio).
+        time_decode_uses_decode_ratio: if True, time masking decodes only
+            ``ceil(decode_ratio * T)`` of the non-encoded timesteps instead of all of
+            them (identical whenever ``encode_ratio + decode_ratio >= 1``).
         """
         self._encode_ratio = encode_ratio
         self._decode_ratio = decode_ratio
         self.only_decode_modalities = only_decode_modalities
         self.random_ratio = random_ratio
+        self.bandset_encode_ratio = bandset_encode_ratio
+        self.time_decode_uses_decode_ratio = time_decode_uses_decode_ratio
         if self.random_ratio > 1:
             raise ValueError(f"Random ratio must be <= 1, got {self.random_ratio}")
 
@@ -1935,6 +1944,9 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                     num_encode = math.ceil(len(not_missing_t) * self.encode_ratio)
                     encode_timestamps = not_missing_t[:num_encode]
                     decode_timestamps = not_missing_t[num_encode:]
+                    if self.time_decode_uses_decode_ratio:
+                        num_decode = math.ceil(len(not_missing_t) * self.decode_ratio)
+                        decode_timestamps = decode_timestamps[:num_decode]
 
             if len(encode_decode_bandsets) == 1 and not has_decode_only_modalities:
                 # this branch should barely ever trigger
@@ -1955,7 +1967,12 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
                 )
             else:
                 np.random.shuffle(encode_decode_bandsets)
-                num_encode = math.ceil(len(encode_decode_bandsets) * self.encode_ratio)
+                bandset_ratio = (
+                    self.encode_ratio
+                    if self.bandset_encode_ratio is None
+                    else self.bandset_encode_ratio
+                )
+                num_encode = math.ceil(len(encode_decode_bandsets) * bandset_ratio)
                 encode_bandsets = encode_decode_bandsets[:num_encode]
                 decode_bandsets = encode_decode_bandsets[num_encode:]
 
@@ -2053,6 +2070,74 @@ class RandomTimeWithDecodeMaskingStrategy(MaskingStrategy):
         mask[:, :, :, timestamps] = mask_value
         mask[missing_mask] = MaskValue.MISSING.value
         return mask
+
+
+@MASKING_STRATEGY_REGISTRY.register("size_scheduled_random_time_with_decode")
+class SizeScheduledRandomTimeWithDecodeMaskingStrategy(
+    RandomTimeWithDecodeMaskingStrategy
+):
+    """``random_time_with_decode`` with token / timestep ratios that depend on the grid size.
+
+    Built for the neighborhood-attention embedding run (fixed ps2, 12 timesteps, grids
+    of several sizes): larger inputs are masked more so the step cost stays bounded.
+    The band-set split stays at ``bandset_encode_ratio`` (default 0.5: 2 of 3 band sets
+    encode-only, as in v1.3); ``schedule`` sets, per patch-grid side ``hw``, the share of
+    an encode band set's tokens (or timesteps) that is visible and the share of a decode
+    band set's tokens (or timesteps) that is decoded. A grid size not in the schedule
+    uses the largest scheduled size below it (or the smallest one).
+    """
+
+    def __init__(
+        self,
+        schedule: list[list[float]],
+        random_ratio: float = 0.5,
+        only_decode_modalities: list[str] = [],
+        bandset_encode_ratio: float = 0.5,
+    ):
+        """Args:
+        schedule: ``[[hw, encode_ratio, decode_ratio], ...]`` (``hw`` in patches).
+        """
+        if not schedule:
+            raise ValueError("schedule must not be empty")
+        self.schedule = sorted((int(hw), float(e), float(d)) for hw, e, d in schedule)
+        for hw, e, d in self.schedule:
+            if not (0 < e <= 1 and 0 <= d <= 1):
+                raise ValueError(f"bad ratios for hw={hw}: {e}, {d}")
+        super().__init__(
+            encode_ratio=self.schedule[0][1],
+            decode_ratio=self.schedule[0][2],
+            random_ratio=random_ratio,
+            only_decode_modalities=only_decode_modalities,
+            bandset_encode_ratio=bandset_encode_ratio,
+            time_decode_uses_decode_ratio=True,
+        )
+
+    def ratios_for(self, hw: int) -> tuple[float, float]:
+        """``(encode_ratio, decode_ratio)`` for a grid of ``hw`` patches per side."""
+        chosen = self.schedule[0]
+        for entry in self.schedule:
+            if entry[0] <= hw:
+                chosen = entry
+        return chosen[1], chosen[2]
+
+    def apply_mask(
+        self, batch: OlmoEarthSample, patch_size: int | None = None, **kwargs: Any
+    ) -> MaskedOlmoEarthSample:
+        """Set the ratios for this batch's grid size, then mask as the parent does."""
+        if patch_size is None:
+            raise ValueError("patch_size must be provided")
+        hw = None
+        for modality_name in batch.modalities:
+            if modality_name == "timestamps":
+                continue
+            instance = getattr(batch, modality_name)
+            modality = Modality.get(modality_name)
+            if instance is not None and modality.is_spatial:
+                hw = instance.shape[1] // (patch_size * modality.image_tile_size_factor)
+                break
+        if hw is not None:
+            self._encode_ratio, self._decode_ratio = self.ratios_for(hw)
+        return super().apply_mask(batch, patch_size, **kwargs)
 
 
 def propagate_tokenization_config(

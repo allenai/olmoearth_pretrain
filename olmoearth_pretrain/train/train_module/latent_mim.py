@@ -63,6 +63,10 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     ema_decay: tuple[float, float] = (0.996, 1.0)
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
+    # Per grid size ``[[hw, rank_microbatch_size], ...]`` (hw in patches): batches whose
+    # grid is at least hw use that microbatch size (the largest matching entry), else
+    # ``rank_microbatch_size``. Lets big-input batches accumulate gradients.
+    rank_microbatch_size_by_hw: list[list[int]] | None = None
 
     def build(
         self,
@@ -132,6 +136,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         regularizer_config: LossConfig | None = None,
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
+        rank_microbatch_size_by_hw: list[list[int]] | None = None,
     ):
         """Initialize the training module.
 
@@ -204,6 +209,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         if self.model.location_token_distillation_head is not None:
             self.total_loss_name = f"{self.total_loss_name}+student"
         self.pixel_targets = pixel_targets
+        self.rank_microbatch_size_by_hw = sorted(
+            (int(hw), int(size)) for hw, size in (rank_microbatch_size_by_hw or [])
+        )
         if pixel_targets and not isinstance(
             self.model.target_encoder, FrozenTargetProjection
         ):
@@ -252,7 +260,14 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         location_query_patch_size = batch[2] if len(batch) > 2 else None
 
         # Split batch into microbatches
-        masked_microbatches = split_masked_batch(batch_data, self.rank_microbatch_size)
+        microbatch_size = self.rank_microbatch_size
+        s2 = batch_data.sentinel2_l2a
+        if self.rank_microbatch_size_by_hw and s2 is not None:
+            hw = s2.shape[1] // patch_size
+            for min_hw, size in self.rank_microbatch_size_by_hw:
+                if hw >= min_hw:
+                    microbatch_size = size
+        masked_microbatches = split_masked_batch(batch_data, microbatch_size)
         num_microbatches = len(masked_microbatches)
 
         for microbatch_idx in range(num_microbatches):
