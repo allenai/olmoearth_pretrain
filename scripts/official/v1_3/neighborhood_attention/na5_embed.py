@@ -4,16 +4,19 @@ Built on ``na5.py`` (the v1.3 control + 5x5 NA in the encoder, pooler and decode
 with the data shaped like production embedding inference:
 
 * patch size 2 always, S2 + S1 + Landsat, exactly 12 timesteps;
-* square inputs of 16 / 24 / 32 / 48 px (8 / 12 / 16 / 24 patches), weights 2:2:2:1,
-  one size per rank batch;
-* masking grows with the input so the step costs about 2x a v1.3 step: v1.3's
+* square inputs of 16 / 24 / 32 px (8 / 12 / 16 patches), equal weights, one size per
+  step on every rank;
+* masking grows with the input so the step costs about 1.9x a v1.3 step: v1.3's
   ``random_time_with_decode`` (2 of 3 band sets encode-only) with the within-band-set
   visible share and the decode share scheduled by size (``MASK_SCHEDULES``; v1.3 is
   50% / 50% at every size);
-* a 2304-query location budget, so one location query per pixel is possible at every
+* a 1024-query location budget, so one location query per pixel is possible at every
   size (production embeds at location-query patch size 1);
 * smaller rank microbatches for the big sizes (gradient accumulation; same 512-instance
   global batch).
+
+48 px was dropped (favyen, 2026-11-05): with 2:2:2:1 a step measured ~2.7x v1.3, mostly
+the target encoder on all 20,736 tokens of a 48 px input, which masking cannot reduce.
 
 ``NA_EMBED_SCHEDULE`` (env, default "A") picks the schedule; it only affects the data,
 so the in-loop eval jobs (which rebuild the model from this module) are unaffected.
@@ -53,23 +56,23 @@ MODULE_PATH = "scripts/official/v1_3/neighborhood_attention/na5_embed.py"
 
 PATCH_SIZE = 2
 NUM_TIMESTEPS = 12
-# Grid sides in patches (16 / 24 / 32 / 48 px at ps2) and their sampling weights.
-SAMPLED_HW_P_LIST = [8, 12, 16, 24]
-SAMPLED_HW_P_WEIGHTS = [2.0, 2.0, 2.0, 1.0]
-# Crop budget: 3 band sets x 24^2 x 12 = the largest shape, so every shape keeps all 12
+# Grid sides in patches (16 / 24 / 32 px at ps2) and their sampling weights.
+SAMPLED_HW_P_LIST = [8, 12, 16]
+SAMPLED_HW_P_WEIGHTS = [1.0, 1.0, 1.0]
+# Crop budget: 3 band sets x 16^2 x 12 = the largest shape, so every shape keeps all 12
 # timesteps (the dataset crops spatially only when a budget is set).
-TOKEN_BUDGET = 3 * 24 * 24 * NUM_TIMESTEPS
-MAX_LOCATION_QUERIES = 48 * 48
+TOKEN_BUDGET = 3 * 16 * 16 * NUM_TIMESTEPS
+MAX_LOCATION_QUERIES = 32 * 32
 # [hw, visible share of an encode band set, decoded share of a decode band set].
 MASK_SCHEDULES = {
-    # ~2.0x a v1.3 step (FLOP estimate): 50 / 65 / 75 / 85 % masked.
-    "A": [[8, 0.50, 0.50], [12, 0.35, 0.40], [16, 0.25, 0.30], [24, 0.15, 0.25]],
-    # ~1.9x: 25 / 60 / 80 / 90 % masked.
-    "B": [[8, 0.75, 0.50], [12, 0.40, 0.40], [16, 0.20, 0.25], [24, 0.10, 0.20]],
+    # ~1.9x a v1.3 step (measured per-size costs): 50 / 65 / 75 % masked. Chosen.
+    "A": [[8, 0.50, 0.50], [12, 0.35, 0.40], [16, 0.25, 0.30]],
+    # ~2.0x: 25 / 60 / 80 % masked.
+    "B": [[8, 0.75, 0.50], [12, 0.40, 0.40], [16, 0.20, 0.25]],
 }
 MASK_SCHEDULE = os.environ.get("NA_EMBED_SCHEDULE", "A")
 # Rank microbatch (instances) per grid size, for memory; the global batch stays 512.
-RANK_MICROBATCH_SIZE_BY_HW = [[8, 64], [12, 32], [16, 32], [24, 16]]
+RANK_MICROBATCH_SIZE_BY_HW = [[8, 64], [12, 32], [16, 32]]
 
 
 def _masking_config(common: CommonComponents) -> MaskingConfig:
@@ -86,11 +89,11 @@ def _masking_config(common: CommonComponents) -> MaskingConfig:
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """Fixed ps2, 12 timesteps, weighted 16-48 px inputs, size-scheduled masking."""
+    """Fixed ps2, 12 timesteps, 16-32 px inputs, size-scheduled masking."""
     config = _build_dataloader_config(common)
     config.fixed_patch_size = PATCH_SIZE
-    # One shape per step on every rank: a step costs the slowest rank's batch, and
-    # independent draws put a 48 px batch in ~71% of 8-rank steps.
+    # One shape per step on every rank: a step costs the slowest rank's batch, so
+    # independent draws would make most steps cost the largest size.
     config.sync_shape_across_ranks = True
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
     config.sampled_hw_p_weights = list(SAMPLED_HW_P_WEIGHTS)
