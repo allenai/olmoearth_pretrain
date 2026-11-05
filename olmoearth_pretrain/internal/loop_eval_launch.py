@@ -84,7 +84,7 @@ def launch_checkpoint_eval_job(
     module_path: str,
     checkpoint_dir: str,
     step: int,
-    cluster: str,
+    clusters: list[str],
     run_name: str,
     priority: str,
     tasks_to_run: list[str] | None = None,
@@ -139,7 +139,8 @@ def launch_checkpoint_eval_job(
         str(script_path),
         "launch_evaluate",
         run_name,
-        cluster,
+        clusters[0],
+        f"--launch.clusters=[{','.join(clusters)}]",
         f"--launch.priority={priority}",
         *_EVAL_LAUNCH_OVERRIDES,
         *_LOOP_EVAL_OVERRIDES,
@@ -186,10 +187,10 @@ def launch_checkpoint_eval_job(
         stderr = subprocess.STDOUT
 
     logger.info(
-        "Launching Beaker eval job for step %d (priority=%s, cluster=%s): %s",
+        "Launching Beaker eval job for step %d (priority=%s, clusters=%s): %s",
         step,
         priority,
-        cluster,
+        clusters,
         " ".join(cmd),
     )
     # Non-blocking: spawn the launcher and return. The launcher itself submits the
