@@ -103,3 +103,31 @@ def test_builds_on_meta(name: str, release: Any) -> None:
     n_base = sum(p.numel() for p in base_model.parameters())
     n_sized = sum(p.numel() for p in sized_model.parameters())
     assert n_sized > n_base
+
+
+@pytest.mark.parametrize("name", sorted(EXPECTED))
+def test_exposes_eval_job_builders(name: str, release: Any) -> None:
+    """In-loop eval jobs look these names up on the script; they must be the release's.
+
+    ``checkpoint_sweep_evals`` falls back to the default common components (a 3-group
+    S2 tokenization) when ``build_common_components`` is missing, and then cannot load
+    the checkpoint (the 80k eval of v1_3_d1024 failed that way, 2026-11-06).
+    """
+    sized = _load(name)
+    for attr in ("build_common_components", "build_train_module_config"):
+        assert getattr(sized, attr) is getattr(release, attr), attr
+    common = sized.build_common_components(
+        f"{name}.py", SubCmd.dry_run, "test", "local", []
+    )
+    assert (
+        common.tokenization_config.as_dict()
+        == release.build_common_components(
+            "x.py", SubCmd.dry_run, "test", "local", []
+        ).tokenization_config.as_dict()
+    )
+    evaluator = sized.build_trainer_config(common).callbacks["downstream_evaluator"]
+    assert evaluator.beaker_eval_module_path == sized.MODULE_PATH
+    release_evaluator = release.build_trainer_config(common).callbacks[
+        "downstream_evaluator"
+    ]
+    assert evaluator.tasks.keys() == release_evaluator.tasks.keys()

@@ -13,8 +13,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rc_ld1_pixtgt_pix512_sized import (  # noqa: E402
+# build_common_components / build_train_module_config are re-exported for the in-loop
+# eval jobs, which import this script and look them up by name.
+from rc_ld1_pixtgt_pix512_sized import (  # noqa: E402, F401
+    build_common_components,
     build_sized_model_config,
+    build_sized_trainer_config,
+    build_train_module_config,
     run_sized,
 )
 
@@ -40,5 +45,10 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     )
 
 
+def build_trainer_config(common: CommonComponents):
+    """The release run's trainer and loop evals, rebuilt from THIS module."""
+    return build_sized_trainer_config(common, MODULE_PATH)
+
+
 if __name__ == "__main__":
-    run_sized(MODULE_PATH, build_model_config)
+    run_sized(build_model_config, build_trainer_config)

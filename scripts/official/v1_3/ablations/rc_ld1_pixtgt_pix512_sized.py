@@ -23,6 +23,7 @@ recording hangs the gloo bookkeeping all-reduce (see ``olmo_core_patches``).
 import logging
 import sys
 from collections.abc import Callable
+from typing import Any
 from dataclasses import replace
 from pathlib import Path
 
@@ -89,23 +90,30 @@ def build_sized_model_config(
     return config
 
 
+def build_sized_trainer_config(common: CommonComponents, module_path: str):
+    """The release run's trainer (loop evals incl. ps4/ps2 student) for ``module_path``."""
+    return build_mix_trainer_config(
+        common, module_path, ps4_student_evals=True, ps2_student_evals=True
+    )
+
+
 def run_sized(
-    module_path: str,
     model_config_builder: Callable[[CommonComponents], LatentMIMConfig],
+    trainer_config_builder: Callable[[CommonComponents], Any],
 ) -> None:
-    """Run a resized release config; loop evals rebuild the model from ``module_path``."""
+    """Run a resized release config with the release data/train-module builders.
 
-    def build_trainer_config(common: CommonComponents):
-        return build_mix_trainer_config(
-            common, module_path, ps4_student_evals=True, ps2_student_evals=True
-        )
-
+    The run script must also expose ``build_common_components``,
+    ``build_train_module_config``, ``build_model_config`` and ``build_trainer_config``
+    at module level: in-loop eval jobs (``checkpoint_sweep_evals``) import the script
+    and look those names up, falling back to defaults (the wrong tokenization) if absent.
+    """
     main(
         common_components_builder=build_common_components,
         model_config_builder=model_config_builder,
         train_module_config_builder=build_train_module_config,
         dataset_config_builder=build_dataset_config,
         dataloader_config_builder=build_dataloader_config,
-        trainer_config_builder=build_trainer_config,
+        trainer_config_builder=trainer_config_builder,
         visualize_config_builder=build_visualize_config,
     )
