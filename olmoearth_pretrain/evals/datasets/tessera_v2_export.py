@@ -86,8 +86,12 @@ import torch
 from rasterio.enums import Resampling
 from rslearn.data_sources.data_source import Item
 from rslearn.dataset import Dataset, Window
+from rslearn.utils.fsspec import open_rasterio_upath_reader
 from rslearn.utils.raster_array import RasterArray, RasterMetadata
-from rslearn.utils.raster_format import GeotiffRasterFormat
+from rslearn.utils.raster_format import (
+    GeotiffRasterFormat,
+    get_raster_projection_and_bounds,
+)
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
@@ -302,6 +306,79 @@ def _no_scenes(
     )
 
 
+def _covered_range(
+    lo: float, hi: float, start: int, size: int, ratio: float, what: str
+) -> tuple[int, int]:
+    """First/last window pixel (0-based) whose center lies in [lo, hi).
+
+    Raises:
+        ValueError: if a strip wider than one stored pixel is uncovered, which
+            is not the grid-rounding case this repairs.
+    """
+    centers = start + np.arange(size) + 0.5
+    covered = np.flatnonzero((centers >= lo) & (centers < hi))
+    if covered.size == 0 or covered[0] >= ratio or size - 1 - covered[-1] >= ratio:
+        raise ValueError(
+            f"stored raster covers {what} [{lo}, {hi}) but the window spans "
+            f"[{start}, {start + size}); more than grid rounding is missing"
+        )
+    return int(covered[0]), int(covered[-1])
+
+
+def _fill_beyond_stored_extent(
+    array: np.ndarray, raster_dir: UPath, window: Window
+) -> np.ndarray:
+    """Replicate edge pixels that fall outside the stored raster's extent.
+
+    A coarser band set (S2's 20 m bands and SCL) is materialized on its own
+    grid, with the window bounds floor-divided. For a window whose pixel
+    bounds are odd, that raster ends one 10 m pixel short of the window, so
+    reading it onto the window grid fills the last row and/or column with 0.
+    For SCL, 0 is the no-data class, so every scene masked that strip out and
+    the pixels there reached the student with no S2 observations at all.
+    Their tiles do not have this seam: the neighbouring 20 m pixel exists. Copy
+    the nearest covered row/column into the strip as the closest stand-in.
+
+    Args:
+        array: (C, H, W) raster decoded onto the window grid.
+        raster_dir: the band-set directory it was decoded from.
+        window: the window it was decoded onto.
+
+    Returns:
+        the array, edge-filled where the stored raster did not reach.
+    """
+    with open_rasterio_upath_reader(raster_dir / GeotiffRasterFormat().fname) as src:
+        stored_projection, stored_bounds = get_raster_projection_and_bounds(src)
+    projection = window.projection
+    if stored_projection.crs != projection.crs:
+        raise ValueError(
+            f"{raster_dir} is stored in {stored_projection.crs}, the window in "
+            f"{projection.crs}"
+        )
+    x_ratio = stored_projection.x_resolution / projection.x_resolution
+    y_ratio = stored_projection.y_resolution / projection.y_resolution
+    x0, y0, x1, y1 = window.bounds
+    col_lo, col_hi = _covered_range(
+        stored_bounds[0] * x_ratio,
+        stored_bounds[2] * x_ratio,
+        x0,
+        x1 - x0,
+        x_ratio,
+        "columns",
+    )
+    row_lo, row_hi = _covered_range(
+        stored_bounds[1] * y_ratio,
+        stored_bounds[3] * y_ratio,
+        y0,
+        y1 - y0,
+        y_ratio,
+        "rows",
+    )
+    rows = np.clip(np.arange(y1 - y0), row_lo, row_hi)
+    cols = np.clip(np.arange(x1 - x0), col_lo, col_hi)
+    return array[:, rows][:, :, cols]
+
+
 def _read_scenes(
     window: Window,
     layer_name: str,
@@ -355,15 +432,16 @@ def _read_scenes(
     raster_format = GeotiffRasterFormat()
     scenes = []
     for group_idx in completed:
-        arrays = [
-            raster_format.decode_raster(
-                window.get_raster_dir(layer_name, bands, group_idx),
+        arrays = []
+        for bands in band_sets:
+            raster_dir = window.get_raster_dir(layer_name, bands, group_idx)
+            array = raster_format.decode_raster(
+                raster_dir,
                 window.projection,
                 window.bounds,
                 resampling=resampling,
             ).get_chw_array()
-            for bands in band_sets
-        ]
+            arrays.append(_fill_beyond_stored_extent(array, raster_dir, window))
         scenes.append(np.concatenate(arrays, axis=0).transpose(1, 2, 0))
     if not scenes:
         raise ValueError(
@@ -393,8 +471,9 @@ def build_dpixel_inputs(
         the keyword arguments for encode_tile.
 
     Raises:
-        ValueError: if the window has no S2 scenes, or an S1 layer is
-            unmaterialized and allow_unmaterialized_s1 is False.
+        ValueError: if the window has no S2 scenes, an S1 layer is
+            unmaterialized and allow_unmaterialized_s1 is False, or some pixel
+            has no S2 or S1 observation at all.
     """
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
     if s2.shape[0] == 0:
@@ -423,6 +502,19 @@ def build_dpixel_inputs(
             allow_unmaterialized=allow_unmaterialized_s1,
         )
         s1[layer] = (s1_raw_to_tessera_units(raw), doys)
+
+    # encode_pixels skips a pixel with no valid S2 frame (mask == 1) and no
+    # non-zero S1 frame, leaving its row of an np.empty buffer unwritten --
+    # upstream behaviour, so it is caught here rather than in the vendored code.
+    observed = s2_masks.any(axis=0)
+    for bands, _ in s1.values():
+        observed |= (bands != 0).any(axis=-1).any(axis=0)
+    if not observed.all():
+        raise ValueError(
+            f"window {fetch_window.group}/{fetch_window.name}: "
+            f"{int((~observed).sum())} pixels have no S2 or S1 observation, "
+            "and the student would leave their embedding uninitialized"
+        )
 
     return {
         "s2_bands": s2[..., TESSERA_S2_INDICES],
