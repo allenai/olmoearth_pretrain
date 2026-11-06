@@ -9,6 +9,7 @@ from torch import nn
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.evals.datasets.configs import TaskType
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.models import (
     AnySat,
     Clay,
@@ -585,7 +586,30 @@ class PrecomputedEmbeddingEvalWrapper(EvalWrapper):
         )
         if self.use_center_token:
             batch_embeddings = self._extract_center_token(batch_embeddings)
+        self._check_scored_embeddings_finite(batch_embeddings, labels)
         return batch_embeddings, labels
+
+    @staticmethod
+    def _check_scored_embeddings_finite(
+        embeddings: torch.Tensor, labels: torch.Tensor
+    ) -> None:
+        """Raise if an embedding the probe will score is non-finite.
+
+        A product marks pixels it has no embedding for as NaN (the Tessera v2
+        export does, for pixels with no S2 or S1 observation). That is harmless
+        anywhere the eval does not read -- e.g. a window edge on a center-token
+        task -- so only the embeddings actually scored are checked: the center
+        token, a pooled window, or the labelled pixels of a dense task.
+        """
+        bad = ~torch.isfinite(embeddings).all(dim=-1)
+        if bad.ndim == 3 and labels.shape == bad.shape:
+            bad &= labels.to(bad.device) != SEGMENTATION_IGNORE_LABEL
+        if bad.any():
+            raise ValueError(
+                f"{int(bad.sum())} scored embeddings in this batch are "
+                "non-finite: the product has no embedding for a labelled pixel "
+                "(see the product's manifest for unobserved pixels)"
+            )
 
 
 class TesseraEvalWrapper(EvalWrapper):

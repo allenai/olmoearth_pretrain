@@ -471,9 +471,8 @@ def build_dpixel_inputs(
         the keyword arguments for encode_tile.
 
     Raises:
-        ValueError: if the window has no S2 scenes, an S1 layer is
-            unmaterialized and allow_unmaterialized_s1 is False, or some pixel
-            has no S2 or S1 observation at all.
+        ValueError: if the window has no S2 scenes, or an S1 layer is
+            unmaterialized and allow_unmaterialized_s1 is False.
     """
     s2, s2_doys = _read_scenes(fetch_window, S2_LAYER, S2_BAND_SETS)
     if s2.shape[0] == 0:
@@ -503,19 +502,6 @@ def build_dpixel_inputs(
         )
         s1[layer] = (s1_raw_to_tessera_units(raw), doys)
 
-    # encode_pixels skips a pixel with no valid S2 frame (mask == 1) and no
-    # non-zero S1 frame, leaving its row of an np.empty buffer unwritten --
-    # upstream behaviour, so it is caught here rather than in the vendored code.
-    observed = s2_masks.any(axis=0)
-    for bands, _ in s1.values():
-        observed |= (bands != 0).any(axis=-1).any(axis=0)
-    if not observed.all():
-        raise ValueError(
-            f"window {fetch_window.group}/{fetch_window.name}: "
-            f"{int((~observed).sum())} pixels have no S2 or S1 observation, "
-            "and the student would leave their embedding uninitialized"
-        )
-
     return {
         "s2_bands": s2[..., TESSERA_S2_INDICES],
         "s2_doys": s2_doys,
@@ -525,6 +511,21 @@ def build_dpixel_inputs(
         "s1_desc_bands": s1[S1_LAYERS[1]][0],
         "s1_desc_doys": s1[S1_LAYERS[1]][1],
     }
+
+
+def unobserved_pixels(inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """(H, W) mask of pixels with no valid S2 frame and no non-zero S1 frame.
+
+    encode_pixels skips exactly these pixels, leaving their row of an
+    np.empty buffer unwritten (upstream behaviour, kept in the vendored code),
+    so infer overwrites them with NaN, the layer's nodata value.
+    """
+    observed = inputs["s2_masks"].astype(bool).any(axis=0)
+    for key in ("s1_asc_bands", "s1_desc_bands"):
+        bands = inputs[key]
+        if bands.shape[0]:
+            observed |= (bands != 0).any(axis=-1).any(axis=0)
+    return ~observed
 
 
 def write_fetch_config(ds_path: str, out_path: str | None = None) -> UPath:
@@ -822,6 +823,7 @@ def infer(
     skipped = 0
     failed: list[str] = []
     coverage_gaps: list[str] = []
+    unobserved_windows: dict[str, int] = {}
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
         for eval_window, inputs, status in bounded_map(pool, eval_windows):
@@ -845,6 +847,11 @@ def infer(
                 logger.exception(f"window {eval_window.name}: inference failed")
                 failed.append(eval_window.name)
                 continue
+            # The eval wrapper raises only if one of these is a scored pixel.
+            unobserved = unobserved_pixels(inputs)
+            if unobserved.any():
+                embedding[unobserved] = np.nan
+                unobserved_windows[eval_window.name] = int(unobserved.sum())
             write_embedding_layer(eval_window, embedding.transpose(2, 0, 1))
             written += 1
             if written % 50 == 0:
@@ -856,7 +863,8 @@ def infer(
         logger.info(
             f"Shard {shard_index}/{num_shards} done: {written} written, "
             f"{skipped} skipped, {len(coverage_gaps)} gaps, {len(failed)} "
-            "failed. NO manifest written -- after all shards finish, run one "
+            f"failed, {len(unobserved_windows)} with unobserved (NaN) pixels "
+            f"{sorted(unobserved_windows)[:10]}. NO manifest written -- after all shards finish, run one "
             "final unsharded pass to write the combined manifest."
         )
         return
@@ -885,6 +893,13 @@ def infer(
             "windows_without_year": [],
             "num_windows_failed": len(failed),
             "windows_failed": sorted(failed),
+            # Pixels with no S2 or S1 observation, written as NaN. Informational:
+            # the eval raises only if one is a scored (labelled) pixel. Not
+            # carried across runs, so a re-run that skips existing windows
+            # reports only the windows it wrote.
+            "num_windows_with_unobserved_pixels": len(unobserved_windows),
+            "num_unobserved_pixels": sum(unobserved_windows.values()),
+            "unobserved_pixels_per_window": dict(sorted(unobserved_windows.items())),
             "cli_args": {
                 "dataset_path": out_ds_path,
                 "fetch_dataset_path": ds_path,
@@ -896,7 +911,8 @@ def infer(
     )
     logger.info(
         f"Done: {written} written, {skipped} skipped, "
-        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed"
+        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed, "
+        f"{len(unobserved_windows)} with unobserved (NaN) pixels"
     )
     if failed:
         logger.warning(

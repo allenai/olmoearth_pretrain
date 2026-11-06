@@ -10,6 +10,7 @@ from olmoearth_pretrain.evals.eval_wrapper import (
     PrecomputedEmbeddingEvalWrapper,
     get_eval_wrapper,
 )
+from olmoearth_pretrain.evals.metrics import SEGMENTATION_IGNORE_LABEL
 from olmoearth_pretrain.evals.models import PrecomputedEmbedding
 from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
@@ -83,6 +84,24 @@ class TestPrecomputedEmbedding:
             model(sample, pooling=PoolingType.MEAN), expected.mean(dim=(1, 2))
         )
 
+    def test_tessera_v2_unobserved_pixels_stay_nan_through_the_round_trip(
+        self,
+    ) -> None:
+        """The int8 cast would turn the export's NaN into a finite zero vector."""
+        model = PrecomputedEmbedding(modality=Modality.TESSERA_V2.name)
+        emb = torch.randn(B, H, W, 1, C)
+        emb[0, 0, 0] = float("nan")
+        sample = MaskedOlmoEarthSample(
+            timestamps=torch.zeros(B, 1, 3, dtype=torch.long), tessera_v2=emb
+        )
+        out = model(sample, spatial_pool=True)
+        assert torch.isnan(out[0, 0, 0]).all()
+        # Every other pixel is round-tripped exactly as before.
+        clean = roundtrip_embeddings_tessera(emb.squeeze(3).nan_to_num(0.0))
+        keep = torch.ones(B, H, W, dtype=torch.bool)
+        keep[0, 0, 0] = False
+        torch.testing.assert_close(out[keep], clean[keep])
+
     def test_has_baseline_interface(self) -> None:
         """The module exposes the attributes the eval harness expects."""
         model = PrecomputedEmbedding(modality=Modality.GSE.name)
@@ -135,3 +154,31 @@ class TestPrecomputedEmbeddingEvalWrapper:
         labels = torch.zeros(B, H, W, dtype=torch.long)
         embeddings, _ = wrapper(_sample_with_gse(gse), labels)
         assert embeddings.shape == (B, H, W, C)
+
+    def test_nan_embeddings_raise_only_where_scored(self) -> None:
+        """A product's NaN (no embedding) is fine unless the eval reads it."""
+        gse = torch.randn(B, H, W, 1, C)
+        gse[0, 0, 0] = float("nan")  # an edge pixel
+
+        # Center-token task: the edge pixel is never read.
+        center = self._wrapper(TaskType.CLASSIFICATION, use_center_token=True)
+        center(_sample_with_gse(gse), torch.zeros(B, dtype=torch.long))
+
+        # Dense task: fine while that pixel is unlabelled, raises once labelled.
+        seg = self._wrapper(TaskType.SEGMENTATION)
+        labels = torch.zeros(B, H, W, dtype=torch.long)
+        labels[0, 0, 0] = SEGMENTATION_IGNORE_LABEL
+        seg(_sample_with_gse(gse), labels)
+        labels[0, 0, 0] = 3
+        with pytest.raises(ValueError, match="1 scored embeddings"):
+            seg(_sample_with_gse(gse), labels)
+
+        # Pooled window task: every pixel feeds the pooled vector.
+        pooled = self._wrapper(TaskType.CLASSIFICATION)
+        with pytest.raises(ValueError, match="non-finite"):
+            pooled(_sample_with_gse(gse), torch.zeros(B, dtype=torch.long))
+
+        # And a NaN at the center pixel is caught on the center-token task.
+        gse[1, H // 2, W // 2] = float("nan")
+        with pytest.raises(ValueError, match="1 scored embeddings"):
+            center(_sample_with_gse(gse), torch.zeros(B, dtype=torch.long))

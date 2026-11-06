@@ -330,43 +330,48 @@ def test_coarse_band_sets_are_edge_filled_on_odd_window_bounds(
         )
 
 
-def test_unobserved_pixels_raise_instead_of_being_left_uninitialized(
+def test_unobserved_pixels_are_the_ones_encode_pixels_skips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """encode_pixels leaves a pixel with no S2 or S1 observation as np.empty.
 
-    That is upstream behaviour (vendored unchanged), so build_dpixel_inputs
-    refuses such a window instead of writing whatever was in memory.
+    That is upstream behaviour (vendored unchanged), so infer overwrites those
+    pixels with NaN; this is the mask it uses. An S1 return alone counts as an
+    observation, since the student embeds S1-only pixels.
     """
     t, h, w = 3, 2, 2
-    scl = np.full((t, h, w, 1), 4, dtype=np.float32)  # 4 = vegetation, clear
-    scl[:, 0, 0] = 9  # cloud in every scene
-    s1 = np.full((2, h, w, 2), 0.05, dtype=np.float32)
-    s1[:, 0, 0] = 0  # and no S1 return either
+    s2_masks = np.ones((t, h, w), dtype=np.uint8)
+    s2_masks[:, 0, 0] = 0  # cloud in every scene
+    s2_masks[:, 0, 1] = 0
+    s1 = np.full((2, h, w, 2), 1000.0, dtype=np.float32)
+    s1[:, 0, 0] = 0  # and no S1 return at (0, 0)
+    inputs = {
+        "s2_masks": s2_masks,
+        "s1_asc_bands": s1,
+        "s1_desc_bands": np.zeros((0, h, w, 2), dtype=np.float32),
+    }
+    expected = np.zeros((h, w), dtype=bool)
+    expected[0, 0] = True
+    np.testing.assert_array_equal(tessera_v2_export.unobserved_pixels(inputs), expected)
 
-    def fake_read(
-        window: SimpleNamespace,
-        layer: str,
-        band_sets: tuple[list[str], ...],
-        **kwargs: object,
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Serve the synthetic scenes for whichever layer is asked for."""
-        doys = np.arange(1, t + 1)
-        if layer == tessera_v2_export.S2_LAYER:
-            if band_sets == (tessera_v2_export.SCL_BAND_SET,):
-                return scl, doys
-            return np.ones((t, h, w, 10), dtype=np.float32), doys
-        return s1, np.arange(1, 3)
-
-    monkeypatch.setattr(tessera_v2_export, "_read_scenes", fake_read)
-    window = SimpleNamespace(group="g", name="w", bounds=(0, 0, w, h))
-    with pytest.raises(ValueError, match="1 pixels have no S2 or S1"):
-        tessera_v2_export.build_dpixel_inputs(window)
-
-    # An S1 return alone is an observation: the student embeds S1-only pixels.
-    s1[:, 0, 0] = 0.05
-    inputs = tessera_v2_export.build_dpixel_inputs(window)
-    assert inputs["s2_masks"][:, 0, 0].sum() == 0
+    # And it matches what the vendored student actually leaves unwritten.
+    model = PixelStudent(latent_dim=16, nhead=2, num_layers=1, dim_feedforward=32)
+    sentinel = 12345.0
+    full = np.full
+    monkeypatch.setattr(
+        np, "empty", lambda shape, dtype=None: full(shape, sentinel, dtype=dtype)
+    )
+    out = encode_tile(
+        model,
+        np.full((t, h, w, 10), 1000.0, dtype=np.float32),
+        np.arange(1, t + 1),
+        s2_masks=s2_masks,
+        s1_asc_bands=s1,
+        s1_asc_doys=np.arange(1, 3),
+        device=torch.device("cpu"),
+    )
+    monkeypatch.undo()
+    np.testing.assert_array_equal((out == sentinel).all(axis=-1), expected)
 
 
 def test_write_fetch_config_keeps_storage_and_leaves_the_dataset_alone(
