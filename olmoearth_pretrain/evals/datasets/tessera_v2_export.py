@@ -306,77 +306,30 @@ def _no_scenes(
     )
 
 
-def _covered_range(
-    lo: float, hi: float, start: int, size: int, ratio: float, what: str
-) -> tuple[int, int]:
-    """First/last window pixel (0-based) whose center lies in [lo, hi).
-
-    Raises:
-        ValueError: if a strip wider than one stored pixel is uncovered, which
-            is not the grid-rounding case this repairs.
-    """
-    centers = start + np.arange(size) + 0.5
-    covered = np.flatnonzero((centers >= lo) & (centers < hi))
-    if covered.size == 0 or covered[0] >= ratio or size - 1 - covered[-1] >= ratio:
-        raise ValueError(
-            f"stored raster covers {what} [{lo}, {hi}) but the window spans "
-            f"[{start}, {start + size}); more than grid rounding is missing"
-        )
-    return int(covered[0]), int(covered[-1])
-
-
 def _fill_beyond_stored_extent(
     array: np.ndarray, raster_dir: UPath, window: Window
 ) -> np.ndarray:
-    """Replicate edge pixels that fall outside the stored raster's extent.
+    """Edge-fill rows/columns of the window the stored raster does not reach.
 
-    A coarser band set (S2's 20 m bands and SCL) is materialized on its own
-    grid, with the window bounds floor-divided. For a window whose pixel
-    bounds are odd, that raster ends one 10 m pixel short of the window, so
-    reading it onto the window grid fills the last row and/or column with 0.
-    For SCL, 0 is the no-data class, so every scene masked that strip out and
-    the pixels there reached the student with no S2 observations at all.
-    Their tiles do not have this seam: the neighbouring 20 m pixel exists. Copy
-    the nearest covered row/column into the strip as the closest stand-in.
-
-    Args:
-        array: (C, H, W) raster decoded onto the window grid.
-        raster_dir: the band-set directory it was decoded from.
-        window: the window it was decoded onto.
-
-    Returns:
-        the array, edge-filled where the stored raster did not reach.
+    Coarser band sets (S2's 20 m bands and SCL) are stored with floor-divided
+    bounds, so on a window with odd pixel bounds the raster ends one 10 m pixel
+    short and decodes as 0 there -- SCL's no-data class, masking that strip in
+    every scene.
     """
     with open_rasterio_upath_reader(raster_dir / GeotiffRasterFormat().fname) as src:
         stored_projection, stored_bounds = get_raster_projection_and_bounds(src)
-    projection = window.projection
-    if stored_projection.crs != projection.crs:
-        raise ValueError(
-            f"{raster_dir} is stored in {stored_projection.crs}, the window in "
-            f"{projection.crs}"
-        )
-    x_ratio = stored_projection.x_resolution / projection.x_resolution
-    y_ratio = stored_projection.y_resolution / projection.y_resolution
+    ratio = round(stored_projection.x_resolution / window.projection.x_resolution)
+    sx0, sy0, sx1, sy1 = (b * ratio for b in stored_bounds)
     x0, y0, x1, y1 = window.bounds
-    col_lo, col_hi = _covered_range(
-        stored_bounds[0] * x_ratio,
-        stored_bounds[2] * x_ratio,
-        x0,
-        x1 - x0,
-        x_ratio,
-        "columns",
-    )
-    row_lo, row_hi = _covered_range(
-        stored_bounds[1] * y_ratio,
-        stored_bounds[3] * y_ratio,
-        y0,
-        y1 - y0,
-        y_ratio,
-        "rows",
-    )
-    rows = np.clip(np.arange(y1 - y0), row_lo, row_hi)
-    cols = np.clip(np.arange(x1 - x0), col_lo, col_hi)
-    return array[:, rows][:, :, cols]
+    top, bottom = max(0, sy0 - y0), max(0, y1 - sy1)
+    left, right = max(0, sx0 - x0), max(0, x1 - sx1)
+    if max(top, bottom, left, right) >= max(ratio, 1):
+        raise ValueError(
+            f"{raster_dir} misses more than grid rounding of {window.bounds}"
+        )
+    h, w = array.shape[1:]
+    cropped = array[:, top : h - bottom, left : w - right]
+    return np.pad(cropped, ((0, 0), (top, bottom), (left, right)), mode="edge")
 
 
 def _read_scenes(
@@ -823,7 +776,6 @@ def infer(
     skipped = 0
     failed: list[str] = []
     coverage_gaps: list[str] = []
-    unobserved_windows: dict[str, int] = {}
     # Overlap raster reads (I/O-bound) with GPU inference.
     with ThreadPoolExecutor(max_workers=read_workers) as pool:
         for eval_window, inputs, status in bounded_map(pool, eval_windows):
@@ -851,7 +803,10 @@ def infer(
             unobserved = unobserved_pixels(inputs)
             if unobserved.any():
                 embedding[unobserved] = np.nan
-                unobserved_windows[eval_window.name] = int(unobserved.sum())
+                logger.info(
+                    f"window {eval_window.name}: {int(unobserved.sum())} "
+                    "unobserved pixels written as NaN"
+                )
             write_embedding_layer(eval_window, embedding.transpose(2, 0, 1))
             written += 1
             if written % 50 == 0:
@@ -863,8 +818,7 @@ def infer(
         logger.info(
             f"Shard {shard_index}/{num_shards} done: {written} written, "
             f"{skipped} skipped, {len(coverage_gaps)} gaps, {len(failed)} "
-            f"failed, {len(unobserved_windows)} with unobserved (NaN) pixels "
-            f"{sorted(unobserved_windows)[:10]}. NO manifest written -- after all shards finish, run one "
+            "failed. NO manifest written -- after all shards finish, run one "
             "final unsharded pass to write the combined manifest."
         )
         return
@@ -893,13 +847,6 @@ def infer(
             "windows_without_year": [],
             "num_windows_failed": len(failed),
             "windows_failed": sorted(failed),
-            # Pixels with no S2 or S1 observation, written as NaN. Informational:
-            # the eval raises only if one is a scored (labelled) pixel. Not
-            # carried across runs, so a re-run that skips existing windows
-            # reports only the windows it wrote.
-            "num_windows_with_unobserved_pixels": len(unobserved_windows),
-            "num_unobserved_pixels": sum(unobserved_windows.values()),
-            "unobserved_pixels_per_window": dict(sorted(unobserved_windows.items())),
             "cli_args": {
                 "dataset_path": out_ds_path,
                 "fetch_dataset_path": ds_path,
@@ -911,8 +858,7 @@ def infer(
     )
     logger.info(
         f"Done: {written} written, {skipped} skipped, "
-        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed, "
-        f"{len(unobserved_windows)} with unobserved (NaN) pixels"
+        f"{len(coverage_gaps)} coverage gaps, {len(failed)} failed"
     )
     if failed:
         logger.warning(
