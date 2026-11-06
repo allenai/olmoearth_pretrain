@@ -35,6 +35,15 @@ from olmoearth_pretrain.nn.latent_mim import LatentMIMConfig  # noqa: E402
 from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
     LatentMIMTrainModuleConfig,
 )
+from olmoearth_pretrain.train.olmo_core_patches import (  # noqa: E402
+    drop_async_checkpoint_duration_metric,
+)
+
+# The async-save duration metric is recorded at a rank-dependent step and hangs or
+# crashes the gloo bookkeeping all-reduce right after the in-loop eval launch at
+# 80k/160k/...; v1_3_na5 crashed at 80,250 ("Application timeout caused pair
+# closure"). See olmo_core_patches (na5_embed imports this module, so it is covered).
+drop_async_checkpoint_duration_metric()
 
 logger = logging.getLogger(__name__)
 
