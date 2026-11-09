@@ -100,3 +100,84 @@ def test_text_model_builds_with_its_head(
     assert model.text_head is not None
     assert model.text_head.proj.in_features == 768
     assert model.text_head.proj.out_features == 768
+
+
+RELEASE_TRAINING = ROOT / "tests/fixtures/release_training_configs/v1_3_mlpgram1.json"
+
+# Release fields that no longer exist, at values equal to what the current code does.
+RELEASE_FIELDS_NOW_BUILT_IN: dict[tuple[str, ...], object] = {
+    # The packaged default norm config.
+    ("dataset", "computed_norm_config"): "computed.json",
+    # The dataloader always keeps the masking's decode-only maps out of the budget.
+    ("data_loader", "exclude_only_decode_from_budget"): True,
+    # Patch sizes are drawn uniformly from min..max.
+    ("data_loader", "patch_size_probs"): [0.125] * 8,
+    # LocationTokenDistillationHead sums cosine and Gram unweighted, at 2048 tokens; the
+    # within-cell Gram and uniformity terms were off and are gone.
+    ("train_module", "projection_distill_cosine_weight"): 1.0,
+    ("train_module", "projection_distill_gram_weight"): 1.0,
+    ("train_module", "projection_distill_gram_max_tokens"): 2048,
+    ("train_module", "projection_distill_gram_within_weight"): 0.0,
+    ("train_module", "projection_distill_gram_within_max_cells"): 256,
+    ("train_module", "projection_uniformity_weight"): 0.0,
+    ("train_module", "register_uniformity_weight"): 0.0,
+    ("train_module", "register_uniformity_rotations"): 2,
+}
+# Current fields at their off/default values that the release config predates.
+CURRENT_FIELDS_AT_DEFAULT: dict[tuple[str, ...], object] = {
+    ("train_module", "pixel_targets"): False,
+    ("train_module", "subpatch_offset_loss_weight"): 0.0,
+    ("trainer", "callbacks", "checkpointer", "max_checkpoints"): None,
+    # Registry tags newer olmo-core writes out; the release config left them implicit.
+    ("train_module", "optim_config", "type"): "adamw",
+    ("train_module", "scheduler", "type"): "cos_with_warmup",
+    # LossConfig.build pops "type", and the release config was saved after building;
+    # the release branch's v1.2 base sets this same loss.
+    ("train_module", "loss_config", "loss_config", "type"): (
+        "modality_patch_discrimination_masked_negatives_vec"
+    ),
+}
+
+
+def _drop(config: dict, path: tuple[str, ...]) -> object:
+    for key in path[:-1]:
+        config = config[key]
+    return config.pop(path[-1], None)
+
+
+def test_text_arm_trains_like_the_release_run(
+    text: ModuleType, common: CommonComponents
+) -> None:
+    """Data, sampler, optimization, duration and seed match the v1.3 release run."""
+    from olmoearth_pretrain.internal.experiment import build_config
+
+    built = build_config(
+        common,
+        text.build_model_config,
+        text.build_dataset_config,
+        text.build_dataloader_config,
+        text.build_trainer_config,
+        text.build_train_module_config,
+        [],
+        text.build_visualize_config,
+    ).as_config_dict()
+    release = json.loads(RELEASE_TRAINING.read_text())
+
+    for path, value in RELEASE_FIELDS_NOW_BUILT_IN.items():
+        assert _drop(release, path) == value, path
+    for path, value in CURRENT_FIELDS_AT_DEFAULT.items():
+        assert _drop(built, path) == value, path
+    assert built["dataset"].pop("caption_dir") == text.CAPTION_DIR
+    assert built["dataset"]["training_modalities"].pop() == Modality.CAPTION_CELL.name
+    built["data_loader"].pop("work_dir")
+    trainer = built["trainer"]
+    for key in ("save_folder", "work_dir"):
+        trainer.pop(key)
+    trainer["checkpointer"].pop("work_dir")
+    assert trainer["callbacks"].pop("wandb")["project"] == "2026_11_09_text_pretrain"
+    assert trainer["callbacks"].pop("downstream_evaluator")["enabled"] is False
+    # The olmo-core release config spelled out the BeakerCallback's default.
+    assert release["trainer"]["callbacks"]["beaker"].pop("enabled") is True
+
+    for section in ("dataset", "data_loader", "train_module", "trainer", "init_seed"):
+        assert built[section] == release[section], section

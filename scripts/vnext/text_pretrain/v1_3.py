@@ -14,8 +14,9 @@ maps) with a 768-d AttentionPooler read in four interleaved [read -> self-attn] 
 per-modality supervision heads on the location tokens, a detached [128, 64] student
 distilled by cosine + Gram, the single-pass LatentMIM train module with a
 projection-only target, replicated DP + bf16 autocast, and the decorrelated shape
-sampler. In-loop evals are v1.2's (v1.3's student-only eval routing needs fields that
-are not on main).
+sampler. Training matches the release run's config.json field for field (see
+``build_trainer_config`` for the two trainer differences, neither of which touches
+training).
 
     python scripts/vnext/text_pretrain/v1_3.py launch <run_name> ai2/jupiter \
         --launch.num_gpus=8 --launch.priority=urgent
@@ -32,11 +33,11 @@ from olmo_core.distributed.parallel import (  # noqa: E402
     DataParallelConfig,
     DataParallelType,
 )
+from olmo_core.train.config import TrainerConfig  # noqa: E402
 from v1_2.base import (  # noqa: E402
     PATCH_EMBED_HIDDEN_SIZES,
     build_common_components,
     build_dataset_config,
-    build_trainer_config,
     build_visualize_config,
 )
 from v1_2.base import (  # noqa: E402
@@ -48,6 +49,7 @@ from v1_2.base import (  # noqa: E402
 from v1_2.base import (  # noqa: E402
     build_train_module_config as _v1_2_build_train_module_config,
 )
+from v1_2.base import build_trainer_config as _v1_2_build_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
@@ -128,6 +130,7 @@ TEMPORAL_BIAS = 2.75
 TIME_PRIORITY_PROB = 0.5
 SAMPLED_HW_P_LIST = list(range(1, 17)) + [18, 20, 24, 28, 32]
 RANK_MICROBATCH_SIZE = 64
+WANDB_PROJECT = "2026_11_09_text_pretrain"
 
 
 def build_supervision_head_config() -> SupervisionHeadConfig:
@@ -246,6 +249,23 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
         dp_config=DataParallelConfig(name=DataParallelType.ddp),
         autocast_precision=DType.bfloat16,
     )
+
+
+def build_trainer_config(common: CommonComponents) -> TrainerConfig:
+    """v1.2's trainer, keeping every checkpoint and running no in-process evals.
+
+    Both text-pretraining arms log to ``WANDB_PROJECT``.
+
+    The release run kept all its 5000-step checkpoints (newer olmo-core keeps 3 by
+    default) and ran its evals as separate Beaker jobs, never in the training process.
+    Its eval sets (AEF year-aligned kNN twins, year-aligned PASTIS) are not on main, so
+    checkpoints are scored afterwards with the release protocol instead.
+    """
+    config = _v1_2_build_trainer_config(common)
+    config.callbacks["checkpointer"].max_checkpoints = None
+    config.callbacks["downstream_evaluator"].enabled = False
+    config.callbacks["wandb"].project = WANDB_PROJECT
+    return config
 
 
 def run() -> None:

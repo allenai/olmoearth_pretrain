@@ -1,0 +1,326 @@
+{
+  "_source": "Training sections of step667200/config.json from the v1.3 release run (regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_stunorm_mlpgram1); run-specific paths, W&B settings and the eval callback removed. The model is in checkpoint_configs/.",
+  "data_loader": {
+    "_CLASS_": "olmoearth_pretrain.data.dataloader.OlmoEarthDataLoaderConfig",
+    "drop_last": true,
+    "exclude_only_decode_from_budget": true,
+    "global_batch_size": 512,
+    "masking_config": {
+      "_CLASS_": "olmoearth_pretrain.train.masking.MaskingConfig",
+      "strategy_config": {
+        "decode_ratio": 0.5,
+        "encode_ratio": 0.5,
+        "only_decode_modalities": [
+          "worldcover",
+          "srtm",
+          "openstreetmap_raster",
+          "wri_canopy_height_map",
+          "cdl",
+          "worldcereal"
+        ],
+        "random_ratio": 0.5,
+        "type": "random_time_with_decode"
+      },
+      "tokenization_config": {
+        "_CLASS_": "olmoearth_pretrain.nn.tokenization.TokenizationConfig",
+        "overrides": {
+          "landsat": {
+            "_CLASS_": "olmoearth_pretrain.nn.tokenization.ModalityTokenization",
+            "band_groups": [
+              [
+                "B8",
+                "B1",
+                "B2",
+                "B3",
+                "B4",
+                "B5",
+                "B6",
+                "B7",
+                "B9",
+                "B10",
+                "B11"
+              ]
+            ]
+          },
+          "sentinel2_l2a": {
+            "_CLASS_": "olmoearth_pretrain.nn.tokenization.ModalityTokenization",
+            "band_groups": [
+              [
+                "B02",
+                "B03",
+                "B04",
+                "B08",
+                "B05",
+                "B06",
+                "B07",
+                "B8A",
+                "B11",
+                "B12",
+                "B01",
+                "B09"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "max_patch_size": 8,
+    "max_timesteps": 12,
+    "min_patch_size": 1,
+    "min_tokens_per_instance": 228,
+    "num_dataset_repeats_per_epoch": 1,
+    "num_masked_views": 1,
+    "num_workers": 16,
+    "patch_size_probs": [
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125,
+      0.125
+    ],
+    "prefetch_factor": 4,
+    "sampled_hw_p_list": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      18,
+      20,
+      24,
+      28,
+      32
+    ],
+    "seed": 3622,
+    "shuffle": true,
+    "temporal_bias": 2.75,
+    "tile_size": 128,
+    "time_priority_prob": 0.5,
+    "token_budget": 3072
+  },
+  "dataset": {
+    "_CLASS_": "olmoearth_pretrain.data.dataset.OlmoEarthDatasetConfig",
+    "apply_cutmix": false,
+    "computed_norm_config": "computed.json",
+    "dataset_percentage": 1.0,
+    "dtype": "float32",
+    "h5py_dir": "/weka/dfive-default/helios/dataset/osm_sampling/h5py_data_w_missing_timesteps_zstd_3_128_x_4/cdl_gse_landsat_openstreetmap_raster_sentinel1_sentinel2_l2a_srtm_worldcereal_worldcover_worldpop_wri_canopy_height_map/1138828",
+    "normalize": true,
+    "seed": 0,
+    "training_modalities": [
+      "sentinel2_l2a",
+      "sentinel1",
+      "landsat",
+      "worldcover",
+      "srtm",
+      "openstreetmap_raster",
+      "wri_canopy_height_map",
+      "cdl",
+      "worldcereal"
+    ]
+  },
+  "init_seed": 12536,
+  "train_module": {
+    "_CLASS_": "olmoearth_pretrain.train.train_module.latent_mim.LatentMIMTrainModuleConfig",
+    "autocast_precision": "bfloat16",
+    "compile_loss": false,
+    "compile_model": false,
+    "dp_config": {
+      "_CLASS_": "olmo_core.distributed.parallel.data_parallel.DataParallelConfig",
+      "name": "ddp",
+      "reduce_dtype": "float32"
+    },
+    "ema_decay": [
+      1.0,
+      1.0
+    ],
+    "find_unused_parameters": true,
+    "loss_config": {
+      "_CLASS_": "olmoearth_pretrain.train.loss.LossConfig",
+      "loss_config": {
+        "mask_negatives_for_modalities": [
+          "worldcover",
+          "srtm",
+          "openstreetmap_raster",
+          "wri_canopy_height_map",
+          "cdl",
+          "worldcereal"
+        ],
+        "same_target_threshold": 0.999,
+        "tau": 0.1
+      }
+    },
+    "masking_config": {
+      "_CLASS_": "olmoearth_pretrain.train.masking.MaskingConfig",
+      "strategy_config": {
+        "decode_ratio": 0.5,
+        "encode_ratio": 0.5,
+        "only_decode_modalities": [
+          "worldcover",
+          "srtm",
+          "openstreetmap_raster",
+          "wri_canopy_height_map",
+          "cdl",
+          "worldcereal"
+        ],
+        "random_ratio": 0.5,
+        "type": "random_time_with_decode"
+      },
+      "tokenization_config": {
+        "_CLASS_": "olmoearth_pretrain.nn.tokenization.TokenizationConfig",
+        "overrides": {
+          "landsat": {
+            "_CLASS_": "olmoearth_pretrain.nn.tokenization.ModalityTokenization",
+            "band_groups": [
+              [
+                "B8",
+                "B1",
+                "B2",
+                "B3",
+                "B4",
+                "B5",
+                "B6",
+                "B7",
+                "B9",
+                "B10",
+                "B11"
+              ]
+            ]
+          },
+          "sentinel2_l2a": {
+            "_CLASS_": "olmoearth_pretrain.nn.tokenization.ModalityTokenization",
+            "band_groups": [
+              [
+                "B02",
+                "B03",
+                "B04",
+                "B08",
+                "B05",
+                "B06",
+                "B07",
+                "B8A",
+                "B11",
+                "B12",
+                "B01",
+                "B09"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    "max_grad_norm": 1.0,
+    "optim_config": {
+      "_CLASS_": "olmo_core.optim.adamw.AdamWConfig",
+      "betas": [
+        0.9,
+        0.999
+      ],
+      "compile": false,
+      "eps": 1e-08,
+      "fixed_fields": [
+        "initial_lr"
+      ],
+      "fused": true,
+      "lr": 0.0001,
+      "weight_decay": 0.02
+    },
+    "projection_distill_cosine_weight": 1.0,
+    "projection_distill_gram_max_tokens": 2048,
+    "projection_distill_gram_weight": 1.0,
+    "projection_distill_gram_within_max_cells": 256,
+    "projection_distill_gram_within_weight": 0.0,
+    "projection_uniformity_weight": 0.0,
+    "rank_microbatch_size": 64,
+    "register_uniformity_rotations": 2,
+    "register_uniformity_weight": 0.0,
+    "scheduler": {
+      "_CLASS_": "olmo_core.optim.scheduler.CosWithWarmup",
+      "alpha_f": 0.1,
+      "initial_lr_field": "initial_lr",
+      "lr_field": "lr",
+      "units": "steps",
+      "warmup": 8000,
+      "warmup_min_lr": 0.0
+    },
+    "token_exit_cfg": {
+      "cdl": 0,
+      "landsat": 0,
+      "openstreetmap_raster": 0,
+      "sentinel1": 0,
+      "sentinel2_l2a": 0,
+      "srtm": 0,
+      "worldcereal": 0,
+      "worldcover": 0,
+      "wri_canopy_height_map": 0
+    },
+    "transform_config": {
+      "_CLASS_": "olmoearth_pretrain.data.transform.TransformConfig",
+      "transform_kwargs": {},
+      "transform_type": "flip_and_rotate"
+    }
+  },
+  "trainer": {
+    "_CLASS_": "olmo_core.train.config.TrainerConfig",
+    "bookkeeping_soft_timeout": 30,
+    "callbacks": {
+      "beaker": {
+        "_CLASS_": "olmo_core.train.callbacks.beaker.BeakerCallback",
+        "enabled": true,
+        "result_dir": "/results"
+      },
+      "checkpointer": {
+        "_CLASS_": "olmo_core.train.callbacks.checkpointer.CheckpointerCallback",
+        "enabled": true,
+        "ephemeral_save_interval": 250,
+        "remove": "ephemeral_only",
+        "save_interval": 5000
+      },
+      "config_saver": {
+        "_CLASS_": "olmo_core.train.callbacks.config_saver.ConfigSaverCallback",
+        "fname": "config.json"
+      },
+      "garbage_collector": {
+        "_CLASS_": "olmo_core.train.callbacks.garbage_collector.GarbageCollectorCallback",
+        "enabled": true,
+        "gc_interval": 1
+      },
+      "gpu_memory_monitor": {
+        "_CLASS_": "olmo_core.train.callbacks.gpu_memory_monitor.GPUMemoryMonitorCallback"
+      },
+      "speed_monitor": {
+        "_CLASS_": "olmoearth_pretrain.train.callbacks.speed_monitor.OlmoEarthSpeedMonitorCallback"
+      }
+    },
+    "cancel_check_interval": 25,
+    "checkpointer": {
+      "_CLASS_": "olmo_core.train.checkpoint.CheckpointerConfig",
+      "pre_download": false,
+      "throttle_uploads": false
+    },
+    "load_strategy": "if_available",
+    "max_duration": {
+      "_CLASS_": "olmo_core.train.common.Duration",
+      "unit": "epochs",
+      "value": 300
+    },
+    "metrics_collect_interval": 10,
+    "no_checkpoints": false,
+    "no_evals": false,
+    "save_overwrite": false
+  }
+}
