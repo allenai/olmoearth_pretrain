@@ -7,9 +7,30 @@ import torch
 from olmoearth_pretrain.data.transform import Transform
 from olmoearth_pretrain.datatypes import (
     MaskedOlmoEarthSample,
+    MaskValue,
     OlmoEarthSample,
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
+
+
+def mask_without_captions(
+    masking_strategy: MaskingStrategy, sample: OlmoEarthSample, patch_size: int
+) -> MaskedOlmoEarthSample:
+    """Mask the sample, carrying caption_cell past the masking strategy.
+
+    caption_cell is a text target, never a model input: it gets no tokens, and its
+    mask is MISSING throughout.
+    """
+    caption_cell = sample.caption_cell
+    masked = masking_strategy.apply_mask(sample._replace(caption_cell=None), patch_size)
+    if caption_cell is None:
+        return masked
+    return masked._replace(
+        caption_cell=caption_cell,
+        caption_cell_mask=torch.full(
+            (*caption_cell.shape[:-1], 1), MaskValue.MISSING.value
+        ),
+    )
 
 
 def collate_olmoearth_pretrain(
@@ -64,7 +85,7 @@ def collate_single_masked_batched(
         stacked_sample = transform.apply(stacked_sample)
 
     # Apply masking to the batch
-    masked_sample = masking_strategy.apply_mask(stacked_sample, patch_size)
+    masked_sample = mask_without_captions(masking_strategy, stacked_sample, patch_size)
 
     return patch_size, masked_sample
 
@@ -98,10 +119,12 @@ def collate_double_masked_batched(
         stacked_sample = transform.apply(stacked_sample)
 
     # Apply both masking strategies to the batch
-    masked_sample_a = masking_strategy.apply_mask(stacked_sample, patch_size)
+    masked_sample_a = mask_without_captions(
+        masking_strategy, stacked_sample, patch_size
+    )
     strategy_b = (
         masking_strategy_b if masking_strategy_b is not None else masking_strategy
     )
-    masked_sample_b = strategy_b.apply_mask(stacked_sample, patch_size)
+    masked_sample_b = mask_without_captions(strategy_b, stacked_sample, patch_size)
 
     return patch_size, masked_sample_a, masked_sample_b

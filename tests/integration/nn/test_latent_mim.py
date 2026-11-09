@@ -1,10 +1,14 @@
 """Test LatentMIM with loss."""
 
+import json
 import logging
+from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
 
+from olmoearth_pretrain.data.captions import caption_cell_raster
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     AttentionPoolerConfig,
@@ -19,6 +23,10 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionModalityConfig,
     SupervisionTaskType,
     compute_supervision_loss,
+)
+from olmoearth_pretrain.nn.text_alignment import (
+    TextAlignmentHeadConfig,
+    text_alignment_loss,
 )
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import PatchDiscriminationLoss
@@ -153,6 +161,76 @@ def test_latentmim_attention_pooler(
     assert model.encoder.attention_pooler.read_blocks[0].attn.q.weight.grad is not None
     assert model.decoder.location_tokens_to_decoder_embed.weight.grad is not None
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
+
+
+def test_latentmim_text_head_trains_the_location_tokens(
+    masked_sample_dict: dict[str, torch.Tensor], tmp_path: Path
+) -> None:
+    """The text loss on caption cells reaches the AttentionPooler and the text head."""
+    modalities = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
+    B, H, W, _, _ = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(
+        **{k: v for k, v in masked_sample_dict.items() if "worldcover" not in k}
+    )
+    text = np.random.default_rng(0).normal(size=(B, 17, 8))
+    text /= np.linalg.norm(text, axis=-1, keepdims=True)
+    np.save(tmp_path / "embeddings.npy", text.astype(np.float16))
+    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+
+    pooler_dim = 8
+    model = LatentMIMConfig(
+        encoder_config=EncoderConfig(
+            supported_modality_names=modalities,
+            embedding_size=16,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=4.0,
+            max_patch_size=8,
+            min_patch_size=1,
+            max_sequence_length=12,
+            spatial_pos_encoding="rope",
+            attention_pooler_config=AttentionPoolerConfig(
+                pooler_dim=pooler_dim, pooler_depth=2
+            ),
+        ),
+        decoder_config=PredictorConfig(
+            supported_modality_names=modalities,
+            encoder_embedding_size=16,
+            decoder_embedding_size=16,
+            num_heads=2,
+            depth=2,
+            mlp_ratio=4.0,
+            max_sequence_length=12,
+            spatial_pos_encoding="rope",
+            use_attention_pooler=True,
+            pooler_dim=pooler_dim,
+        ),
+        text_head_config=TextAlignmentHeadConfig(
+            embeddings_dir=str(tmp_path), text_dim=8
+        ),
+    ).build()
+    assert model.text_head is not None
+
+    patch_size = 1
+    *_, student_outputs = model.forward(x, patch_size)
+    assert student_outputs is not None
+    present = np.ones(16, dtype=bool)
+    caption_cell = torch.stack(
+        [torch.from_numpy(caption_cell_raster(i, present, H, W)) for i in range(B)]
+    )
+    loss, metrics = text_alignment_loss(
+        model.text_head,
+        student_outputs["location_tokens"],
+        caption_cell,
+        pixels=patch_size,
+    )
+    loss.backward()
+
+    assert metrics["text/cells"] == B * H * W
+    assert loss > 0
+    assert model.text_head.proj.weight.grad is not None
+    assert model.text_head.log_scale.grad is not None
+    assert model.encoder.attention_pooler.learned_query.grad is not None
 
 
 def test_latentmim_attention_pooler_3d_encoder_2d_decoder(

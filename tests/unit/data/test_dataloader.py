@@ -363,6 +363,46 @@ def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) 
     assert dl._space_only_bandsets < so_with_maps
 
 
+def test_caption_cell_stays_out_of_the_budget(tmp_path: Path) -> None:
+    """caption_cell, a text target, never takes token budget from the imagery."""
+    modalities = [Modality.SENTINEL2_L2A.name, Modality.CAPTION_CELL.name]
+
+    class CaptionedDataset(OlmoEarthDataset):
+        def __init__(self) -> None:
+            self.training_modalities = modalities
+
+        def __len__(self) -> int:
+            return 4
+
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    dl = OlmoEarthDataLoader(
+        dataset=CaptionedDataset(),
+        work_dir=tmp_path,
+        global_batch_size=2,
+        dp_world_size=1,
+        dp_rank=0,
+        fs_local_rank=0,
+        num_workers=0,
+        collator=functools.partial(
+            collate_single_masked_batched,
+            transform=None,
+            masking_strategy=masking_strategy,
+        ),
+        target_device_type="cpu",
+        token_budget=4096,
+        min_patch_size=1,
+        max_patch_size=1,
+        sampled_hw_p_list=[8],
+        masking_strategy=masking_strategy,
+        num_masked_views=1,
+    )
+    assert dl.budget_exclude_modalities == frozenset([Modality.CAPTION_CELL.name])
+    _st, imagery_only, _static, _time = compute_bandset_rates(
+        [Modality.SENTINEL2_L2A.name], dl.tokenization_config
+    )
+    assert dl._space_only_bandsets == imagery_only
+
+
 def _create_test_dataloader(
     tmp_path: Path,
     seed: int = 42,

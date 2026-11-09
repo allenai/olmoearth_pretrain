@@ -226,17 +226,21 @@ class OlmoEarthDataLoader(DataLoaderBase):
             # Overhead of loading modules on import by preloading them
             mp.set_forkserver_preload(["torch", "rasterio"])
 
-        # Modalities kept out of the encoder token budget (decode-only targets are
-        # never encoded, so they should not consume budget meant for the encoder).
-        self.budget_exclude_modalities: frozenset[str] = frozenset(
-            getattr(self.masking_strategy, "only_decode_modalities", []) or []
-        )
-
         # Precompute per-instance band-set token rates so the shape sampler can
         # invert the budget without a concrete sample in hand. Uses the full
         # training modality set (a superset of any single sample), so the derived
         # max_t is conservative and always fits the per-sample budget downstream.
         training_modalities = getattr(self.dataset, "training_modalities", None)
+
+        # Modalities kept out of the encoder token budget (decode-only targets are
+        # never encoded, so they should not consume budget meant for the encoder;
+        # nor is caption_cell, a text target).
+        exclude = set(
+            getattr(self.masking_strategy, "only_decode_modalities", []) or []
+        )
+        if training_modalities and Modality.CAPTION_CELL.name in training_modalities:
+            exclude.add(Modality.CAPTION_CELL.name)
+        self.budget_exclude_modalities: frozenset[str] = frozenset(exclude)
         if training_modalities is not None:
             (
                 self._space_time_bandsets,

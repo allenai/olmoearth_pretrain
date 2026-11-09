@@ -26,6 +26,10 @@ from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
 )
+from olmoearth_pretrain.nn.text_alignment import (
+    TextAlignmentHead,
+    TextAlignmentHeadConfig,
+)
 from olmoearth_pretrain.nn.utils import DistributedMixins, unpack_encoder_output
 
 logger = logging.getLogger(__name__)
@@ -89,6 +93,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_head: SupervisionHead | None = None,
         location_token_distillation_head: LocationTokenDistillationHead | None = None,
         projection_only_target: bool = False,
+        text_head: TextAlignmentHead | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -107,6 +112,8 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            text_head: Optional head aligning the location-token grid with grid-caption
+                embeddings. Training-only; the train module calls it.
         """
         super().__init__()
         self.encoder = encoder
@@ -114,6 +121,7 @@ class LatentMIM(nn.Module, DistributedMixins):
         self.reconstructor = reconstructor
         self.supervision_head = supervision_head
         self.location_token_distillation_head = location_token_distillation_head
+        self.text_head = text_head
         if projection_only_target:
             self.target_encoder: nn.Module = FrozenTargetProjection(self.encoder)
         else:
@@ -247,6 +255,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             fully_shard(self.supervision_head, **fsdp_config)
         if self.location_token_distillation_head is not None:
             fully_shard(self.location_token_distillation_head, **fsdp_config)
+        if self.text_head is not None:
+            fully_shard(self.text_head, **fsdp_config)
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -280,6 +290,8 @@ class LatentMIMConfig(Config):
         LocationTokenDistillationHeadConfig | None
     ) = None
     projection_only_target: bool = False
+    # Contrastive alignment of the location-token grid with grid-caption embeddings.
+    text_head_config: TextAlignmentHeadConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -330,6 +342,11 @@ class LatentMIMConfig(Config):
                 "the supervision heads read the location-token grid, so "
                 "supervision_head_config requires the encoder AttentionPooler"
             )
+        if self.text_head_config is not None and not encoder_uses_location_tokens:
+            raise ValueError(
+                "the text head reads the location-token grid, so text_head_config "
+                "requires the encoder AttentionPooler"
+            )
         if self.location_token_distillation_head_config is not None:
             attention_pooler_config = self.encoder_config.attention_pooler_config
             if (
@@ -371,6 +388,12 @@ class LatentMIMConfig(Config):
                     student_dims=attention_pooler_config.sorted_student_dims,
                 )
             )
+        text_head = None
+        if self.text_head_config is not None:
+            assert self.encoder_config.attention_pooler_config is not None
+            text_head = self.text_head_config.build(
+                embedding_dim=self.encoder_config.attention_pooler_config.pooler_dim
+            )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
@@ -378,4 +401,5 @@ class LatentMIMConfig(Config):
             supervision_head=supervision_head,
             location_token_distillation_head=location_token_distillation_head,
             projection_only_target=self.projection_only_target,
+            text_head=text_head,
         )

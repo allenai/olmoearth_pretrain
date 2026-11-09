@@ -24,6 +24,7 @@ from olmoearth_pretrain.nn.pixel_targets import (
     spatial_token_grid,
 )
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
+from olmoearth_pretrain.nn.text_alignment import text_alignment_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
@@ -210,6 +211,8 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
 
         if self.model.location_token_distillation_head is not None:
             self.total_loss_name = f"{self.total_loss_name}+student"
+        if self.model.text_head is not None:
+            self.total_loss_name = f"{self.total_loss_name}+text"
         self.pixel_targets = pixel_targets
         if pixel_targets and not isinstance(
             self.model.target_encoder, FrozenTargetProjection
@@ -340,6 +343,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         ``location_query_patch_size``: pixels per location query along each side, drawn by
         the dataloader (None = one location query per token).
         """
+        # caption_cell is the text head's target, never a model input.
+        caption_cell = batch.caption_cell
+        batch = batch._replace(caption_cell=None, caption_cell_mask=None)
         # Pixel targets: one uniformly drawn pixel per token cell. At ps=1 the cell IS
         # the pixel, so the standard path is already pixel-resolution.
         pixel_offsets = None
@@ -444,5 +450,21 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics["subpatch_offset_loss"] = offset_loss.detach()
+
+                if (
+                    self.model.text_head is not None
+                    and caption_cell is not None
+                    and student_outputs is not None
+                ):
+                    text_loss, text_metrics = text_alignment_loss(
+                        self.model.text_head,
+                        student_outputs["location_tokens"],
+                        caption_cell,
+                        pixels=location_query_patch_size or patch_size,
+                    )
+                    loss = loss + text_loss
+                    if extra_metrics is None:
+                        extra_metrics = {}
+                    extra_metrics.update(text_metrics)
 
             return loss, latent, decoded, target_output, extra_metrics

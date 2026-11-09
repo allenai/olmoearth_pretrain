@@ -15,9 +15,12 @@ from olmoearth_pretrain.data.captions import (
     caption_cell_raster,
     patch_caption_keys,
 )
+from olmoearth_pretrain.data.collate import collate_single_masked_batched
 from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.data.dataset import GetItemArgs, OlmoEarthDataset
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
+from olmoearth_pretrain.datatypes import MaskValue, OlmoEarthSample
+from olmoearth_pretrain.train.masking import RandomMaskingStrategy
 
 CELLS = [f"cell {i} é" for i in range(16)]
 
@@ -116,3 +119,26 @@ def test_caption_cell_needs_float32(tmp_path: Path) -> None:
             dtype=np.float16,
             caption_dir=_store(tmp_path),
         )
+
+
+def test_collate_keeps_caption_cell_out_of_masking() -> None:
+    """caption_cell survives collation unmasked by the strategy, MISSING to the model."""
+    present = np.ones(16, dtype=bool)
+    samples = [
+        (
+            2,
+            OlmoEarthSample(
+                sentinel2_l2a=np.ones((8, 8, 2, 12), dtype=np.float32),
+                caption_cell=caption_cell_raster(i, present, 8, 8),
+                timestamps=np.array([[1, 0, 2020], [1, 1, 2020]]),
+            ),
+        )
+        for i in (4, 9)
+    ]
+    _, masked = collate_single_masked_batched(samples, None, RandomMaskingStrategy())
+    assert masked.caption_cell is not None and masked.caption_cell_mask is not None
+    assert masked.caption_cell.shape == (2, 8, 8, 1, 2)
+    assert (masked.caption_cell[1, ..., 0] == 9).all()
+    assert masked.caption_cell_mask.shape == (2, 8, 8, 1, 1)
+    assert (masked.caption_cell_mask == MaskValue.MISSING.value).all()
+    assert masked.sentinel2_l2a_mask is not None

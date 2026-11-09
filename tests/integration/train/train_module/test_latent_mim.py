@@ -1,20 +1,28 @@
 """Integration tests for the latent MIM Training Module."""
 
+import json
 import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import numpy as np
 import pytest
 import torch
 from olmo_core.optim.adamw import AdamWConfig
 from olmo_core.train.config import TrainerConfig
 
+from olmoearth_pretrain.data.captions import caption_cell_raster
 from olmoearth_pretrain.data.collate import collate_single_masked_batched
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataset import OlmoEarthSample
 from olmoearth_pretrain.data.transform import TransformConfig
-from olmoearth_pretrain.nn.flexi_vit import EncoderConfig, PredictorConfig
+from olmoearth_pretrain.nn.flexi_vit import (
+    AttentionPoolerConfig,
+    EncoderConfig,
+    PredictorConfig,
+)
 from olmoearth_pretrain.nn.latent_mim import LatentMIM, LatentMIMConfig
+from olmoearth_pretrain.nn.text_alignment import TextAlignmentHeadConfig
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
 from olmoearth_pretrain.train.train_module.latent_mim import LatentMIMTrainModuleConfig
@@ -257,3 +265,82 @@ def test_band_dropout_enabled_by_train_module(
     # point) remains off so it always sees full spectral info.
     assert model.encoder.patch_embeddings.band_dropout_rate == 0.5
     assert model.target_encoder.patch_embeddings.band_dropout_rate == 0.0
+
+
+def test_train_batch_with_text_head(
+    optim_config: AdamWConfig, tmp_path: Path, set_random_seeds: None
+) -> None:
+    """caption_cell reaches the text loss, not the model, and the head's weights move."""
+    modalities = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
+    text = np.random.default_rng(0).normal(size=(4, 17, 8))
+    text /= np.linalg.norm(text, axis=-1, keepdims=True)
+    np.save(tmp_path / "embeddings.npy", text.astype(np.float16))
+    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+    model = LatentMIMConfig(
+        encoder_config=EncoderConfig(
+            supported_modality_names=modalities,
+            embedding_size=16,
+            max_patch_size=8,
+            num_heads=2,
+            mlp_ratio=1.0,
+            depth=2,
+            max_sequence_length=12,
+            spatial_pos_encoding="rope",
+            attention_pooler_config=AttentionPoolerConfig(pooler_dim=8, pooler_depth=1),
+        ),
+        decoder_config=PredictorConfig(
+            supported_modality_names=modalities,
+            encoder_embedding_size=16,
+            decoder_embedding_size=16,
+            depth=2,
+            mlp_ratio=1.0,
+            num_heads=2,
+            max_sequence_length=12,
+            spatial_pos_encoding="rope",
+            use_attention_pooler=True,
+            pooler_dim=8,
+        ),
+        text_head_config=TextAlignmentHeadConfig(
+            embeddings_dir=str(tmp_path), text_dim=8
+        ),
+    ).build()
+    assert model.text_head is not None
+    before = model.text_head.proj.weight.detach().clone()
+
+    rng = np.random.default_rng(1)
+    samples = [
+        (
+            2,
+            OlmoEarthSample(
+                sentinel2_l2a=rng.random((8, 8, 2, 12), dtype=np.float32),
+                latlon=rng.random(2, dtype=np.float32),
+                caption_cell=caption_cell_raster(i, np.ones(16, dtype=bool), 8, 8),
+                timestamps=np.array([[1, 0, 2020], [1, 1, 2020]]),
+            ),
+        )
+        for i in range(4)
+    ]
+    masking_strategy = MaskingConfig(strategy_config={"type": "random"}).build()
+    batch = collate_single_masked_batched(
+        samples, transform=None, masking_strategy=masking_strategy
+    )
+    config = LatentMIMTrainModuleConfig(
+        optim_config=optim_config,
+        rank_microbatch_size=4,
+        loss_config=LossConfig(loss_config={"type": "patch_discrimination"}),
+        masking_config=MaskingConfig(strategy_config={"type": "random"}),
+        token_exit_cfg={modality: 0 for modality in Modality.names()},
+        ema_decay=(0.996, 1.0),
+        max_grad_norm=1.0,
+    )
+    train_module = config.build(model, device="cpu")
+    with patch("olmoearth_pretrain.train.train_module.train_module.build_world_mesh"):
+        mock_trainer = MockTrainer()
+        train_module.on_attach = MagicMock(return_value=None)  # type: ignore
+        train_module._attach_trainer(mock_trainer)
+        train_module.train_batch(batch)
+        train_module.optim_step()
+
+    assert "train/PatchDisc+text" in mock_trainer._metrics
+    assert mock_trainer._metrics["text/cells"] == 4 * 16
+    assert not torch.equal(model.text_head.proj.weight, before)
