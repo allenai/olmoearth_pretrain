@@ -23,6 +23,7 @@ from olmoearth_pretrain._compat import (
     deprecated_class_alias as _deprecated_class_alias,
 )
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.captions import CaptionStore, caption_cell_raster
 from olmoearth_pretrain.data.constants import (
     MAX_SEQUENCE_LENGTH,
     MISSING_VALUE,
@@ -404,6 +405,7 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        caption_dir: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -429,6 +431,8 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            caption_dir: CaptionStore for the caption_cell modality; required when it is
+                a training modality.
 
         Returns:
             None
@@ -468,6 +472,18 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+
+        self.captions: CaptionStore | None = None
+        if Modality.CAPTION_CELL.name in training_modalities:
+            if caption_dir is None:
+                raise ValueError("caption_cell needs caption_dir")
+            if dtype != np.float32:
+                raise ValueError("caption_cell holds window ids, which need float32")
+            self.captions = CaptionStore(caption_dir)
+            if self.captions.meta["h5py_dir"].rstrip("/") != str(h5py_dir).rstrip("/"):
+                logger.warning(
+                    f"Captions in {caption_dir} were made for {self.captions.meta['h5py_dir']}"
+                )
 
     @property
     def fingerprint_version(self) -> str:
@@ -900,6 +916,19 @@ class OlmoEarthDataset(Dataset):
             ]
         return timestamps, missing_timesteps_masks
 
+    def _add_caption_cell(self, sample_dict: dict[str, Any], index: int) -> None:
+        """Add the caption_cell raster when the window has any cell caption."""
+        assert self.captions is not None
+        if index >= len(self.captions):
+            return
+        present = self.captions.cells_present(index)
+        if not present.any():
+            return
+        height, width, _ = self.extract_hwt_from_sample_dict(sample_dict)
+        sample_dict[Modality.CAPTION_CELL.name] = caption_cell_raster(
+            index, present, height, width
+        )
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
@@ -913,6 +942,8 @@ class OlmoEarthDataset(Dataset):
             sample_dict["timestamps"], missing_timesteps_masks
         )
         sample_dict["timestamps"] = timestamps
+        if self.captions is not None:
+            self._add_caption_cell(sample_dict, index)
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
@@ -994,6 +1025,7 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    caption_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

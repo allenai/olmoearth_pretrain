@@ -27,6 +27,7 @@ from upath import UPath
 
 from olmoearth_pretrain._compat import deprecated_class_alias as _deprecated_class_alias
 from olmoearth_pretrain.config import Config
+from olmoearth_pretrain.data.captions import caption_cell_raster
 from olmoearth_pretrain.data.collate import (
     collate_double_masked_batched,
     collate_single_masked_batched,
@@ -541,6 +542,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
                 dtype=np.float32,
             )
             output_dict[Modality.EUROCROPS.name] = mock_eurocrops
+        if Modality.CAPTION_CELL.name in self.dataset.training_modalities:
+            output_dict[Modality.CAPTION_CELL.name] = caption_cell_raster(
+                0, np.ones(16, dtype=bool), standard_hw, standard_hw
+            )
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

@@ -569,6 +569,17 @@ class Modality:
         ignore_when_parsing=False,
     )
 
+    # Where each pixel's grid caption lives (window id, cell index); built at load time
+    # from a CaptionStore (see data/captions.py). A text target, not an input.
+    CAPTION_CELL = ModalitySpec(
+        name="caption_cell",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["window_id", "cell"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+        skip_normalization=True,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""
