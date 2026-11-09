@@ -1,5 +1,6 @@
 """Training and optimizer abstraction for OlmoEarth Pretrain."""
 
+import math
 from dataclasses import dataclass, field
 from logging import getLogger
 from typing import Any
@@ -31,6 +32,7 @@ from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
 from olmoearth_pretrain.train.masking import MaskingConfig
+from olmoearth_pretrain.train.subpatch_offset_loss import subpatch_offset_loss
 from olmoearth_pretrain.train.train_module.train_module import (
     OlmoEarthTrainModule,
     OlmoEarthTrainModuleConfig,
@@ -55,6 +57,9 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
         pixel_target_draw: ``"shared"`` (one pixel per cell for all its tokens),
             ``"independent"`` (one pixel per token) or ``"pooled"`` (as many pixels
             as masked tokens, drawn from all masked pixels of the sample).
+        subpatch_offset_loss_weight: Weight on the sub-patch offset loss (see
+            ``olmoearth_pretrain.train.subpatch_offset_loss``), applied when the
+            Perceiver's registers are finer than the patch size.
     """
 
     loss_config: LossConfig = field(
@@ -71,6 +76,7 @@ class LatentMIMTrainModuleConfig(OlmoEarthTrainModuleConfig):
     max_grad_norm: float = 1.0
     pixel_targets: bool = False
     pixel_target_draw: str = "shared"
+    subpatch_offset_loss_weight: float = 0.0
 
     def build(
         self,
@@ -141,6 +147,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         find_unused_parameters: bool = True,
         pixel_targets: bool = False,
         pixel_target_draw: str = "shared",
+        subpatch_offset_loss_weight: float = 0.0,
     ):
         """Initialize the training module.
 
@@ -177,6 +184,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 ``"pooled"``: per (sample, modality), as many targets as masked
                 tokens, drawn without replacement from every masked pixel, so a
                 footprint can get zero or several; needs one band set per modality.
+            subpatch_offset_loss_weight: Weight on the sub-patch offset loss.
         """
         super().__init__(
             model=model,
@@ -230,6 +238,9 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 f"{pixel_target_draw!r}"
             )
         self.pixel_target_draw = pixel_target_draw
+        self.subpatch_offset_loss_weight = subpatch_offset_loss_weight
+        if subpatch_offset_loss_weight > 0:
+            self.total_loss_name = f"{self.total_loss_name}+subpatch_offset"
 
     def loss_fn(self, pred: Any, targets: Any) -> torch.Tensor:
         """Compute the loss between the predicted and target tensors."""
@@ -463,5 +474,19 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics.update(distill_metrics)
+
+                if self.subpatch_offset_loss_weight > 0 and student_outputs is not None:
+                    # The latent stride divides the patch size, so the register grid
+                    # tiles the token grid r x r per token; r > 1 when finer.
+                    registers = student_outputs["registers"]
+                    n_h, n_w = spatial_token_grid(batch, patch_size)
+                    r_sq, rem = divmod(registers.shape[1], n_h * n_w)
+                    r = math.isqrt(r_sq)
+                    if rem == 0 and r * r == r_sq and r > 1:
+                        offset_loss = subpatch_offset_loss(registers, (n_h, n_w), r)
+                        loss = loss + self.subpatch_offset_loss_weight * offset_loss
+                        if extra_metrics is None:
+                            extra_metrics = {}
+                        extra_metrics["subpatch_offset_loss"] = offset_loss.detach()
 
             return loss, latent, decoded, target_output, extra_metrics

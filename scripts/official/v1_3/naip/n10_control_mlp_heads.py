@@ -5,6 +5,8 @@ its own H5 and modalities, with every per-cell linear supervision head (WorldCov
 CDL, WorldCereal, OSM, SRTM, canopy height) turned into N7's 2-layer MLP
 (``decoder="mlp"``). No NAIP, Open Buildings or VIIRS, so N10 vs the control isolates
 the MLP heads; N7 vs N8 measures them on top of the NAIP + hi-res-target arms.
+Runs launched after commit 9c99bb01f also get the sub-patch offset loss
+(``naip_common.SUBPATCH_OFFSET_LOSS_WEIGHT``); the first N10 run did not.
 
 W&B project ``2026_10_23_naip_v13``; trained as ``v1_3_naip_n10_control_mlp``.
 """
@@ -24,11 +26,15 @@ from base import (  # noqa: E402
     build_visualize_config,
 )
 from rc_ld1_pix512 import build_model_config as _control_model_config  # noqa: E402
-from rc_pixtgt_pix512 import build_train_module_config  # noqa: E402
 
 from olmoearth_pretrain.internal.experiment import main  # noqa: E402
 
 MODULE_PATH = "scripts/official/v1_3/naip/n10_control_mlp_heads.py"
+
+
+def build_train_module_config(common):
+    """The control's train module plus the sub-patch offset loss (no extra modalities)."""
+    return naip_common.build_train_module_config(common, [])
 
 
 def build_model_config(common):

@@ -50,6 +50,10 @@ from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
 
 WANDB_PROJECT = "2026_10_23_naip_v13"
 
+# PR #630 sub-patch offset loss (ported), on for every arm launched from this branch.
+# N2-N12 were launched before it existed here and trained at 0.0, as did the control.
+SUBPATCH_OFFSET_LOSS_WEIGHT = 1.0
+
 # The async-save duration metric is recorded at a rank-dependent step and hangs the gloo
 # bookkeeping all-reduce (N2 hung twice on 10-26); see olmo_core_patches.
 drop_async_checkpoint_duration_metric()
@@ -128,8 +132,9 @@ def _add_decode_only(masking_config, names: list[str]) -> None:
 def build_train_module_config(
     common: CommonComponents, target_only_modalities: list[str]
 ) -> LatentMIMTrainModuleConfig:
-    """The control's train module (pixel targets); target-only modalities decode-only."""
+    """The control's train module + sub-patch offset loss; target-only modalities decode-only."""
     config = _control_train_module_config(common)
+    config.subpatch_offset_loss_weight = SUBPATCH_OFFSET_LOSS_WEIGHT
     _add_decode_only(config.masking_config, target_only_modalities)
     return config
 
