@@ -89,3 +89,15 @@ def test_lookup_returns_unit_vectors_and_masks_missing_keys(embedded: str) -> No
     expected = fake_vector("cell xxxxx")[:2]
     np.testing.assert_allclose(vec[0], expected / np.linalg.norm(expected), atol=1e-3)
     assert not vec[1:].any()
+
+
+def test_write_rows_lands_on_disk_without_touching_neighbours(tmp_path: Path) -> None:
+    """Rows go to their byte offset and read back through a fresh, unmapped load."""
+    path = str(tmp_path / "a.npy")
+    np.lib.format.open_memmap(path, "w+", np.float16, (4, 17, DIM)).flush()
+    offset = np.load(path, mmap_mode="r").offset
+    block = np.ones((2, 17, DIM), dtype=np.float16)
+    caption_embeddings.write_rows(path, offset + 17 * DIM * 2, block)
+    array = np.load(path)
+    assert not array[0].any() and not array[3].any()
+    assert (array[1:3] == 1).all()

@@ -109,7 +109,10 @@ def embed_store(
         json.dump(meta, open(os.path.join(out_dir, "meta.json"), "w"), indent=1)
     if world_size > 1:
         torch.distributed.barrier()
-    array = np.load(path, mmap_mode="r+")
+    # Plain writes, not the memory map: on Weka, memory-mapped writes from a restarted
+    # job were silently lost even after flush().
+    offset = np.load(path, mmap_mode="r").offset
+    row_bytes = ROWS * dim * np.dtype(np.float16).itemsize
 
     chunks = range(rank * CHUNK, len(store), world_size * CHUNK)
     for start in chunks:
@@ -135,10 +138,31 @@ def embed_store(
             )
             idx = np.array(where)
             block[idx[:, 0], idx[:, 1]] = emb.astype(np.float16)
-        array[start:end] = block
-        array.flush()
+        write_rows(path, offset + start * row_bytes, block)
         open(marker, "w").close()
         logger.info(f"rank {rank}: windows {start}-{end}, {len(texts)} captions")
+
+
+def write_rows(path: str, at: int, block: np.ndarray) -> None:
+    """Write ``block`` at byte ``at``, sync it, and check it reads back."""
+    data = block.tobytes()
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        written = 0
+        while written < len(data):
+            written += os.pwrite(fd, data[written:], at + written)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        tail = os.pread(
+            fd, min(len(data), 1 << 20), at + len(data) - min(len(data), 1 << 20)
+        )
+    finally:
+        os.close(fd)
+    if tail != data[len(data) - len(tail) :]:
+        raise OSError(f"rows written at byte {at} of {path} did not read back")
 
 
 def main() -> None:
