@@ -5,7 +5,7 @@ sample's 128x128 10 m grid, plus the finest contributing tile resolution.
 
 Sample grid: latlon_distribution.npy holds the centre of each sample's parent 256x256 UTM
 tile (10 m); sample n is quadrant n % 4 (as in build_gebco_patches.py). The parent tile is
-placed in the UTM zone of its centre; check_alignment.py tests this against S2 water.
+placed in the UTM zone of its centre.
 
   python build_labels.py [max_samples | all]
 
