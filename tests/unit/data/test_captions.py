@@ -121,8 +121,8 @@ def test_caption_cell_needs_float32(tmp_path: Path) -> None:
         )
 
 
-def test_collate_keeps_caption_cell_out_of_masking() -> None:
-    """caption_cell survives collation unmasked by the strategy, MISSING to the model."""
+def test_collate_keeps_text_targets_out_of_masking() -> None:
+    """caption_cell and text_label survive collation, MISSING to the model."""
     present = np.ones(16, dtype=bool)
     samples = [
         (
@@ -130,6 +130,7 @@ def test_collate_keeps_caption_cell_out_of_masking() -> None:
             OlmoEarthSample(
                 sentinel2_l2a=np.ones((8, 8, 2, 12), dtype=np.float32),
                 caption_cell=caption_cell_raster(i, present, 8, 8),
+                text_label=np.full((8, 8, 1, 4), float(i), dtype=np.float32),
                 timestamps=np.array([[1, 0, 2020], [1, 1, 2020]]),
             ),
         )
@@ -141,4 +142,8 @@ def test_collate_keeps_caption_cell_out_of_masking() -> None:
     assert (masked.caption_cell[1, ..., 0] == 9).all()
     assert masked.caption_cell_mask.shape == (2, 8, 8, 1, 1)
     assert (masked.caption_cell_mask == MaskValue.MISSING.value).all()
+    assert masked.text_label is not None and masked.text_label_mask is not None
+    assert (masked.text_label[1] == 9).all()
+    assert masked.text_label_mask.shape == (2, 8, 8, 1, 1)
+    assert (masked.text_label_mask == MaskValue.MISSING.value).all()
     assert masked.sentinel2_l2a_mask is not None

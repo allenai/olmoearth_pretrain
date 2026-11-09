@@ -234,12 +234,13 @@ class OlmoEarthDataLoader(DataLoaderBase):
 
         # Modalities kept out of the encoder token budget (decode-only targets are
         # never encoded, so they should not consume budget meant for the encoder;
-        # nor is caption_cell, a text target).
+        # nor are the text targets).
         exclude = set(
             getattr(self.masking_strategy, "only_decode_modalities", []) or []
         )
-        if training_modalities and Modality.CAPTION_CELL.name in training_modalities:
-            exclude.add(Modality.CAPTION_CELL.name)
+        for target in (Modality.CAPTION_CELL.name, Modality.TEXT_LABEL.name):
+            if training_modalities and target in training_modalities:
+                exclude.add(target)
         self.budget_exclude_modalities: frozenset[str] = frozenset(exclude)
         if training_modalities is not None:
             (
@@ -550,6 +551,10 @@ class OlmoEarthDataLoader(DataLoaderBase):
             output_dict[Modality.CAPTION_CELL.name] = caption_cell_raster(
                 0, np.ones(16, dtype=bool), standard_hw, standard_hw
             )
+        if Modality.TEXT_LABEL.name in self.dataset.training_modalities:
+            output_dict[Modality.TEXT_LABEL.name] = rng.integers(
+                0, 4, size=(standard_hw, standard_hw, 1, Modality.TEXT_LABEL.num_bands)
+            ).astype(np.float32)
 
         days = rng.integers(0, 25, (12, 1))
         months = rng.integers(0, 12, (12, 1))

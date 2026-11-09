@@ -270,12 +270,16 @@ def test_band_dropout_enabled_by_train_module(
 def test_train_batch_with_text_head(
     optim_config: AdamWConfig, tmp_path: Path, set_random_seeds: None
 ) -> None:
-    """caption_cell reaches the text loss, not the model, and the head's weights move."""
+    """Captions and labels reach the text losses, not the model; the head's weights move."""
     modalities = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
     text = np.random.default_rng(0).normal(size=(4, 17, 8))
     text /= np.linalg.norm(text, axis=-1, keepdims=True)
     np.save(tmp_path / "embeddings.npy", text.astype(np.float16))
     (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+    label_dir = tmp_path / "labels"
+    label_dir.mkdir()
+    np.save(label_dir / "embeddings.npy", np.eye(8, dtype=np.float32)[:5])
+    (label_dir / "meta.json").write_text(json.dumps({"dim": 8}))
     model = LatentMIMConfig(
         encoder_config=EncoderConfig(
             supported_modality_names=modalities,
@@ -301,7 +305,10 @@ def test_train_batch_with_text_head(
             pooler_dim=8,
         ),
         text_head_config=TextAlignmentHeadConfig(
-            embeddings_dir=str(tmp_path), text_dim=8
+            embeddings_dir=str(tmp_path),
+            text_dim=8,
+            label_vocab_dir=str(label_dir),
+            num_label_distractors=2,
         ),
     ).build()
     assert model.text_head is not None
@@ -315,6 +322,7 @@ def test_train_batch_with_text_head(
                 sentinel2_l2a=rng.random((8, 8, 2, 12), dtype=np.float32),
                 latlon=rng.random(2, dtype=np.float32),
                 caption_cell=caption_cell_raster(i, np.ones(16, dtype=bool), 8, 8),
+                text_label=np.full((8, 8, 1, 4), float(i), dtype=np.float32),
                 timestamps=np.array([[1, 0, 2020], [1, 1, 2020]]),
             ),
         )
@@ -343,4 +351,5 @@ def test_train_batch_with_text_head(
 
     assert "train/PatchDisc+text" in mock_trainer._metrics
     assert mock_trainer._metrics["text/cells"] == 4 * 16
+    assert mock_trainer._metrics["text/labels"] == 4
     assert not torch.equal(model.text_head.proj.weight, before)

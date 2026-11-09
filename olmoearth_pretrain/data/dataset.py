@@ -32,6 +32,7 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.text_labels import LabelVocabulary
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
@@ -406,6 +407,7 @@ class OlmoEarthDataset(Dataset):
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
         caption_dir: str | None = None,
+        label_vocab_dir: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -431,8 +433,11 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
-            caption_dir: CaptionStore for the caption_cell modality; required when it is
-                a training modality.
+            caption_dir: CaptionStore for the caption_cell modality. Without one,
+                caption_cell is missing for every window (e.g. a dataset with no
+                captions, concatenated with one that has them).
+            label_vocab_dir: Label vocabulary for the text_label modality; required when
+                it is a training modality.
 
         Returns:
             None
@@ -475,15 +480,25 @@ class OlmoEarthDataset(Dataset):
 
         self.captions: CaptionStore | None = None
         if Modality.CAPTION_CELL.name in training_modalities:
-            if caption_dir is None:
-                raise ValueError("caption_cell needs caption_dir")
             if dtype != np.float32:
                 raise ValueError("caption_cell holds window ids, which need float32")
-            self.captions = CaptionStore(caption_dir)
-            if self.captions.meta["h5py_dir"].rstrip("/") != str(h5py_dir).rstrip("/"):
-                logger.warning(
-                    f"Captions in {caption_dir} were made for {self.captions.meta['h5py_dir']}"
-                )
+            if caption_dir is None:
+                logger.info(f"No caption_dir: caption_cell is missing in {h5py_dir}")
+            else:
+                self.captions = CaptionStore(caption_dir)
+                made_for = self.captions.meta["h5py_dir"].rstrip("/")
+                if made_for != str(h5py_dir).rstrip("/"):
+                    logger.warning(
+                        f"Captions in {caption_dir} were made for {made_for}"
+                    )
+
+        self.labels: LabelVocabulary | None = None
+        if Modality.TEXT_LABEL.name in training_modalities:
+            if dtype != np.float32:
+                raise ValueError("text_label holds label ids, which need float32")
+            if label_vocab_dir is None:
+                raise ValueError("text_label needs label_vocab_dir")
+            self.labels = LabelVocabulary.load(label_vocab_dir)
 
     @property
     def fingerprint_version(self) -> str:
@@ -929,6 +944,18 @@ class OlmoEarthDataset(Dataset):
             index, present, height, width
         )
 
+    def _add_text_label(self, sample_dict: dict[str, Any]) -> None:
+        """Add text_label from the window's raw label layers, if they give any label."""
+        assert self.labels is not None
+        layers = {
+            name: sample_dict[name]
+            for name in ("worldcover", "cdl", "worldcereal", "openstreetmap_raster")
+            if name in sample_dict
+        }
+        raster = self.labels.layer_raster(layers)
+        if raster is not None:
+            sample_dict[Modality.TEXT_LABEL.name] = raster
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
@@ -944,6 +971,8 @@ class OlmoEarthDataset(Dataset):
         sample_dict["timestamps"] = timestamps
         if self.captions is not None:
             self._add_caption_cell(sample_dict, index)
+        if self.labels is not None and Modality.TEXT_LABEL.name not in sample_dict:
+            self._add_text_label(sample_dict)
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
@@ -1026,6 +1055,7 @@ class OlmoEarthDatasetConfig(Config):
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
     caption_dir: str | None = None
+    label_vocab_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

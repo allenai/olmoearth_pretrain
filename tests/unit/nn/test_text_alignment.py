@@ -9,9 +9,13 @@ import torch
 
 from olmoearth_pretrain.data.caption_embeddings import CaptionEmbeddings
 from olmoearth_pretrain.data.captions import caption_cell_raster
+from olmoearth_pretrain.data.constants import MISSING_VALUE
 from olmoearth_pretrain.nn.text_alignment import (
+    LabelEmbeddings,
     TextAlignmentHead,
+    label_alignment_loss,
     pool_caption_cells,
+    pool_labels,
     text_alignment_loss,
 )
 
@@ -101,4 +105,64 @@ def test_loss_without_two_captioned_cells_is_zero_with_gradients(
     loss.backward()
     assert loss == 0
     assert metrics["text/cells"] == 1
+    assert head.proj.weight.grad is not None
+
+
+@pytest.fixture
+def labels(tmp_path: Path) -> LabelEmbeddings:
+    """Embeddings of 6 labels: 0 and 1 share a text, the rest are distinct."""
+    table = np.eye(DIM, dtype=np.float32)[:6]
+    table[1] = table[0]
+    path = tmp_path / "labels"
+    path.mkdir()
+    np.save(path / "embeddings.npy", table)
+    (path / "meta.json").write_text(json.dumps({"dim": DIM}))
+    return LabelEmbeddings(str(path))
+
+
+def test_pool_labels_averages_tokens_per_sample_and_label() -> None:
+    """A token joins the group of every label at its centre pixel, per sample."""
+    label = torch.full((2, 2, 2, 1, 4), float(MISSING_VALUE))
+    label[0, :, :, 0, 0] = 3  # all of sample 0 is label 3 ...
+    label[0, 0, 0, 0, 1] = 5  # ... and its first token is also label 5
+    label[1, :, 1, 0, 0] = 3  # sample 1's right column is label 3
+    tokens = torch.arange(8, dtype=torch.float32).reshape(2, 2, 2, 1)
+    pooled, ids = pool_labels(tokens, label)
+    assert ids.tolist() == [3, 5, 3]
+    assert pooled[:, 0].tolist() == [1.5, 0.0, 6.0]
+
+
+def test_label_loss_ignores_near_identical_labels(
+    embeddings: CaptionEmbeddings, labels: LabelEmbeddings
+) -> None:
+    """A label sharing the target's text is not a negative, even as a distractor."""
+    head = TextAlignmentHead(embeddings=embeddings, embedding_dim=DIM, labels=labels)
+    with torch.no_grad():
+        head.proj.weight.copy_(torch.eye(DIM))
+        head.proj.bias.zero_()
+    candidates = labels.get(torch.arange(6))
+    targets = torch.tensor([0, 2])
+    loss, metrics = head(candidates[targets].clone(), candidates, targets)
+    assert metrics["text/label_top1"] == 1
+    unmasked = TextAlignmentHead(
+        embeddings=embeddings,
+        embedding_dim=DIM,
+        labels=labels,
+        same_text_threshold=2.0,
+    )
+    unmasked.load_state_dict(head.state_dict())
+    assert unmasked(candidates[targets].clone(), candidates, targets)[0] > loss
+
+
+def test_label_loss_without_labels_is_zero_with_gradients(
+    embeddings: CaptionEmbeddings, labels: LabelEmbeddings
+) -> None:
+    """No labelled token still runs the head, so every rank reduces the same gradients."""
+    head = TextAlignmentHead(embeddings=embeddings, embedding_dim=3, labels=labels)
+    label = torch.full((1, 4, 4, 1, 4), float(MISSING_VALUE))
+    tokens = torch.randn(1, 4, 3, requires_grad=True)
+    loss, metrics = label_alignment_loss(head, tokens, label, pixels=2)
+    loss.backward()
+    assert loss == 0
+    assert metrics["text/labels"] == 0
     assert head.proj.weight.grad is not None

@@ -181,3 +181,52 @@ def test_text_arm_trains_like_the_release_run(
 
     for section in ("dataset", "data_loader", "train_module", "trainer", "init_seed"):
         assert built[section] == release[section], section
+
+
+@pytest.fixture(scope="module")
+def text_mix() -> ModuleType:
+    """The captions + labels script."""
+    return _load("text_mix")
+
+
+def test_mix_arm_adds_labels_and_open_set_windows(
+    text: ModuleType, text_mix: ModuleType, common: CommonComponents
+) -> None:
+    """text.py plus the label term, the open-set windows, and v1.3's step count."""
+    head = text_mix.build_model_config(common).as_config_dict()["text_head_config"]
+    assert head.pop("label_vocab_dir") == text_mix.LABEL_VOCAB_DIR
+    text_head = text.build_model_config(common).as_config_dict()["text_head_config"]
+    assert head == text_head
+    model = text_mix.build_model_config(common).as_config_dict()
+    model.pop("text_head_config")
+    base = text.build_model_config(common).as_config_dict()
+    base.pop("text_head_config")
+    assert model == base
+
+    pretrain, open_set = text_mix.build_dataset_config(common).dataset_configs
+    text_data = text.build_dataset_config(common)
+    modalities = [*text_data.training_modalities, Modality.TEXT_LABEL.name]
+    assert pretrain.training_modalities == modalities
+    assert pretrain.label_vocab_dir == text_mix.LABEL_VOCAB_DIR
+    assert pretrain.caption_dir == text_data.caption_dir
+    assert pretrain.h5py_dir == text_data.h5py_dir
+    assert open_set.training_modalities == modalities
+    assert open_set.caption_dir is None
+    assert open_set.h5py_dir.endswith("/103112")
+
+    # 300 epochs of the pretraining set alone, as the release run trained.
+    assert text_mix.MAX_STEPS == 300 * (1_138_828 // 512)
+    trainer = text_mix.build_trainer_config(common).as_config_dict()
+    assert trainer.pop("max_duration") == {
+        "value": text_mix.MAX_STEPS,
+        "unit": "steps",
+        "_CLASS_": "olmo_core.train.common.Duration",
+    }
+    base_trainer = text.build_trainer_config(common).as_config_dict()
+    base_trainer.pop("max_duration")
+    assert trainer == base_trainer
+    for builder in ("build_train_module_config", "build_dataloader_config"):
+        assert (
+            getattr(text_mix, builder)(common).as_config_dict()
+            == getattr(text, builder)(common).as_config_dict()
+        )

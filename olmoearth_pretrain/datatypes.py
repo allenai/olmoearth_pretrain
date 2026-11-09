@@ -109,6 +109,8 @@ class OlmoEarthSample(NamedTuple):
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # caption_cell is built at load time from a CaptionStore: (window id, cell) per pixel.
     caption_cell: ArrayTensor | None = None  # [B, H, W, 1, 2]
+    # text_label: per-pixel label ids into a label vocabulary (data/text_labels.py).
+    text_label: ArrayTensor | None = None  # [B, H, W, 1, 4]
     latlon: ArrayTensor | None = None  # [B, 2]
     timestamps: ArrayTensor | None = None  # [B, T, D=3], where D=[day, month, year]
 
@@ -398,6 +400,8 @@ class MaskedOlmoEarthSample(NamedTuple):
     eurocrops_mask: Tensor | None = None
     caption_cell: Tensor | None = None
     caption_cell_mask: Tensor | None = None
+    text_label: Tensor | None = None
+    text_label_mask: Tensor | None = None
 
     def as_dict(self, include_nones: bool = False) -> dict[str, Any]:
         """Convert to a dictionary.
@@ -554,6 +558,8 @@ class TokensAndMasks(NamedTuple):
     eurocrops_mask: Tensor | None = None
     caption_cell: Tensor | None = None
     caption_cell_mask: Tensor | None = None
+    text_label: Tensor | None = None
+    text_label_mask: Tensor | None = None
     latlon: Tensor | None = None
     latlon_mask: Tensor | None = None
 

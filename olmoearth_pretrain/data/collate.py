@@ -12,25 +12,26 @@ from olmoearth_pretrain.datatypes import (
 )
 from olmoearth_pretrain.train.masking import MaskingStrategy
 
+TEXT_TARGETS = ("caption_cell", "text_label")
+
 
 def mask_without_captions(
     masking_strategy: MaskingStrategy, sample: OlmoEarthSample, patch_size: int
 ) -> MaskedOlmoEarthSample:
-    """Mask the sample, carrying caption_cell past the masking strategy.
+    """Mask the sample, carrying the text targets past the masking strategy.
 
-    caption_cell is a text target, never a model input: it gets no tokens, and its
-    mask is MISSING throughout.
+    caption_cell and text_label are text targets, never model inputs: they get no
+    tokens, and their masks are MISSING throughout.
     """
-    caption_cell = sample.caption_cell
-    masked = masking_strategy.apply_mask(sample._replace(caption_cell=None), patch_size)
-    if caption_cell is None:
-        return masked
-    return masked._replace(
-        caption_cell=caption_cell,
-        caption_cell_mask=torch.full(
-            (*caption_cell.shape[:-1], 1), MaskValue.MISSING.value
-        ),
+    targets = {name: getattr(sample, name) for name in TEXT_TARGETS}
+    masked = masking_strategy.apply_mask(
+        sample._replace(**dict.fromkeys(TEXT_TARGETS)), patch_size
     )
+    for name, target in targets.items():
+        if target is not None:
+            mask = torch.full((*target.shape[:-1], 1), MaskValue.MISSING.value)
+            masked = masked._replace(**{name: target, f"{name}_mask": mask})
+    return masked
 
 
 def collate_olmoearth_pretrain(

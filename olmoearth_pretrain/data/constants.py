@@ -580,6 +580,17 @@ class Modality:
         skip_normalization=True,
     )
 
+    # Per-pixel label ids into a label vocabulary (see data/text_labels.py): land cover,
+    # crop, cereal and OSM channels. A text target, not an input.
+    TEXT_LABEL = ModalitySpec(
+        name="text_label",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["land_cover", "crop", "cereal", "osm"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+        skip_normalization=True,
+    )
+
     @classmethod
     def get(self, name: str) -> ModalitySpec:
         """Get the ModalitySpec with the specified name."""

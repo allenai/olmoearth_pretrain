@@ -363,9 +363,13 @@ def test_exclude_only_decode_frees_budget(tmp_path: Path, setup_h5py_dir: Path) 
     assert dl._space_only_bandsets < so_with_maps
 
 
-def test_caption_cell_stays_out_of_the_budget(tmp_path: Path) -> None:
-    """caption_cell, a text target, never takes token budget from the imagery."""
-    modalities = [Modality.SENTINEL2_L2A.name, Modality.CAPTION_CELL.name]
+def test_text_targets_stay_out_of_the_budget(tmp_path: Path) -> None:
+    """caption_cell and text_label never take token budget from the imagery."""
+    modalities = [
+        Modality.SENTINEL2_L2A.name,
+        Modality.CAPTION_CELL.name,
+        Modality.TEXT_LABEL.name,
+    ]
 
     class CaptionedDataset(OlmoEarthDataset):
         def __init__(self) -> None:
@@ -396,7 +400,9 @@ def test_caption_cell_stays_out_of_the_budget(tmp_path: Path) -> None:
         masking_strategy=masking_strategy,
         num_masked_views=1,
     )
-    assert dl.budget_exclude_modalities == frozenset([Modality.CAPTION_CELL.name])
+    assert dl.budget_exclude_modalities == frozenset(
+        [Modality.CAPTION_CELL.name, Modality.TEXT_LABEL.name]
+    )
     _st, imagery_only, _static, _time = compute_bandset_rates(
         [Modality.SENTINEL2_L2A.name], dl.tokenization_config
     )
