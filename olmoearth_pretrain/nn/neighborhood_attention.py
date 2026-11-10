@@ -19,17 +19,20 @@ which attends and is attended globally.
 
 The mask is a dense ``[B, 1, Nq, Nk]`` boolean for SDPA (fused memory-efficient
 kernel) unless it would exceed ``DENSE_MASK_MAX_ELEMENTS``; then, on CUDA, it is a
-FlexAttention ``BlockMask``. Measured on an H100 (``agent/favyen/2026-11-05-favyen-
+FlexAttention ``BlockMask`` when gradients are on, and a ``ChunkedDenseMask`` (dense masks
+over batch chunks that each fit the limit) when they are off. Measured on an H100 (``agent/favyen/2026-11-05-favyen-
 neighborhood-attention-pretrain/bin/attn_bench.py``): dense SDPA costs ~1.2x the stock
 key-padding SDPA in fwd+bwd, while FlexAttention costs 3-5x at the release shapes
 (N ~ 0.9k-3k) and only wins at very long sequences (N ~ 9k-21k, where the dense mask
-would also take several GB).
+would also take several GB). At eval, though, FlexAttention ran the ws16 ps1 embedding
+pass (B=64, N ~ 9.2k) at ~15 s/batch vs ~1.25 s for the full-attention control, so
+no-grad passes use the chunked dense path instead.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -75,10 +78,45 @@ def box_covers_grid(grid: tuple[int, int], neighborhood_cells: int) -> bool:
 
 
 @dataclass
+class ChunkedDenseMask:
+    """Dense box masks built per batch chunk, each chunk within ``DENSE_MASK_MAX_ELEMENTS``.
+
+    Passed as ``attn_mask``; ``Attention.sdpa`` runs SDPA once per chunk. No-grad only
+    (eval / target encoder): the chunk masks are cached for reuse across layers.
+    """
+
+    q_cells: Tensor
+    k_cells: Tensor
+    key_valid: Tensor | None
+    grid: tuple[int, int]
+    neighborhood_cells: int
+    chunk: int
+    _cache: dict[int, Tensor] = field(default_factory=dict, init=False, repr=False)
+
+    def chunks(self) -> list[tuple[int, int]]:
+        """``[start, end)`` batch ranges."""
+        b = self.q_cells.shape[0]
+        return [(i, min(i + self.chunk, b)) for i in range(0, b, self.chunk)]
+
+    def dense(self, start: int, end: int) -> Tensor:
+        """The ``[end - start, 1, Nq, Nk]`` dense mask of one chunk."""
+        if start not in self._cache:
+            valid = self.key_valid[start:end] if self.key_valid is not None else None
+            self._cache[start] = dense_neighborhood_mask(
+                self.q_cells[start:end],
+                self.k_cells[start:end],
+                valid,
+                self.grid,
+                self.neighborhood_cells,
+            )
+        return self._cache[start]
+
+
+@dataclass
 class NeighborhoodMask:
     """What an attention block needs: exactly one of ``attn_mask`` / ``block_mask``."""
 
-    attn_mask: Tensor | None = None
+    attn_mask: Tensor | ChunkedDenseMask | None = None
     block_mask: Any | None = None
 
     def kwargs(self) -> dict[str, Any]:
@@ -197,7 +235,19 @@ def neighborhood_mask(
         raise ValueError(
             f"neighborhood_cells must be a positive odd number, got {neighborhood_cells}"
         )
-    dense_elements = q_cells.shape[0] * q_cells.shape[1] * k_cells.shape[1]
+    per_instance = q_cells.shape[1] * k_cells.shape[1]
+    dense_elements = q_cells.shape[0] * per_instance
+    if dense_elements > DENSE_MASK_MAX_ELEMENTS and not torch.is_grad_enabled():
+        return NeighborhoodMask(
+            attn_mask=ChunkedDenseMask(
+                q_cells,
+                k_cells,
+                key_valid,
+                grid,
+                neighborhood_cells,
+                chunk=max(1, DENSE_MASK_MAX_ELEMENTS // per_instance),
+            )
+        )
     if q_cells.is_cuda and dense_elements > DENSE_MASK_MAX_ELEMENTS:
         return NeighborhoodMask(
             block_mask=flex_neighborhood_mask(

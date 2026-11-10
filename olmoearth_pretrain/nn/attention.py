@@ -21,6 +21,7 @@ from olmoearth_pretrain.nn.encodings import (
     init_3d_mixed_rope_freqs,
     resolve_position_encoding,
 )
+from olmoearth_pretrain.nn.neighborhood_attention import ChunkedDenseMask
 
 try:
     import flash_attn
@@ -235,7 +236,7 @@ class Attention(nn.Module):
         max_seqlen: int | None = None,
         max_seqlen_q: int | None = None,
         max_seqlen_k: int | None = None,
-        attn_mask: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | ChunkedDenseMask | None = None,
         block_mask: Any | None = None,
     ) -> torch.Tensor:
         """Compute scaled dot product attention.
@@ -245,7 +246,8 @@ class Attention(nn.Module):
             k: Key tensor of shape (B, H, N, D)
             v: Value tensor of shape (B, H, N, D)
             n: Number of tokens
-            attn_mask: Attention mask. Defaults to None.
+            attn_mask: Attention mask. Defaults to None. A ``ChunkedDenseMask``
+                (no-grad neighborhood attention) runs SDPA once per batch chunk.
             cu_seqlens: Optional cumulative sequence lengths for the input tensor needed for varlen flash attention
             cu_seqlens_q: Optional cumulative sequence lengths for the query tensor, needed for cross varlen flash attention
             cu_seqlens_k: Optional cumulative sequence lengths for the key tensor, needed for cross varlen flash attention
@@ -259,6 +261,16 @@ class Attention(nn.Module):
         Returns:
             Output tensor of shape (B, H, N, D)
         """
+        if isinstance(attn_mask, ChunkedDenseMask):
+            return torch.cat(
+                [
+                    self.sdpa(
+                        q[s:e], k[s:e], v[s:e], n, attn_mask=attn_mask.dense(s, e)
+                    )
+                    for s, e in attn_mask.chunks()
+                ],
+                dim=0,
+            )
         if block_mask is not None:
             if attn_mask is not None or self.use_flash_attn:
                 raise ValueError(

@@ -102,7 +102,7 @@ def test_dense_mask_is_the_shifted_box() -> None:
     valid[0, 5] = False
     allowed = dense_neighborhood_mask(cells, cells, valid, (h, w), W)[0, 0]
     allowed = allowed.view(h, w, h, w)
-    start = lambda i, n: min(max(i - 2, 0), n - W)  # noqa: E731
+    start = lambda i, n: min(max(i - 2, 0), n - W)
     for r in range(h):
         for c in range(w):
             box = torch.zeros(h, w, dtype=torch.bool)
@@ -267,3 +267,27 @@ def test_latent_mim_backward_on_a_large_grid() -> None:
     loss.backward()
     grads = [p.grad for p in model.encoder.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
+
+
+def test_no_grad_large_masks_are_chunked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Over the dense-mask limit with no grad, NA runs per-chunk dense masks, same output."""
+    import olmoearth_pretrain.nn.neighborhood_attention as na_module
+
+    encoder = _encoder(W)
+    sample = _sample(24, batch=3, decode_frac=0.3, seed=7)
+    kwargs = {"patch_size": 2, "input_res": 10, "location_query_patch_size": 1}
+    with torch.no_grad():
+        dense = encoder(sample, **kwargs)
+        built: list = []
+        real = na_module.ChunkedDenseMask.dense
+
+        def spy(self, start: int, end: int) -> torch.Tensor:
+            built.append(end - start)
+            return real(self, start, end)
+
+        monkeypatch.setattr(na_module.ChunkedDenseMask, "dense", spy)
+        # 12x12 grid x 2 modalities x T: per-instance Nq * Nk is well above this.
+        monkeypatch.setattr(na_module, "DENSE_MASK_MAX_ELEMENTS", 1)
+        chunked = encoder(sample, **kwargs)
+    assert built and max(built) == 1
+    _assert_same(dense, chunked)
