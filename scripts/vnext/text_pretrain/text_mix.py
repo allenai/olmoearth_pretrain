@@ -16,7 +16,7 @@ Everything in ``text.py`` (v1.3 plus the cell-caption InfoNCE), and:
 
 Open-set windows have no captions or label layers: their caption_cell and map
 modalities are missing, so only the label term and the image losses see them.
-Training runs the release run's 667,200 steps (300 epochs of the pretraining set alone),
+Training runs the published v1.3 run's 667,200 steps (300 epochs of the pretraining set alone),
 so the schedule matches v1.3 although the data is larger.
 
     python scripts/vnext/text_pretrain/text_mix.py launch <run_name> ai2/jupiter \
@@ -55,7 +55,7 @@ OPEN_SET_H5PY_DIR = f"{_MIX}/h5/103112"
 # Same reasoning as the caption weight: the cross-entropy starts near log(candidates).
 LABEL_WEIGHT = 0.1
 NUM_LABEL_DISTRACTORS = 1024
-# The release run's length: 300 epochs of the 1,138,828-window pretraining set at 512.
+# The published v1.3 run's length: 300 epochs of the 1,138,828-window pretraining set at 512.
 MAX_STEPS = 667_200
 
 
@@ -87,7 +87,7 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthConcatDatasetConf
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
-    """text.py's trainer, run for the release run's number of steps."""
+    """text.py's trainer, run for the published v1.3 run's number of steps."""
     config = _text_build_trainer_config(common)
     config.max_duration = Duration.steps(MAX_STEPS)
     return config

@@ -1,4 +1,4 @@
-"""The text-pretraining experiment scripts: v1.3 as released, plus only the text head."""
+"""The text-pretraining experiment scripts: v1.3 as published, plus only the text head."""
 
 import importlib.util
 import json
@@ -14,11 +14,8 @@ from olmoearth_pretrain.internal.experiment import CommonComponents, SubCmd
 
 ROOT = Path(__file__).parents[3]
 SCRIPTS = ROOT / "scripts" / "vnext" / "text_pretrain"
-RELEASE = (
-    ROOT
-    / "tests/fixtures/checkpoint_configs"
-    / "regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_stunorm_mlpgram1.json"
-)
+# The published v1.3: its HF model config, and its run's training config.
+PUBLISHED = ROOT / "tests/fixtures/release_training_configs/v1_3_published.json"
 
 
 def _load(name: str) -> ModuleType:
@@ -51,12 +48,12 @@ def common(v1_3: ModuleType) -> CommonComponents:
     )
 
 
-def test_v1_3_model_is_the_release_model(
+def test_v1_3_model_is_the_published_model(
     v1_3: ModuleType, common: CommonComponents
 ) -> None:
-    """The port builds exactly the released v1.3 model config."""
-    release = json.loads(RELEASE.read_text())["model"]
-    assert v1_3.build_model_config(common).as_config_dict() == release
+    """The port builds exactly the published v1.3 model config."""
+    published = json.loads(PUBLISHED.read_text())["model"]
+    assert v1_3.build_model_config(common).as_config_dict() == published
 
 
 def test_text_arm_adds_only_the_text_head_and_captions(
@@ -102,37 +99,17 @@ def test_text_model_builds_with_its_head(
     assert model.text_head.proj.out_features == 768
 
 
-RELEASE_TRAINING = ROOT / "tests/fixtures/release_training_configs/v1_3_mlpgram1.json"
-
-# Release fields that no longer exist, at values equal to what the current code does.
-RELEASE_FIELDS_NOW_BUILT_IN: dict[tuple[str, ...], object] = {
-    # The packaged default norm config.
-    ("dataset", "computed_norm_config"): "computed.json",
-    # The dataloader always keeps the masking's decode-only maps out of the budget.
-    ("data_loader", "exclude_only_decode_from_budget"): True,
-    # Patch sizes are drawn uniformly from min..max.
-    ("data_loader", "patch_size_probs"): [0.125] * 8,
-    # LocationTokenDistillationHead sums cosine and Gram unweighted, at 2048 tokens; the
-    # within-cell Gram and uniformity terms were off and are gone.
-    ("train_module", "projection_distill_cosine_weight"): 1.0,
-    ("train_module", "projection_distill_gram_weight"): 1.0,
-    ("train_module", "projection_distill_gram_max_tokens"): 2048,
-    ("train_module", "projection_distill_gram_within_weight"): 0.0,
-    ("train_module", "projection_distill_gram_within_max_cells"): 256,
-    ("train_module", "projection_uniformity_weight"): 0.0,
-    ("train_module", "register_uniformity_weight"): 0.0,
-    ("train_module", "register_uniformity_rotations"): 2,
+# Published-run fields that no longer exist, at values equal to what the current code does.
+PUBLISHED_FIELDS_NOW_BUILT_IN: dict[tuple[str, ...], object] = {
+    # Main keeps only the shared draw: one pixel per token cell for all its tokens.
+    ("train_module", "pixel_target_draw"): "shared",
 }
-# Current fields at their off/default values that the release config predates.
+# Current fields at their off/default values that the published config predates.
 CURRENT_FIELDS_AT_DEFAULT: dict[tuple[str, ...], object] = {
-    ("train_module", "pixel_targets"): False,
     ("train_module", "subpatch_offset_loss_weight"): 0.0,
     ("trainer", "callbacks", "checkpointer", "max_checkpoints"): None,
-    # Registry tags newer olmo-core writes out; the release config left them implicit.
-    ("train_module", "optim_config", "type"): "adamw",
-    ("train_module", "scheduler", "type"): "cos_with_warmup",
-    # LossConfig.build pops "type", and the release config was saved after building;
-    # the release branch's v1.2 base sets this same loss.
+    # LossConfig.build pops "type", and the run's config was saved after building; its
+    # v1.2 base sets this same loss.
     ("train_module", "loss_config", "loss_config", "type"): (
         "modality_patch_discrimination_masked_negatives_vec"
     ),
@@ -145,10 +122,10 @@ def _drop(config: dict, path: tuple[str, ...]) -> object:
     return config.pop(path[-1], None)
 
 
-def test_text_arm_trains_like_the_release_run(
+def test_text_arm_trains_like_the_published_run(
     text: ModuleType, common: CommonComponents
 ) -> None:
-    """Data, sampler, optimization, duration and seed match the v1.3 release run."""
+    """Data, sampler, optimization, duration and seed match the published v1.3 run."""
     from olmoearth_pretrain.internal.experiment import build_config
 
     built = build_config(
@@ -161,10 +138,15 @@ def test_text_arm_trains_like_the_release_run(
         [],
         text.build_visualize_config,
     ).as_config_dict()
-    release = json.loads(RELEASE_TRAINING.read_text())
+    release = json.loads(PUBLISHED.read_text())
 
-    for path, value in RELEASE_FIELDS_NOW_BUILT_IN.items():
+    for path, value in PUBLISHED_FIELDS_NOW_BUILT_IN.items():
         assert _drop(release, path) == value, path
+    # The run's per-pixel Perceiver latents at a random stride under a 512 budget are
+    # now the dataloader's location-query budget.
+    queries = release["location_queries"]
+    assert queries["pixel_latents"] and queries["random_latent_stride"]
+    assert built["data_loader"].pop("max_location_queries") == queries["max_latents"]
     for path, value in CURRENT_FIELDS_AT_DEFAULT.items():
         assert _drop(built, path) == value, path
     assert built["dataset"].pop("caption_dir") == text.CAPTION_DIR

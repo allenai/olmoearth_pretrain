@@ -1,22 +1,25 @@
-r"""The v1.3 release recipe on current code: the baseline arm for the text-pretraining runs.
+r"""The published v1.3 recipe on current code: the baseline arm for text pretraining.
 
-v1.3 (``regbtl_v1_2_gdyn_d768_proj128lin_sup768_w1_newsamp_psuniform_stunorm_mlpgram1``)
-was trained on ``gabi/perceiver`` with the pre-rename register-bottleneck config, and its
-script (``scripts/official/v1_3/base.py`` on ``favyen/20260917-pixreg-v1_3``) still uses
-those names. This is the same recipe under the current names, following
-``scripts/official/v1_3/convert_legacy_checkpoint.py``: the register bottleneck is the
-AttentionPooler, the registers are location tokens, and the student's distillation heads
-are the LocationTokenDistillationHead. ``tests/unit/scripts/test_text_pretrain_config.py``
-checks the model against the release config run through that converter.
+The published OlmoEarth v1.3 (huggingface.co/allenai/OlmoEarth-v1_3-Base, and the
+embeddings archive on source.coop built from it) was converted from
+``gabrielt/v1_3_rc_ld1_pixtgt_pix512/step667200``: trained as
+``scripts/official/v1_3/ablations/rc_ld1_pixtgt_pix512.py`` on favyen's v1.3 branches,
+under the pre-rename Perceiver names. This is that recipe under the current names:
 
-What it is: the v1.2 base (hidden patch-embed projection, mixed 3D RoPE, decode-only
-maps) with a 768-d AttentionPooler read in four interleaved [read -> self-attn] steps,
-per-modality supervision heads on the location tokens, a detached [128, 64] student
-distilled by cosine + Gram, the single-pass LatentMIM train module with a
-projection-only target, replicated DP + bf16 autocast, and the decorrelated shape
-sampler. Training matches the release run's config.json field for field (see
-``build_trainer_config`` for the two trainer differences, neither of which touches
-training).
+* the v1.2 base (hidden patch-embed projection, mixed 3D RoPE at base 10000, decode-only
+  maps) with a 768-d AttentionPooler of ONE interleaved [read -> self-attn] layer,
+  per-modality supervision heads on its location tokens, and a detached [128, 64]
+  student distilled by cosine + Gram;
+* per-pixel location queries at a random stride under a 512-query budget (the run's
+  Perceiver ``pixel_latents`` / ``random_latent_stride`` / ``max_latents``, now the
+  dataloader's ``max_location_queries``);
+* pixel MIM targets: one random pixel per token cell, shared by the cell's tokens;
+* the single-pass LatentMIM train module with a projection-only target, replicated DP +
+  bf16 autocast, and the decorrelated shape sampler.
+
+``tests/unit/scripts/test_text_pretrain_config.py`` pins the model to the published
+config and the training to the run's config.json, field by field; the trainer's two
+differences (see ``build_trainer_config``) don't touch training.
 
     python scripts/vnext/text_pretrain/v1_3.py launch <run_name> ai2/jupiter \
         --launch.num_gpus=8 --launch.priority=urgent
@@ -73,11 +76,13 @@ logger = logging.getLogger(__name__)
 
 ENCODER_SIZE_NAME = "base_shallow_decoder"
 POOLER_DIM = 768
-POOLER_DEPTH = 4
+POOLER_DEPTH = 1
 STUDENT_DIMS = [128, 64]
 BACK_PROJECTION_HIDDEN = 256
-# The release run's v1.2 base (on gabi/perceiver) had 10000; main's v1.2 has 10.
+# The published run's v1.2 base had 10000; main's v1.2 has 10.
 ROPE_MIXED_BASE = 10000.0
+# Per-sample location-query budget for the random per-pixel query stride.
+MAX_LOCATION_QUERIES = 512
 
 SUPERVISION_BASE_WEIGHT = 1.0
 # Classification/BCE losses run ~10x larger than the L1 regressions.
@@ -88,7 +93,7 @@ TASK_TYPE_WEIGHTS = {
 }
 WORLDCOVER_CLASS_VALUES = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0]
 # USDA NASS CDL codes, normalized as raw/200 by the CDL norm config. 81/88 are pipeline
-# sentinels kept for head-dim compatibility with the release checkpoint.
+# sentinels kept for head-dim compatibility with the published checkpoint.
 _CDL_CODES = [
     *range(1, 7),
     *range(10, 15),
@@ -216,7 +221,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
 
 
 def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConfig:
-    """v1.2 dataloader, one masked view, the decorrelated shape sampler."""
+    """v1.2 dataloader, one masked view, the decorrelated shape sampler, pixel queries."""
     config = _v1_2_build_dataloader_config(common)
     config.num_masked_views = 1
     config.token_budget = TOKEN_BUDGET
@@ -224,11 +229,12 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     config.temporal_bias = TEMPORAL_BIAS
     config.time_priority_prob = TIME_PRIORITY_PROB
     config.sampled_hw_p_list = list(SAMPLED_HW_P_LIST)
+    config.max_location_queries = MAX_LOCATION_QUERIES
     return config
 
 
 def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleConfig:
-    """v1.2's settings in the single-pass train module, replicated DP and bf16."""
+    """v1.2's settings in the single-pass train module, pixel targets, DDP and bf16."""
     base = _v1_2_build_train_module_config(common)
     return LatentMIMTrainModuleConfig(
         optim_config=base.optim_config,
@@ -248,6 +254,7 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
         # torch.compile stays off: it degraded training quality on both DP stacks.
         dp_config=DataParallelConfig(name=DataParallelType.ddp),
         autocast_precision=DType.bfloat16,
+        pixel_targets=True,
     )
 
 
@@ -256,10 +263,10 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
 
     Both text-pretraining arms log to ``WANDB_PROJECT``.
 
-    The release run kept all its 5000-step checkpoints (newer olmo-core keeps 3 by
+    The published run kept all its 5000-step checkpoints (newer olmo-core keeps 3 by
     default) and ran its evals as separate Beaker jobs, never in the training process.
     Its eval sets (AEF year-aligned kNN twins, year-aligned PASTIS) are not on main, so
-    checkpoints are scored afterwards with the release protocol instead.
+    checkpoints are scored afterwards with the same protocol instead.
     """
     config = _v1_2_build_trainer_config(common)
     config.callbacks["checkpointer"].max_checkpoints = None
