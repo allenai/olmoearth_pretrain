@@ -214,6 +214,13 @@ def evaluate_checkpoints(
                 f"test={test_result.primary if test_result else 'N/A'} "
                 f"({eval_time:.1f}s)"
             )
+            # All metrics (e.g. MAE besides the primary RMSE) for log-only parsing.
+            for split_name, split_result in (("val", val_result), ("test", test_result)):
+                if split_result is not None:
+                    logger.info(
+                        f"  {evaluator.evaluation_name} {split_name}_metrics="
+                        f"{dict(sorted(split_result.metrics.items()))}"
+                    )
 
             if wandb_callback.enabled and get_rank() == 0:
                 wandb_callback.wandb.log(metrics)

@@ -3743,6 +3743,82 @@
       "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/building",
       "window_size": 64
     },
+    "nisar_osm_building_s1": {
+      "classes": [
+        "background",
+        "building"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_building_s1",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_osm_building_s1",
+      "norm_stats": {},
+      "num_classes": 2,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_building",
+      "split_stats": {
+        "test": {
+          "count": 355
+        },
+        "train": {
+          "count": 1305
+        },
+        "val": {
+          "count": 292
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_building",
+      "window_size": 64
+    },
+    "nisar_osm_building_s1nisar": {
+      "classes": [
+        "background",
+        "building"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_building_s1nisar",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "nisar_asc",
+        "nisar_desc"
+      ],
+      "name": "nisar_osm_building_s1nisar",
+      "norm_stats": {},
+      "num_classes": 2,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_building",
+      "split_stats": {
+        "test": {
+          "count": 355
+        },
+        "train": {
+          "count": 1305
+        },
+        "val": {
+          "count": 292
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_building",
+      "window_size": 64
+    },
     "nisar_osm_canopy_height": {
       "classes": [
         "0"
@@ -3814,6 +3890,228 @@
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/canopy_height",
       "window_size": 64
+    },
+    "nisar_osm_canopy_height_s1": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "52230e27271cc40e90df6add75d581b27a60e045c41b79c84c542b6c3d6ab6e2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_canopy_height_s1",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_osm_canopy_height_s1",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_canopy_height",
+      "split_stats": {
+        "test": {
+          "count": 335
+        },
+        "train": {
+          "count": 1273
+        },
+        "val": {
+          "count": 342
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_canopy_height",
+      "window_size": 64
+    },
+    "nisar_osm_canopy_height_s1nisar": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "52230e27271cc40e90df6add75d581b27a60e045c41b79c84c542b6c3d6ab6e2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_canopy_height_s1nisar",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "nisar_asc",
+        "nisar_desc"
+      ],
+      "name": "nisar_osm_canopy_height_s1nisar",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_canopy_height",
+      "split_stats": {
+        "test": {
+          "count": 335
+        },
+        "train": {
+          "count": 1273
+        },
+        "val": {
+          "count": 342
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_canopy_height",
+      "window_size": 64
+    },
+    "nisar_osm_elevation_s1": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_elevation_s1",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_osm_elevation_s1",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_elevation",
+      "split_stats": {
+        "test": {
+          "count": 1007
+        },
+        "train": {
+          "count": 3762
+        },
+        "val": {
+          "count": 895
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_elevation",
+      "window_size": 64
+    },
+    "nisar_osm_elevation_s1nisar": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_elevation_s1nisar",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "nisar_asc",
+        "nisar_desc"
+      ],
+      "name": "nisar_osm_elevation_s1nisar",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_elevation",
+      "split_stats": {
+        "test": {
+          "count": 1007
+        },
+        "train": {
+          "count": 3762
+        },
+        "val": {
+          "count": 895
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_elevation",
+      "window_size": 64
+    },
+    "nisar_osm_lfmc_s1": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "70ed86d4fed32e79316aba532db4046dabe130d0cbdbd4ace8ada979f78e16f7",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_lfmc_s1",
+      "end_time": "2026-11-06",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_osm_lfmc_s1",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/lfmc_nisar_2026",
+      "split_stats": {
+        "test": {
+          "count": 874
+        },
+        "train": {
+          "count": 2949
+        },
+        "val": {
+          "count": 762
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-02-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_lfmc",
+      "window_size": 32
+    },
+    "nisar_osm_lfmc_s1nisar": {
+      "classes": [
+        "0"
+      ],
+      "config_json_sha256": "70ed86d4fed32e79316aba532db4046dabe130d0cbdbd4ace8ada979f78e16f7",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_lfmc_s1nisar",
+      "end_time": "2026-11-06",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "nisar_asc",
+        "nisar_desc"
+      ],
+      "name": "nisar_osm_lfmc_s1nisar",
+      "norm_stats": {},
+      "num_classes": 1,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/lfmc_nisar_2026",
+      "split_stats": {
+        "test": {
+          "count": 874
+        },
+        "train": {
+          "count": 2949
+        },
+        "val": {
+          "count": 762
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-02-17",
+      "task_type": "regression",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_lfmc",
+      "window_size": 32
     },
     "nisar_osm_storage_tank": {
       "classes": [
@@ -3961,6 +4259,82 @@
       "timeseries": true,
       "use_pretrain_norm": true,
       "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/wind_turbine",
+      "window_size": 64
+    },
+    "nisar_osm_wind_turbine_s1": {
+      "classes": [
+        "background",
+        "wind_turbine"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_wind_turbine_s1",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1"
+      ],
+      "name": "nisar_osm_wind_turbine_s1",
+      "norm_stats": {},
+      "num_classes": 2,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_wind_turbine",
+      "split_stats": {
+        "test": {
+          "count": 340
+        },
+        "train": {
+          "count": 1289
+        },
+        "val": {
+          "count": 288
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_wind_turbine",
+      "window_size": 64
+    },
+    "nisar_osm_wind_turbine_s1nisar": {
+      "classes": [
+        "background",
+        "wind_turbine"
+      ],
+      "config_json_sha256": "7f2224f2fcab32ae229792e9d6a4a02948b766a2f6752ca6407ca37a808961d2",
+      "config_repo_dir": "data/rslearn_dataset_configs/nisar_osm_wind_turbine_s1nisar",
+      "end_time": "2026-10-15",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "sentinel1",
+        "nisar_asc",
+        "nisar_desc"
+      ],
+      "name": "nisar_osm_wind_turbine_s1nisar",
+      "norm_stats": {},
+      "num_classes": 2,
+      "num_timesteps": 4,
+      "source_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_wind_turbine",
+      "split_stats": {
+        "test": {
+          "count": 340
+        },
+        "train": {
+          "count": 1289
+        },
+        "val": {
+          "count": 288
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2026-06-17",
+      "task_type": "segmentation",
+      "timeseries": true,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_wind_turbine",
       "window_size": 64
     },
     "oil_spill_detection": {

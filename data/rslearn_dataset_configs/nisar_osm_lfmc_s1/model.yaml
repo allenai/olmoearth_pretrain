@@ -1,0 +1,44 @@
+# LFMC S1+NISAR eval (card t-grl7q6, favyen 2026-11-10; nisar_osm_evals/bin/build_lfmc_view.py and
+# make_s1nisar_yamls.py in /weka/dfive-default/agent/favyen/2026-10-27-favyen-nisar-naip-pretrain).
+# 63x63 windows at 10 m around FEMS LFMC sites; label: LFMC % (FEMS field samples 2026-06..10) at the center pixel (31,31) only.
+# Input: S1 vv/vh only (same windows as the _s1nisar dataset); layers m1-m4 = 4 x 30 d before the sample date.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/helios/dataset_creation/nisar_osm_evals/s1nisar_lfmc
+    inputs:
+      sentinel1:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - sentinel1_m1
+        - sentinel1_m2
+        - sentinel1_m3
+        - sentinel1_m4
+        load_all_layers: true
+        bands:
+        - vv
+        - vh
+        passthrough: true
+        required: true
+      targets:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+        - labels
+        bands:
+        - value
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.multi_task.MultiTask
+      init_args:
+        tasks:
+          eval_task:
+            class_path: rslearn.train.tasks.per_pixel_regression.PerPixelRegressionTask
+            init_args:
+              nodata_value: -1
+        input_mapping:
+          eval_task:
+            targets: targets
+    batch_size: 8
+    num_workers: 16
