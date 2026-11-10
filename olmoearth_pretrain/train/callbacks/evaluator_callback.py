@@ -59,6 +59,7 @@ from olmoearth_pretrain.evals.embedding_transforms import (
 from olmoearth_pretrain.evals.embeddings import get_embeddings
 from olmoearth_pretrain.evals.eval_wrapper import get_eval_wrapper
 from olmoearth_pretrain.evals.finetune import run_finetune_eval
+from olmoearth_pretrain.evals.finetune.model import fixed_latent_stride
 from olmoearth_pretrain.evals.knn import run_knn
 from olmoearth_pretrain.evals.linear_probe import (
     ProbeType,
@@ -141,6 +142,10 @@ class DownstreamTaskConfig:
     # With eval_on_student_registers: probe only the first N dims of the student (a
     # Matryoshka prefix, e.g. 64 of a [128, 64] student). None = full student width.
     eval_student_dim: int | None = None
+    # Fine-tune only, for a pixel-latent Perceiver: pin the latent stride (pixels per
+    # register along each side; 1 = per-pixel) in train and eval mode, instead of the
+    # random training stride. None = leave the model as it is.
+    latent_patch_size: int | None = None
     # Use the center spatial patch embedding instead of pooling across all patches
     # for classification tasks. Has no effect on segmentation tasks.
     use_center_token: bool = False
@@ -350,6 +355,7 @@ class DownstreamEvaluator:
         self.eval_on_encoder_tokens = task.eval_on_encoder_tokens
         self.eval_on_student_registers = task.eval_on_student_registers
         self.eval_student_dim = task.eval_student_dim
+        self.latent_patch_size = task.latent_patch_size
         self.use_center_token = task.use_center_token
         self.select_best_by_primary_metric = task.select_best_by_primary_metric
         self.quantize_embeddings = task.quantize_embeddings
@@ -960,7 +966,36 @@ class DownstreamEvaluator:
         else:
             logger.info("No resume checkpoint found, starting fresh")
 
-        result = run_finetune_eval(
+        with fixed_latent_stride(model, self.latent_patch_size):
+            result = self._run_finetune_eval(
+                model,
+                train_loader,
+                val_loader,
+                test_loader,
+                best_checkpoint_path,
+                resume_checkpoint_path,
+            )
+        logger.info(
+            f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
+        )
+        model.load_state_dict(original_state)
+        del original_state
+
+        torch.cuda.empty_cache()
+        gc.collect()
+        return result
+
+    def _run_finetune_eval(
+        self,
+        model: torch.nn.Module,
+        train_loader: DataLoader,
+        val_loader: DataLoader,
+        test_loader: DataLoader | None,
+        best_checkpoint_path: str,
+        resume_checkpoint_path: str,
+    ) -> EvalTaskResult:
+        """Call run_finetune_eval with this task's settings."""
+        return run_finetune_eval(
             task_name=self.evaluation_name,
             task_config=self.config,
             trainer=self.trainer,
@@ -983,16 +1018,9 @@ class DownstreamEvaluator:
             ft_grad_accum_steps=self.ft_grad_accum_steps,
             head_type=self.ft_head_type,  # type: ignore[arg-type]
             use_dice_loss=self.use_dice_loss,
+            latent_patch_size=self.latent_patch_size,
+            use_center_token=self.use_center_token,
         )
-        logger.info(
-            f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
-        )
-        model.load_state_dict(original_state)
-        del original_state
-
-        torch.cuda.empty_cache()
-        gc.collect()
-        return result
 
     def _val_embedding_diagnostics(self) -> EvalTaskResult:
         """Compute embedding diagnostics only (no downstream task)."""

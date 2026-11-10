@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Literal, cast
 
 import torch
@@ -30,8 +32,17 @@ class BackboneWithHead(nn.Module):
         use_pooled_tokens: bool = False,
         eval_on_encoder_tokens: bool = False,
         head_type: HeadType = "linear",
+        latent_patch_size: int | None = None,
+        use_center_token: bool = False,
     ) -> None:
-        """Initialize the backbone with head."""
+        """Initialize the backbone with head.
+
+        With ``latent_patch_size`` the Perceiver emits one register per
+        ``latent_patch_size`` pixels instead of one per token (run the fine-tune
+        inside :func:`fixed_latent_stride`), so the dense heads decode each register
+        cell to ``latent_patch_size**2`` pixels; ``self.patch_size`` is that per-cell
+        pixel stride.
+        """
         if head_type in _PIXEL_HEADS and task_type not in (
             TaskType.SEGMENTATION,
             TaskType.PER_PIXEL_REGRESSION,
@@ -50,9 +61,12 @@ class BackboneWithHead(nn.Module):
             concat_features=False,
             use_pooled_tokens=use_pooled_tokens,
             eval_on_encoder_tokens=eval_on_encoder_tokens,
+            use_center_token=use_center_token,
         )
         self.task_type = task_type
-        self.patch_size = patch_size
+        self.patch_size = (
+            latent_patch_size if latent_patch_size is not None else patch_size
+        )
         self.num_classes = num_classes
         self.head_type: HeadType = head_type
         # True when the head already outputs (B, num_classes, H, W) pixel-space logits.
@@ -92,6 +106,40 @@ class BackboneWithHead(nn.Module):
         if emb.device != dev:
             emb = emb.to(dev, non_blocking=True)
         return self._head(emb), labels
+
+
+@contextmanager
+def fixed_latent_stride(model: nn.Module, stride: int | None) -> Iterator[None]:
+    """Pin the Perceiver's pixel-latent stride to ``stride`` in train and eval mode.
+
+    A pixel-latent Perceiver trained with ``random_latent_stride`` draws a random
+    stride in train mode, so a fine-tune would see a different register grid every
+    step. Inside this context the draw is off (train mode then uses stride 1) and
+    eval uses ``stride``; both are restored on exit. ``None`` changes nothing.
+    """
+    if stride is None:
+        yield
+        return
+    if stride != 1:
+        raise NotImplementedError("fine-tuning supports latent_patch_size=1 only")
+    saved = []
+    for module in model.modules():
+        if getattr(module, "pixel_latents", False) and hasattr(
+            module, "random_latent_stride"
+        ):
+            saved.append(
+                (module, module.random_latent_stride, module.eval_latent_stride)
+            )
+            module.random_latent_stride = False
+            module.eval_latent_stride = stride
+    if not saved:
+        raise ValueError("latent_patch_size set but the model has no pixel latents")
+    try:
+        yield
+    finally:
+        for module, random_stride, eval_stride in saved:
+            module.random_latent_stride = random_stride
+            module.eval_latent_stride = eval_stride
 
 
 def to_device(
