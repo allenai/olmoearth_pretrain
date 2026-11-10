@@ -33,6 +33,7 @@ from olmoearth_pretrain.evals.band_sensitivity import (
     occlude_band,
     reliance_profile,
 )
+from olmoearth_pretrain.evals.changed_year import scorer_for_dataset
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -609,6 +610,7 @@ class DownstreamEvaluator:
                         )
                     ),
                     probe_input_norm=self.probe_input_norm,
+                    extra_test_metrics=scorer_for_dataset(self.dataset),
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -1340,6 +1342,7 @@ class DownstreamEvaluator:
             use_dice_loss=self.use_dice_loss,
             class_weighting=self.ft_class_weighting,
             focal_gamma=self.ft_focal_gamma,
+            extra_test_metrics=scorer_for_dataset(self.dataset),
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"

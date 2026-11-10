@@ -18,6 +18,7 @@ from olmo_core.data.utils import get_rng
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
 
+from olmoearth_pretrain.evals.changed_year import ExtraTestMetrics
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.metrics import (
     SEGMENTATION_IGNORE_LABEL,
@@ -392,6 +393,7 @@ def train_and_eval_probe(
     probe_input_norm: ProbeInputNorm = ProbeInputNorm.BATCHNORM,
     class_weighting: str = "none",
     focal_gamma: float = 0.0,
+    extra_test_metrics: ExtraTestMetrics | None = None,
 ) -> EvalTaskResult:
     """Run a linear probe on the OlmoEarth Pretrain model.
 
@@ -710,6 +712,10 @@ def train_and_eval_probe(
             primary_metric_class=primary_metric_class,
             scores=all_scores,
         )
+        if extra_test_metrics is not None:
+            test_result.metrics.update(
+                extra_test_metrics(all_preds, all_labels, config.num_classes)
+            )
         if n_bootstrap == 0:
             logger.info(f"Test result: {test_result}")
 

@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.evals.changed_year import ExtraTestMetrics
 from olmoearth_pretrain.evals.finetune.model import BackboneWithHead, to_device
 from olmoearth_pretrain.evals.metrics import (
     EvalMetric,
@@ -152,6 +153,7 @@ def eval_seg(
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
     dump_tag: str | None = None,
+    extra_test_metrics: ExtraTestMetrics | None = None,
 ) -> EvalResult:
     """Evaluate segmentation metrics."""
     module.eval()
@@ -182,7 +184,9 @@ def eval_seg(
 
     _pdir = _os.environ.get("OE_PRED_DIR")
     if not _pdir:
-        _pmark = "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
+        _pmark = (
+            "/weka/dfive-default/piperw/dev/rslearn_projects/pastis2/oe_pred_dir.txt"
+        )
         if _os.path.exists(_pmark):
             with open(_pmark) as _mf:
                 _pdir = _mf.read().strip()
@@ -192,7 +196,7 @@ def eval_seg(
         torch.save({"preds": preds, "labels": labels, "dump_tag": dump_tag}, _pp)
         print(f"[FT_PRED_DUMP] wrote {_pp} preds={tuple(preds.shape)}", flush=True)
 
-    return segmentation_metrics(
+    result = segmentation_metrics(
         preds,
         labels,
         num_classes=num_classes,
@@ -201,3 +205,6 @@ def eval_seg(
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
+    if extra_test_metrics is not None:
+        result.metrics.update(extra_test_metrics(preds, labels, num_classes))
+    return result
