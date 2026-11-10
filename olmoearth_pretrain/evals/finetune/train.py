@@ -16,6 +16,7 @@ from olmo_core.train.trainer import Trainer
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.evals.changed_year import ExtraTestMetrics
 from olmoearth_pretrain.evals.datasets.configs import EvalDatasetConfig, TaskType
 from olmoearth_pretrain.evals.finetune.checkpoint import (
     load_training_checkpoint,
@@ -104,6 +105,7 @@ def compute_eval_metrics(
     patch_size: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    extra_test_metrics: ExtraTestMetrics | None = None,
 ) -> EvalTaskResult:
     """Evaluate a finetuned model on val and test sets."""
     ft.eval()
@@ -162,6 +164,7 @@ def compute_eval_metrics(
                 patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                extra_test_metrics=extra_test_metrics,
             )
 
     return EvalTaskResult(val_result=val_result, test_result=test_result)
@@ -191,6 +194,7 @@ def run_finetune_eval(
     head_type: HeadType = "linear",
     use_dice_loss: bool = False,
     location_query_patch_size: int | None = None,
+    extra_test_metrics: ExtraTestMetrics | None = None,
 ) -> EvalTaskResult:
     """Finetune the model on a downstream task and evaluate."""
     if task_config.task_type == TaskType.WINDOW_REGRESSION:
@@ -238,6 +242,7 @@ def run_finetune_eval(
             patch_size,
             primary_metric=primary_metric,
             primary_metric_class=primary_metric_class,
+            extra_test_metrics=extra_test_metrics,
         )
 
     # Freeze the backbone for the first portion of epochs
@@ -316,6 +321,7 @@ def run_finetune_eval(
                 patch_size,
                 primary_metric=primary_metric,
                 primary_metric_class=primary_metric_class,
+                extra_test_metrics=extra_test_metrics,
             )
 
     ft.train()
@@ -464,4 +470,5 @@ def run_finetune_eval(
         patch_size,
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
+        extra_test_metrics=extra_test_metrics,
     )
