@@ -45,6 +45,8 @@ def set_random_seeds() -> None:
     torch.use_deterministic_algorithms(True)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    # terratorch's Clay backbone sets "medium" on import
+    torch.set_float32_matmul_precision("highest")
     random.seed(42)
 
 
