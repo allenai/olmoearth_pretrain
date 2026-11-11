@@ -401,6 +401,12 @@ def _read_scenes(
             f"window {window.group}/{window.name} has no materialized "
             f"{layer_name} scenes"
         )
+    if len(completed) < len(times):
+        # Tessera takes any number of frames, but upstream would see them all.
+        logger.warning(
+            f"window {window.group}/{window.name}: only {len(completed)}/"
+            f"{len(times)} prepared {layer_name} scenes materialized"
+        )
     doys = np.array(
         [times[group_idx].timetuple().tm_yday for group_idx in completed],
         dtype=np.int64,
