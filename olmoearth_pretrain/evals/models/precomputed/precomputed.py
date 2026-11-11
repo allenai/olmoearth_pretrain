@@ -102,8 +102,15 @@ class PrecomputedEmbedding(nn.Module):
             # The other products are int8 at source and carry that loss already.
             # Tessera v2 is baked by our own float32 inference run, so apply the
             # released product's per-pixel int8 scheme here, before pooling, as
-            # a geotessera user would see it after dequantising.
-            embeddings = roundtrip_embeddings_tessera(embeddings)
+            # a geotessera user would see it after dequantising. The export
+            # writes NaN for pixels with no observations; the int8 cast would
+            # turn those into finite zeros, so carry them through as NaN for
+            # the eval wrapper's labelled-pixel check.
+            unobserved = ~torch.isfinite(embeddings).all(dim=-1)
+            embeddings = roundtrip_embeddings_tessera(
+                embeddings.masked_fill(unobserved[..., None], 0.0)
+            )
+            embeddings = embeddings.masked_fill(unobserved[..., None], float("nan"))
         if not spatial_pool:
             embeddings = reduce(embeddings, "b h w c -> b c", pooling)
         return embeddings
