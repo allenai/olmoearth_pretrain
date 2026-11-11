@@ -149,10 +149,10 @@ class DatasetSpec:
 # its fetch year is pinned. The Tessera layer is therefore already calendar-year
 # aligned (Jan - Dec 2019, the label year, and the same year the AEF layer
 # reads), so pastis_year_aligned needs no spec of its own: it would fetch this
-# same group at the same year. The *_year_aligned datasets were re-anchored to
-# (Jan 1 Y, Jan 1 Y+1) by reanchor_year_aligned_dataset.py, so their own range
-# is already the product year and is read per window -- which is what a
-# multi-year dataset needs, since no single --year would be right for it.
+# same group at the same year. The *_year_aligned datasets' windows span
+# (Jan 1 Y, Jan 1 Y+1), so their own range is already the product year and is
+# read per window -- which is what a multi-year dataset needs, since no single
+# --year would be right for it.
 # scripts/tools/setup_tessera_v2.py orchestrates the pipeline across all of
 # YEAR_ALIGNED_DATASETS.
 YEAR_ALIGNED_DATASETS = (
@@ -635,8 +635,8 @@ def create_windows(ds_path: str, spec: DatasetSpec) -> None:
     if bad:
         raise SystemExit(
             f"{len(bad)} of {len(windows)} windows have no usable product year, "
-            f"e.g. {list(bad.items())[:3]}. Re-anchor the dataset first "
-            "(scripts/tools/reanchor_year_aligned_dataset.py) or pass --year."
+            f"e.g. {list(bad.items())[:3]}. Anchor its windows to calendar "
+            "years first or pass --year."
         )
 
     years: dict[int, int] = {}

@@ -11,8 +11,7 @@ as living fixtures: ``plan`` should read them as ``done``, and if it does not,
 the stage detection is wrong, not the datasets.
 
 Stages, detected per dataset from what is already on weka, so re-running
-``run --go`` (or ``plan`` to watch) advances the pipeline exactly like
-setup_extra_layers.py does for SCL/Landsat:
+``run --go`` (or ``plan`` to watch) advances the pipeline:
 
   apply        write ``<ds>/config_tessera_v2_fetch.json`` and mirror every
                eval window into the ``<base>_tessera_v2`` fetch group on that
