@@ -35,10 +35,8 @@ dataset:
         --retry-backoff-seconds 2
     rslearn dataset materialize ... (same flags, --retry-backoff-seconds 60)
 
-   For many concurrent CPU jobs use
-   ``scripts/tools/launch_year_aligned_prepare.sh`` with
-   ``LAYER_SET=tessera_v2_fetch``, which wraps the rslearn_projects launcher
-   (https://github.com/allenai/rslearn_projects/tree/master/rslp/common).
+   ``scripts/tools/setup_tessera_v2.py`` launches these as Beaker CPU jobs,
+   one per dataset.
 4. ``infer``: per eval window, assemble the per-pixel year of observations in
    exactly the d-pixel form their pipeline produces (S2 uint16 DN in their
    band order + SCL-derived cloud mask; S1 converted with their
@@ -86,8 +84,12 @@ import torch
 from rasterio.enums import Resampling
 from rslearn.data_sources.data_source import Item
 from rslearn.dataset import Dataset, Window
+from rslearn.utils.fsspec import open_rasterio_upath_reader
 from rslearn.utils.raster_array import RasterArray, RasterMetadata
-from rslearn.utils.raster_format import GeotiffRasterFormat
+from rslearn.utils.raster_format import (
+    GeotiffRasterFormat,
+    get_raster_projection_and_bounds,
+)
 from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
@@ -147,10 +149,10 @@ class DatasetSpec:
 # its fetch year is pinned. The Tessera layer is therefore already calendar-year
 # aligned (Jan - Dec 2019, the label year, and the same year the AEF layer
 # reads), so pastis_year_aligned needs no spec of its own: it would fetch this
-# same group at the same year. The *_year_aligned datasets were re-anchored to
-# (Jan 1 Y, Jan 1 Y+1) by reanchor_year_aligned_dataset.py, so their own range
-# is already the product year and is read per window -- which is what a
-# multi-year dataset needs, since no single --year would be right for it.
+# same group at the same year. The *_year_aligned datasets' windows span
+# (Jan 1 Y, Jan 1 Y+1), so their own range is already the product year and is
+# read per window -- which is what a multi-year dataset needs, since no single
+# --year would be right for it.
 # scripts/tools/setup_tessera_v2.py orchestrates the pipeline across all of
 # YEAR_ALIGNED_DATASETS.
 YEAR_ALIGNED_DATASETS = (
@@ -302,6 +304,32 @@ def _no_scenes(
     )
 
 
+def _fill_beyond_stored_extent(
+    array: np.ndarray, raster_dir: UPath, window: Window
+) -> np.ndarray:
+    """Edge-fill rows/columns of the window the stored raster does not reach.
+
+    Coarser band sets (S2's 20 m bands and SCL) are stored with floor-divided
+    bounds, so on a window with odd pixel bounds the raster ends one 10 m pixel
+    short and decodes as 0 there -- SCL's no-data class, masking that strip in
+    every scene.
+    """
+    with open_rasterio_upath_reader(raster_dir / GeotiffRasterFormat().fname) as src:
+        stored_projection, stored_bounds = get_raster_projection_and_bounds(src)
+    ratio = round(stored_projection.x_resolution / window.projection.x_resolution)
+    sx0, sy0, sx1, sy1 = (b * ratio for b in stored_bounds)
+    x0, y0, x1, y1 = window.bounds
+    top, bottom = max(0, sy0 - y0), max(0, y1 - sy1)
+    left, right = max(0, sx0 - x0), max(0, x1 - sx1)
+    if max(top, bottom, left, right) >= max(ratio, 1):
+        raise ValueError(
+            f"{raster_dir} misses more than grid rounding of {window.bounds}"
+        )
+    h, w = array.shape[1:]
+    cropped = array[:, top : h - bottom, left : w - right]
+    return np.pad(cropped, ((0, 0), (top, bottom), (left, right)), mode="edge")
+
+
 def _read_scenes(
     window: Window,
     layer_name: str,
@@ -355,20 +383,27 @@ def _read_scenes(
     raster_format = GeotiffRasterFormat()
     scenes = []
     for group_idx in completed:
-        arrays = [
-            raster_format.decode_raster(
-                window.get_raster_dir(layer_name, bands, group_idx),
+        arrays = []
+        for bands in band_sets:
+            raster_dir = window.get_raster_dir(layer_name, bands, group_idx)
+            array = raster_format.decode_raster(
+                raster_dir,
                 window.projection,
                 window.bounds,
                 resampling=resampling,
             ).get_chw_array()
-            for bands in band_sets
-        ]
+            arrays.append(_fill_beyond_stored_extent(array, raster_dir, window))
         scenes.append(np.concatenate(arrays, axis=0).transpose(1, 2, 0))
     if not scenes:
         raise ValueError(
             f"window {window.group}/{window.name} has no materialized "
             f"{layer_name} scenes"
+        )
+    if len(completed) < len(times):
+        # Tessera takes any number of frames, but upstream would see them all.
+        logger.warning(
+            f"window {window.group}/{window.name}: only {len(completed)}/"
+            f"{len(times)} prepared {layer_name} scenes materialized"
         )
     doys = np.array(
         [times[group_idx].timetuple().tm_yday for group_idx in completed],
@@ -433,6 +468,21 @@ def build_dpixel_inputs(
         "s1_desc_bands": s1[S1_LAYERS[1]][0],
         "s1_desc_doys": s1[S1_LAYERS[1]][1],
     }
+
+
+def unobserved_pixels(inputs: dict[str, np.ndarray]) -> np.ndarray:
+    """(H, W) mask of pixels with no valid S2 frame and no non-zero S1 frame.
+
+    encode_pixels skips exactly these pixels, leaving their row of an
+    np.empty buffer unwritten (upstream behaviour, kept in the vendored code),
+    so infer overwrites them with NaN, the layer's nodata value.
+    """
+    observed = inputs["s2_masks"].astype(bool).any(axis=0)
+    for key in ("s1_asc_bands", "s1_desc_bands"):
+        bands = inputs[key]
+        if bands.shape[0]:
+            observed |= (bands != 0).any(axis=-1).any(axis=0)
+    return ~observed
 
 
 def write_fetch_config(ds_path: str, out_path: str | None = None) -> UPath:
@@ -585,8 +635,8 @@ def create_windows(ds_path: str, spec: DatasetSpec) -> None:
     if bad:
         raise SystemExit(
             f"{len(bad)} of {len(windows)} windows have no usable product year, "
-            f"e.g. {list(bad.items())[:3]}. Re-anchor the dataset first "
-            "(scripts/tools/reanchor_year_aligned_dataset.py) or pass --year."
+            f"e.g. {list(bad.items())[:3]}. Anchor its windows to calendar "
+            "years first or pass --year."
         )
 
     years: dict[int, int] = {}
@@ -753,6 +803,14 @@ def infer(
                 logger.exception(f"window {eval_window.name}: inference failed")
                 failed.append(eval_window.name)
                 continue
+            # The eval wrapper raises only if one of these is a scored pixel.
+            unobserved = unobserved_pixels(inputs)
+            if unobserved.any():
+                embedding[unobserved] = np.nan
+                logger.info(
+                    f"window {eval_window.name}: {int(unobserved.sum())} "
+                    "unobserved pixels written as NaN"
+                )
             write_embedding_layer(eval_window, embedding.transpose(2, 0, 1))
             written += 1
             if written % 50 == 0:

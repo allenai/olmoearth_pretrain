@@ -252,6 +252,128 @@ def test_read_scenes_distinguishes_absent_from_unmaterialized(
     assert scenes.shape == (0, 4, 4, 2) and doys.shape == (0,)
 
 
+def _write_raster(
+    path: Path, resolution: float, bounds: tuple[int, int, int, int]
+) -> np.ndarray:
+    """Write a (1, H, W) geotiff of distinct values on a UTM grid."""
+    from rasterio.crs import CRS
+    from rslearn.utils.geometry import Projection
+    from rslearn.utils.raster_array import RasterArray
+    from rslearn.utils.raster_format import GeotiffRasterFormat
+    from upath import UPath
+
+    h, w = bounds[3] - bounds[1], bounds[2] - bounds[0]
+    array = (np.arange(h * w, dtype=np.float32) + 1).reshape(1, h, w)
+    projection = Projection(CRS.from_epsg(32631), resolution, -resolution)
+    GeotiffRasterFormat().encode_raster(
+        UPath(path), projection, bounds, RasterArray(chw_array=array)
+    )
+    return array
+
+
+def test_coarse_band_sets_are_edge_filled_on_odd_window_bounds(
+    tmp_path: Path,
+) -> None:
+    """A 20 m band set on an odd-bounded window must not leave a zero seam.
+
+    rslearn stores the coarser band set with the window bounds floor-divided,
+    so for window bounds (1, 1, 9, 9) at 10 m the 20 m raster covers 10 m
+    pixels 0..7 and the window's last row and column fall outside it. Read
+    back, that strip was 0 -- for SCL the no-data class, which masked it out
+    of every scene (seen on lcmap_lu, us_trees, glance, ... fetch windows).
+    """
+    from rasterio.crs import CRS
+    from rasterio.enums import Resampling
+    from rslearn.utils.geometry import Projection
+    from rslearn.utils.raster_format import GeotiffRasterFormat
+    from upath import UPath
+
+    window = SimpleNamespace(
+        projection=Projection(CRS.from_epsg(32631), 10, -10), bounds=(1, 1, 9, 9)
+    )
+    stored = _write_raster(tmp_path / "scl", 20, (0, 0, 4, 4))[0]
+    decoded = (
+        GeotiffRasterFormat()
+        .decode_raster(
+            UPath(tmp_path / "scl"),
+            window.projection,
+            window.bounds,
+            resampling=Resampling.nearest,
+        )
+        .get_chw_array()
+    )
+    assert (decoded[0, -1] == 0).all() and (decoded[0, :, -1] == 0).all()
+
+    filled = tessera_v2_export._fill_beyond_stored_extent(
+        decoded, UPath(tmp_path / "scl"), window
+    )
+    # Covered pixels untouched; the seam copies its covered neighbour.
+    np.testing.assert_array_equal(filled[0, :-1, :-1], decoded[0, :-1, :-1])
+    np.testing.assert_array_equal(filled[0, -1], filled[0, -2])
+    np.testing.assert_array_equal(filled[0, :, -1], filled[0, :, -2])
+    assert set(np.unique(filled)) <= set(np.unique(stored))
+
+    # A raster that covers the window exactly is returned unchanged.
+    full = _write_raster(tmp_path / "b02", 10, window.bounds)
+    np.testing.assert_array_equal(
+        tessera_v2_export._fill_beyond_stored_extent(
+            full, UPath(tmp_path / "b02"), window
+        ),
+        full,
+    )
+
+    # More missing than grid rounding is not silently papered over.
+    _write_raster(tmp_path / "short", 10, (1, 1, 7, 9))
+    with pytest.raises(ValueError, match="more than grid rounding"):
+        tessera_v2_export._fill_beyond_stored_extent(
+            full, UPath(tmp_path / "short"), window
+        )
+
+
+def test_unobserved_pixels_are_the_ones_encode_pixels_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """encode_pixels leaves a pixel with no S2 or S1 observation as np.empty.
+
+    That is upstream behaviour (vendored unchanged), so infer overwrites those
+    pixels with NaN; this is the mask it uses. An S1 return alone counts as an
+    observation, since the student embeds S1-only pixels.
+    """
+    t, h, w = 3, 2, 2
+    s2_masks = np.ones((t, h, w), dtype=np.uint8)
+    s2_masks[:, 0, 0] = 0  # cloud in every scene
+    s2_masks[:, 0, 1] = 0
+    s1 = np.full((2, h, w, 2), 1000.0, dtype=np.float32)
+    s1[:, 0, 0] = 0  # and no S1 return at (0, 0)
+    inputs = {
+        "s2_masks": s2_masks,
+        "s1_asc_bands": s1,
+        "s1_desc_bands": np.zeros((0, h, w, 2), dtype=np.float32),
+    }
+    expected = np.zeros((h, w), dtype=bool)
+    expected[0, 0] = True
+    np.testing.assert_array_equal(tessera_v2_export.unobserved_pixels(inputs), expected)
+
+    # And it matches what the vendored student actually leaves unwritten.
+    model = PixelStudent(latent_dim=16, nhead=2, num_layers=1, dim_feedforward=32)
+    sentinel = 12345.0
+    full = np.full
+    monkeypatch.setattr(
+        np, "empty", lambda shape, dtype=None: full(shape, sentinel, dtype=dtype)
+    )
+    out = encode_tile(
+        model,
+        np.full((t, h, w, 10), 1000.0, dtype=np.float32),
+        np.arange(1, t + 1),
+        s2_masks=s2_masks,
+        s1_asc_bands=s1,
+        s1_asc_doys=np.arange(1, 3),
+        device=torch.device("cpu"),
+    )
+    monkeypatch.undo()
+    np.testing.assert_array_equal((out == sentinel).all(axis=-1), expected)
+
+
 def test_write_fetch_config_keeps_storage_and_leaves_the_dataset_alone(
     tmp_path: Path,
 ) -> None:

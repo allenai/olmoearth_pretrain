@@ -1,10 +1,13 @@
 """Vendored TESSERA v2 pixel student (128-d Matryoshka encoder).
 
-Copied verbatim (upstream docstring below) from
-https://github.com/ucam-eo/tessera branch ``v2``,
-``tessera_infer_v2/student/model.py``. Weights are the Hugging Face
-``geotessera`` org TESSERA-V-2.0-2B-{N,S,M,L} checkpoints, loadable via
-``load_model``. Do not edit except to re-vendor.
+Copied from https://github.com/ucam-eo/tessera branch ``v2`` at commit
+7823662df0ff, ``tessera_infer_v2/student/model.py`` (upstream docstring
+below). The code is upstream's: it was only ruff-formatted, with
+``typing.Dict/Optional/Tuple`` annotations rewritten as builtins and unused
+imports dropped -- with docstrings, imports and annotations set aside, its AST
+is identical to upstream's. Weights are the Hugging Face ``geotessera`` org
+TESSERA-V-2.0-2B-{N,S,M,L} checkpoints, loadable via ``load_model``. Do not
+edit except to re-vendor.
 
 Upstream docstring:
 Standalone TESSERA Pixel Student — 128-d Matryoshka pixel encoder.

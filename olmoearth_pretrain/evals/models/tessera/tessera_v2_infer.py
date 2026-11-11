@@ -1,9 +1,13 @@
 """Vendored TESSERA v2 per-pixel inference helpers.
 
-Copied verbatim (upstream docstring below) from
-https://github.com/ucam-eo/tessera branch ``v2``,
-``tessera_infer_v2/student/infer.py``, with only the import of the
-sibling model module adjusted. Do not edit except to re-vendor.
+Copied from https://github.com/ucam-eo/tessera branch ``v2`` at commit
+7823662df0ff, ``tessera_infer_v2/student/infer.py`` (upstream docstring
+below). The code is upstream's: the sibling-model import points at
+tessera_v2_model, and it was ruff-formatted, with ``typing.List/Optional``
+annotations rewritten as builtins and unused imports dropped -- with
+docstrings, imports and annotations set aside, its AST is identical to
+upstream's. Do not edit except to re-vendor; upstream quirks (e.g. a pixel
+with no observations is left uninitialized) are handled by the callers.
 
 Upstream docstring:
 All-doy per-pixel inference helpers for Pixel Student V1.1.
