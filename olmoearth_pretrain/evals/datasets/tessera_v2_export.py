@@ -35,10 +35,8 @@ dataset:
         --retry-backoff-seconds 2
     rslearn dataset materialize ... (same flags, --retry-backoff-seconds 60)
 
-   For many concurrent CPU jobs use
-   ``scripts/tools/launch_year_aligned_prepare.sh`` with
-   ``LAYER_SET=tessera_v2_fetch``, which wraps the rslearn_projects launcher
-   (https://github.com/allenai/rslearn_projects/tree/master/rslp/common).
+   ``scripts/tools/setup_tessera_v2.py`` launches these as Beaker CPU jobs,
+   one per dataset.
 4. ``infer``: per eval window, assemble the per-pixel year of observations in
    exactly the d-pixel form their pipeline produces (S2 uint16 DN in their
    band order + SCL-derived cloud mask; S1 converted with their

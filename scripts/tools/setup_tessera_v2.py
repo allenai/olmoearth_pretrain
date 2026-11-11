@@ -24,7 +24,7 @@ setup_extra_layers.py does for SCL/Landsat:
                --config <fetch config> --group <fetch group>`` in the
                rate-limited regime (16 workers, 2s backoff; a long backoff
                parks a worker for minutes on its first routine 403 and
-               collapses parallelism -- see launch_year_aligned_prepare.sh).
+               collapses parallelism).
                Planetary Computer's rate limit is per-account, so fan out
                across datasets, never by stacking jobs on one dataset.
   materialize  same job shape, worker-bound regime (64 workers, 60s backoff);
@@ -311,11 +311,11 @@ def job_command(
     """The rslearn command the Beaker job runs.
 
     prepare and materialize are bound by different resources (rate limit vs
-    workers), hence the split worker/backoff defaults -- measured reasoning in
-    launch_year_aligned_prepare.sh. The standalone --config carries ONLY the
-    three *_all layers, so no --enabled-layers is needed and the dataset's own
-    monthly layers cannot be rescanned; --group keeps the job off the ~10-45k
-    eval windows, for which a year-of-scenes fetch would be ruinous.
+    workers), hence the split worker/backoff defaults. The standalone --config
+    carries ONLY the three *_all layers, so no --enabled-layers is needed and
+    the dataset's own monthly layers cannot be rescanned; --group keeps the job
+    off the ~10-45k eval windows, for which a year-of-scenes fetch would be
+    ruinous.
     """
     if stage == "prepare":
         workers, backoff = args.prepare_workers, args.prepare_retry_backoff
