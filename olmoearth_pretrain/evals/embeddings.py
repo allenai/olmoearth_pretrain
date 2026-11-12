@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable, Iterable
 
 import torch
+from einops import reduce
 
 from olmoearth_pretrain.evals.embedding_diagnostics import (
     compute_pipeline_diagnostics,
@@ -18,6 +19,7 @@ from olmoearth_pretrain.evals.embedding_transforms import (
     quantize_embeddings_percentile,
 )
 from olmoearth_pretrain.evals.eval_wrapper import EvalWrapper
+from olmoearth_pretrain.nn.pooling import PoolingType
 from olmoearth_pretrain.train.masking import MaskedOlmoEarthSample
 
 logger = logging.getLogger(__name__)
@@ -112,6 +114,33 @@ def normalize_and_quantize(
     return embeddings
 
 
+def point_pair_features(
+    spatial_embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    pooling_type: PoolingType,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Per-sample features for a point-pair classification task.
+
+    Args:
+        spatial_embeddings: ``[B, h, w, D]`` embedding grid of the full window.
+        labels: ``[B, 5]`` rows of [class, row0, col0, row1, col1], the points
+            as fractions of the window height/width (label_at_point_pair).
+        pooling_type: How the whole grid is pooled into the context feature.
+
+    Returns:
+        ``[B, 3D]`` features (the token under each point, then the pooled grid)
+        and the ``[B]`` class labels.
+    """
+    b, h, w, _ = spatial_embeddings.shape
+    batch = torch.arange(b, device=spatial_embeddings.device)
+    points = labels[:, 1:].to(spatial_embeddings.device)
+    rows = (points[:, 0::2] * h).long().clamp(0, h - 1)
+    cols = (points[:, 1::2] * w).long().clamp(0, w - 1)
+    features = [spatial_embeddings[batch, rows[:, i], cols[:, i]] for i in range(2)]
+    features.append(reduce(spatial_embeddings, "b h w d -> b d", pooling_type))
+    return torch.cat(features, dim=-1), labels[:, 0].long()
+
+
 def get_embeddings(
     data_loader: Iterable[tuple[MaskedOlmoEarthSample, torch.Tensor]],
     model: EvalWrapper,
@@ -177,6 +206,11 @@ def get_embeddings(
                     masked_olmoearth_sample=masked_olmoearth_sample,
                     labels=label,
                     is_train=is_train,
+                )
+
+            if model.point_pair:
+                batch_embeddings, label = point_pair_features(
+                    batch_embeddings, label, model.pooling_type
                 )
 
             embeddings_list.append(batch_embeddings.cpu())

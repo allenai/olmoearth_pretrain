@@ -1,0 +1,29 @@
+{
+  "layers": {
+    "label": {
+      "band_sets": [
+        {
+          "bands": [
+            "label"
+          ],
+          "dtype": "uint8"
+        }
+      ],
+      "type": "raster"
+    },
+    "landsat": {
+      "band_sets": [
+        {
+          "bands": [
+            "B2",
+            "B3",
+            "B4",
+            "B5"
+          ],
+          "dtype": "uint16"
+        }
+      ],
+      "type": "raster"
+    }
+  }
+}

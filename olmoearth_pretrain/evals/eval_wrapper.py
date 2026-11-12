@@ -54,6 +54,7 @@ class EvalWrapper:
         eval_student_dim: int | None = None,
         use_center_token: bool = False,
         location_query_patch_size: int | None = None,
+        point_pair: bool = False,
     ):
         """Initialize the eval wrapper.
 
@@ -82,6 +83,9 @@ class EvalWrapper:
             location_query_patch_size: For OlmoEarth models with an AttentionPooler, pixels per location query
                 along each side (must divide ``patch_size``; 1 = per-pixel location queries).
                 None = one location query per token. Other models ignore it.
+            point_pair: Classification task whose labels carry two query points
+                (label_at_point_pair). The spatial grid is kept so
+                get_embeddings can gather the tokens under both points.
         """
         super().__init__()
         self.model = model
@@ -92,10 +96,11 @@ class EvalWrapper:
         # SEGMENTATION and (dense) REGRESSION keep the spatial grid for per-pixel
         # heads. CLASSIFICATION and WINDOW_REGRESSION are per-sample, so they pool
         # over space to a single (B, D) embedding.
-        self.spatial_pool = task_type in (
+        self.spatial_pool = point_pair or task_type in (
             TaskType.SEGMENTATION,
             TaskType.PER_PIXEL_REGRESSION,
         )
+        self.point_pair = point_pair
         self.use_pooled_tokens = use_pooled_tokens
         self.eval_on_encoder_tokens = eval_on_encoder_tokens
         self.eval_on_student_location_tokens = eval_on_student_location_tokens

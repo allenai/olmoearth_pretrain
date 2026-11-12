@@ -298,6 +298,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         tile_samples: bool = False,
         sample_size: int | None = None,
         declared_bands: dict[str, list[str]] | None = None,
+        label_at_point_pair: bool = False,
     ):
         """Initialize RslearnToOlmoEarthDataset.
 
@@ -344,6 +345,15 @@ class RslearnToOlmoEarthDataset(Dataset):
                 modality stores fewer than its canonical bands, read channels are
                 scattered to their canonical positions and the rest zeroed after
                 normalization (see _init_band_scatter). None assumes full bands.
+            label_at_point_pair: If set, the segmentation label raster must
+                carry exactly two labeled pixels of the same class (the query
+                points of a point-pair task such as GeoPathfinder). The sample
+                is emitted with a float label [class, row0, col0, row1, col1],
+                the points in raster-scan order as fractions of the raster
+                height/width at pixel centers; the embedding step gathers the
+                tokens under both points (see point_pair_features). Mutually
+                exclusive with window_size, label_at_center_pixel and
+                tile_samples.
         """
         if (
             not norm_stats_from_pretrained
@@ -396,6 +406,18 @@ class RslearnToOlmoEarthDataset(Dataset):
             )
         self.window_size = window_size
         self.label_at_center_pixel = label_at_center_pixel
+        if label_at_point_pair:
+            if self.target_task_type != TaskType.SEGMENTATION:
+                raise ValueError(
+                    "label_at_point_pair requires a segmentation target, got "
+                    f"{self.target_task_type.value}"
+                )
+            if window_size is not None or label_at_center_pixel or tile_samples:
+                raise ValueError(
+                    "label_at_point_pair is mutually exclusive with window_size, "
+                    "label_at_center_pixel and tile_samples"
+                )
+        self.label_at_point_pair = label_at_point_pair
         # "group/name" ids of windows dropped for lacking a live embedding
         # product's layer; set by from_model_config.
         self.excluded_windows: list[str] = []
@@ -460,6 +482,7 @@ class RslearnToOlmoEarthDataset(Dataset):
         tile_samples: bool = False,
         sample_size: int | None = None,
         required_layers: list[str] | None = None,
+        label_at_point_pair: bool = False,
     ) -> RslearnToOlmoEarthDataset:
         """Build from a parsed model.yaml config dict.
 
@@ -498,6 +521,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             required_layers: layers every window must have completed; other
                 windows are dropped before label_fraction subsampling. Their
                 ids are kept on the result as ``excluded_windows``.
+            label_at_point_pair: Emit the class and both labeled points of a
+                two-point label raster (see RslearnToOlmoEarthDataset).
         """
         if not 0 < label_fraction <= 1:
             raise ValueError("label_fraction must be in (0, 1].")
@@ -573,6 +598,7 @@ class RslearnToOlmoEarthDataset(Dataset):
             label_at_center_pixel=label_at_center_pixel,
             tile_samples=tile_samples,
             sample_size=sample_size,
+            label_at_point_pair=label_at_point_pair,
         )
         dataset.excluded_windows = excluded_windows
         return dataset
@@ -695,6 +721,27 @@ class RslearnToOlmoEarthDataset(Dataset):
             return rows, cols, classes[row, col]
         return rows, cols, classes
 
+    @staticmethod
+    def _point_pair_label(classes: torch.Tensor) -> torch.Tensor:
+        """[class, row0, col0, row1, col1] from a raster with two labeled pixels.
+
+        The points are in raster-scan order, as fractions of the raster
+        height/width taken at pixel centers.
+        """
+        valid = (classes != SEGMENTATION_IGNORE_LABEL).nonzero()
+        if len(valid) != 2:
+            raise ValueError(
+                f"label_at_point_pair requires exactly 2 labeled pixels, got {len(valid)}"
+            )
+        point_classes = classes[valid[:, 0], valid[:, 1]]
+        if point_classes[0] != point_classes[1]:
+            raise ValueError(
+                f"the two labeled pixels disagree: {point_classes.tolist()}"
+            )
+        h, w = classes.shape
+        points = (valid.float() + 0.5) / torch.tensor([h, w], dtype=torch.float32)
+        return torch.cat([point_classes[:1].float(), points.flatten()])
+
     def _transform_sample(
         self,
         input_dict: dict,
@@ -732,6 +779,8 @@ class RslearnToOlmoEarthDataset(Dataset):
             label = label[crop_rows, crop_cols]
         elif self.window_size is not None or self.label_at_center_pixel:
             crop_rows, crop_cols, label = self._label_crop_slices(label)
+        elif self.label_at_point_pair:
+            label = self._point_pair_label(label)
 
         # First pass: read every present modality (crop, dB-convert), keeping
         # the raw arrays so ragged imagery can be aligned onto a shared
@@ -1165,6 +1214,7 @@ def from_registry_entry(
     window_size: int | None = None,
     label_at_center_pixel: bool = False,
     tile_samples: bool = False,
+    label_at_point_pair: bool = False,
 ) -> RslearnToOlmoEarthDataset:
     """Build RslearnToOlmoEarthDataset from a registry EvalDatasetEntry.
 
@@ -1199,6 +1249,8 @@ def from_registry_entry(
         tile_samples: Tile every sample into window_size x window_size windows
             instead of center-cropping; the stored sample size is taken from
             the registry entry's window_size (see RslearnToOlmoEarthDataset).
+        label_at_point_pair: Emit the class and both labeled points of a
+            two-point label raster (see RslearnToOlmoEarthDataset).
 
     Returns:
         Configured RslearnToOlmoEarthDataset instance.
@@ -1316,6 +1368,7 @@ def from_registry_entry(
         label_at_center_pixel=label_at_center_pixel,
         tile_samples=tile_samples,
         sample_size=entry.window_size if tile_samples else None,
+        label_at_point_pair=label_at_point_pair,
         # Every model skips windows lacking a live embedding product's layer,
         # so all models on the dataset are scored on the same windows.
         required_layers=sorted(entry.embedding_products),

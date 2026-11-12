@@ -1,0 +1,42 @@
+# Canonical model/task config for the geopathfinder eval dataset: GeoPathfinder
+# (isaaccorley/GeoPathfinder on Hugging Face) with the released Landsat 8/9
+# imagery, exported by
+# olmoearth_pretrain/evals/datasets/geopathfinder_rslearn_export.py. Consumed by
+# studio_ingest and rslearn_builder.py; only the `data` block is read.
+# One 256x256 patch at 30 m carrying Collection 2 Level-2 surface-reflectance
+# DNs for B2/B3/B4/B5 only; the other Landsat bands are zeroed after
+# normalization by the eval loader. Two windows per patch (connect,
+# disconnect) share the imagery.
+data:
+  class_path: rslearn.train.data_module.RslearnDataModule
+  init_args:
+    path: /weka/dfive-default/olmoearth/eval_datasets/geopathfinder
+    inputs:
+      landsat:
+        data_type: raster
+        dtype: FLOAT32
+        layers:
+          - landsat
+        bands:
+          - B2
+          - B3
+          - B4
+          - B5
+        passthrough: true
+      targets:
+        data_type: raster
+        dtype: INT32
+        layers:
+          - label
+        bands:
+          - label
+        is_target: true
+    task:
+      class_path: rslearn.train.tasks.segmentation.SegmentationTask
+      init_args:
+        # 1 connected by land, 0 separated by water, written only at the two dot
+        # pixels; 255 everywhere else. Read with label_at_point_pair.
+        num_classes: 2
+        nodata_value: 255
+    batch_size: 8
+    num_workers: 4

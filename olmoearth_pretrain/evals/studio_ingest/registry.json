@@ -1312,6 +1312,120 @@
       "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geo_ecosystem_annual_test",
       "window_size": 64
     },
+    "geopathfinder": {
+      "classes": [
+        "0",
+        "1"
+      ],
+      "config_json_sha256": "91698a18b8abaee768735e311369b08ceda7e69ab710065b41c875860d271455",
+      "embedding_products": {},
+      "end_time": "2024-12-31",
+      "imputes": [],
+      "is_multilabel": false,
+      "modalities": [
+        "landsat"
+      ],
+      "name": "geopathfinder",
+      "norm_stats": {
+        "landsat": {
+          "B1": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B10": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B11": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B2": {
+            "max": 65454.0,
+            "mean": 9038.409316980426,
+            "min": 7.0,
+            "std": 1127.1216408230766
+          },
+          "B3": {
+            "max": 65454.0,
+            "mean": 10114.08595231745,
+            "min": 1460.0,
+            "std": 1504.0269475477883
+          },
+          "B4": {
+            "max": 65454.0,
+            "mean": 10246.398705371696,
+            "min": 3122.0,
+            "std": 2174.237422635405
+          },
+          "B5": {
+            "max": 65454.0,
+            "mean": 16641.956966192138,
+            "min": 2604.0,
+            "std": 3560.462454404759
+          },
+          "B6": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B7": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B8": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          },
+          "B9": {
+            "absent": true,
+            "max": 0.0,
+            "mean": 0.0,
+            "min": 0.0,
+            "std": 1.0
+          }
+        }
+      },
+      "num_classes": 2,
+      "num_timesteps": 1,
+      "packaged_config": "geopathfinder",
+      "source_path": "/weka/dfive-default/agent/piperbots/geopathfinder/staging/rslearn/geopathfinder",
+      "split_stats": {
+        "test": {
+          "count": 1054
+        },
+        "train": {
+          "count": 8436
+        },
+        "val": {
+          "count": 1056
+        }
+      },
+      "split_tag_key": "eval_split",
+      "start_time": "2023-01-01",
+      "task_type": "segmentation",
+      "timeseries": false,
+      "use_pretrain_norm": true,
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/geopathfinder",
+      "window_size": 256
+    },
     "glance": {
       "classes": [
         "0",
@@ -4330,6 +4444,6 @@
       "window_size": 16
     }
   },
-  "updated_at": "2026-10-22T15:32:29.369664",
+  "updated_at": "2026-11-10T23:53:42.681162",
   "version": "1.0"
 }

@@ -337,6 +337,49 @@ class TestTileSamples:
             build_dataset(window_size=12, sample_size=32, tile_samples=True)
 
 
+class TestPointPairLabel:
+    """Tests for label_at_point_pair."""
+
+    def test_emits_class_and_points(self) -> None:
+        """Two same-class pixels -> [class, row0, col0, row1, col1] at centers."""
+        ds = RslearnToOlmoEarthDataset(
+            model_dataset=None,  # type: ignore[arg-type]
+            input_modalities=[S2],
+            label_at_point_pair=True,
+        )
+        input_dict, target = make_sample(8, {(6, 1): 1, (2, 5): 1})
+        masked_sample, label = ds._transform_sample(input_dict, target)
+        assert getattr(masked_sample, S2).shape[:2] == (8, 8)
+        expected = torch.tensor([1, 2.5 / 8, 5.5 / 8, 6.5 / 8, 1.5 / 8])
+        torch.testing.assert_close(label, expected)
+
+    def test_class_zero_is_kept(self) -> None:
+        """Class 0 is a real label, not ignore."""
+        label = RslearnToOlmoEarthDataset._point_pair_label(
+            make_label_raster(8, {(0, 0): 0, (7, 7): 0})
+        )
+        assert label[0].item() == 0
+
+    @pytest.mark.parametrize(
+        "labeled",
+        [{(1, 1): 1}, {(1, 1): 1, (2, 2): 1, (3, 3): 1}, {(1, 1): 0, (2, 2): 1}],
+    )
+    def test_rejects_bad_rasters(self, labeled: dict[tuple[int, int], int]) -> None:
+        """Anything but two same-class pixels is a loud failure."""
+        with pytest.raises(ValueError):
+            RslearnToOlmoEarthDataset._point_pair_label(make_label_raster(8, labeled))
+
+    def test_rejects_crop_options(self) -> None:
+        """Point pairs index the full raster, so crops cannot combine with them."""
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            RslearnToOlmoEarthDataset(
+                model_dataset=None,  # type: ignore[arg-type]
+                input_modalities=[S2],
+                window_size=16,
+                label_at_point_pair=True,
+            )
+
+
 def test_window_size_requires_segmentation_target() -> None:
     """The crop/center-label options only make sense for segmentation."""
     with pytest.raises(ValueError, match="segmentation"):
