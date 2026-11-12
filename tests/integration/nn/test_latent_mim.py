@@ -163,22 +163,11 @@ def test_latentmim_attention_pooler(
     assert model.supervision_head.heads["worldcover"].weight.grad is not None
 
 
-def test_latentmim_text_head_trains_the_location_tokens(
-    masked_sample_dict: dict[str, torch.Tensor], tmp_path: Path
-) -> None:
-    """The text loss on caption cells reaches the AttentionPooler and the text head."""
+def _text_mim_config(embeddings_dir: Path) -> LatentMIMConfig:
+    """A tiny LatentMIM with an AttentionPooler and a text head on 8-d captions."""
     modalities = [Modality.SENTINEL2_L2A.name, Modality.LATLON.name]
-    B, H, W, _, _ = masked_sample_dict["sentinel2_l2a"].shape
-    x = MaskedOlmoEarthSample(
-        **{k: v for k, v in masked_sample_dict.items() if "worldcover" not in k}
-    )
-    text = np.random.default_rng(0).normal(size=(B, 17, 8))
-    text /= np.linalg.norm(text, axis=-1, keepdims=True)
-    np.save(tmp_path / "embeddings.npy", text.astype(np.float16))
-    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
-
     pooler_dim = 8
-    model = LatentMIMConfig(
+    return LatentMIMConfig(
         encoder_config=EncoderConfig(
             supported_modality_names=modalities,
             embedding_size=16,
@@ -206,9 +195,25 @@ def test_latentmim_text_head_trains_the_location_tokens(
             pooler_dim=pooler_dim,
         ),
         text_head_config=TextAlignmentHeadConfig(
-            embeddings_dir=str(tmp_path), text_dim=8
+            embeddings_dir=str(embeddings_dir), text_dim=8
         ),
-    ).build()
+    )
+
+
+def test_latentmim_text_head_trains_the_location_tokens(
+    masked_sample_dict: dict[str, torch.Tensor], tmp_path: Path
+) -> None:
+    """The text loss on caption cells reaches the AttentionPooler and the text head."""
+    B, H, W, _, _ = masked_sample_dict["sentinel2_l2a"].shape
+    x = MaskedOlmoEarthSample(
+        **{k: v for k, v in masked_sample_dict.items() if "worldcover" not in k}
+    )
+    text = np.random.default_rng(0).normal(size=(B, 17, 8))
+    text /= np.linalg.norm(text, axis=-1, keepdims=True)
+    np.save(tmp_path / "embeddings.npy", text.astype(np.float16))
+    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+
+    model = _text_mim_config(tmp_path).build()
     assert model.text_head is not None
 
     patch_size = 1
@@ -231,6 +236,30 @@ def test_latentmim_text_head_trains_the_location_tokens(
     assert model.text_head.proj.weight.grad is not None
     assert model.text_head.log_scale.grad is not None
     assert model.encoder.attention_pooler.learned_query.grad is not None
+
+
+def test_frozen_backbone_trains_only_the_text_head(tmp_path: Path) -> None:
+    """Released weights load into everything but the head, which alone trains."""
+    np.save(tmp_path / "embeddings.npy", np.ones((1, 17, 8), dtype=np.float16))
+    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+    released = _text_mim_config(tmp_path).build()
+    state = {
+        k: v for k, v in released.state_dict().items() if not k.startswith("text_head.")
+    }
+    torch.save(state, tmp_path / "weights.pth")
+
+    config = _text_mim_config(tmp_path)
+    config.frozen_backbone_weights = str(tmp_path)
+    model = config.build()
+    for k, v in state.items():
+        assert torch.equal(model.state_dict()[k], v), k
+    trainable = {n for n, p in model.named_parameters() if p.requires_grad}
+    assert trainable and all(n.startswith("text_head.") for n in trainable)
+
+    state.pop(next(iter(state)))
+    torch.save(state, tmp_path / "weights.pth")
+    with pytest.raises(ValueError, match="does not match"):
+        config.build()
 
 
 def test_latentmim_attention_pooler_3d_encoder_2d_decoder(

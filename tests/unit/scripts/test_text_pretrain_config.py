@@ -212,3 +212,41 @@ def test_mix_arm_adds_labels_and_open_set_windows(
             getattr(text_mix, builder)(common).as_config_dict()
             == getattr(text, builder)(common).as_config_dict()
         )
+
+
+@pytest.mark.parametrize(
+    ("frozen_name", "joint_name"),
+    [("text_frozen", "text"), ("text_mix_frozen", "text_mix")],
+)
+def test_frozen_arm_differs_from_its_joint_arm_only_in_freezing(
+    frozen_name: str, joint_name: str, common: CommonComponents
+) -> None:
+    """Same model, data, masking and batch; frozen at the published weights, short schedule."""
+    frozen, joint = _load(frozen_name), _load(joint_name)
+    weights = frozen.freeze.__globals__["PUBLISHED_WEIGHTS"]
+    model = frozen.build_model_config(common).as_config_dict()
+    assert model.pop("frozen_backbone_weights") == weights
+    base_model = joint.build_model_config(common).as_config_dict()
+    base_model.pop("frozen_backbone_weights", None)
+    assert model == base_model
+
+    for builder in ("build_dataset_config", "build_dataloader_config"):
+        assert (
+            getattr(frozen, builder)(common).as_config_dict()
+            == getattr(joint, builder)(common).as_config_dict()
+        )
+
+    module = frozen.build_train_module_config(common).as_config_dict()
+    base_module = joint.build_train_module_config(common).as_config_dict()
+    steps = frozen.freeze.__globals__["STEPS"]
+    assert module.pop("optim_config")["lr"] == frozen.freeze.__globals__["LR"]
+    assert module.pop("scheduler")["warmup"] == frozen.freeze.__globals__["WARMUP"]
+    base_module.pop("optim_config")
+    base_module.pop("scheduler")
+    assert module == base_module
+
+    trainer = frozen.build_trainer_config(common).as_config_dict()
+    assert trainer.pop("max_duration")["value"] == steps
+    base_trainer = joint.build_trainer_config(common).as_config_dict()
+    base_trainer.pop("max_duration")
+    assert trainer == base_trainer

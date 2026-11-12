@@ -14,6 +14,7 @@ from torch.distributed.fsdp import (
     fully_shard,
     register_fsdp_forward_method,
 )
+from upath import UPath
 
 from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.datatypes import MaskedOlmoEarthSample
@@ -292,6 +293,9 @@ class LatentMIMConfig(Config):
     projection_only_target: bool = False
     # Contrastive alignment of the location-token grid with grid-caption embeddings.
     text_head_config: TextAlignmentHeadConfig | None = None
+    # Released weights (a weights.pth, or a directory holding one) to start from with
+    # everything but the text head frozen: a text head trained on a finished model.
+    frozen_backbone_weights: str | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -341,6 +345,10 @@ class LatentMIMConfig(Config):
             raise ValueError(
                 "the supervision heads read the location-token grid, so "
                 "supervision_head_config requires the encoder AttentionPooler"
+            )
+        if self.frozen_backbone_weights is not None and self.text_head_config is None:
+            raise ValueError(
+                "frozen_backbone_weights leaves only the text head to train"
             )
         if self.text_head_config is not None and not encoder_uses_location_tokens:
             raise ValueError(
@@ -394,7 +402,7 @@ class LatentMIMConfig(Config):
             text_head = self.text_head_config.build(
                 embedding_dim=self.encoder_config.attention_pooler_config.pooler_dim
             )
-        return LatentMIM(
+        model = LatentMIM(
             encoder=encoder,
             decoder=decoder,
             reconstructor=reconstructor,
@@ -403,3 +411,25 @@ class LatentMIMConfig(Config):
             projection_only_target=self.projection_only_target,
             text_head=text_head,
         )
+        if self.frozen_backbone_weights is not None:
+            freeze_all_but_text_head(model, self.frozen_backbone_weights)
+        return model
+
+
+def freeze_all_but_text_head(model: LatentMIM, weights: str) -> None:
+    """Load released weights into everything but the text head, and freeze it all."""
+    path = UPath(weights)
+    if path.is_dir():
+        path = path / "weights.pth"
+    with path.open("rb") as f:
+        state_dict = torch.load(f, map_location="cpu")
+    result = model.load_state_dict(state_dict, strict=False)
+    missing = [k for k in result.missing_keys if not k.startswith("text_head.")]
+    if missing or result.unexpected_keys:
+        raise ValueError(
+            f"{weights} does not match the model: missing {missing[:5]}, "
+            f"unexpected {result.unexpected_keys[:5]}"
+        )
+    for name, param in model.named_parameters():
+        param.requires_grad_(name.startswith("text_head."))
+    logger.info("froze all but the text head, from %s", weights)
