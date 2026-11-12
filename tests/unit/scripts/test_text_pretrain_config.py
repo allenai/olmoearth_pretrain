@@ -250,3 +250,44 @@ def test_frozen_arm_differs_from_its_joint_arm_only_in_freezing(
     base_trainer = joint.build_trainer_config(common).as_config_dict()
     base_trainer.pop("max_duration")
     assert trainer == base_trainer
+
+
+@pytest.mark.parametrize(
+    ("finetune_name", "joint_name"),
+    [("text_finetune", "text"), ("text_mix_finetune", "text_mix")],
+)
+def test_finetune_arm_differs_from_its_joint_arm_only_in_init_and_schedule(
+    finetune_name: str, joint_name: str, common: CommonComponents
+) -> None:
+    """Same model, data, masking and batch; started from the published weights."""
+    finetune, joint = _load(finetune_name), _load(joint_name)
+    g = finetune.from_published.__globals__
+    model = finetune.build_model_config(common).as_config_dict()
+    assert model.pop("init_weights") == g["PUBLISHED_WEIGHTS"]
+    base_model = joint.build_model_config(common).as_config_dict()
+    base_model.pop("init_weights", None)
+    assert model == base_model
+
+    for builder in ("build_dataset_config", "build_dataloader_config"):
+        assert (
+            getattr(finetune, builder)(common).as_config_dict()
+            == getattr(joint, builder)(common).as_config_dict()
+        )
+
+    module = finetune.build_train_module_config(common).as_config_dict()
+    base_module = joint.build_train_module_config(common).as_config_dict()
+    optim = module.pop("optim_config")
+    assert optim["lr"] == g["BACKBONE_LR"]
+    assert [(o["params"], o["opts"]) for o in optim["group_overrides"]] == [
+        (["text_head.*"], {"lr": g["HEAD_LR"]})
+    ]
+    assert module.pop("scheduler")["warmup"] == g["WARMUP"]
+    base_module.pop("optim_config")
+    base_module.pop("scheduler")
+    assert module == base_module
+
+    trainer = finetune.build_trainer_config(common).as_config_dict()
+    assert trainer.pop("max_duration")["value"] == g["STEPS"]
+    base_trainer = joint.build_trainer_config(common).as_config_dict()
+    base_trainer.pop("max_duration")
+    assert trainer == base_trainer

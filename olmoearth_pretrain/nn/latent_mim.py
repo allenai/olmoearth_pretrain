@@ -296,6 +296,9 @@ class LatentMIMConfig(Config):
     # Released weights (a weights.pth, or a directory holding one) to start from with
     # everything but the text head frozen: a text head trained on a finished model.
     frozen_backbone_weights: str | None = None
+    # Released weights to start from with everything training: fine-tuning a finished
+    # model with the text head (new) alongside its own objectives.
+    init_weights: str | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -350,6 +353,8 @@ class LatentMIMConfig(Config):
             raise ValueError(
                 "frozen_backbone_weights leaves only the text head to train"
             )
+        if self.frozen_backbone_weights is not None and self.init_weights is not None:
+            raise ValueError("set one of frozen_backbone_weights and init_weights")
         if self.text_head_config is not None and not encoder_uses_location_tokens:
             raise ValueError(
                 "the text head reads the location-token grid, so text_head_config "
@@ -413,11 +418,13 @@ class LatentMIMConfig(Config):
         )
         if self.frozen_backbone_weights is not None:
             freeze_all_but_text_head(model, self.frozen_backbone_weights)
+        if self.init_weights is not None:
+            load_released_weights(model, self.init_weights)
         return model
 
 
-def freeze_all_but_text_head(model: LatentMIM, weights: str) -> None:
-    """Load released weights into everything but the text head, and freeze it all."""
+def load_released_weights(model: LatentMIM, weights: str) -> None:
+    """Load released weights into everything but the text head."""
     path = UPath(weights)
     if path.is_dir():
         path = path / "weights.pth"
@@ -430,6 +437,12 @@ def freeze_all_but_text_head(model: LatentMIM, weights: str) -> None:
             f"{weights} does not match the model: missing {missing[:5]}, "
             f"unexpected {result.unexpected_keys[:5]}"
         )
+    logger.info("loaded %s", weights)
+
+
+def freeze_all_but_text_head(model: LatentMIM, weights: str) -> None:
+    """Load released weights into everything but the text head, and freeze it all."""
+    load_released_weights(model, weights)
     for name, param in model.named_parameters():
         param.requires_grad_(name.startswith("text_head."))
     logger.info("froze all but the text head, from %s", weights)

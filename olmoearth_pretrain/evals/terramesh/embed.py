@@ -1,12 +1,11 @@
 """Embed the TerraMesh-Masks eval tiles with an OlmoEarth checkpoint.
 
   python -m olmoearth_pretrain.evals.terramesh.embed --checkpoint <dir> --inputs <dir> \
-      --out <dir> [--readout head|location|student]
+      --out <dir> [--readout head|location|student] [--tile 16]
 
 ``--checkpoint`` is a trainer checkpoint (config.json + model_and_optim/ or weights.pth)
-or a released model dir. Each 256 px tile is cut into 16 px tiles (single date, so
-T = 1) and encoded with patch size 4 and a location query every 2 px, as ClipEarth
-embeds its windows. The location tokens are stitched back, repeated to 10 m pixels and
+or a released model dir. Each 256 px tile is cut into ``--tile`` px tiles (16 by
+default, as ClipEarth embeds its windows; single date, so T = 1) and encoded with patch size 4 and a location query every 2 px. The location tokens are stitched back, repeated to 10 m pixels and
 made unit length. ``head`` (the default when the checkpoint has a text head) projects the
 encoder's location tokens through it first, so the vectors live in the text space and
 ``head.json`` records how to embed queries into it.
@@ -58,17 +57,17 @@ def _attn_mask_respecting_padding(
     return new_mask
 
 
-def to_tiles(x: Tensor) -> Tensor:
-    """``[B, H, W, ...]`` -> ``[B * (H/TILE) * (W/TILE), TILE, TILE, ...]``."""
+def to_tiles(x: Tensor, tile: int = TILE) -> Tensor:
+    """``[B, H, W, ...]`` -> ``[B * (H/tile) * (W/tile), tile, tile, ...]``."""
     b, h, w = x.shape[:3]
     rest = x.shape[3:]
-    x = x.reshape(b, h // TILE, TILE, w // TILE, TILE, *rest).movedim(3, 2)
-    return x.reshape(b * (h // TILE) * (w // TILE), TILE, TILE, *rest)
+    x = x.reshape(b, h // tile, tile, w // tile, tile, *rest).movedim(3, 2)
+    return x.reshape(b * (h // tile) * (w // tile), tile, tile, *rest)
 
 
-def from_tiles(tokens: Tensor) -> Tensor:
+def from_tiles(tokens: Tensor, tile: int = TILE) -> Tensor:
     """``[n * n, g, g, D]`` tile tokens -> ``[SIZE, SIZE, D]``, repeated to pixels."""
-    n, g = SIZE // TILE, tokens.shape[1]
+    n, g = SIZE // tile, tokens.shape[1]
     grid = tokens.reshape(n, n, g, g, -1).movedim(2, 1).reshape(n * g, n * g, -1)
     repeat = SIZE // (n * g)
     return grid.repeat_interleave(repeat, 0).repeat_interleave(repeat, 1)
@@ -86,9 +85,13 @@ def load(path: str) -> torch.nn.Module:
 
 
 def sample_for(
-    tile: dict, encoder: torch.nn.Module, normalizer: Normalizer, device: torch.device
+    tile: dict,
+    encoder: torch.nn.Module,
+    normalizer: Normalizer,
+    device: torch.device,
+    size: int = TILE,
 ) -> MaskedOlmoEarthSample:
-    """The tile as a batch of 16 px tiles, missing S2 pixels masked."""
+    """The tile as a batch of ``size`` px tiles, missing S2 pixels masked."""
     fields = {}
     for modality in MODALITIES:
         if modality not in tile:
@@ -104,9 +107,11 @@ def sample_for(
             missing, MaskValue.MISSING.value, MaskValue.ONLINE_ENCODER.value
         )
         mask = np.repeat(mask[..., None], num_band_sets, axis=-1)
-        fields[modality] = to_tiles(torch.from_numpy(data)[None]).to(device)
-        fields[f"{modality}_mask"] = to_tiles(torch.from_numpy(mask)[None]).to(device)
-    n = (SIZE // TILE) ** 2
+        fields[modality] = to_tiles(torch.from_numpy(data)[None], size).to(device)
+        fields[f"{modality}_mask"] = to_tiles(torch.from_numpy(mask)[None], size).to(
+            device
+        )
+    n = (SIZE // size) ** 2
     timestamps = torch.from_numpy(tile["timestamp"])[None, None].repeat(n, 1, 1)
     fields["timestamps"] = timestamps.to(device)
     return MaskedOlmoEarthSample(**fields)
@@ -121,6 +126,7 @@ def main() -> None:
     p.add_argument("--readout", choices=sorted(READOUT_KEYS))
     p.add_argument("--patch_size", type=int, default=4)
     p.add_argument("--location_query_patch_size", type=int, default=2)
+    p.add_argument("--tile", type=int, default=TILE, choices=(16, 32, 64, 128, 256))
     a = p.parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = load(a.checkpoint).to(device).eval()
@@ -153,7 +159,7 @@ def main() -> None:
         if os.path.exists(out):
             continue
         tile = dict(np.load(path))
-        sample = sample_for(tile, encoder, normalizer, device)
+        sample = sample_for(tile, encoder, normalizer, device, a.tile)
         with (
             torch.no_grad(),
             torch.autocast(
@@ -171,7 +177,11 @@ def main() -> None:
         if proj is not None:
             with torch.no_grad():
                 tokens = proj(tokens).float()
-        grid = torch.nn.functional.normalize(from_tiles(tokens), dim=-1).cpu().numpy()
+        grid = (
+            torch.nn.functional.normalize(from_tiles(tokens, a.tile), dim=-1)
+            .cpu()
+            .numpy()
+        )
         valid = ~tile["no_data"]
         grid[~valid] = 0
         np.savez(out + ".tmp.npz", vectors=grid.astype(np.float16), valid=valid)

@@ -262,6 +262,31 @@ def test_frozen_backbone_trains_only_the_text_head(tmp_path: Path) -> None:
         config.build()
 
 
+def test_init_weights_loads_everything_but_the_head_and_trains_it_all(
+    tmp_path: Path,
+) -> None:
+    """Released weights load into everything but the head; nothing is frozen."""
+    np.save(tmp_path / "embeddings.npy", np.ones((1, 17, 8), dtype=np.float16))
+    (tmp_path / "meta.json").write_text(json.dumps({"dim": 8}))
+    fresh = _text_mim_config(tmp_path).build()
+    state = {
+        k: v for k, v in fresh.state_dict().items() if not k.startswith("text_head.")
+    }
+    torch.save(state, tmp_path / "weights.pth")
+
+    config = _text_mim_config(tmp_path)
+    config.init_weights = str(tmp_path / "weights.pth")
+    model = config.build()
+    for k, v in state.items():
+        assert torch.equal(model.state_dict()[k], v), k
+    trainable = {n for n, p in model.named_parameters() if p.requires_grad}
+    assert trainable == {n for n, p in fresh.named_parameters() if p.requires_grad}
+
+    config.frozen_backbone_weights = str(tmp_path)
+    with pytest.raises(ValueError, match="set one of"):
+        config.build()
+
+
 def test_latentmim_attention_pooler_3d_encoder_2d_decoder(
     modality_band_set_len_and_total_bands: dict[str, tuple[int, int]],
     masked_sample_dict: dict[str, torch.Tensor],

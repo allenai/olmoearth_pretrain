@@ -47,7 +47,7 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
     return config
 
 
-def shorten(config: TrainerConfig) -> TrainerConfig:
-    """The trainer, run for STEPS steps."""
-    config.max_duration = Duration.steps(STEPS)
+def shorten(config: TrainerConfig, steps: int = STEPS) -> TrainerConfig:
+    """The trainer, run for ``steps`` steps."""
+    config.max_duration = Duration.steps(steps)
     return config
