@@ -1371,9 +1371,8 @@ def check_precomputed_embedding_tasks(
 
     A task is capable when its dataset lists the product's modality in
     supported_modalities, which in turn requires the embedding data to have
-    been baked in (embedding materializer for rslearn datasets,
-    pastis_processor --embedding_products for PASTIS, pretrain h5 stores for
-    GSE). Without this check the sweep would launch jobs that skip every task.
+    been baked in (embedding materializer for rslearn datasets, pretrain h5
+    stores for GSE). Without this check the sweep would launch jobs that skip every task.
     """
     if not isinstance(model, BaselineModelName):
         return
