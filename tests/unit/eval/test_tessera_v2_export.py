@@ -1,0 +1,445 @@
+"""Unit tests for the Tessera v2 export pipeline (pure logic)."""
+
+import copy
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+import torch
+
+from olmoearth_pretrain.evals.datasets import tessera_v2_export
+from olmoearth_pretrain.evals.datasets.tessera_v2_export import (
+    DATASETS,
+    FETCH_LAYERS,
+    FETCH_LAYERS_CONFIG,
+    TESSERA_S2_INDICES,
+    check_names_unique,
+    fetch_time_range,
+    resolve_spec,
+    s1_raw_to_tessera_units,
+    scl_to_valid_mask,
+    write_fetch_config,
+)
+from olmoearth_pretrain.evals.models.tessera.tessera_v2_infer import (
+    encode_tile,
+    get_bin_size,
+)
+from olmoearth_pretrain.evals.models.tessera.tessera_v2_model import (
+    S2_BAND_ORDER,
+    PixelStudent,
+    count_params,
+)
+
+
+def test_scl_to_valid_mask() -> None:
+    """SCL nodata/saturated/dark/shadow/cloud are invalid; cirrus is valid."""
+    scl = np.arange(12)
+    mask = scl_to_valid_mask(scl)
+    assert mask.tolist() == [0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 1]
+
+
+def test_s1_raw_to_tessera_units() -> None:
+    """Replicates their (20*log10(raw)+50)*200 int16 encoding with 0 sentinel."""
+    raw = np.array([0.06, 1.0, 0.0, -1.0, np.nan, np.inf, 1e6], dtype=np.float32)
+    out = s1_raw_to_tessera_units(raw)
+    assert out.dtype == np.float32
+    # 20*log10(0.06) = -24.437 -> (50 - 24.437) * 200 = 5112 (int16-rounded).
+    assert out[0] == 5112.0
+    assert out[1] == 10000.0
+    # Non-positive / non-finite raw values become the 0 missing sentinel.
+    assert out[2] == out[3] == out[4] == 0.0
+    # Clipped to int16 range.
+    assert out[6] == 32767.0
+
+
+def test_tessera_s2_band_order() -> None:
+    """The reorder indices map config band order onto the model's band order."""
+    concat_order = [
+        "B02",
+        "B03",
+        "B04",
+        "B08",
+        "B05",
+        "B06",
+        "B07",
+        "B8A",
+        "B11",
+        "B12",
+    ]
+    assert [concat_order[i] for i in TESSERA_S2_INDICES] == S2_BAND_ORDER
+
+
+def test_fetch_layers_match_the_pastis_config() -> None:
+    """The shared fetch config matches pastis's inline copy, bar max_matches.
+
+    pastis_rslearn declares these layers inline (they predate the shared
+    file). If the two drift, a v2 export on another dataset stops mirroring
+    what pastis was built from.
+
+    One deliberate difference, max_matches: pastis was fetched at the
+    original 150 for S2, which truncated 4.94% of ethiopia_crops windows (and
+    from the END of the year, since the layer sorts datetime ascending), so
+    the shared config raises it. Everything else must stay identical.
+    """
+    shared = json.loads(FETCH_LAYERS_CONFIG.read_text())["layers"]
+    pastis = json.loads(
+        (Path(FETCH_LAYERS_CONFIG).parent / "config_pastis_rslearn.json").read_text()
+    )["layers"]
+    assert sorted(shared) == sorted(FETCH_LAYERS)
+    for name in FETCH_LAYERS:
+        a, b = copy.deepcopy(shared[name]), copy.deepcopy(pastis[name])
+        for layer in (a, b):
+            layer["data_source"]["query_config"].pop("max_matches")
+        assert a == b, name
+    assert (
+        shared["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"]
+        > (pastis["sentinel2_l2a_all"]["data_source"]["query_config"]["max_matches"])
+    )
+
+
+def _window(
+    name: str = "w", group: str = "g", time_range: tuple | None = None
+) -> SimpleNamespace:
+    """Minimal stand-in for an rslearn Window."""
+    return SimpleNamespace(name=name, group=group, time_range=time_range)
+
+
+def _year_range(start: int, end: int) -> tuple[datetime, datetime]:
+    """Calendar range (Jan 1 start, Jan 1 end)."""
+    return (datetime(start, 1, 1, tzinfo=UTC), datetime(end, 1, 1, tzinfo=UTC))
+
+
+def test_fetch_time_range_reads_the_windows_own_year() -> None:
+    """A re-anchored window supplies its own product year."""
+    assert fetch_time_range(_window(time_range=_year_range(2020, 2021)), None) == (
+        _year_range(2020, 2021)
+    )
+
+
+def test_fetch_time_range_rejects_non_calendar_windows() -> None:
+    """A Sept-Sept window is not a product year: report, do not guess."""
+    sept = (datetime(2018, 9, 1, tzinfo=UTC), datetime(2019, 8, 27, tzinfo=UTC))
+    reason = fetch_time_range(_window(time_range=sept), None)
+    assert isinstance(reason, str) and "not a calendar year" in reason
+    assert isinstance(fetch_time_range(_window(), None), str)
+    # ... unless the year is pinned, which is what pastis does.
+    assert fetch_time_range(_window(time_range=sept), 2019) == _year_range(2019, 2020)
+
+
+def test_fetch_time_range_rejects_multi_year_windows() -> None:
+    """(Jan 1 2019, Jan 1 2021) is calendar-aligned but is not one year."""
+    reason = fetch_time_range(_window(time_range=_year_range(2019, 2021)), None)
+    assert isinstance(reason, str) and "!= 1 year" in reason
+
+
+def test_check_names_unique_flags_cross_group_collisions() -> None:
+    """Infer matches fetch windows by name, so names must not repeat."""
+    check_names_unique([_window("a", "g1"), _window("b", "g2")])
+    with pytest.raises(SystemExit, match="occur in more than one group"):
+        check_names_unique([_window("a", "g1"), _window("a", "g2")])
+
+
+def test_resolve_spec_presets_and_overrides() -> None:
+    """Presets pin pastis to 2019 and leave year-aligned datasets per-window."""
+    assert resolve_spec("pastis_rslearn").year == 2019
+    assert resolve_spec("africa_crop_mask_year_aligned").year is None
+    assert (
+        resolve_spec("ethiopia_crops_year_aligned").fetch_group
+        == "ethiopia_crops_tessera_v2"
+    )
+    # Overrides must not leak back into the preset table.
+    assert resolve_spec("pastis_rslearn", year=2020).year == 2020
+    assert DATASETS["pastis_rslearn"].year == 2019
+    with pytest.raises(SystemExit, match="Unknown --dataset"):
+        resolve_spec("nope")
+    with pytest.raises(SystemExit, match="pass --dataset or --fetch_group"):
+        resolve_spec(None)
+
+
+def test_zero_s2_scenes_raises_the_typed_coverage_gap_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Prepared-but-zero-matches S2 is typed so infer records a coverage gap.
+
+    Real case: glance has 4 antimeridian windows with no S2 in the archive at
+    all. They must land in the manifest's coverage_gaps (tolerated by the
+    wiring coverage gate), not windows_failed (hard-blocks wiring).
+    """
+    empty = (
+        np.zeros((0, 2, 2, 10), dtype=np.float32),
+        np.zeros((0,), dtype=np.int64),
+    )
+    monkeypatch.setattr(tessera_v2_export, "_read_scenes", lambda *a, **k: empty)
+    window = SimpleNamespace(group="g", name="w", bounds=(0, 0, 2, 2))
+    with pytest.raises(tessera_v2_export.NoS2ScenesError):
+        tessera_v2_export.build_dpixel_inputs(window)
+    # Callers catching the old ValueError keep working.
+    assert issubclass(tessera_v2_export.NoS2ScenesError, ValueError)
+
+
+def test_shard_hash_partitions_windows_completely_and_disjointly() -> None:
+    """The crc32 shard rule is a stable partition: every window in exactly one shard.
+
+    Stability across processes is why it is crc32 and not hash() -- python
+    salts str hashes per process, which would make concurrent shard jobs
+    overlap and miss windows.
+    """
+    import zlib
+
+    names = [f"sample_{i}" for i in range(1000)]
+    for num_shards in (2, 4, 7):
+        shards = [
+            {n for n in names if zlib.crc32(n.encode()) % num_shards == i}
+            for i in range(num_shards)
+        ]
+        assert set().union(*shards) == set(names)
+        assert sum(len(s) for s in shards) == len(names)
+        # Roughly balanced: no shard more than 40% off the ideal share.
+        ideal = len(names) / num_shards
+        assert all(abs(len(s) - ideal) < 0.4 * ideal for s in shards)
+
+
+def test_every_year_aligned_dataset_has_a_per_window_year_preset() -> None:
+    """All eight supplemental datasets resolve with per-window years.
+
+    setup_tessera_v2.py iterates YEAR_ALIGNED_DATASETS, so a dataset missing
+    here silently falls out of the export sweep.
+    """
+    assert len(tessera_v2_export.YEAR_ALIGNED_DATASETS) == 8
+    for base in tessera_v2_export.YEAR_ALIGNED_DATASETS:
+        spec = resolve_spec(f"{base}_year_aligned")
+        assert spec.year is None
+        assert spec.fetch_group == f"{base}_tessera_v2"
+        assert spec.eval_groups is None
+
+
+def test_read_scenes_distinguishes_absent_from_unmaterialized(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No items is fine; items that never materialized is an error by default.
+
+    The difference matters: a layer with zero matches is normal orbit
+    geometry, while prepared-but-unmaterialized normally means the
+    materialize step is incomplete and the embedding would quietly be built
+    from less data than intended. It is downgraded only for scenes confirmed
+    unfetchable at the source.
+    """
+    bands = (["vv", "vh"],)
+
+    def window(n_items: int) -> SimpleNamespace:
+        """Window with n_items prepared and nothing materialized."""
+        monkeypatch.setattr(
+            tessera_v2_export,
+            "_acquisition_times",
+            lambda w, layer: [datetime(2020, 1, 1, tzinfo=UTC)] * n_items,
+        )
+        return SimpleNamespace(
+            group="g", name="w", bounds=(0, 0, 4, 4), list_completed_layers=list
+        )
+
+    scenes, doys = tessera_v2_export._read_scenes(window(0), "layer", bands)
+    assert scenes.shape == (0, 4, 4, 2) and doys.shape == (0,)
+
+    with pytest.raises(ValueError, match="no materialized layer scenes"):
+        tessera_v2_export._read_scenes(window(5), "layer", bands)
+
+    scenes, doys = tessera_v2_export._read_scenes(
+        window(5), "layer", bands, allow_unmaterialized=True
+    )
+    assert scenes.shape == (0, 4, 4, 2) and doys.shape == (0,)
+
+
+def _write_raster(
+    path: Path, resolution: float, bounds: tuple[int, int, int, int]
+) -> np.ndarray:
+    """Write a (1, H, W) geotiff of distinct values on a UTM grid."""
+    from rasterio.crs import CRS
+    from rslearn.utils.geometry import Projection
+    from rslearn.utils.raster_array import RasterArray
+    from rslearn.utils.raster_format import GeotiffRasterFormat
+    from upath import UPath
+
+    h, w = bounds[3] - bounds[1], bounds[2] - bounds[0]
+    array = (np.arange(h * w, dtype=np.float32) + 1).reshape(1, h, w)
+    projection = Projection(CRS.from_epsg(32631), resolution, -resolution)
+    GeotiffRasterFormat().encode_raster(
+        UPath(path), projection, bounds, RasterArray(chw_array=array)
+    )
+    return array
+
+
+def test_coarse_band_sets_are_edge_filled_on_odd_window_bounds(
+    tmp_path: Path,
+) -> None:
+    """A 20 m band set on an odd-bounded window must not leave a zero seam.
+
+    rslearn stores the coarser band set with the window bounds floor-divided,
+    so for window bounds (1, 1, 9, 9) at 10 m the 20 m raster covers 10 m
+    pixels 0..7 and the window's last row and column fall outside it. Read
+    back, that strip was 0 -- for SCL the no-data class, which masked it out
+    of every scene (seen on lcmap_lu, us_trees, glance, ... fetch windows).
+    """
+    from rasterio.crs import CRS
+    from rasterio.enums import Resampling
+    from rslearn.utils.geometry import Projection
+    from rslearn.utils.raster_format import GeotiffRasterFormat
+    from upath import UPath
+
+    window = SimpleNamespace(
+        projection=Projection(CRS.from_epsg(32631), 10, -10), bounds=(1, 1, 9, 9)
+    )
+    stored = _write_raster(tmp_path / "scl", 20, (0, 0, 4, 4))[0]
+    decoded = (
+        GeotiffRasterFormat()
+        .decode_raster(
+            UPath(tmp_path / "scl"),
+            window.projection,
+            window.bounds,
+            resampling=Resampling.nearest,
+        )
+        .get_chw_array()
+    )
+    assert (decoded[0, -1] == 0).all() and (decoded[0, :, -1] == 0).all()
+
+    filled = tessera_v2_export._fill_beyond_stored_extent(
+        decoded, UPath(tmp_path / "scl"), window
+    )
+    # Covered pixels untouched; the seam copies its covered neighbour.
+    np.testing.assert_array_equal(filled[0, :-1, :-1], decoded[0, :-1, :-1])
+    np.testing.assert_array_equal(filled[0, -1], filled[0, -2])
+    np.testing.assert_array_equal(filled[0, :, -1], filled[0, :, -2])
+    assert set(np.unique(filled)) <= set(np.unique(stored))
+
+    # A raster that covers the window exactly is returned unchanged.
+    full = _write_raster(tmp_path / "b02", 10, window.bounds)
+    np.testing.assert_array_equal(
+        tessera_v2_export._fill_beyond_stored_extent(
+            full, UPath(tmp_path / "b02"), window
+        ),
+        full,
+    )
+
+    # More missing than grid rounding is not silently papered over.
+    _write_raster(tmp_path / "short", 10, (1, 1, 7, 9))
+    with pytest.raises(ValueError, match="more than grid rounding"):
+        tessera_v2_export._fill_beyond_stored_extent(
+            full, UPath(tmp_path / "short"), window
+        )
+
+
+def test_unobserved_pixels_are_the_ones_encode_pixels_skips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """encode_pixels leaves a pixel with no S2 or S1 observation as np.empty.
+
+    That is upstream behaviour (vendored unchanged), so infer overwrites those
+    pixels with NaN; this is the mask it uses. An S1 return alone counts as an
+    observation, since the student embeds S1-only pixels.
+    """
+    t, h, w = 3, 2, 2
+    s2_masks = np.ones((t, h, w), dtype=np.uint8)
+    s2_masks[:, 0, 0] = 0  # cloud in every scene
+    s2_masks[:, 0, 1] = 0
+    s1 = np.full((2, h, w, 2), 1000.0, dtype=np.float32)
+    s1[:, 0, 0] = 0  # and no S1 return at (0, 0)
+    inputs = {
+        "s2_masks": s2_masks,
+        "s1_asc_bands": s1,
+        "s1_desc_bands": np.zeros((0, h, w, 2), dtype=np.float32),
+    }
+    expected = np.zeros((h, w), dtype=bool)
+    expected[0, 0] = True
+    np.testing.assert_array_equal(tessera_v2_export.unobserved_pixels(inputs), expected)
+
+    # And it matches what the vendored student actually leaves unwritten.
+    model = PixelStudent(latent_dim=16, nhead=2, num_layers=1, dim_feedforward=32)
+    sentinel = 12345.0
+    full = np.full
+    monkeypatch.setattr(
+        np, "empty", lambda shape, dtype=None: full(shape, sentinel, dtype=dtype)
+    )
+    out = encode_tile(
+        model,
+        np.full((t, h, w, 10), 1000.0, dtype=np.float32),
+        np.arange(1, t + 1),
+        s2_masks=s2_masks,
+        s1_asc_bands=s1,
+        s1_asc_doys=np.arange(1, 3),
+        device=torch.device("cpu"),
+    )
+    monkeypatch.undo()
+    np.testing.assert_array_equal((out == sentinel).all(axis=-1), expected)
+
+
+def test_write_fetch_config_keeps_storage_and_leaves_the_dataset_alone(
+    tmp_path: Path,
+) -> None:
+    """Only the layers are replaced, and config.json is never touched."""
+    config = tmp_path / "config.json"
+    storage = {"class_path": "rslearn.dataset.storage.sqlite.SQLiteWindowStorage"}
+    original = {"layers": {"gse": {"type": "raster"}}, "storage": storage}
+    config.write_text(json.dumps(original))
+
+    out = write_fetch_config(str(tmp_path))
+    written = json.loads(Path(str(out)).read_text())
+    # rslearn instantiates the window storage from whatever config it is
+    # handed, so the fetch config has to carry the dataset's own.
+    assert written["storage"] == storage
+    assert set(written["layers"]) == set(FETCH_LAYERS)
+    assert json.loads(config.read_text()) == original
+
+
+def test_student_param_counts_match_model_cards() -> None:
+    """Vendored architecture reproduces the published student sizes exactly."""
+    sizes = {
+        (36, 2, 384): 1_066_402,  # nano
+        (64, 4, 1024): 7_112_322,  # small
+        (110, 4, 1792): 21_031_506,  # medium
+        (160, 4, 2560): 43_831_170,  # large
+    }
+    for (latent, layers, ffn), expected in sizes.items():
+        model = PixelStudent(latent_dim=latent, num_layers=layers, dim_feedforward=ffn)
+        assert count_params(model) == expected
+
+
+def test_bin_sizes() -> None:
+    """Valid-observation counts bucketize to the {8,...,256} ladder."""
+    assert get_bin_size(0) == 0
+    assert get_bin_size(1) == 8
+    assert get_bin_size(43) == 48
+    assert get_bin_size(135) == 136
+    assert get_bin_size(500) == 256
+
+
+def test_encode_tile_shapes_and_mask_handling() -> None:
+    """encode_tile runs the full bucketize/pad/forward path on a tiny tile."""
+    torch.manual_seed(0)
+    rng = np.random.default_rng(0)
+    model = PixelStudent(latent_dim=8, num_layers=1, nhead=2, dim_feedforward=16)
+    model.eval()
+
+    t_s2, t_s1, h, w = 5, 4, 3, 3
+    s2 = rng.uniform(0, 4000, (t_s2, h, w, 10)).astype(np.float32)
+    masks = np.ones((t_s2, h, w), dtype=np.uint8)
+    masks[:, 0, 0] = 0  # one fully-cloudy pixel: s2_bin drops to 0
+    s1 = rng.uniform(2000, 8000, (t_s1, h, w, 2)).astype(np.float32)
+
+    out = encode_tile(
+        model,
+        s2_bands=s2,
+        s2_doys=np.array([10, 60, 150, 220, 300]),
+        s2_masks=masks,
+        s1_asc_bands=s1,
+        s1_asc_doys=np.array([15, 105, 195, 285]),
+        s1_desc_bands=None,
+        s1_desc_doys=None,
+        batch_pixels=4,
+        device=torch.device("cpu"),
+    )
+    assert out.shape == (h, w, 128)
+    assert np.isfinite(out).all()
+    # The final non-affine LayerNorm makes every pixel mean-0/std-1.
+    np.testing.assert_allclose(out.mean(axis=-1), 0.0, atol=1e-4)
