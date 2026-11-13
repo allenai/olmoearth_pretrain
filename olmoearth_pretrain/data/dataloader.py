@@ -494,6 +494,11 @@ class OlmoEarthDataLoader(DataLoaderBase):
         if Modality.SRTM.name in self.dataset.training_modalities:
             mock_srtm = rng.random((standard_hw, standard_hw, 1, 1), dtype=np.float32)
             output_dict["srtm"] = mock_srtm
+        if Modality.BLUETOPO.name in self.dataset.training_modalities:
+            mock_bluetopo = rng.random(
+                (standard_hw, standard_hw, 1, 1), dtype=np.float32
+            )
+            output_dict[Modality.BLUETOPO.name] = mock_bluetopo
         if Modality.LANDSAT.name in self.dataset.training_modalities:
             mock_landsat = rng.random(
                 (standard_hw, standard_hw, 12, Modality.LANDSAT.num_bands),

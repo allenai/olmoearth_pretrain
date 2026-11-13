@@ -1,4 +1,10 @@
 {
+  "bluetopo": {
+    "depth": {
+      "max": 40,
+      "min": 0
+    }
+  },
   "cdl": {
     "cdl": {
       "count": 100,
