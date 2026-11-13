@@ -30,6 +30,7 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.shards import ShardIndex
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
     OlmoEarthSample,
@@ -332,6 +333,7 @@ class OlmoEarthDataset(Dataset):
         self.h5py_dir = h5py_dir
         if not self.h5py_dir.exists():
             raise FileNotFoundError(f"H5PY directory does not exist: {self.h5py_dir}")
+        self._shards: ShardIndex | None | bool = False  # False: not looked for yet
         self.cache_dir = cache_dir
         if self.cache_dir is not None:
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -709,7 +711,20 @@ class OlmoEarthDataset(Dataset):
     def read_h5_file(
         self, h5_file_path: UPath
     ) -> tuple[dict[str, Any], dict[str, Any]]:
-        """Read the h5 file."""
+        """Read the h5 file.
+
+        A packed dataset (``shard_index.npz`` next to the sidecars) is read through the shard bytes; the sample
+        file itself does not exist then, so the node-local cache (which copies whole files) does not apply.
+        """
+        shards = self._shard_index()
+        if shards is not None:
+            name = h5_file_path.name
+            sample_index = int(name[len("sample_") : -len(".h5")])
+            self._apply_throttling()
+            with shards.open(sample_index) as slice_file:
+                with h5py.File(slice_file, "r") as h5file:
+                    return self._read_opened_h5(h5file)
+
         if self.cache_dir is not None:
             cache_file_path = self.cache_dir / h5_file_path.name
             logger.debug(f"Caching H5 file {h5_file_path} to {cache_file_path}")
@@ -729,31 +744,44 @@ class OlmoEarthDataset(Dataset):
         sample_dict = {}
         with h5_file_path.open("rb") as f:
             with h5py.File(f, "r") as h5file:
-                logger.debug(
-                    f"Reading h5 file {h5_file_path} with keys {h5file.keys()}"
-                )
-                # timestamps should not be a floating string
-                sample_dict = {
-                    k: v[()]
-                    for k, v in h5file.items()
-                    if k in self.training_modalities
-                    # TODO: Fix the floating string issue
-                    or k in ["timestamps"]
-                }
+                return self._read_opened_h5(h5file)
 
-                if (
-                    missing_mask_group_name
-                    := ConvertToH5py.missing_timesteps_mask_group_name
-                ) in h5file:
-                    missing_timesteps_masks = {
-                        k: v[()]
-                        for k, v in h5file[missing_mask_group_name].items()
-                        if k in self.training_modalities
-                    }
-                else:
-                    # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
-                    missing_timesteps_masks = {}
+    def _read_opened_h5(
+        self, h5file: h5py.File
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Collect the training modality datasets and their missing-timesteps masks from an opened file."""
+        logger.debug(f"Reading h5 file with keys {h5file.keys()}")
+        # timestamps should not be a floating string
+        sample_dict = {
+            k: v[()]
+            for k, v in h5file.items()
+            if k in self.training_modalities
+            # TODO: Fix the floating string issue
+            or k in ["timestamps"]
+        }
+
+        if (
+            missing_mask_group_name
+            := ConvertToH5py.missing_timesteps_mask_group_name
+        ) in h5file:
+            missing_timesteps_masks = {
+                k: v[()]
+                for k, v in h5file[missing_mask_group_name].items()
+                if k in self.training_modalities
+            }
+        else:
+            # To preserve backwards compatibility, we set missing_timesteps_masks to an empty dict if it doesn't exist in file
+            missing_timesteps_masks = {}
         return sample_dict, missing_timesteps_masks
+
+    def _shard_index(self) -> ShardIndex | None:
+        """The packed dataset's index next to the sidecars; None (cached) when the samples are still files."""
+        if self._shards is False:
+            try:
+                self._shards = ShardIndex(self.h5py_dir)
+            except FileNotFoundError:
+                self._shards = None
+        return self._shards
 
     def _get_h5_file_path(self, index: int) -> UPath:
         """Get the h5 file path."""
