@@ -149,6 +149,7 @@ def make_dataset(
     Args:
         tmp_path: pytest tmp_path fixture value.
         time_ranges: per-window time ranges; defaults to TIME_RANGE for all.
+        window_options: options set on every window; defaults to none.
 
     Returns:
         tuple of (dataset path, list of windows). The third window ("w3") lies
@@ -283,9 +284,7 @@ def test_windows_without_time_range_are_skipped(tmp_path: Path) -> None:
 
 def test_synthetic_geometry_blocks_materialization(tmp_path: Path) -> None:
     """Fabricated coordinates must never be used to fetch embedding products."""
-    ds_path, _ = make_dataset(
-        tmp_path, window_options={"synthetic_geometry": True}
-    )
+    ds_path, _ = make_dataset(tmp_path, window_options={"synthetic_geometry": True})
 
     with pytest.raises(ValueError, match="synthetic geometry"):
         materialize_product(ds_path, FAKE_AEF)

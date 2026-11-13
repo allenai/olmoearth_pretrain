@@ -71,12 +71,12 @@ def test_ai4sf_windows_falls_back_to_downloaded_val_split(tmp_path: Path) -> Non
     assert list(ai4sf_windows(tmp_path)) == [("val", "tile", image)]
 
 
-def test_ctm_selected_timesteps_reverse_imagery_and_dates() -> None:
-    """Selected acquisitions follow PANGAEA's reversed time order."""
+def test_ctm_selected_timesteps_keeps_last_six_in_order() -> None:
+    """The last six acquisitions are kept with imagery and dates aligned."""
     arr = np.arange(8).reshape(1, 1, 1, 8)
     dates = [datetime(2020, 1, day, tzinfo=UTC) for day in range(1, 9)]
 
     selected_arr, selected_dates = ctm_selected_timesteps(arr, dates)
 
-    np.testing.assert_array_equal(selected_arr.ravel(), [7, 6, 5, 4, 3, 2])
-    assert selected_dates == dates[7:1:-1]
+    np.testing.assert_array_equal(selected_arr.ravel(), [2, 3, 4, 5, 6, 7])
+    assert selected_dates == dates[2:]

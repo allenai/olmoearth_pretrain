@@ -27,7 +27,7 @@ import json
 import logging
 import shutil
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -229,11 +229,11 @@ def export_ai4smallfarms(
 # series from 2017 stored as (C, H, W, T) npz arrays with no geolocation.
 # PANGAEA flips the time axis and right-pads to 6 timesteps with F.pad; every
 # sample has more than 6, so the negative pad CROPS, keeping the last 6 array
-# entries in reverse order. We store those entries in reverse order, each as
-# its own layer dated from the sample's json. Labels 1-4 (sorghum, maize, rice,
-# groundnut) become 0-3; everything else is ignored. S1 ships in dB but rslearn
-# datasets store linear power (the eval loader applies convert_to_db), so it is
-# written as 10 ** (dB / 10).
+# entries (in reverse). We store those entries in their original array order,
+# each as its own layer dated from the sample's json, so time runs forward.
+# Labels 1-4 (sorghum, maize, rice, groundnut) become 0-3; everything else is
+# ignored. S1 ships in dB but rslearn datasets store linear power (the eval
+# loader applies convert_to_db), so it is written as 10 ** (dB / 10).
 
 CTM_GROUP = "croptypemapping"
 CTM_TIMESTEPS = 6
@@ -262,8 +262,8 @@ def ctm_dates(root: Path, sensor: str, sample_id: str) -> list[datetime]:
 def ctm_selected_timesteps(
     arr: np.ndarray, dates: list[datetime]
 ) -> tuple[np.ndarray, list[datetime]]:
-    """Select the last six acquisitions in PANGAEA's reversed time order."""
-    return arr[..., -CTM_TIMESTEPS:][..., ::-1], dates[-CTM_TIMESTEPS:][::-1]
+    """Select the last six acquisitions PANGAEA keeps, in array order."""
+    return arr[..., -CTM_TIMESTEPS:], dates[-CTM_TIMESTEPS:]
 
 
 def export_ctm_sample(
@@ -348,7 +348,7 @@ def export_croptypemapping(src: Path, ds_path: UPath, workers: int) -> None:
     logger.info(json.dumps(counts))
 
 
-EXPORTERS = {
+EXPORTERS: dict[str, Callable[..., None]] = {
     "ai4smallfarms": export_ai4smallfarms,
     "croptypemapping": export_croptypemapping,
 }
