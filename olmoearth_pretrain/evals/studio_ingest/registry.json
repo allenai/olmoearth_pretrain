@@ -18023,7 +18023,7 @@
       },
       "num_classes": 19,
       "num_timesteps": 12,
-      "source_path": "/weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/pastis_changed/dataset",
+      "source_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_changed",
       "split_stats": {
         "test": {
           "count": 1908
@@ -18040,7 +18040,7 @@
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
-      "weka_path": "/weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/pastis_changed/dataset",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/pastis_changed",
       "window_size": 128
     },
     "pastis_planteur_bal10": {
@@ -28896,7 +28896,7 @@
       },
       "num_classes": 29,
       "num_timesteps": 12,
-      "source_path": "/weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset",
+      "source_path": "/weka/dfive-default/olmoearth/eval_datasets/planteur_codes",
       "split_stats": {
         "test": {
           "count": 443
@@ -28913,7 +28913,7 @@
       "task_type": "segmentation",
       "timeseries": true,
       "use_pretrain_norm": true,
-      "weka_path": "/weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset",
+      "weka_path": "/weka/dfive-default/olmoearth/eval_datasets/planteur_codes",
       "window_size": 128
     },
     "small_landsat_vessel_length": {

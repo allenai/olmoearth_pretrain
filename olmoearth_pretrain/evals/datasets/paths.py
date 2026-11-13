@@ -15,7 +15,7 @@ _DEFAULTS = {
     "PASTIS_DIR_ORIG": "/weka/dfive-default/presto_eval_sets/pastis_r_origsize",
     "PASTIS_DIR_PARTITION": "/weka/dfive-default/presto_eval_sets/pastis",
     # pastis_r with the original RPG 2019 crop codes as labels (53 codes + background)
-    "PASTIS_CODES_DIR": "/weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/pastis_codes/pastis_r_codes",
+    "PASTIS_CODES_DIR": "/weka/dfive-default/olmoearth/eval_datasets/pastis_r_codes",
     "PASTIS_DROM_RAW_DIR": "/weka/dfive-default/piperw/pastis2_drom_pastis_format",
     "FIFTY_CITIES_DIR": "/weka/dfive-default/presto_eval_sets/fifty_cities",
     "SBD_DIR": "/weka/dfive-default/presto_eval_sets/similar_but_different",

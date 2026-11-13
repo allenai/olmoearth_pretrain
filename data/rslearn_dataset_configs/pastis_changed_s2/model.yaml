@@ -4,7 +4,7 @@
 data:
   class_path: rslearn.train.data_module.RslearnDataModule
   init_args:
-    path: /weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/pastis_changed/dataset
+    path: /weka/dfive-default/olmoearth/eval_datasets/pastis_changed
     inputs:
       sentinel2_l2a:
         data_type: raster

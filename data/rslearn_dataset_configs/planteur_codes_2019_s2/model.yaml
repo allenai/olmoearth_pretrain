@@ -1,9 +1,9 @@
 # PLANTEUR 2019 with original RPG crop codes (29 classes, tenure-only variants merged).
-# Copy of pastis2_drom_bg8void_2019_s2 reading label_codes from /weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset.
+# Copy of pastis2_drom_bg8void_2019_s2 reading label_codes from /weka/dfive-default/olmoearth/eval_datasets/planteur_codes.
 data:
   class_path: rslearn.train.data_module.RslearnDataModule
   init_args:
-    path: /weka/dfive-default/agent/piperbots/2026-10-28-rpg-history/planteur_codes/dataset
+    path: /weka/dfive-default/olmoearth/eval_datasets/planteur_codes
     inputs:
       sentinel2_l2a:
         data_type: raster
