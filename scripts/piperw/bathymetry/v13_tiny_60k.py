@@ -19,7 +19,6 @@ from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "official" / "v1_2"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import base  # noqa: E402
 import tiny  # noqa: E402
@@ -28,8 +27,8 @@ from olmo_core.distributed.parallel import (  # noqa: E402
     DataParallelConfig,
     DataParallelType,
 )
+from olmo_core.train.common import Duration  # noqa: E402
 from olmo_core.train.config import TrainerConfig  # noqa: E402
-from tiny_60k import build_trainer_config as build_60k_trainer_config  # noqa: E402
 
 from olmoearth_pretrain.data.constants import Modality  # noqa: E402
 from olmoearth_pretrain.data.dataloader import OlmoEarthDataLoaderConfig  # noqa: E402
@@ -48,6 +47,7 @@ from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
 )
 
 WANDB_PROJECT = "2026_10_29_bathymetry_direct_supervision"
+MAX_STEPS = 60_000
 BLUETOPO_DIR = "/weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/bluetopo_train"
 
 POOLER_DEPTH = 4
@@ -259,8 +259,9 @@ def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
 
 
 def build_trainer_config(common: CommonComponents) -> TrainerConfig:
-    """tiny_60k's trainer, logged to this project."""
-    config = build_60k_trainer_config(common)
+    """v1.2 trainer, shortened to MAX_STEPS and logged to this project."""
+    config = base.build_trainer_config(common)
+    config.max_duration = Duration.steps(MAX_STEPS)
     config.callbacks["wandb"].project = WANDB_PROJECT
     return config
 
