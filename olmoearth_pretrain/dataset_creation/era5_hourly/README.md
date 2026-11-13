@@ -67,6 +67,8 @@ fallback to a neighbouring cell.
 | 4 | `validate --shard N` | `progress/shard_NNN.validate.json` |
 
 `scripts/era5_supervised/v0/era5_hourly/launch_build.sh` runs them in a
-CPU-only Beaker job (one job per shard; `plan` once, before the others). Every
-stage resumes or skips finished work. The token comes from the workspace
-secret `RSLEARN_EARTHDATAHUB_TOKEN` as `EARTHDATAHUB_TOKEN`.
+CPU-only Beaker job (one job per shard; `plan` once, before the others) on a
+jupiter, neptune or saturn node: one job per node, at most 64 workers, at
+most 50 jobs at once. Every stage resumes or skips finished work. The token
+comes from the workspace secret `RSLEARN_EARTHDATAHUB_TOKEN` as
+`EARTHDATAHUB_TOKEN`.
