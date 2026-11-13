@@ -6,7 +6,6 @@ import hashlib
 import logging
 import shutil
 import time
-import warnings
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -41,71 +40,7 @@ from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
-# Satellite-derived bathymetry (SDB), following Li et al. 2021, "Automated Global
-# Shallow Water Bathymetry Mapping Using Google Earth Engine" (the Allen Coral Atlas
-# method; reference code github.com/CoralMapping/GEE_Sentinel2_Bathymetry_Paper).
-# Band indices are positions in Modality.SENTINEL2_L2A.band_order.
-_SDB_B02, _SDB_B03, _SDB_B08, _SDB_B05, _SDB_B09 = 0, 1, 3, 4, 11
-_SDB_CHLA = 0.5
-_SDB_M0 = 52.073 * np.exp(0.957 * _SDB_CHLA)
-_SDB_M1 = 50.156 * np.exp(0.957 * _SDB_CHLA)
-_SDB_MAX_DEPTH = 20.0
-# Pixels without a usable depth (land, turbid or optically deep water) get this value
-# rather than MISSING_VALUE, because token masks only look at one pixel per patch.
-SDB_FILL_DEPTH = -5.0
-# Samples with fewer valid depth pixels than this are treated as missing the modality.
-SDB_MIN_VALID_FRACTION = 0.01
-# Pixels where reference bathymetry (GEBCO) is deeper than this are optically deep: the
-# blue/green ratio there saturates and returns spurious depths.
-SDB_DEEP_WATER_ELEVATION = -30
 BLUETOPO_MIN_VALID_FRACTION = 0.01
-
-
-def compute_sdb(
-    s2_data: np.ndarray,
-    deep_water: np.ndarray | None = None,
-    fill_value: float = SDB_FILL_DEPTH,
-) -> tuple[np.ndarray, float]:
-    """Compute a satellite-derived depth map from a raw S2 L2A time series.
-
-    Per-timestep clean-water masks (cloud/haze via B09, glint via B05/B08, NDWI > 0)
-    select observations for a per-pixel median composite of B02/B03, which is
-    converted to below-surface remote sensing reflectance and mapped to depth with
-    the blue/green log ratio. Unlike the reference code, out-of-range depths are
-    marked invalid instead of clipped: negative values come from turbid water and
-    values past 20 m from water where the bottom is not visible.
-
-    Args:
-        s2_data: Raw (un-normalized) S2 L2A data, shape [H, W, T, C].
-        deep_water: Optional boolean [H, W], True where the water is known to be too
-            deep for the bottom to be visible. Those pixels are invalid.
-        fill_value: Value written to invalid pixels.
-
-    Returns:
-        Tuple of (depth array [H, W, 1, 1] with fill_value where invalid,
-        fraction of valid pixels).
-    """
-    s2 = s2_data.astype(np.float32)
-    b2, b3 = s2[..., _SDB_B02], s2[..., _SDB_B03]
-    b5, b8, b9 = s2[..., _SDB_B05], s2[..., _SDB_B08], s2[..., _SDB_B09]
-    ndwi = (b3 - b8) / np.maximum(b3 + b8, 1.0)
-    clean = (b9 > 50) & (b9 < 300) & (b3 > 100) & (b5 < 1000) & (b8 < 300) & (ndwi > 0)
-    has_obs = clean.any(axis=-1)
-    # All-NaN pixels (never clean water) are expected; they end up invalid below.
-    with np.errstate(all="ignore"), warnings.catch_warnings():
-        warnings.simplefilter("ignore", RuntimeWarning)
-        composite = np.nanmedian(
-            np.where(clean[..., None], np.stack([b2, b3], axis=-1), np.nan), axis=2
-        )
-        rrs_above = composite / (10000 * np.pi)
-        rrs_below = rrs_above / (0.52 + 1.7 * rrs_above)
-        ln_rrs = np.log(1000 * rrs_below)
-        depth = _SDB_M0 * ln_rrs[..., 0] / ln_rrs[..., 1] - _SDB_M1
-    valid = has_obs & np.isfinite(depth) & (depth >= 0) & (depth <= _SDB_MAX_DEPTH)
-    if deep_water is not None:
-        valid &= ~deep_water
-    depth = np.where(valid, depth, fill_value)
-    return depth[:, :, None, None], float(valid.mean())
 
 
 # =============================================================================
@@ -471,8 +406,6 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
-        sdb_gebco_patches_file: str | None = None,
-        sdb_invalid_as_missing: bool = False,
         bluetopo_dir: str | None = None,
     ):
         """Initialize the dataset.
@@ -499,14 +432,6 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
-            sdb_gebco_patches_file: Optional int16 numpy array [N, h, w] indexed by sample:
-                GEBCO elevation on a coarse grid aligned with each sample. Pixels deeper
-                than SDB_DEEP_WATER_ELEVATION get no sdb target. Only used when sdb is a
-                training modality.
-            sdb_invalid_as_missing: Write MISSING_VALUE instead of SDB_FILL_DEPTH to
-                pixels without a usable depth. For pixel-level losses that skip missing
-                pixels (the supervision head); the token-level latent-MIM path needs the
-                fill value.
             bluetopo_dir: Directory with idx.npy (sorted sample indices) and depth_dm.npy
                 (int16 [M, h, w], BlueTopo depth in decimetres on each sample's grid, -1 =
                 no label). Only used when bluetopo is a training modality; samples not in
@@ -551,9 +476,6 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
-        self.sdb_gebco_patches_file = sdb_gebco_patches_file
-        self._sdb_gebco_patches: np.ndarray | None = None
-        self.sdb_invalid_as_missing = sdb_invalid_as_missing
         self.bluetopo_dir = bluetopo_dir
         self._bluetopo: tuple[np.ndarray, np.ndarray] | None = None
 
@@ -735,19 +657,6 @@ class OlmoEarthDataset(Dataset):
             return self.normalizer_computed.normalize(modality, image)
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
-
-    def _sdb_deep_water(self, index: int, size: int) -> np.ndarray | None:
-        """Per-pixel deep-water mask for a size x size sample from the GEBCO patches."""
-        if self.sdb_gebco_patches_file is None:
-            return None
-        if self._sdb_gebco_patches is None:
-            # Opened lazily so each dataloader worker maps the file itself.
-            self._sdb_gebco_patches = np.load(
-                self.sdb_gebco_patches_file, mmap_mode="r"
-            )
-        deep = self._sdb_gebco_patches[index] < SDB_DEEP_WATER_ELEVATION
-        scale = size // deep.shape[0]
-        return np.repeat(np.repeat(deep, scale, axis=0), scale, axis=1)
 
     def _bluetopo_depth(self, index: int) -> np.ndarray | None:
         """BlueTopo depth [h, w, 1, 1] in metres (MISSING_VALUE where unlabelled), if any."""
@@ -1035,21 +944,7 @@ class OlmoEarthDataset(Dataset):
         )
         sample_dict["timestamps"] = timestamps
         sample_dict, current_length = self._pad_timestamps(sample_dict)
-        # Computed before subsetting so the composite uses the full time series.
-        # Leaving it out of sample_dict marks it missing for this sample.
-        if (
-            Modality.SDB.name in self.training_modalities
-            and "sentinel2_l2a" in sample_dict
-        ):
-            sdb, valid_fraction = compute_sdb(
-                sample_dict["sentinel2_l2a"],
-                self._sdb_deep_water(index, sample_dict["sentinel2_l2a"].shape[0]),
-                fill_value=(
-                    MISSING_VALUE if self.sdb_invalid_as_missing else SDB_FILL_DEPTH
-                ),
-            )
-            if valid_fraction >= SDB_MIN_VALID_FRACTION:
-                sample_dict[Modality.SDB.name] = sdb.astype(self.dtype)
+        # Samples without BlueTopo labels leave it out, which marks it missing.
         if Modality.BLUETOPO.name in self.training_modalities:
             bluetopo = self._bluetopo_depth(index)
             if bluetopo is not None:
@@ -1134,8 +1029,6 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
-    sdb_gebco_patches_file: str | None = None
-    sdb_invalid_as_missing: bool = False
     bluetopo_dir: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:

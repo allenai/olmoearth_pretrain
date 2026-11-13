@@ -14,7 +14,7 @@ OLD = Path(
 )
 OLD_BUNDLE = "/weka/dfive-default/agent/piperbots/2026-10-26-piperw-bathymetry-target/bundles/base"
 BUNDLES = HERE.parent / "bundles"
-ARMS = ["sdbprobe", "sdbsup", "btsup", "sdbbtsup"]
+ARMS = ["base", "btsup"]
 
 
 def main() -> None:

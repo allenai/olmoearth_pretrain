@@ -106,8 +106,6 @@ class OlmoEarthSample(NamedTuple):
     era5_10: ArrayTensor | None = None  # [B, T, len(ERA5_bands)]
     # ndvi is computed from S2 L2A bands B04 (Red) and B08 (NIR), not loaded from file.
     ndvi: ArrayTensor | None = None  # [B, H, W, T, 1]
-    # sdb is computed from the S2 L2A time series, not loaded from file.
-    sdb: ArrayTensor | None = None  # [B, H, W, 1, 1]
     # bluetopo is NOAA survey depth, precomputed per sample (bluetopo_dir).
     bluetopo: ArrayTensor | None = None  # [B, H, W, 1, 1]
     eurocrops: ArrayTensor | None = None  # [B, H, W, 1, 1]
@@ -396,8 +394,6 @@ class MaskedOlmoEarthSample(NamedTuple):
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
     ndvi_mask: Tensor | None = None
-    sdb: Tensor | None = None
-    sdb_mask: Tensor | None = None
     bluetopo: Tensor | None = None
     bluetopo_mask: Tensor | None = None
     eurocrops: Tensor | None = None
@@ -554,8 +550,6 @@ class TokensAndMasks(NamedTuple):
     era5_10_mask: Tensor | None = None
     ndvi: Tensor | None = None
     ndvi_mask: Tensor | None = None
-    sdb: Tensor | None = None
-    sdb_mask: Tensor | None = None
     bluetopo: Tensor | None = None
     bluetopo_mask: Tensor | None = None
     eurocrops: Tensor | None = None

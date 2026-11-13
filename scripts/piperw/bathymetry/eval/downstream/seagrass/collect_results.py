@@ -17,13 +17,8 @@ import numpy as np
 HERE = Path(
     "/weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/downstream/seagrass"
 )
-ARMS = ["sdbprobe", "sdbsup", "btsup", "sdbbtsup"]
-PAIRS = [
-    ("sdbprobe", "sdbsup"),
-    ("sdbprobe", "btsup"),
-    ("sdbprobe", "sdbbtsup"),
-    ("sdbsup", "sdbbtsup"),
-]
+ARMS = ["base", "btsup"]
+PAIRS = [("base", "btsup")]
 METRICS = ["test_F1_f1/avg", "test_F1_f1/cls_0", "test_F1_f1/cls_1"]
 ROW = re.compile(r"│\s*(test_\S+)\s*│\s*([-0-9.eE]+)\s*│")
 NAME = re.compile(r"bathy_v13(\w+?)_(mallorca|menorca)_(linprobe|finetune)_s(\d)")

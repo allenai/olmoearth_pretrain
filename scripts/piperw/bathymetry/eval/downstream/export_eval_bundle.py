@@ -1,9 +1,9 @@
-"""Export a pretraining checkpoint as a model_path bundle without the sdb and bluetopo modalities.
+"""Export a pretraining checkpoint as a model_path bundle without the bluetopo modality.
 
 The seagrass evals run rslearn with olmoearth_pretrain from git main, which does not know
-Modality.SDB. sdb is decode-only, so the encoder never uses its parameters on S2 input:
-drop them, drop sdb from the config, and check the stripped model loads strictly and gives
-the same encoder output as the original. Both arms are exported the same way.
+Modality.BLUETOPO. bluetopo is decode-only, so the encoder never uses its parameters on S2
+input: drop them, drop bluetopo from the config, and check the stripped model loads strictly
+and gives the same encoder output as the original. Both arms are exported the same way.
 
 Usage (from the olmoearth_pretrain piperw/bathymetry checkout):
   .venv/bin/python export_eval_bundle.py <checkpoint step dir> <output dir>
@@ -24,7 +24,7 @@ from olmoearth_pretrain.model_loader import (
     patch_legacy_encoder_config,
 )
 
-DROP = {Modality.SDB.name, Modality.BLUETOPO.name}
+DROP = {Modality.BLUETOPO.name}
 
 
 def strip_config(node):

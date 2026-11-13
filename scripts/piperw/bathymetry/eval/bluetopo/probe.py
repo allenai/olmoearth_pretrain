@@ -7,8 +7,7 @@ seen by the probe. Ridge (standardised features, alpha by GCV on the training fo
 training-set sizes. The out-of-fold predictions are then compared between arms with a
 cluster bootstrap over cells.
 
-Feature sets: each embedding file given, the 12-band log median (no encoder), and the
-dataset's own sdb (formula output, token mean, only where valid; scored as a 1-d linear fit).
+Feature sets: each embedding file given, and the 12-band log median (no encoder).
 
 With --holdout, only samples in the 1-degree cells held out from BlueTopo training
 (holdout_cells.json, see make_train_labels.py) are used.
@@ -144,13 +143,10 @@ def main() -> None:
     feats["bands"] = np.nan_to_num(feats["bands"], nan=0.0)
     for name, path in arms.items():
         feats[name] = np.load(path, mmap_mode="r")[keep_s][s, r, c].astype(np.float32)
-    sdb = blocks(inp["sdb"][keep_s].astype(np.float32))[s, r, c]
-    sdb_valid = np.isfinite(sdb).all(-1)
-    sdb_mean = np.nanmean(np.where(np.isfinite(sdb), sdb, np.nan), -1)
 
     print(
         f"samples {len(idx)} (dropped {int((~keep_s).sum())} with tile res > {MAX_TILE_RES} m), "
-        f"tokens {len(y)}, cells {len(np.unique(cell))}, sdb-valid tokens {int(sdb_valid.sum())}"
+        f"tokens {len(y)}, cells {len(np.unique(cell))}"
     )
     print(f"depth percentiles 5/50/95: {np.percentile(y, [5, 50, 95]).round(1)}")
 
@@ -158,10 +154,8 @@ def main() -> None:
         "n_samples": int(len(idx)),
         "n_tokens": int(len(y)),
         "n_cells": int(len(np.unique(cell))),
-        "n_sdb_valid_tokens": int(sdb_valid.sum()),
         "probe": {},
         "paired": {},
-        "sdb_subset": {},
     }
     oof = {}
     for size in SIZES:
@@ -194,21 +188,6 @@ def main() -> None:
             print(
                 f"{key}: dR² {d['r2_diff']:+.3f} {np.round(d['r2_diff_ci95'], 3)}, "
                 f"dMAE {d['mae_diff']:+.2f} m {np.round(d['mae_diff_ci95'], 2)}"
-            )
-
-    # sdb formula vs probes, on the tokens where the formula gives a depth
-    m = sdb_valid
-    if m.sum() > 100:
-        sdb_fit = oof_predict(sdb_mean[m, None], y[m], cell[m], size, 0)
-        results["sdb_subset"]["sdb_formula_raw"] = metrics(y[m], sdb_mean[m])
-        results["sdb_subset"]["sdb_formula_linear_fit"] = metrics(y[m], sdb_fit)
-        for name in ["bands", *names]:
-            results["sdb_subset"][f"{name}@{size}"] = metrics(
-                y[m], oof[(name, size)][m]
-            )
-        for k, v in results["sdb_subset"].items():
-            print(
-                f"[sdb-valid tokens] {k:>24}: R² {v['r2']:.3f}  MAE {v['mae']:.2f} m  rho {v['spearman']:.3f}"
             )
 
     Path(args.out).write_text(json.dumps(results, indent=1))

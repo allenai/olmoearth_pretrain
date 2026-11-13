@@ -324,7 +324,6 @@
             1.25,
             1.27
           ],
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 133,
           "pos_weight": false,
@@ -334,7 +333,6 @@
         },
         "openstreetmap_raster": {
           "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionModalityConfig",
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 30,
           "pos_weight": true,
@@ -344,7 +342,6 @@
         },
         "srtm": {
           "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionModalityConfig",
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 1,
           "pos_weight": false,
@@ -354,7 +351,6 @@
         },
         "worldcereal": {
           "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionModalityConfig",
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 8,
           "pos_weight": true,
@@ -377,7 +373,6 @@
             0.95,
             1.0
           ],
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 11,
           "pos_weight": false,
@@ -387,7 +382,6 @@
         },
         "wri_canopy_height_map": {
           "_CLASS_": "olmoearth_pretrain.nn.supervision_head.SupervisionModalityConfig",
-          "detach_input": false,
           "norm_pix_loss": false,
           "num_output_channels": 1,
           "pos_weight": false,

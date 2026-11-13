@@ -561,16 +561,6 @@ class Modality:
         ignore_when_parsing=True,  # computed from S2 L2A, not loaded from file
     )
 
-    # Satellite-derived bathymetry (Li et al. 2021, the Allen Coral Atlas method),
-    # computed from the S2 L2A time series at load time. Depth in metres, 0-20.
-    SDB = ModalitySpec(
-        name="sdb",
-        tile_resolution_factor=16,
-        band_sets=[BandSet(["depth"], 16)],
-        is_multitemporal=False,
-        ignore_when_parsing=True,
-    )
-
     # NOAA BlueTopo survey bathymetry (US waters), precomputed per sample on its 10 m grid.
     # Depth in metres, 0-40.
     BLUETOPO = ModalitySpec(
