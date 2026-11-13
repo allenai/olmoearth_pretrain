@@ -254,6 +254,17 @@ def materialize_product(
     dataset_path = UPath(dataset_path)
     layer_name = product.modality.name
     all_windows = Dataset(dataset_path).storage.get_windows(groups=groups)
+    synthetic_windows = [
+        window
+        for window in all_windows
+        if window.options and window.options.get("synthetic_geometry")
+    ]
+    if synthetic_windows:
+        examples = ", ".join(_window_id(window) for window in synthetic_windows[:5])
+        raise ValueError(
+            f"Cannot materialize embeddings for {len(synthetic_windows)} windows "
+            f"with synthetic geometry (e.g. {examples})."
+        )
 
     no_year = [w for w in all_windows if w.time_range is None]
     for window in no_year:

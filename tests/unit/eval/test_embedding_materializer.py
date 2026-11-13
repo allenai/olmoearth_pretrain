@@ -140,7 +140,9 @@ def reset_fake_source(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def make_dataset(
-    tmp_path: Path, time_ranges: list[tuple[datetime, datetime] | None] | None = None
+    tmp_path: Path,
+    time_ranges: list[tuple[datetime, datetime] | None] | None = None,
+    window_options: dict[str, Any] | None = None,
 ) -> tuple[UPath, list[Window]]:
     """Create a tiny rslearn dataset on disk with three windows.
 
@@ -169,6 +171,7 @@ def make_dataset(
             projection=PROJECTION,
             bounds=window_bounds(idx),
             time_range=time_range,
+            options=window_options,
         )
         window.save()
         windows.append(window)
@@ -276,6 +279,18 @@ def test_windows_without_time_range_are_skipped(tmp_path: Path) -> None:
     assert manifest["windows_without_year"] == ["default/w2"]
     assert manifest["num_windows_written"] == 1
     assert not windows[1].is_layer_completed("gse")
+
+
+def test_synthetic_geometry_blocks_materialization(tmp_path: Path) -> None:
+    """Fabricated coordinates must never be used to fetch embedding products."""
+    ds_path, _ = make_dataset(
+        tmp_path, window_options={"synthetic_geometry": True}
+    )
+
+    with pytest.raises(ValueError, match="synthetic geometry"):
+        materialize_product(ds_path, FAKE_AEF)
+
+    assert not (ds_path / CONFIG_BACKUP_NAME).exists()
 
 
 def test_request_time_offset_handles_leap_years(tmp_path: Path) -> None:

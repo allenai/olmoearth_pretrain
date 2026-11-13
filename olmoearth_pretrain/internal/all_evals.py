@@ -398,7 +398,7 @@ EVAL_TASKS = {
         epochs=50,
         eval_mode=EvalMode.LINEAR_PROBE,
         primary_metric=EvalMetric.MIOU,
-        window_size=64,
+        window_size=128,
         tile_samples=True,
     ),
     **{

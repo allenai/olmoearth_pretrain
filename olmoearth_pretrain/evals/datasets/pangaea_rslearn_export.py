@@ -13,7 +13,11 @@ the pixels it shares with its neighbour are labelled IGNORE_LABEL, so each
 source pixel is scored exactly once and no window holds padded imagery.
 
     python -m olmoearth_pretrain.evals.datasets.pangaea_rslearn_export \
-        ai4smallfarms --src <pangaea root_path> --ds_path <out rslearn root>
+        ai4smallfarms --src <pangaea root_path> --tile-metadata <tiles_asia.gpkg> \
+        --ds_path <out rslearn root>
+
+AI4SmallFarms downloads may not include ``tiles_asia.gpkg``; in that case, pass
+the acquisition metadata file separately with ``--tile-metadata``.
 """
 
 import argparse
@@ -102,10 +106,13 @@ AI4SF_BANDS = ["B02", "B03", "B04", "B08"]
 AI4SF_SPLITS = {"train": "train", "validate": "val", "test": "test"}
 
 
-def ai4sf_tile_dates(src: Path) -> dict[str, tuple[datetime, datetime]]:
+def ai4sf_tile_dates(
+    src: Path, tile_metadata_path: Path | None = None
+) -> dict[str, tuple[datetime, datetime]]:
     """Tile stem (e.g. '0_vietnam') -> its acquisition month, from tiles_asia.gpkg."""
     out = {}
-    with fiona.open(src / "sentinel-2-asia/tiles_asia.gpkg") as tiles:
+    metadata_path = tile_metadata_path or src / "sentinel-2-asia/tiles_asia.gpkg"
+    with fiona.open(metadata_path) as tiles:
         for t in tiles:
             p = t["properties"]
             year, month = int(p["year"]), int(p["month"])
@@ -120,7 +127,10 @@ def ai4sf_tile_dates(src: Path) -> dict[str, tuple[datetime, datetime]]:
 def ai4sf_windows(src: Path) -> Iterator[tuple[str, str, Path]]:
     """(split tag, tile stem, image path) for every tile."""
     for folder, split in AI4SF_SPLITS.items():
-        for image in sorted((src / f"sentinel-2-asia/{folder}/images").glob("*.tif")):
+        image_dir = src / f"sentinel-2-asia/{folder}/images"
+        if folder == "validate" and not image_dir.exists():
+            image_dir = src / "sentinel-2-asia/val/images"
+        for image in sorted(image_dir.glob("*.tif")):
             yield split, image.stem, image
 
 
@@ -187,10 +197,15 @@ def export_ai4sf_tile(
     return n
 
 
-def export_ai4smallfarms(src: Path, ds_path: UPath, workers: int) -> None:
+def export_ai4smallfarms(
+    src: Path,
+    ds_path: UPath,
+    workers: int,
+    tile_metadata_path: Path | None = None,
+) -> None:
     """Export AI4SmallFarms (sentinel-2-asia) to an rslearn dataset."""
     dataset = init_dataset(ds_path, "config_pangaea_ai4smallfarms.json")
-    dates = ai4sf_tile_dates(src)
+    dates = ai4sf_tile_dates(src, tile_metadata_path)
     tiles = list(ai4sf_windows(src))
     missing = sorted({stem for _, stem, _ in tiles} - set(dates))
     if missing:
@@ -214,8 +229,8 @@ def export_ai4smallfarms(src: Path, ds_path: UPath, workers: int) -> None:
 # series from 2017 stored as (C, H, W, T) npz arrays with no geolocation.
 # PANGAEA flips the time axis and right-pads to 6 timesteps with F.pad; every
 # sample has more than 6, so the negative pad CROPS, keeping the last 6 array
-# entries. We store exactly those, in their original array order, each as its
-# own layer dated from the sample's json. Labels 1-4 (sorghum, maize, rice,
+# entries in reverse order. We store those entries in reverse order, each as
+# its own layer dated from the sample's json. Labels 1-4 (sorghum, maize, rice,
 # groundnut) become 0-3; everything else is ignored. S1 ships in dB but rslearn
 # datasets store linear power (the eval loader applies convert_to_db), so it is
 # written as 10 ** (dB / 10).
@@ -244,6 +259,13 @@ def ctm_dates(root: Path, sensor: str, sample_id: str) -> list[datetime]:
     return [datetime.fromisoformat(d).replace(tzinfo=UTC) for d in dates]
 
 
+def ctm_selected_timesteps(
+    arr: np.ndarray, dates: list[datetime]
+) -> tuple[np.ndarray, list[datetime]]:
+    """Select the last six acquisitions in PANGAEA's reversed time order."""
+    return arr[..., -CTM_TIMESTEPS:][..., ::-1], dates[-CTM_TIMESTEPS:][::-1]
+
+
 def export_ctm_sample(
     dataset: RslearnDataset, root: Path, index: int, sample_id: str, split: str
 ) -> bool:
@@ -268,7 +290,8 @@ def export_ctm_sample(
             )
         if len(dates) < CTM_TIMESTEPS:
             raise ValueError(f"{sample_id} {sensor}: only {len(dates)} timesteps")
-        series[layer] = (arr[..., -CTM_TIMESTEPS:], dates[-CTM_TIMESTEPS:], bands)
+        selected_arr, selected_dates = ctm_selected_timesteps(arr, dates)
+        series[layer] = (selected_arr, selected_dates, bands)
 
     label = np.full(truth.shape, IGNORE_LABEL, dtype=np.uint8)
     for src_class in range(1, 5):
@@ -338,13 +361,23 @@ def main() -> None:
     )
     parser.add_argument("dataset", choices=sorted(EXPORTERS))
     parser.add_argument("--src", required=True, help="PANGAEA root_path for it")
+    parser.add_argument(
+        "--tile-metadata",
+        type=Path,
+        help="Path to tiles_asia.gpkg if it is missing from the AI4SmallFarms source",
+    )
     parser.add_argument("--ds_path", required=True, help="Output rslearn root")
     parser.add_argument("--workers", type=int, default=16)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     if UPath(args.ds_path).exists():
         raise FileExistsError(f"{args.ds_path} exists; pick a new path")
-    EXPORTERS[args.dataset](Path(args.src), UPath(args.ds_path), args.workers)
+    if args.dataset == "ai4smallfarms":
+        export_ai4smallfarms(
+            Path(args.src), UPath(args.ds_path), args.workers, args.tile_metadata
+        )
+    else:
+        EXPORTERS[args.dataset](Path(args.src), UPath(args.ds_path), args.workers)
 
 
 if __name__ == "__main__":
