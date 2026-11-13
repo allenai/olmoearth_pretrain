@@ -467,6 +467,14 @@ class TestBlueTopoDepth:
         assert np.all(depth[:2] == 2.5)
         assert np.all(depth[2:] == MISSING_VALUE)
 
+    def test_fill_value(self, dataset: OlmoEarthDataset) -> None:
+        """Unlabelled pixels take bluetopo_fill_value when it is set."""
+        dataset.bluetopo_fill_value = -5.0
+        depth = dataset._bluetopo_depth(3)
+        assert depth is not None
+        assert np.all(depth[:2] == 2.5)
+        assert np.all(depth[2:] == -5.0)
+
     def test_unlisted_sample_is_missing(self, dataset: OlmoEarthDataset) -> None:
         """Samples not in idx.npy have no BlueTopo modality."""
         assert dataset._bluetopo_depth(5) is None

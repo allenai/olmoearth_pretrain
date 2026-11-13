@@ -1,4 +1,4 @@
-"""Bathymetry direct supervision: a tiny v1.3-style model for 60k steps.
+"""Baseline for the BlueTopo experiment: a tiny v1.3-style model for 60k steps.
 
 v1.2 tiny plus the v1.3 additions on main's API (as in favyen's
 ``scripts/official/v1_3/base.py`` / ``claude_findings/common.py``): a 4-deep
@@ -6,12 +6,15 @@ AttentionPooler at encoder width, location-token supervision heads on the decode
 maps, the single-pass LatentMIM train module and the decorrelated shape sampler. No
 distilled student: it is detached and would not change the teacher.
 
-Run directly, this is the baseline. ``bluetopo=True`` adds NOAA BlueTopo survey depth
-(US waters) as a supervised L1 regression head on the location tokens. It is decode-only
-and absent from the encoder/decoder modality lists, so only the supervision head reads it.
-Its labels exclude the 1-degree cells held out for the BlueTopo depth eval.
+Run directly, this trains the baseline, with no depth signal. ``run(bluetopo=...)`` adds
+NOAA BlueTopo survey depth (US waters) in one of two ways; it is never an encoder input:
 
-See /weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/.
+- ``SUPERVISION`` (v13_tiny_60k_bluetopo_sup.py): an L1 regression head on the location
+  tokens whose loss reaches the encoder. Only that head reads BlueTopo.
+- ``DECODE`` (v13_tiny_60k_bluetopo_decode.py): a decode-only latent-MIM target, like
+  v1.2's maps. No supervision head; unlabelled pixels get BLUETOPO_DECODE_FILL.
+
+The labels exclude the 1-degree cells held out for the BlueTopo depth eval.
 """
 
 import sys
@@ -48,6 +51,10 @@ from olmoearth_pretrain.train.train_module.latent_mim import (  # noqa: E402
 
 WANDB_PROJECT = "2026_10_29_bathymetry_direct_supervision"
 MAX_STEPS = 60_000
+SUPERVISION = "supervision"
+DECODE = "decode"
+# Below the 0-40 m depth range, so unlabelled pixels are distinct from shallow water.
+BLUETOPO_DECODE_FILL = -5.0
 BLUETOPO_DIR = "/weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/bluetopo_train"
 
 POOLER_DEPTH = 4
@@ -103,11 +110,11 @@ RANK_MICROBATCH_SIZE = 64
 
 
 def build_common_components(
-    *args, bluetopo: bool = False, **kwargs
+    *args, bluetopo: str | None = None, **kwargs
 ) -> CommonComponents:
     """v1.2 modalities, plus bluetopo if used."""
     config = base.build_common_components(*args, **kwargs)
-    if bluetopo:
+    if bluetopo is not None:
         config.training_modalities = config.training_modalities + [
             Modality.BLUETOPO.name
         ]
@@ -177,14 +184,23 @@ def build_supervision_head_config(bluetopo: bool = False) -> SupervisionHeadConf
     return config
 
 
-def build_model_config(common: CommonComponents) -> LatentMIMConfig:
-    """v1.2 tiny + AttentionPooler + supervision heads; depth never enters the encoder."""
-    model_common = replace(
-        common,
-        training_modalities=[
-            m for m in common.training_modalities if m != Modality.BLUETOPO.name
-        ],
-    )
+def build_model_config(
+    common: CommonComponents, bluetopo: str | None = None
+) -> LatentMIMConfig:
+    """v1.2 tiny + AttentionPooler + supervision heads.
+
+    As a supervision target, bluetopo is left out of the encoder/decoder modalities so
+    only its head reads it. As a decode target it stays in them, and the masking config
+    keeps it decode-only.
+    """
+    model_common = common
+    if bluetopo == SUPERVISION:
+        model_common = replace(
+            common,
+            training_modalities=[
+                m for m in common.training_modalities if m != Modality.BLUETOPO.name
+            ],
+        )
     config = tiny.build_model_config(model_common)
     encoder_config = config.encoder_config
     decoder_config = config.decoder_config
@@ -200,7 +216,7 @@ def build_model_config(common: CommonComponents) -> LatentMIMConfig:
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
     config.projection_only_target = True
     config.supervision_head_config = build_supervision_head_config(
-        Modality.BLUETOPO.name in common.training_modalities
+        bluetopo == SUPERVISION
     )
     return config
 
@@ -232,6 +248,9 @@ def build_train_module_config(common: CommonComponents) -> LatentMIMTrainModuleC
     config.masking_config.strategy_config["only_decode_modalities"] = (
         only_decode_modalities(common)
     )
+    config.loss_config.loss_config["mask_negatives_for_modalities"] = (
+        only_decode_modalities(common)
+    )
     return config
 
 
@@ -250,11 +269,15 @@ def build_dataloader_config(common: CommonComponents) -> OlmoEarthDataLoaderConf
     return config
 
 
-def build_dataset_config(common: CommonComponents) -> OlmoEarthDatasetConfig:
+def build_dataset_config(
+    common: CommonComponents, bluetopo: str | None = None
+) -> OlmoEarthDatasetConfig:
     """Same H5 set, plus the BlueTopo labels if used."""
     config = base.build_dataset_config(common)
-    if Modality.BLUETOPO.name in common.training_modalities:
+    if bluetopo is not None:
         config.bluetopo_dir = BLUETOPO_DIR
+    if bluetopo == DECODE:
+        config.bluetopo_fill_value = BLUETOPO_DECODE_FILL
     return config
 
 
@@ -266,15 +289,16 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
     return config
 
 
-def run(bluetopo: bool = False) -> None:
-    """Run one arm."""
+def run(bluetopo: str | None = None) -> None:
+    """Run one arm: the baseline, or bluetopo as SUPERVISION or DECODE."""
+    assert bluetopo in (None, SUPERVISION, DECODE), bluetopo
     main(
         common_components_builder=lambda *a, **k: build_common_components(
             *a, bluetopo=bluetopo, **k
         ),
-        model_config_builder=build_model_config,
+        model_config_builder=lambda common: build_model_config(common, bluetopo),
         train_module_config_builder=build_train_module_config,
-        dataset_config_builder=build_dataset_config,
+        dataset_config_builder=lambda common: build_dataset_config(common, bluetopo),
         dataloader_config_builder=build_dataloader_config,
         trainer_config_builder=build_trainer_config,
         visualize_config_builder=base.build_visualize_config,

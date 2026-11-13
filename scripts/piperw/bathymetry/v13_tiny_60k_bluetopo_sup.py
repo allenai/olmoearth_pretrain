@@ -1,4 +1,4 @@
-"""v1.3-tiny 60k: BlueTopo depth supervises the encoder.
+"""v1.3-tiny 60k: BlueTopo depth supervises the encoder through a supervision head.
 
 Baseline: v13_tiny_60k.py.
 """
@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from v13_tiny_60k import run  # noqa: E402
+from v13_tiny_60k import SUPERVISION, run  # noqa: E402
 
 if __name__ == "__main__":
-    run(bluetopo=True)
+    run(bluetopo=SUPERVISION)

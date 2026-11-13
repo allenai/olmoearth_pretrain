@@ -407,6 +407,7 @@ class OlmoEarthDataset(Dataset):
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
         bluetopo_dir: str | None = None,
+        bluetopo_fill_value: float = MISSING_VALUE,
     ):
         """Initialize the dataset.
 
@@ -437,6 +438,10 @@ class OlmoEarthDataset(Dataset):
                 no label). Only used when bluetopo is a training modality; samples not in
                 idx.npy, or with under BLUETOPO_MIN_VALID_FRACTION labelled pixels, treat
                 it as missing.
+            bluetopo_fill_value: Value for unlabelled BlueTopo pixels. MISSING_VALUE suits
+                pixel-level losses that skip missing pixels (the supervision head). As a
+                latent-MIM target, use a value outside the depth range instead: token masks
+                only look at one pixel per patch, so MISSING_VALUE would reach the encoder.
 
         Returns:
             None
@@ -477,6 +482,7 @@ class OlmoEarthDataset(Dataset):
         else:
             self.indices_to_filter = None
         self.bluetopo_dir = bluetopo_dir
+        self.bluetopo_fill_value = bluetopo_fill_value
         self._bluetopo: tuple[np.ndarray, np.ndarray] | None = None
 
     @property
@@ -659,7 +665,7 @@ class OlmoEarthDataset(Dataset):
             return self.normalizer_predefined.normalize(modality, image)
 
     def _bluetopo_depth(self, index: int) -> np.ndarray | None:
-        """BlueTopo depth [h, w, 1, 1] in metres (MISSING_VALUE where unlabelled), if any."""
+        """BlueTopo depth [h, w, 1, 1] in metres (bluetopo_fill_value where unlabelled), if any."""
         if self.bluetopo_dir is None:
             return None
         if self._bluetopo is None:
@@ -675,7 +681,7 @@ class OlmoEarthDataset(Dataset):
         d = np.asarray(depth_dm[pos])
         if (d >= 0).mean() < BLUETOPO_MIN_VALID_FRACTION:
             return None
-        depth = np.where(d >= 0, d.astype(np.float32) / 10, MISSING_VALUE)
+        depth = np.where(d >= 0, d.astype(np.float32) / 10, self.bluetopo_fill_value)
         return depth[:, :, None, None]
 
     def _compute_ndvi(
@@ -1030,6 +1036,7 @@ class OlmoEarthDatasetConfig(Config):
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
     bluetopo_dir: str | None = None
+    bluetopo_fill_value: float = MISSING_VALUE
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""
