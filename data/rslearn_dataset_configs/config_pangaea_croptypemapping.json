@@ -1,0 +1,219 @@
+{
+  "layers": {
+    "label": {
+      "band_sets": [
+        {
+          "bands": [
+            "label"
+          ],
+          "dtype": "uint8"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t0": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t1": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t2": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t3": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t4": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel1_t5": {
+      "alias": "sentinel1",
+      "band_sets": [
+        {
+          "bands": [
+            "vv",
+            "vh"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t0": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t1": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t2": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t3": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t4": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    },
+    "sentinel2_l2a_t5": {
+      "alias": "sentinel2_l2a",
+      "band_sets": [
+        {
+          "bands": [
+            "B02",
+            "B03",
+            "B04",
+            "B05",
+            "B06",
+            "B07",
+            "B08",
+            "B8A",
+            "B11",
+            "B12"
+          ],
+          "dtype": "float32"
+        }
+      ],
+      "type": "raster"
+    }
+  }
+}

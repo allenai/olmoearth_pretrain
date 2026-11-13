@@ -383,6 +383,41 @@ EVAL_TASKS = {
         )
         for name in PLANTEUR_LOIO_DATASETS
     },
+    # PANGAEA-bench datasets exported with their original imagery
+    # (evals/datasets/pangaea_rslearn_export.py).
+    "pangaea_ai4smallfarms": DownstreamTaskConfig(
+        dataset="pangaea_ai4smallfarms",
+        embedding_batch_size=32,
+        probe_batch_size=8,
+        num_workers=2,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=True,
+        probe_lr=0.1,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.SENTINEL2_L2A.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.MIOU,
+        window_size=128,
+        tile_samples=True,
+    ),
+    **{
+        f"pangaea_croptypemapping_{suffix}": DownstreamTaskConfig(
+            dataset="pangaea_croptypemapping",
+            embedding_batch_size=32,
+            probe_batch_size=8,
+            num_workers=2,
+            pooling_type=PoolingType.MEAN,
+            norm_stats_from_pretrained=True,
+            probe_lr=0.1,
+            eval_interval=Duration.epochs(50),
+            input_modalities=modalities,
+            epochs=50,
+            eval_mode=EvalMode.LINEAR_PROBE,
+            primary_metric=EvalMetric.MIOU,
+        )
+        for suffix, modalities in PLANTEUR_MODALITIES.items()
+    },
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # Three split modes (random / by_city / by_continent), each with an S2-only,
     # an S1-only, and an S1+S2 task. The split mode is carried by the dataset
