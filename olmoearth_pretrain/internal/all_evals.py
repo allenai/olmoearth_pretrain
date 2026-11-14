@@ -383,6 +383,25 @@ EVAL_TASKS = {
         )
         for name in PLANTEUR_LOIO_DATASETS
     },
+    # GeoPathfinder: are two dots on a Landsat patch connected by land? The
+    # probe sees the tokens under both dots plus the pooled patch. The imagery
+    # is Level-2 surface reflectance while pretraining saw Level-1, so it is
+    # normalized with the dataset's own stats.
+    "geopathfinder": DownstreamTaskConfig(
+        dataset="geopathfinder",
+        embedding_batch_size=32,
+        probe_batch_size=32,
+        num_workers=4,
+        pooling_type=PoolingType.MEAN,
+        norm_stats_from_pretrained=False,
+        probe_lr=0.01,
+        eval_interval=Duration.epochs(50),
+        input_modalities=[Modality.LANDSAT.name],
+        epochs=50,
+        eval_mode=EvalMode.LINEAR_PROBE,
+        primary_metric=EvalMetric.ACCURACY,
+        label_at_point_pair=True,
+    ),
     # 50Cities: single-timestep S2+S1 land-cover segmentation, 64x64 tiles.
     # Three split modes (random / by_city / by_continent), each with an S2-only,
     # an S1-only, and an S1+S2 task. The split mode is carried by the dataset

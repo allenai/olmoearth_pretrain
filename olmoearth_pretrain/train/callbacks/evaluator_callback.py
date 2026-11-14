@@ -160,6 +160,10 @@ class DownstreamTaskConfig:
     # labeled pixel; pair with use_center_token=True (and patch_size=1) so the
     # probe reads exactly that token.
     label_at_center_pixel: bool = False
+    # For registry (rslearn) segmentation datasets whose label raster marks two
+    # query points with the sample's class (GeoPathfinder): run the task as
+    # classification on [token at point 0, token at point 1, pooled grid].
+    label_at_point_pair: bool = False
     # Default to 2std no clip - this matches what our model sees in pretraining,
     # so when using dataset stats (e.g. for MADOS) consistency is important.
     norm_method: NormMethod = field(
@@ -245,6 +249,7 @@ class DownstreamEvaluator:
         self._is_registry_dataset = task.dataset not in DATASET_TO_CONFIG
         self.window_size = task.window_size
         self.label_at_center_pixel = task.label_at_center_pixel
+        self.label_at_point_pair = task.label_at_point_pair
         self.tile_samples = task.tile_samples
         if self.tile_samples:
             if not self._is_registry_dataset:
@@ -284,6 +289,24 @@ class DownstreamEvaluator:
                 )
             # The dataset emits one scalar label per sample, so downstream the
             # task is a classification task over per-sample embeddings.
+            self.config = dataclasses.replace(
+                self.config, task_type=TaskType.CLASSIFICATION, height_width=None
+            )
+        if self.label_at_point_pair:
+            if not self._is_registry_dataset:
+                raise ValueError(
+                    f"label_at_point_pair is only supported for registry "
+                    f"datasets, got dataset '{task.dataset}'"
+                )
+            if self.config.task_type != TaskType.SEGMENTATION:
+                raise ValueError(
+                    "label_at_point_pair requires a segmentation dataset, "
+                    f"got task type '{self.config.task_type.value}'"
+                )
+            if task.eval_mode == EvalMode.FINETUNE:
+                raise ValueError("label_at_point_pair does not support finetuning")
+            # get_embeddings reduces each sample to one point-pair feature
+            # vector and a scalar class, so downstream this is classification.
             self.config = dataclasses.replace(
                 self.config, task_type=TaskType.CLASSIFICATION, height_width=None
             )
@@ -456,6 +479,8 @@ class DownstreamEvaluator:
                 extra_kwargs["window_size"] = self.window_size
             if self.label_at_center_pixel:
                 extra_kwargs["label_at_center_pixel"] = True
+            if self.label_at_point_pair:
+                extra_kwargs["label_at_point_pair"] = True
             if self.tile_samples:
                 extra_kwargs["tile_samples"] = True
         if self.dataset.startswith("pretrain_subset") and self.h5py_dir is not None:
@@ -550,6 +575,7 @@ class DownstreamEvaluator:
             "eval_student_dim": self.eval_student_dim,
             "use_center_token": self.use_center_token,
             "location_query_patch_size": self.location_query_patch_size,
+            "point_pair": self.label_at_point_pair,
         }
         model = get_eval_wrapper(model, **wrapper_kwargs)
         return get_embeddings(
