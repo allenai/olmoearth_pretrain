@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import sys
+from dataclasses import replace
 from logging import getLogger
 from typing import Any
 
@@ -1797,8 +1798,12 @@ FT_EVAL_TASKS = {
 # PASTIS changed-year benchmark: train on the pastis_rslearn 2019 folds, test on the same
 # places re-imaged in a year when their crop changed (plus the 2019 test fold as reference).
 # Per-set scores are logged as cy_* test metrics (see evals/changed_year.py).
-EVAL_TASKS["pastis_changed_probe_sentinel2"] = _planteur_ps1_task(
-    "pastis_changed_s2", [Modality.SENTINEL2_L2A.name], window_size=16
+# 16 tiles per embedding batch: 64 runs out of memory on an 80GB GPU with v1.2.
+EVAL_TASKS["pastis_changed_probe_sentinel2"] = replace(
+    _planteur_ps1_task(
+        "pastis_changed_s2", [Modality.SENTINEL2_L2A.name], window_size=16
+    ),
+    embedding_batch_size=16,
 )
 FT_EVAL_TASKS["pastis_changed_ft_sentinel2"] = DownstreamTaskConfig(
     dataset="pastis_changed_s2",
