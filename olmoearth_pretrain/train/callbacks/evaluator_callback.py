@@ -23,6 +23,7 @@ from upath import UPath
 
 from olmoearth_pretrain.data.constants import Modality
 from olmoearth_pretrain.data.dataloader import _worker_ignore_sigterm
+from olmoearth_pretrain.evals.changed_year import scorer_for_dataset
 from olmoearth_pretrain.evals.datasets import get_eval_dataset
 from olmoearth_pretrain.evals.datasets.configs import (
     DATASET_TO_CONFIG,
@@ -408,6 +409,7 @@ class DownstreamEvaluator:
                     use_dice_loss=self.use_dice_loss,
                     primary_metric=self.primary_metric,
                     primary_metric_class=self.primary_metric_class,
+                    extra_test_metrics=scorer_for_dataset(self.dataset),
                 )
                 if self.eval_mode == EvalMode.LINEAR_PROBE
                 else None
@@ -844,6 +846,7 @@ class DownstreamEvaluator:
             ft_grad_accum_steps=self.ft_grad_accum_steps,
             head_type=self.ft_head_type,  # type: ignore[arg-type]
             use_dice_loss=self.use_dice_loss,
+            extra_test_metrics=scorer_for_dataset(self.dataset),
         )
         logger.info(
             f"Downstream evaluator {self.evaluation_name} val score: {result.val_result}, test score: {result.test_result}"
