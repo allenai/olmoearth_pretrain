@@ -31,9 +31,9 @@ def test_gathers_tokens_under_points_and_pools() -> None:
 def test_get_embeddings_handles_point_pair_classification() -> None:
     """Classification pools the grid, while point-pair classification gathers from it."""
     batch_size, height, width, dim = 2, 4, 4, 3
-    grid = torch.arange(
-        batch_size * height * width * dim, dtype=torch.float32
-    ).reshape(batch_size, height, width, dim)
+    grid = torch.arange(batch_size * height * width * dim, dtype=torch.float32).reshape(
+        batch_size, height, width, dim
+    )
     sample = MaskedOlmoEarthSample(
         timestamps=torch.zeros(batch_size, 1, 3, dtype=torch.long)
     )
