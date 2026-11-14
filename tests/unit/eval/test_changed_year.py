@@ -83,3 +83,25 @@ def test_changed_year_metrics_counts_unmatched(sidecar: str) -> None:
 def test_scorer_only_for_changed_year_datasets() -> None:
     """Other datasets get no extra metrics."""
     assert scorer_for_dataset("pastis") is None
+
+
+def test_changed_year_dataset_uses_registry_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pastis_changed_s2 is read from the registry, not by the official-PASTIS loader."""
+    import olmoearth_pretrain.evals.datasets as datasets
+
+    calls: list[dict] = []
+
+    def fake_from_registry_entry(**kw: object) -> str:
+        calls.append(kw)
+        return "rslearn"
+
+    monkeypatch.setattr(datasets, "get_dataset_entry", lambda name: name)
+    monkeypatch.setattr(datasets, "from_registry_entry", fake_from_registry_entry)
+    out = datasets.get_eval_dataset(
+        "pastis_changed_s2", "test", window_size=16, tile_samples=True
+    )
+    assert out == "rslearn"
+    assert calls[0]["entry"] == "pastis_changed_s2"
+    assert calls[0]["window_size"] == 16 and calls[0]["tile_samples"]
