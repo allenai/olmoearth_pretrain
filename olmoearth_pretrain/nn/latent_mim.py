@@ -22,6 +22,11 @@ from olmoearth_pretrain.nn.register_distillation_head import (
     RegisterDistillationHead,
     RegisterDistillationHeadConfig,
 )
+from olmoearth_pretrain.nn.strata_aux import (
+    EmaInvarianceConfig,
+    RecDiscHeadConfig,
+    build_ema_teacher,
+)
 from olmoearth_pretrain.nn.supervision_head import (
     SupervisionHead,
     SupervisionHeadConfig,
@@ -89,6 +94,10 @@ class LatentMIM(nn.Module, DistributedMixins):
         supervision_head: SupervisionHead | None = None,
         register_distillation_head: RegisterDistillationHead | None = None,
         projection_only_target: bool = False,
+        recdisc_head: nn.Module | None = None,
+        recdisc_config: RecDiscHeadConfig | None = None,
+        ema_invariance_predictor: nn.Module | None = None,
+        ema_invariance_config: EmaInvarianceConfig | None = None,
     ):
         """Initialize the Latent MIM Style.
 
@@ -107,6 +116,12 @@ class LatentMIM(nn.Module, DistributedMixins):
                 instead of a full copy of the encoder. Only valid when all token
                 exit depths are 0 and the target is never EMA-updated
                 (ema_decay=(1.0, 1.0)).
+            recdisc_head: Optional Strata recdisc head (``nn.strata_aux``); training-only.
+            recdisc_config: Its config (loss hyperparameters).
+            ema_invariance_predictor: Optional predictor for the Strata EMA-teacher
+                invariance loss; training-only.
+            ema_invariance_config: Its config. When set, a frozen EMA copy of the
+                encoder (``ema_encoder``) is built as the teacher.
         """
         super().__init__()
         self.encoder = encoder
@@ -120,6 +135,14 @@ class LatentMIM(nn.Module, DistributedMixins):
             self.target_encoder = deepcopy(self.encoder)
         for p in self.target_encoder.parameters():
             p.requires_grad = False
+        # Strata auxiliary losses (olmoearth_pretrain.nn.strata_aux); training-only.
+        self.recdisc_head = recdisc_head
+        self.recdisc_config = recdisc_config
+        self.ema_invariance_predictor = ema_invariance_predictor
+        self.ema_invariance_config = ema_invariance_config
+        self.ema_encoder: nn.Module | None = None
+        if ema_invariance_config is not None:
+            self.ema_encoder = build_ema_teacher(self.encoder)
 
     def forward(
         self,
@@ -207,6 +230,8 @@ class LatentMIM(nn.Module, DistributedMixins):
             student_outputs = {
                 "registers": rearrange(registers, "b h w d -> b (h w) d"),
                 "student_registers": None,
+                # Unflattened, for the Strata auxiliary losses.
+                "register_grid": registers,
             }
         if student_registers is not None:
             assert student_outputs is not None, (
@@ -253,6 +278,10 @@ class LatentMIM(nn.Module, DistributedMixins):
             fully_shard(self.supervision_head, **fsdp_config)
         if self.register_distillation_head is not None:
             fully_shard(self.register_distillation_head, **fsdp_config)
+        if self.recdisc_head is not None or self.ema_invariance_config is not None:
+            raise NotImplementedError(
+                "the Strata auxiliary losses are only wired for replicated (ddp) training"
+            )
         # TODO: More finegrained wrapping of the encoder transformer layers next time
         fully_shard(self, **fsdp_config)
         register_fsdp_forward_method(self.target_encoder, "forward")
@@ -284,6 +313,9 @@ class LatentMIMConfig(Config):
     # Distillation of the register grid into the Perceiver's detached student.
     register_distillation_head_config: RegisterDistillationHeadConfig | None = None
     projection_only_target: bool = False
+    # Strata auxiliary losses (olmoearth_pretrain.nn.strata_aux).
+    recdisc_head_config: RecDiscHeadConfig | None = None
+    ema_invariance_config: EmaInvarianceConfig | None = None
 
     def validate(self) -> None:
         """Validate the configuration."""
@@ -327,6 +359,11 @@ class LatentMIMConfig(Config):
                 "the supervision heads read the register grid, so "
                 "supervision_head_config requires the encoder Perceiver"
             )
+        if (
+            self.recdisc_head_config is not None
+            or self.ema_invariance_config is not None
+        ) and not encoder_uses_registers:
+            raise ValueError("the Strata auxiliary losses need the encoder Perceiver")
         if self.register_distillation_head_config is not None:
             perceiver_config = self.encoder_config.perceiver_config
             if perceiver_config is None or perceiver_config.sorted_student_dims is None:
@@ -363,6 +400,27 @@ class LatentMIMConfig(Config):
                 register_dim=perceiver_config.register_dim,
                 student_dims=perceiver_config.sorted_student_dims,
             )
+        recdisc_head = None
+        ema_invariance_predictor = None
+        if (
+            self.recdisc_head_config is not None
+            or self.ema_invariance_config is not None
+        ):
+            assert self.encoder_config.perceiver_config is not None
+            register_dim = self.encoder_config.perceiver_config.register_dim
+            if self.recdisc_head_config is not None:
+                # Targets are the frozen exit-0 projection: encoder (output) width.
+                target_dim = (
+                    self.encoder_config.output_embedding_size
+                    or self.encoder_config.embedding_size
+                )
+                recdisc_head = self.recdisc_head_config.build(
+                    register_dim=register_dim, target_dim=target_dim
+                )
+            if self.ema_invariance_config is not None:
+                ema_invariance_predictor = self.ema_invariance_config.build_predictor(
+                    register_dim
+                )
         return LatentMIM(
             encoder=encoder,
             decoder=decoder,
@@ -370,4 +428,8 @@ class LatentMIMConfig(Config):
             supervision_head=supervision_head,
             register_distillation_head=register_distillation_head,
             projection_only_target=self.projection_only_target,
+            recdisc_head=recdisc_head,
+            recdisc_config=self.recdisc_head_config,
+            ema_invariance_predictor=ema_invariance_predictor,
+            ema_invariance_config=self.ema_invariance_config,
         )

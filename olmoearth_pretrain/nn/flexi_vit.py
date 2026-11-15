@@ -1708,6 +1708,11 @@ class Perceiver(nn.Module):
         self.max_latents = max_latents
         self.eval_latent_stride = eval_latent_stride
         self.latent_stride_bias = latent_stride_bias
+        # Plain attributes, not config: an EMA teacher sets ``latent_stride_override``
+        # to the student's drawn stride so the two register grids align cell for cell,
+        # and reads the student's stride from ``last_latent_stride``.
+        self.latent_stride_override: int | None = None
+        self.last_latent_stride: int | None = None
         n_mix = n_extra_latent = n_write = 0
         if token_mix_layout is not None:
             if set(token_mix_layout) - set("MRLW"):
@@ -1999,21 +2004,30 @@ class Perceiver(nn.Module):
         if self.pixel_latents:
             if patch_spacing is None:
                 raise ValueError("pixel_latents requires patch_spacing")
-            latent_stride = choose_latent_stride(
-                training=self.training,
-                spatial_grid=spatial_grid,
-                patch_size=patch_size,
-                random_latent_stride=self.random_latent_stride,
-                max_latents=self.max_latents,
-                eval_latent_stride=self.eval_latent_stride,
-                stride_bias=self.latent_stride_bias,
-            )
+            if self.latent_stride_override is not None:
+                latent_stride = self.latent_stride_override
+                if patch_size % latent_stride != 0:
+                    raise ValueError(
+                        f"latent_stride_override {latent_stride} does not divide "
+                        f"patch_size {patch_size}"
+                    )
+            else:
+                latent_stride = choose_latent_stride(
+                    training=self.training,
+                    spatial_grid=spatial_grid,
+                    patch_size=patch_size,
+                    random_latent_stride=self.random_latent_stride,
+                    max_latents=self.max_latents,
+                    eval_latent_stride=self.eval_latent_stride,
+                    stride_bias=self.latent_stride_bias,
+                )
             register_grid = (
                 spatial_grid[0] * patch_size // latent_stride,
                 spatial_grid[1] * patch_size // latent_stride,
             )
         else:
             register_grid = spatial_grid
+        self.last_latent_stride = latent_stride
         num_registers = register_grid[0] * register_grid[1]
         # Clone the single learned latent across the batch and all grid cells; RoPE on
         # the per-cell register_positions is what differentiates them.

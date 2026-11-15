@@ -27,6 +27,12 @@ from olmoearth_pretrain.nn.pixel_targets import (
     sample_pooled_pixel_queries,
     spatial_token_grid,
 )
+from olmoearth_pretrain.nn.strata_aux import (
+    ema_invariance_loss,
+    ema_update,
+    recdisc_loss,
+    unmask_encoder_modalities,
+)
 from olmoearth_pretrain.nn.supervision_head import compute_supervision_loss
 from olmoearth_pretrain.nn.utils import unpack_encoder_output
 from olmoearth_pretrain.train.loss import LossConfig
@@ -258,6 +264,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         """
         if not dry_run:
             self.update_target_encoder()
+            self.update_ema_teacher()
         # Set the model to train mode
         self.model.train()
         total_batch_loss = torch.zeros([], device=self.device)
@@ -326,6 +333,86 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
         del batch, batch_data  # In case this helps with memory utilization.
         del masked_batch
         del latent, decoded, target_output
+
+    def update_ema_teacher(self) -> None:
+        """EMA update of the Strata invariance teacher (linear momentum schedule)."""
+        config = getattr(self.model, "ema_invariance_config", None)
+        if config is None:
+            return
+        momentum = config.ema_start + self.trainer.global_step * (
+            config.ema_end - config.ema_start
+        ) / max(self.trainer.max_steps, 1)
+        ema_update(self.model.encoder, self.model.ema_encoder, momentum)
+        self.trainer.record_metric("train/emainv_momentum", momentum, ReduceType.mean)
+
+    def _strata_aux_losses(
+        self,
+        batch: MaskedOlmoEarthSample,
+        patch_size: int,
+        decoded: TokensAndMasks,
+        target_output: TokensAndMasks,
+        student_outputs: dict[str, Any] | None,
+        pixel_offsets: torch.Tensor | dict[str, torch.Tensor] | None,
+    ) -> tuple[torch.Tensor | None, dict[str, Any]]:
+        """Recdisc and EMA-invariance losses (``olmoearth_pretrain.nn.strata_aux``)."""
+        recdisc_config = getattr(self.model, "recdisc_config", None)
+        ema_config = getattr(self.model, "ema_invariance_config", None)
+        if recdisc_config is None and ema_config is None:
+            return None, {}
+        assert student_outputs is not None
+        register_grid = student_outputs["register_grid"]
+        perceiver = self.model.encoder.perceiver
+        latent_stride = perceiver.last_latent_stride
+        total: torch.Tensor | None = None
+        metrics: dict[str, Any] = {}
+
+        if recdisc_config is not None:
+            if isinstance(pixel_offsets, dict) or self.pixel_target_draw != "shared":
+                raise ValueError("recdisc needs the shared pixel-target draw")
+            for name in recdisc_config.modalities:
+                targets = getattr(target_output, name, None)
+                if targets is None:
+                    continue
+                loss, extra = recdisc_loss(
+                    self.model.recdisc_head,
+                    recdisc_config,
+                    register_grid,
+                    latent_stride,
+                    patch_size,
+                    pixel_offsets,
+                    targets,
+                    getattr(decoded, f"{name}_mask"),
+                    batch.timestamps,
+                )
+                total = loss if total is None else total + loss
+                metrics[f"recdisc/{name}"] = loss.detach()
+                metrics[f"recdisc/{name}_queries"] = extra["queries_per_sample"]
+
+        if ema_config is not None:
+            teacher_input = unmask_encoder_modalities(
+                batch, set(self.masking_strategy.only_decode_modalities)
+            )
+            teacher_perceiver = self.model.ema_encoder.perceiver
+            teacher_perceiver.latent_stride_override = latent_stride
+            try:
+                with torch.no_grad():
+                    teacher_out = self.model.ema_encoder(
+                        teacher_input, patch_size=patch_size
+                    )
+            finally:
+                teacher_perceiver.latent_stride_override = None
+            _, _, teacher_kwargs = unpack_encoder_output(teacher_out)
+            loss, extra = ema_invariance_loss(
+                self.model.ema_invariance_predictor,
+                register_grid,
+                teacher_kwargs["registers"],
+                ema_config.weight,
+            )
+            total = loss if total is None else total + loss
+            metrics["emainv/loss"] = loss.detach()
+            for key, value in extra.items():
+                metrics[f"emainv/{key}"] = value
+        return total, metrics
 
     def _check_single_bandsets(self, batch: MaskedOlmoEarthSample) -> None:
         """The independent draw gives a token's band sets the same pixel: insist on one."""
@@ -463,5 +550,19 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                     if extra_metrics is None:
                         extra_metrics = {}
                     extra_metrics.update(distill_metrics)
+
+            aux_loss, aux_metrics = self._strata_aux_losses(
+                batch,
+                patch_size,
+                decoded,
+                target_output,
+                student_outputs,
+                pixel_offsets,
+            )
+            if aux_loss is not None:
+                loss = loss + aux_loss
+                if extra_metrics is None:
+                    extra_metrics = {}
+                extra_metrics.update(aux_metrics)
 
             return loss, latent, decoded, target_output, extra_metrics
