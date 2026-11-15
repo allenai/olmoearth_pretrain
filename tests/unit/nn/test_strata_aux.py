@@ -12,6 +12,7 @@ from olmoearth_pretrain.datatypes import MaskValue
 from olmoearth_pretrain.internal.experiment import SubCmd
 from olmoearth_pretrain.nn.attention import DropPath
 from olmoearth_pretrain.nn.strata_aux import (
+    EmaInvarianceConfig,
     RecDiscHeadConfig,
     build_ema_teacher,
     ema_invariance_loss,
@@ -177,18 +178,52 @@ def test_ema_teacher_is_frozen_and_deterministic() -> None:
         assert torch.allclose(t, 0.9 * b + 0.1 * s)
 
 
-def test_ema_invariance_loss_grads_only_reach_the_student() -> None:
-    """Stop-grad on the teacher grid; zero loss when prediction equals the target."""
+@pytest.mark.parametrize("loss_type", ["cos", "disc"])
+def test_ema_invariance_loss_grads_only_reach_the_student(loss_type: str) -> None:
+    """Stop-grad on the teacher grid; shape mismatch is an error."""
     predictor = nn.Identity()
+    config = EmaInvarianceConfig(loss=loss_type, weight=2.0)
     student = torch.randn(2, 3, 3, 8, requires_grad=True)
     teacher = torch.randn(2, 3, 3, 8, requires_grad=True)
-    loss, _ = ema_invariance_loss(predictor, student, teacher, weight=2.0)  # type: ignore[arg-type]
+    loss, metrics = ema_invariance_loss(predictor, student, teacher, config)  # type: ignore[arg-type]
     loss.backward()
+    assert torch.isfinite(loss)
     assert student.grad is not None and teacher.grad is None
-    same, _ = ema_invariance_loss(predictor, teacher.detach(), teacher, 1.0)  # type: ignore[arg-type]
-    assert same.item() == pytest.approx(0.0, abs=1e-6)
+    assert "teacher_within_sample_cos" in metrics
     with pytest.raises(ValueError):
-        ema_invariance_loss(predictor, student, teacher[:, :2], 1.0)  # type: ignore[arg-type]
+        ema_invariance_loss(predictor, student, teacher[:, :2], config)  # type: ignore[arg-type]
+
+
+def test_ema_invariance_cos_is_zero_at_the_target() -> None:
+    """``cos``: zero loss when the prediction equals the teacher."""
+    teacher = torch.randn(2, 3, 3, 8)
+    same, _ = ema_invariance_loss(
+        nn.Identity(),  # type: ignore[arg-type]
+        teacher,
+        teacher,
+        EmaInvarianceConfig(loss="cos"),
+    )
+    assert same.item() == pytest.approx(0.0, abs=1e-6)
+
+
+def test_ema_invariance_disc_does_not_reward_a_collapsed_grid() -> None:
+    """``disc``: a position-independent student scores no better than chance.
+
+    One prediction for every cell gives each row the same logits, so the mean loss is at
+    least ``2 * tau * log(n)``; a student that keeps positions scores far below.
+
+    This is the failure mode of ``cos`` in v1_3_emainv (within-sample cos 1.000).
+    """
+    torch.manual_seed(0)
+    config = EmaInvarianceConfig(loss="disc", num_cells=16)
+    teacher = torch.randn(4, 4, 4, 32) + 5.0  # large shared component, like registers
+    collapsed = teacher.mean(dim=(1, 2), keepdim=True).expand_as(teacher).contiguous()
+    chance = 2 * config.tau * torch.log(torch.tensor(16.0)).item()
+    bad, _ = ema_invariance_loss(nn.Identity(), collapsed, teacher, config)  # type: ignore[arg-type]
+    centered = teacher - teacher.mean(dim=(1, 2), keepdim=True)
+    good, _ = ema_invariance_loss(nn.Identity(), centered, teacher, config)  # type: ignore[arg-type]
+    assert bad.item() >= 0.99 * chance
+    assert good.item() < 0.5 * chance
 
 
 def _load(name: str) -> Any:

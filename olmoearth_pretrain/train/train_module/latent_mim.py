@@ -406,7 +406,7 @@ class LatentMIMTrainModule(OlmoEarthTrainModule):
                 self.model.ema_invariance_predictor,
                 register_grid,
                 teacher_kwargs["registers"],
-                ema_config.weight,
+                ema_config,
             )
             total = loss if total is None else total + loss
             metrics["emainv/loss"] = loss.detach()

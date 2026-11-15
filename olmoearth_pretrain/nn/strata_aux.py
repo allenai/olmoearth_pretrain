@@ -12,11 +12,15 @@ Two training-only additions to the v1.3 recipe, each built only when its config 
   present sensor's tokens either way), and targets are the main MIM's frozen-projection
   pixel targets for them (computed each step on the unmasked input), centered per sample.
 
-* **emainv** (:class:`EmaInvariance`): an EMA copy of the encoder (incl. the Perceiver)
-  encodes the same sample with every encoder token visible, at the student's drawn
-  latent stride; the student's register grid from the masked view, through a predictor
-  MLP, regresses the teacher's grid with ``1 - cos`` (stop-grad, BYOL-style). No
-  prototypes, centering or uniformity terms.
+* **emainv** (:class:`EmaInvarianceConfig`): an EMA copy of the encoder (incl. the
+  Perceiver) encodes the same sample with every encoder token visible, at the student's
+  drawn latent stride; the student's register grid from the masked view, through a
+  predictor MLP, must match the teacher's grid (stop-grad). ``loss="cos"`` is plain
+  ``1 - cos`` (BYOL-style); it collapsed v1_3_emainv's register grid to one direction
+  per sample within 1.5k steps (within-sample cos 1.000), because every register shares
+  the cloned latent and the grid can satisfy it by dropping position. ``loss="disc"``
+  (default) is within-sample InfoNCE over cells against per-sample-centered teacher
+  registers, so a position-independent grid scores at chance.
 """
 
 import math
@@ -266,12 +270,19 @@ class EmaInvarianceConfig(Config):
         ema_end: Teacher momentum at the final step (linear in between, like
             ``LatentMIMTrainModule``'s target-encoder schedule).
         predictor_hidden_dim: Predictor MLP width.
+        loss: ``"disc"`` (within-sample InfoNCE over cells, centered teacher) or
+            ``"cos"`` (plain ``1 - cos``; collapses, kept for reference).
+        num_cells: Cells sampled per sample for ``"disc"``.
+        tau: InfoNCE temperature for ``"disc"`` (loss scaled by ``2 * tau`` like the MIM).
     """
 
     weight: float = 1.0
     ema_start: float = 0.996
     ema_end: float = 1.0
     predictor_hidden_dim: int = 2048
+    loss: str = "disc"
+    num_cells: int = 256
+    tau: float = 0.1
 
     def build_predictor(self, register_dim: int) -> EmaInvariancePredictor:
         """Build the predictor."""
@@ -327,27 +338,57 @@ def ema_invariance_loss(
     predictor: EmaInvariancePredictor,
     student_grid: Tensor,
     teacher_grid: Tensor,
-    weight: float,
+    config: EmaInvarianceConfig,
 ) -> tuple[Tensor, dict[str, Tensor]]:
-    """``weight * mean(1 - cos(predictor(student), stop_grad(teacher)))`` over cells."""
+    """EMA invariance between ``predictor(student)`` and the stop-grad teacher grid.
+
+    Grids are ``[B, H_r, W_r, D]``. ``"cos"``: mean ``1 - cos`` over cells. ``"disc"``:
+    per sample, ``num_cells`` random cells; each prediction must pick its own cell's
+    teacher register among the sample's sampled cells (InfoNCE, same-target negatives
+    masked), teacher centered per sample before normalising. Returns the weighted loss.
+    """
     if student_grid.shape != teacher_grid.shape:
         raise ValueError(
             f"student grid {tuple(student_grid.shape)} != teacher grid "
             f"{tuple(teacher_grid.shape)}"
         )
-    pred = predictor(student_grid).float()
-    target = teacher_grid.detach().float()
-    cos = F.cosine_similarity(pred, target, dim=-1)
-    loss = (1.0 - cos).mean()
+    batch = student_grid.shape[0]
+    student = student_grid.reshape(batch, -1, student_grid.shape[-1])
+    target = teacher_grid.detach().float().reshape(batch, -1, teacher_grid.shape[-1])
+    num_cells = student.shape[1]
+    if config.loss == "cos":
+        pred = predictor(student).float()
+        loss = (1.0 - F.cosine_similarity(pred, target, dim=-1)).mean()
+    elif config.loss == "disc":
+        k = min(config.num_cells, num_cells)
+        idx = torch.rand(batch, num_cells, device=student.device).topk(k, 1).indices
+        pick = student.gather(1, idx.unsqueeze(-1).expand(-1, -1, student.shape[-1]))
+        tgt = target.gather(1, idx.unsqueeze(-1).expand(-1, -1, target.shape[-1]))
+        tgt = tgt - tgt.mean(dim=1, keepdim=True)
+        pred = predictor(pick).float()
+        masks = torch.full(
+            (batch, k), MaskValue.DECODER.value, device=student.device, dtype=torch.long
+        )
+        loss_fn = ModalityPatchDiscriminationMaskedNegativesVec(tau=config.tau)
+        with torch.autocast(student.device.type, enabled=False):
+            loss = loss_fn._compute_modality_loss_parallel(pred, masks, tgt, "emainv")
+    else:
+        raise ValueError(f"unknown emainv loss {config.loss!r}")
     with torch.no_grad():
-        raw_cos = F.cosine_similarity(student_grid.float(), target, dim=-1).mean()
-        teacher_std = F.normalize(target.flatten(0, -2), dim=-1).std(dim=0).mean()
+        raw_cos = F.cosine_similarity(student.float(), target, dim=-1).mean()
+        unit = F.normalize(target, dim=-1)
+        teacher_std = unit.flatten(0, 1).std(dim=0).mean()
+        # Collapse monitor: mean pairwise cosine between a sample's teacher registers
+        # (1.0 = every position identical).
+        sub = unit[:, : min(num_cells, 256)]
+        within = torch.einsum("bnd,bmd->bnm", sub, sub).mean()
     metrics = {
         "loss_unweighted": loss.detach(),
         "student_teacher_cos": raw_cos,
         "teacher_unit_std": teacher_std,
+        "teacher_within_sample_cos": within,
     }
-    return weight * loss, metrics
+    return config.weight * loss, metrics
 
 
 def ema_update(student: nn.Module, teacher: nn.Module, momentum: float) -> None:
