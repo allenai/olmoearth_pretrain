@@ -970,11 +970,15 @@ class FlexiVitBase(nn.Module):
         spatial_pos_encoding: str | None = None,
         routed_mlp_depth: int = 0,
         routed_mlp_num_experts: int = 1,
+        modality_stream_depth: int = 0,
+        num_modality_streams: int = 1,
     ) -> None:
         """Initialize the FlexiVitBase class.
 
         ``routed_mlp_depth`` leading blocks get a :class:`RoutedMlp` with
         ``routed_mlp_num_experts`` experts; the rest keep one shared MLP.
+        ``modality_stream_depth`` leading blocks get ``num_modality_streams - 1``
+        extra copies (``stream_blocks``), one whole block per stream.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -1025,28 +1029,39 @@ class FlexiVitBase(nn.Module):
         self.rope_temporal_coordinate_scale = rope_temporal_coordinate_scale
         self.learnable_channel_embeddings = learnable_channel_embeddings
         self.random_channel_embeddings = random_channel_embeddings
+
+        def _make_block(num_mlp_experts: int = 1) -> Block:
+            return Block(
+                embedding_size,
+                num_heads,
+                mlp_ratio,
+                qkv_bias=True,
+                qk_norm=qk_norm,
+                norm_layer=nn.LayerNorm,  # TODO: This should be configurable
+                cross_attn=self.cross_attn,
+                drop_path=drop_path,
+                use_flash_attn=self.use_flash_attn,
+                position_encoding=self.position_encoding,
+                rope_base=self.rope_base,
+                rope_mixed_base=self.rope_mixed_base,
+                temporal_rope_dim_frac=self.temporal_rope_dim_frac,
+                rope_temporal_base=self.rope_temporal_base,
+                num_mlp_experts=num_mlp_experts,
+            )
+
         self.blocks = nn.ModuleList(
             [
-                Block(
-                    embedding_size,
-                    num_heads,
-                    mlp_ratio,
-                    qkv_bias=True,
-                    qk_norm=qk_norm,
-                    norm_layer=nn.LayerNorm,  # TODO: This should be configurable
-                    cross_attn=self.cross_attn,
-                    drop_path=drop_path,
-                    use_flash_attn=self.use_flash_attn,
-                    position_encoding=self.position_encoding,
-                    rope_base=self.rope_base,
-                    rope_mixed_base=self.rope_mixed_base,
-                    temporal_rope_dim_frac=self.temporal_rope_dim_frac,
-                    rope_temporal_base=self.rope_temporal_base,
-                    num_mlp_experts=(
-                        routed_mlp_num_experts if i_blk < routed_mlp_depth else 1
-                    ),
-                )
+                _make_block(routed_mlp_num_experts if i_blk < routed_mlp_depth else 1)
                 for i_blk in range(depth)
+            ]
+        )
+        # Modality streams: in the first ``modality_stream_depth`` layers every stream
+        # has its own whole block. ``blocks[i]`` is stream 0's and
+        # ``stream_blocks[i][s - 1]`` is stream s's.
+        self.stream_blocks = nn.ModuleList(
+            [
+                nn.ModuleList([_make_block() for _ in range(num_modality_streams - 1)])
+                for _ in range(modality_stream_depth)
             ]
         )
 
@@ -2479,6 +2494,7 @@ class Encoder(FlexiVitBase):
         routed_mlp_depth: int = 0,
         routed_mlp_routing: str = "modality",
         routed_mlp_groups: list[list[str]] | None = None,
+        modality_stream_depth: int = 0,
     ):
         """Initialize the encoder.
 
@@ -2547,8 +2563,13 @@ class Encoder(FlexiVitBase):
                 0 keeps one shared MLP in every block.
             routed_mlp_routing: ``"modality"`` sends a token to its modality's group;
                 ``"random"`` spreads tokens over the same MLPs by sequence position.
-            routed_mlp_groups: Modality names per MLP. None gives every supported
-                modality its own. Modalities in no group use the first MLP.
+            routed_mlp_groups: Modality names per MLP (and per stream). None gives
+                every supported modality its own. Modalities in no group use the first.
+            modality_stream_depth: Number of leading layers run as separate streams,
+                one per group of ``routed_mlp_groups``: each stream has its own whole
+                block and attends only within itself, so these layers cost less than a
+                shared one and the streams first meet in the layer after. Equal to
+                ``depth`` the streams only meet in the Perceiver (late fusion).
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
         # Routed MLPs: one expert per modality group in the first ``routed_mlp_depth``
@@ -2564,11 +2585,24 @@ class Encoder(FlexiVitBase):
         self._mlp_expert_of_modality = {
             name: i for i, group in enumerate(routed_mlp_groups) for name in group
         }
+        self.modality_stream_depth = modality_stream_depth
+        if modality_stream_depth > 0:
+            if routed_mlp_depth > 0:
+                raise ValueError(
+                    "modality_stream_depth and routed_mlp_depth are exclusive"
+                )
+            if use_flash_attn or num_register_tokens > 0:
+                raise ValueError(
+                    "modality streams need the padded (non-flash) attention path and "
+                    "no register tokens"
+                )
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
             routed_mlp_depth=routed_mlp_depth,
             routed_mlp_num_experts=len(routed_mlp_groups) if routed_mlp_depth else 1,
+            modality_stream_depth=modality_stream_depth,
+            num_modality_streams=len(routed_mlp_groups) if modality_stream_depth else 1,
             mlp_ratio=mlp_ratio,
             num_heads=num_heads,
             max_sequence_length=max_sequence_length,
@@ -2867,6 +2901,71 @@ class Encoder(FlexiVitBase):
             expert_ids = by_position.view(1, n, 1).expand_as(expert_ids).contiguous()
         return expert_ids
 
+    def apply_stream_blocks(
+        self,
+        i_blk: int,
+        tokens: Tensor,
+        stream_ids: Tensor,
+        valid: Tensor | None,
+        positions: Tensor | None,
+    ) -> Tensor:
+        """Run layer ``i_blk`` as separate streams: own block, attention within.
+
+        Args:
+            i_blk: Layer index, below ``modality_stream_depth``.
+            tokens: ``[B, N, C]`` padded tokens.
+            stream_ids: ``[B, N]`` stream index per token.
+            valid: ``[B, N]`` bool, False on padding; None when nothing is padded.
+            positions: ``[B, N, coord]`` RoPE coordinates, or None.
+
+        Returns:
+            ``[B, N, C]`` tokens, each updated by its own stream's block.
+        """
+        out = tokens
+        stream_blocks = [self.blocks[i_blk], *self.stream_blocks[i_blk]]
+        for stream, blk in enumerate(stream_blocks):
+            selected = stream_ids == stream
+            if valid is not None:
+                selected = selected & valid
+            # Bring this stream's tokens to the front of each row, as
+            # remove_masked_tokens does, and attend over them alone.
+            sorted_selected, order = torch.sort(
+                selected, dim=1, descending=True, stable=True
+            )
+            n_stream = int(sorted_selected.sum(dim=1).max())
+            if n_stream == 0:
+                # Keep the block in the graph: DDP rejects parameters without a
+                # gradient, and a batch can lack a modality entirely.
+                out = out + 0.0 * sum(p.sum() for p in blk.parameters())
+                continue
+            order = order[:, :n_stream]
+            stream_mask = sorted_selected[:, :n_stream]
+            index = order[:, :, None].expand(-1, -1, tokens.shape[-1])
+            stream_tokens = tokens.gather(1, index)
+            stream_positions = None
+            if positions is not None:
+                stream_positions = positions.gather(
+                    1, order[:, :, None].expand(-1, -1, positions.shape[-1])
+                )
+            # Always masked: rows hold different numbers of this stream's tokens. A row
+            # with none of them (a sample missing the modality) would have every key
+            # masked and give NaNs, so it attends to its first slot; that slot belongs
+            # to another stream and its output is discarded below.
+            attn_mask = stream_mask.clone()
+            attn_mask[~stream_mask.any(dim=1), 0] = True
+            updated = blk(
+                x=stream_tokens,
+                attn_mask=attn_mask,
+                rope_positions=stream_positions,
+            )
+            # Write back only this stream's tokens; the padded tail of each row
+            # points at other streams' tokens and must keep their current value.
+            current = out.gather(1, index)
+            out = out.scatter(
+                1, index, torch.where(stream_mask[:, :, None], updated, current)
+            )
+        return out
+
     def _maybe_get_attn_mask(
         self,
         new_mask: Tensor,
@@ -3031,7 +3130,7 @@ class Encoder(FlexiVitBase):
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
         mlp_expert_ids: Tensor | None = None
-        if self.routed_mlp_depth > 0:
+        if self.routed_mlp_depth > 0 or self.modality_stream_depth > 0:
             mlp_expert_ids = self.build_mlp_expert_ids(
                 tokens_only_dict, original_masks_dict
             )
@@ -3117,6 +3216,12 @@ class Encoder(FlexiVitBase):
             # attention
             # WARNING: THIS MAY CHANGE DEPENDING ON THE ATTENTION IMPLEMENTATION
 
+            if i_blk < self.modality_stream_depth:
+                assert mlp_expert_ids is not None
+                tokens = self.apply_stream_blocks(
+                    i_blk, tokens, mlp_expert_ids, new_mask, positions
+                )
+                continue
             tokens = blk(
                 x=tokens,
                 cu_seqlens=cu_seqlens,
@@ -4027,6 +4132,11 @@ class EncoderConfig(Config):
     routed_mlp_depth: int = 0
     routed_mlp_routing: str = "modality"
     routed_mlp_groups: list[list[str]] | None = None
+    # Modality streams (parameters for less compute): the first
+    # ``modality_stream_depth`` layers run one stream per group of
+    # ``routed_mlp_groups``, each with its own whole block and attention only within
+    # the stream. ``depth`` -> the streams first meet in the Perceiver.
+    modality_stream_depth: int = 0
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
@@ -4091,6 +4201,13 @@ class EncoderConfig(Config):
                 f"routed_mlp_depth must be in [0, depth={self.depth}], got "
                 f"{self.routed_mlp_depth}"
             )
+        if not 0 <= self.modality_stream_depth <= self.depth:
+            raise ValueError(
+                f"modality_stream_depth must be in [0, depth={self.depth}], got "
+                f"{self.modality_stream_depth}"
+            )
+        if self.modality_stream_depth > 0 and self.routed_mlp_depth > 0:
+            raise ValueError("modality_stream_depth and routed_mlp_depth are exclusive")
         if self.routed_mlp_routing not in ("modality", "random"):
             raise ValueError(
                 "routed_mlp_routing must be 'modality' or 'random', got "

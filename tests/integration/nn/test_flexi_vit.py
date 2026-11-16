@@ -2343,3 +2343,123 @@ def test_routed_mlp_config_validation() -> None:
         EncoderConfig(
             **base, routed_mlp_depth=1, routed_mlp_groups=[["sentinel2_l2a"], ["naip"]]
         ).validate()
+
+
+_STREAM_KWARGS: dict[str, Any] = dict(
+    supported_modalities=[
+        Modality.SENTINEL2_L2A,
+        Modality.LATLON,
+        Modality.WORLDCOVER,
+    ],
+    embedding_size=16,
+    max_patch_size=8,
+    min_patch_size=1,
+    num_heads=2,
+    mlp_ratio=4.0,
+    max_sequence_length=12,
+    depth=2,
+    drop_path=0.0,
+)
+_STREAM_GROUPS = [["sentinel2_l2a"], ["latlon", "worldcover"]]
+
+
+def _s2_tokens(encoder: Encoder, sample: dict[str, torch.Tensor], **kw: Any) -> Tensor:
+    out, _, _ = unpack_encoder_output(
+        encoder.forward(MaskedOlmoEarthSample(**sample), 4, 1, **kw)
+    )
+    return out.sentinel2_l2a
+
+
+@pytest.mark.parametrize("fast_pass", [False, True])
+def test_modality_streams_isolate_modalities_until_they_merge(
+    masked_sample_dict: dict[str, torch.Tensor], fast_pass: bool
+) -> None:
+    """With every layer a stream, S2 tokens do not depend on the other stream."""
+    torch.manual_seed(0)
+    streams = Encoder(
+        **_STREAM_KWARGS, routed_mlp_groups=_STREAM_GROUPS, modality_stream_depth=2
+    ).eval()
+    half = Encoder(
+        **_STREAM_KWARGS, routed_mlp_groups=_STREAM_GROUPS, modality_stream_depth=1
+    ).eval()
+    assert len(streams.stream_blocks) == 2 and len(streams.stream_blocks[0]) == 1
+    # Make every token visible so the other stream is really there to be ignored.
+    sample = {
+        k: torch.full_like(v, MaskValue.ONLINE_ENCODER.value)
+        if k.endswith("_mask")
+        else v
+        for k, v in masked_sample_dict.items()
+    }
+    changed = dict(sample)
+    changed["worldcover"] = sample["worldcover"] + 5.0
+    with torch.no_grad():
+        for encoder, isolated in ((streams, True), (half, False)):
+            a = _s2_tokens(encoder, sample, fast_pass=fast_pass)
+            b = _s2_tokens(encoder, changed, fast_pass=fast_pass)
+            assert torch.isfinite(a).all()
+            assert torch.allclose(a, b, atol=1e-6) == isolated
+
+
+@pytest.mark.parametrize("fast_pass", [False, True])
+def test_modality_streams_with_one_stream_match_the_plain_encoder(
+    masked_sample_dict: dict[str, torch.Tensor], fast_pass: bool
+) -> None:
+    """All tokens in stream 0 (the other empty): the plain encoder, same weights."""
+    torch.manual_seed(0)
+    plain = Encoder(**_STREAM_KWARGS).eval()
+    one_stream = Encoder(
+        **_STREAM_KWARGS,
+        routed_mlp_groups=[["sentinel2_l2a", "latlon", "worldcover"], ["sentinel1"]],
+        modality_stream_depth=2,
+    ).eval()
+    missing, unexpected = one_stream.load_state_dict(plain.state_dict(), strict=False)
+    assert not unexpected and all(k.startswith("stream_blocks.") for k in missing)
+    with torch.no_grad():
+        a = _s2_tokens(plain, masked_sample_dict, fast_pass=fast_pass)
+        b = _s2_tokens(one_stream, masked_sample_dict, fast_pass=fast_pass)
+    assert torch.allclose(a, b, atol=1e-5)
+
+
+def test_modality_streams_train_when_a_sample_lacks_a_modality(
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """A sample with no token of a stream gives finite outputs and gradients."""
+    torch.manual_seed(0)
+    encoder = Encoder(
+        **_STREAM_KWARGS, routed_mlp_groups=_STREAM_GROUPS, modality_stream_depth=2
+    ).train()
+    sample = {k: v.clone() for k, v in masked_sample_dict.items()}
+    for name in ("latlon_mask", "worldcover_mask"):
+        sample[name][0] = MaskValue.DECODER.value
+    out = _s2_tokens(encoder, sample)
+    assert torch.isfinite(out).all()
+    out.sum().backward()
+    for name, param in encoder.named_parameters():
+        if name.startswith(("blocks.", "stream_blocks.")):
+            assert param.grad is not None, name
+            assert torch.isfinite(param.grad).all(), name
+
+    # No token of the second stream anywhere in the batch: its blocks still get a
+    # (zero) gradient.
+    encoder.zero_grad()
+    for name in ("latlon_mask", "worldcover_mask"):
+        sample[name][:] = MaskValue.DECODER.value
+    _s2_tokens(encoder, sample).sum().backward()
+    for name, param in encoder.stream_blocks.named_parameters():
+        assert param.grad is not None and param.grad.abs().sum() == 0, name
+
+
+def test_modality_stream_config_validation() -> None:
+    """Streams and routed MLPs are exclusive; the depth is bounded."""
+    base: dict[str, Any] = dict(
+        supported_modality_names=["sentinel2_l2a", "sentinel1"],
+        embedding_size=16,
+        num_heads=2,
+        depth=2,
+    )
+    encoder = EncoderConfig(**base, modality_stream_depth=2).build()
+    assert [len(layer) for layer in encoder.stream_blocks] == [1, 1]
+    with pytest.raises(ValueError, match="modality_stream_depth"):
+        EncoderConfig(**base, modality_stream_depth=3).validate()
+    with pytest.raises(ValueError, match="exclusive"):
+        EncoderConfig(**base, modality_stream_depth=1, routed_mlp_depth=1).validate()
