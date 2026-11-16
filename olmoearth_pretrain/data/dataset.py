@@ -32,6 +32,7 @@ from olmoearth_pretrain.data.constants import (
     ModalitySpec,
 )
 from olmoearth_pretrain.data.normalize import Normalizer, Strategy
+from olmoearth_pretrain.data.text_holdout import TextHoldout
 from olmoearth_pretrain.data.text_labels import LabelVocabulary
 from olmoearth_pretrain.dataset.convert_to_h5py import ConvertToH5py
 from olmoearth_pretrain.datatypes import (
@@ -408,6 +409,7 @@ class OlmoEarthDataset(Dataset):
         filter_idx_file: str | None = None,
         caption_dir: str | None = None,
         label_vocab_dir: str | None = None,
+        text_holdout_spec: str | None = None,
     ):
         """Initialize the dataset.
 
@@ -438,6 +440,9 @@ class OlmoEarthDataset(Dataset):
                 captions, concatenated with one that has them).
             label_vocab_dir: Label vocabulary for the text_label modality; required when
                 it is a training modality.
+            text_holdout_spec: Split spec (data/text_holdout.py). Text targets drop its
+                held-out classes, and windows in its held-out or buffer locations get no
+                caption_cell or text_label.
 
         Returns:
             None
@@ -499,6 +504,24 @@ class OlmoEarthDataset(Dataset):
             if label_vocab_dir is None:
                 raise ValueError("text_label needs label_vocab_dir")
             self.labels = LabelVocabulary.load(label_vocab_dir)
+
+        # Per window index: whether text targets are withheld for its location.
+        self.text_masked_windows: np.ndarray | None = None
+        self.held_label_ids: np.ndarray | None = None
+        if text_holdout_spec is not None:
+            holdout = TextHoldout.load(text_holdout_spec)
+            with self.latlon_distribution_path.open("rb") as f:
+                latlon = np.load(f)
+            self.text_masked_windows = holdout.masked_locations(
+                latlon[:, 0], latlon[:, 1]
+            )
+            if self.labels is not None:
+                self.held_label_ids = holdout.held_label_ids(self.labels)
+            logger.info(
+                f"Text holdout {text_holdout_spec}: {self.text_masked_windows.sum()} of "
+                f"{len(latlon)} windows withheld by location, "
+                f"{0 if self.held_label_ids is None else len(self.held_label_ids)} labels held out"
+            )
 
     @property
     def fingerprint_version(self) -> str:
@@ -956,6 +979,28 @@ class OlmoEarthDataset(Dataset):
         if raster is not None:
             sample_dict[Modality.TEXT_LABEL.name] = raster
 
+    def _apply_text_holdout(self, sample_dict: dict[str, Any], index: int) -> None:
+        """Drop text targets in withheld locations, and held-out labels everywhere."""
+        assert self.text_masked_windows is not None
+        if self.text_masked_windows[index]:
+            sample_dict.pop(Modality.CAPTION_CELL.name, None)
+            sample_dict.pop(Modality.TEXT_LABEL.name, None)
+            return
+        labels = sample_dict.get(Modality.TEXT_LABEL.name)
+        if (
+            labels is None
+            or self.held_label_ids is None
+            or not len(self.held_label_ids)
+        ):
+            return
+        labels = np.where(
+            np.isin(labels, self.held_label_ids), MISSING_VALUE, labels
+        ).astype(labels.dtype)
+        if (labels == MISSING_VALUE).all():
+            sample_dict.pop(Modality.TEXT_LABEL.name)
+        else:
+            sample_dict[Modality.TEXT_LABEL.name] = labels
+
     def __getitem__(self, args: GetItemArgs) -> tuple[int, OlmoEarthSample]:
         """Get the sample at the given index."""
         if hasattr(self, "sample_indices") and self.sample_indices is not None:
@@ -973,6 +1018,8 @@ class OlmoEarthDataset(Dataset):
             self._add_caption_cell(sample_dict, index)
         if self.labels is not None and Modality.TEXT_LABEL.name not in sample_dict:
             self._add_text_label(sample_dict)
+        if self.text_masked_windows is not None:
+            self._apply_text_holdout(sample_dict, index)
         sample_dict, current_length = self._pad_timestamps(sample_dict)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
@@ -1056,6 +1103,7 @@ class OlmoEarthDatasetConfig(Config):
     filter_idx_file: str | None = None
     caption_dir: str | None = None
     label_vocab_dir: str | None = None
+    text_holdout_spec: str | None = None
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

@@ -30,7 +30,8 @@ from olmoearth_pretrain.config import Config
 from olmoearth_pretrain.data.caption_embeddings import CaptionEmbeddings
 from olmoearth_pretrain.data.captions import GRID, patch_caption_keys
 from olmoearth_pretrain.data.constants import MISSING_VALUE
-from olmoearth_pretrain.data.text_labels import CHANNELS
+from olmoearth_pretrain.data.text_holdout import TextHoldout
+from olmoearth_pretrain.data.text_labels import CHANNELS, LabelVocabulary
 
 
 @dataclass
@@ -48,6 +49,8 @@ class TextAlignmentHeadConfig(Config):
             text_label targets; None trains on captions only.
         label_weight: Weight of the label loss.
         num_label_distractors: Vocabulary labels drawn as extra negatives per microbatch.
+        text_holdout_spec: Split spec (data/text_holdout.py) whose held-out labels are
+            never drawn as distractors.
     """
 
     embeddings_dir: str
@@ -58,6 +61,7 @@ class TextAlignmentHeadConfig(Config):
     label_vocab_dir: str | None = None
     label_weight: float = 0.1
     num_label_distractors: int = 1024
+    text_holdout_spec: str | None = None
 
     def build(self, embedding_dim: int) -> TextAlignmentHead:
         """Build the head for a location-token grid of width ``embedding_dim``."""
@@ -68,7 +72,9 @@ class TextAlignmentHeadConfig(Config):
             init_temperature=self.init_temperature,
             same_text_threshold=self.same_text_threshold,
             labels=(
-                LabelEmbeddings(self.label_vocab_dir, self.text_dim)
+                LabelEmbeddings(
+                    self.label_vocab_dir, self.text_dim, self.text_holdout_spec
+                )
                 if self.label_vocab_dir is not None
                 else None
             ),
@@ -80,8 +86,13 @@ class TextAlignmentHeadConfig(Config):
 class LabelEmbeddings:
     """A label vocabulary's embeddings, held in memory: [labels, dim] unit vectors."""
 
-    def __init__(self, path: str, dim: int | None = None):
-        """Read ``embeddings.npy`` and ``meta.json``; ``dim`` truncates (Matryoshka)."""
+    def __init__(
+        self, path: str, dim: int | None = None, holdout_spec: str | None = None
+    ):
+        """Read ``embeddings.npy`` and ``meta.json``; ``dim`` truncates (Matryoshka).
+
+        With ``holdout_spec``, its held-out labels are left out of ``distractor_ids``.
+        """
         self.meta = json.load(open(os.path.join(path, "meta.json")))
         table = np.load(os.path.join(path, "embeddings.npy")).astype(np.float32)
         table = table[:, : dim or table.shape[1]]
@@ -89,6 +100,11 @@ class LabelEmbeddings:
             table / np.linalg.norm(table, axis=1, keepdims=True)
         )
         self.dim = self.table.shape[1]
+        keep = np.ones(len(table), bool)
+        if holdout_spec is not None:
+            vocab = LabelVocabulary.load(path)
+            keep[TextHoldout.load(holdout_spec).held_label_ids(vocab)] = False
+        self.distractor_ids = torch.from_numpy(np.flatnonzero(keep))
 
     def __len__(self) -> int:
         """The number of labels."""
@@ -292,9 +308,10 @@ def label_alignment_loss(
         return loss * 0.0, {
             "text/labels": torch.tensor(0.0, device=location_tokens.device)
         }
-    distractors = torch.randint(
-        len(head.labels), (head.num_label_distractors,), device=ids.device
-    )
+    pool = head.labels.distractor_ids.to(ids.device)
+    distractors = pool[
+        torch.randint(len(pool), (head.num_label_distractors,), device=ids.device)
+    ]
     candidates = torch.cat([ids, distractors]).unique()
     targets = torch.searchsorted(candidates, ids)
     return head(pooled, head.labels.get(candidates), targets)
