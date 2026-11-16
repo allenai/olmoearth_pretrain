@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch.utils.data import DataLoader
 
+from olmoearth_pretrain.evals.changed_year import ExtraTestMetrics
 from olmoearth_pretrain.evals.finetune.model import BackboneWithHead, to_device
 from olmoearth_pretrain.evals.metrics import (
     EvalMetric,
@@ -151,6 +152,7 @@ def eval_seg(
     patch_size: int,
     primary_metric: EvalMetric | None = None,
     primary_metric_class: int | None = None,
+    extra_test_metrics: ExtraTestMetrics | None = None,
 ) -> EvalResult:
     """Evaluate segmentation metrics."""
     module.eval()
@@ -169,7 +171,7 @@ def eval_seg(
     preds = torch.cat(preds_all, 0)
     labels = torch.cat(labels_all, 0)
     scores = torch.cat(scores_all, 0)
-    return segmentation_metrics(
+    result = segmentation_metrics(
         preds,
         labels,
         num_classes=num_classes,
@@ -178,3 +180,6 @@ def eval_seg(
         primary_metric=primary_metric,
         primary_metric_class=primary_metric_class,
     )
+    if extra_test_metrics is not None:
+        result.metrics.update(extra_test_metrics(preds, labels, num_classes))
+    return result

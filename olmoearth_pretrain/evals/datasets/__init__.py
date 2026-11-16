@@ -113,7 +113,7 @@ def get_eval_dataset(
             norm_stats_from_pretrained=norm_stats_from_pretrained,
             norm_method=norm_method,
         )
-    elif eval_dataset.startswith("pastis"):
+    elif eval_dataset in ("pastis", "pastis128"):
         kwargs = {
             "split": split,
             "label_fraction": label_fraction,
