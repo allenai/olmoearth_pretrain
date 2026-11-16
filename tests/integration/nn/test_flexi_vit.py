@@ -15,6 +15,7 @@ from torch import Tensor
 from olmoearth_pretrain.data.constants import Modality, ModalitySpec
 from olmoearth_pretrain.nn.flexi_vit import (
     Encoder,
+    EncoderConfig,
     MultiModalPatchEmbeddings,
     PerceiverConfig,
     Predictor,
@@ -2247,3 +2248,98 @@ def test_predictor_flash_register_context_matches_packing(
     assert kwargs["max_seqlen_k"] == n_reg
     # Every register is valid, so there is nothing to mask on the context side.
     assert kwargs["attn_mask"] is None
+
+
+def _routed_encoder_pair(routing: str) -> tuple[Encoder, Encoder]:
+    """A plain encoder and a routed one whose experts all hold the plain MLP weights."""
+    kwargs: dict[str, Any] = dict(
+        supported_modalities=[
+            Modality.SENTINEL2_L2A,
+            Modality.LATLON,
+            Modality.WORLDCOVER,
+        ],
+        embedding_size=16,
+        max_patch_size=8,
+        min_patch_size=1,
+        num_heads=2,
+        mlp_ratio=4.0,
+        max_sequence_length=12,
+        depth=2,
+        drop_path=0.0,
+    )
+    torch.manual_seed(0)
+    plain = Encoder(**kwargs)
+    routed = Encoder(
+        **kwargs,
+        routed_mlp_depth=1,
+        routed_mlp_routing=routing,
+        routed_mlp_groups=[["sentinel2_l2a"], ["latlon", "worldcover"]],
+    )
+    state = {}
+    for key, value in plain.state_dict().items():
+        if key.startswith("blocks.0.mlp."):
+            for i in range(2):
+                state[key.replace("mlp.", f"mlp.experts.{i}.", 1)] = value
+        else:
+            state[key] = value
+    routed.load_state_dict(state)
+    return plain.eval(), routed.eval()
+
+
+@pytest.mark.parametrize("routing", ["modality", "random"])
+@pytest.mark.parametrize("fast_pass", [False, True])
+def test_routed_mlp_encoder_matches_plain_when_experts_are_equal(
+    masked_sample_dict: dict[str, torch.Tensor], routing: str, fast_pass: bool
+) -> None:
+    """With identical experts the routed encoder is the plain encoder."""
+    plain, routed = _routed_encoder_pair(routing)
+    assert sum(p.numel() for p in routed.parameters()) > sum(
+        p.numel() for p in plain.parameters()
+    )
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+    with torch.no_grad():
+        a, _, _ = unpack_encoder_output(plain.forward(x, 4, 1, fast_pass=fast_pass))
+        b, _, _ = unpack_encoder_output(routed.forward(x, 4, 1, fast_pass=fast_pass))
+    assert torch.allclose(a.sentinel2_l2a, b.sentinel2_l2a, atol=1e-5)
+
+
+def test_routed_mlp_expert_ids_follow_modality_groups(
+    masked_sample_dict: dict[str, torch.Tensor],
+) -> None:
+    """Modality routing gives every token its group's expert; random spreads them."""
+    _, routed = _routed_encoder_pair("modality")
+    x = MaskedOlmoEarthSample(**masked_sample_dict)
+    patchified = routed.patch_embeddings.forward(x, 4)
+    tokens, masks, _ = routed.split_tokens_masks_and_dims(patchified)
+    ids = routed.build_mlp_expert_ids(tokens, masks)[..., 0]
+    n_s2 = tokens["sentinel2_l2a"][0, ..., 0].numel()
+    assert ids.shape[1] > n_s2
+    # The collapsed order is the encoder's own; count per expert instead of slicing.
+    assert ((ids == 0).sum(dim=1) == n_s2).all()
+    assert ((ids == 1).sum(dim=1) == ids.shape[1] - n_s2).all()
+
+    _, random_routed = _routed_encoder_pair("random")
+    random_ids = random_routed.build_mlp_expert_ids(tokens, masks)[..., 0]
+    assert random_ids.shape == ids.shape
+    assert random_ids[0].tolist() == [i % 2 for i in range(ids.shape[1])]
+
+
+def test_routed_mlp_config_validation() -> None:
+    """The config rejects bad routed-MLP settings and round-trips good ones."""
+    base: dict[str, Any] = dict(
+        supported_modality_names=["sentinel2_l2a", "sentinel1"],
+        embedding_size=16,
+        num_heads=2,
+        depth=2,
+    )
+    encoder = EncoderConfig(**base, routed_mlp_depth=1).build()
+    assert len(encoder.blocks[0].mlp.experts) == 2
+    assert not hasattr(encoder.blocks[1].mlp, "experts")
+    with pytest.raises(ValueError, match="routed_mlp_depth"):
+        EncoderConfig(**base, routed_mlp_depth=3).validate()
+    with pytest.raises(ValueError, match="routed_mlp_routing"):
+        EncoderConfig(**base, routed_mlp_depth=1, routed_mlp_routing="x").validate()
+    with pytest.raises(ValueError, match="unsupported modalities"):
+        EncoderConfig(
+            **base, routed_mlp_depth=1, routed_mlp_groups=[["sentinel2_l2a"], ["naip"]]
+        ).validate()

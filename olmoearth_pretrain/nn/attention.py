@@ -550,6 +550,54 @@ class Mlp(nn.Module):
         return x
 
 
+class RoutedMlp(nn.Module):
+    """Several independent :class:`Mlp` experts; each token goes through exactly one.
+
+    The expert is chosen by the caller (``expert_ids``), not learned: e.g. one expert
+    per input modality. A token costs the same as through a single ``Mlp``, so this
+    adds parameters without adding compute.
+
+    Args:
+        num_experts: Number of independent MLPs.
+        **mlp_kwargs: Passed to every :class:`Mlp`.
+    """
+
+    def __init__(self, num_experts: int, **mlp_kwargs: Any) -> None:
+        """Initialize the routed MLP."""
+        super().__init__()
+        if num_experts < 2:
+            raise ValueError(f"num_experts must be >= 2, got {num_experts}")
+        self.experts = nn.ModuleList([Mlp(**mlp_kwargs) for _ in range(num_experts)])
+
+    def forward(self, x: torch.Tensor, expert_ids: torch.Tensor) -> torch.Tensor:
+        """Apply each token's expert.
+
+        Args:
+            x: Tokens of shape ``(..., C)``.
+            expert_ids: Long tensor of shape ``x.shape[:-1]`` with values in
+                ``[0, num_experts)``.
+
+        Returns:
+            Tensor of the same shape as ``x``.
+        """
+        if expert_ids.shape != x.shape[:-1]:
+            raise ValueError(
+                f"expert_ids shape {tuple(expert_ids.shape)} does not match tokens "
+                f"{tuple(x.shape[:-1])}"
+            )
+        out: torch.Tensor | None = None
+        for i, expert in enumerate(self.experts):
+            selected = expert_ids == i
+            # Run every expert even on an empty selection so all parameters stay in
+            # the graph (DDP rejects parameters that receive no gradient).
+            y = expert(x[selected])
+            if out is None:
+                out = y.new_zeros(*x.shape[:-1], y.shape[-1])
+            out[selected] = y
+        assert out is not None
+        return out
+
+
 class LayerScale(nn.Module):
     """Learnable scaling layer.
 
@@ -667,6 +715,7 @@ class Block(nn.Module):
         spatial_pos_encoding: str | None = None,
         attn_dim: int | None = None,
         kv_in_dim: int | None = None,
+        num_mlp_experts: int = 1,
     ) -> None:
         """Initialize the Transformer block.
 
@@ -700,6 +749,8 @@ class Block(nn.Module):
                 the caller.
             kv_in_dim: Optional key/value source width for cross-attention when
                 the context ``y`` is wider than ``dim`` (see :class:`Attention`).
+            num_mlp_experts: With a value above 1 the MLP is a :class:`RoutedMlp`
+                and ``forward`` needs ``mlp_expert_ids``.
         """
         super().__init__()
         position_encoding = resolve_position_encoding(
@@ -730,11 +781,16 @@ class Block(nn.Module):
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
         self.norm2 = norm_layer(dim)
-        self.mlp = Mlp(
+        mlp_kwargs = dict(
             in_features=dim,
             hidden_features=int(dim * mlp_ratio),
             act_layer=act_layer,
             drop=drop,
+        )
+        self.mlp: Mlp | RoutedMlp = (
+            RoutedMlp(num_mlp_experts, **mlp_kwargs)
+            if num_mlp_experts > 1
+            else Mlp(**mlp_kwargs)
         )
         self.ls2 = (
             LayerScale(dim, init_values=init_values) if init_values else nn.Identity()
@@ -759,12 +815,15 @@ class Block(nn.Module):
         rope_spatial_extent: torch.Tensor | None = None,
         rope_spatial_extent_y: torch.Tensor | None = None,
         block_mask: Any | None = None,
+        mlp_expert_ids: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Forward pass.
 
         Args:
             x: Input tensor of shape (B, N, C)
             y: Optional context tensor for cross attention of shape (B, M, C)
+            mlp_expert_ids: Per-token expert index for a routed MLP (see
+                :class:`RoutedMlp`); required when the block has one.
             block_mask: Optional FlexAttention block mask (see :meth:`Attention.sdpa`).
             rope_extent: Optional per-query temporal interval widths (see
                 :meth:`Attention.forward`).
@@ -813,7 +872,13 @@ class Block(nn.Module):
             )
         )
 
-        x = x + self.drop_path(self.ls2(self.mlp(self.norm2(x))))
+        if isinstance(self.mlp, RoutedMlp):
+            if mlp_expert_ids is None:
+                raise ValueError("this block's MLP is routed: pass mlp_expert_ids")
+            mlp_out = self.mlp(self.norm2(x), mlp_expert_ids)
+        else:
+            mlp_out = self.mlp(self.norm2(x))
+        x = x + self.drop_path(self.ls2(mlp_out))
         return x
 
     def apply_fsdp(self, **fsdp_kwargs: Any) -> None:

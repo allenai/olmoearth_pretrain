@@ -968,8 +968,14 @@ class FlexiVitBase(nn.Module):
         rope_temporal_base: float | None = None,
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
+        routed_mlp_depth: int = 0,
+        routed_mlp_num_experts: int = 1,
     ) -> None:
-        """Initialize the FlexiVitBase class."""
+        """Initialize the FlexiVitBase class.
+
+        ``routed_mlp_depth`` leading blocks get a :class:`RoutedMlp` with
+        ``routed_mlp_num_experts`` experts; the rest keep one shared MLP.
+        """
         super().__init__()
         position_encoding = resolve_position_encoding(
             position_encoding, spatial_pos_encoding
@@ -1036,8 +1042,11 @@ class FlexiVitBase(nn.Module):
                     rope_mixed_base=self.rope_mixed_base,
                     temporal_rope_dim_frac=self.temporal_rope_dim_frac,
                     rope_temporal_base=self.rope_temporal_base,
+                    num_mlp_experts=(
+                        routed_mlp_num_experts if i_blk < routed_mlp_depth else 1
+                    ),
                 )
-                for _ in range(depth)
+                for i_blk in range(depth)
             ]
         )
 
@@ -2467,6 +2476,9 @@ class Encoder(FlexiVitBase):
         rope_temporal_coordinate_scale: float = 1.0,
         spatial_pos_encoding: str | None = None,
         perceiver_config: PerceiverConfig | JointLatentConfig | None = None,
+        routed_mlp_depth: int = 0,
+        routed_mlp_routing: str = "modality",
+        routed_mlp_groups: list[list[str]] | None = None,
     ):
         """Initialize the encoder.
 
@@ -2530,11 +2542,33 @@ class Encoder(FlexiVitBase):
                 :class:`PerceiverConfig`. Requires a RoPE position encoding. A
                 :class:`JointLatentConfig` instead produces the register grid by joint
                 token-latent attention (no ViT blocks, no reads; use ``depth=0``).
+            routed_mlp_depth: Number of leading blocks whose MLP is one of several
+                per-group MLPs (see :class:`~olmoearth_pretrain.nn.attention.RoutedMlp`).
+                0 keeps one shared MLP in every block.
+            routed_mlp_routing: ``"modality"`` sends a token to its modality's group;
+                ``"random"`` spreads tokens over the same MLPs by sequence position.
+            routed_mlp_groups: Modality names per MLP. None gives every supported
+                modality its own. Modalities in no group use the first MLP.
         """
         self.tokenization_config = tokenization_config or TokenizationConfig()
+        # Routed MLPs: one expert per modality group in the first ``routed_mlp_depth``
+        # blocks. Each token still passes through one MLP, so this adds parameters
+        # without compute. "modality" routes a token to its modality's group; "random"
+        # is the control with the same experts but tokens spread over them by position.
+        self.routed_mlp_depth = routed_mlp_depth
+        self.routed_mlp_routing = routed_mlp_routing
+        if routed_mlp_groups is None:
+            routed_mlp_groups = [[m.name] for m in supported_modalities]
+        self.routed_mlp_groups = routed_mlp_groups
+        # Modalities in no group (e.g. decode-only ones, never visible) use expert 0.
+        self._mlp_expert_of_modality = {
+            name: i for i, group in enumerate(routed_mlp_groups) for name in group
+        }
         super().__init__(
             embedding_size=embedding_size,
             depth=depth,
+            routed_mlp_depth=routed_mlp_depth,
+            routed_mlp_num_experts=len(routed_mlp_groups) if routed_mlp_depth else 1,
             mlp_ratio=mlp_ratio,
             num_heads=num_heads,
             max_sequence_length=max_sequence_length,
@@ -2802,6 +2836,37 @@ class Encoder(FlexiVitBase):
             exit_ids_seq = None
         return exit_ids_seq
 
+    def build_mlp_expert_ids(
+        self,
+        tokens_only_dict: dict[str, Tensor],
+        original_masks_dict: dict[str, Tensor],
+    ) -> Tensor:
+        """Routed-MLP expert index per token, ``[B, N, 1]`` long, in collapsed order."""
+        available_modalities = return_modalities_from_dict(tokens_only_dict)
+        modalities_to_process = get_modalities_to_process(
+            available_modalities, self.supported_modality_names
+        )
+        ids_dict: dict[str, Tensor] = {}
+        for modality_name in modalities_to_process:
+            tokens = tokens_only_dict[modality_name]
+            ids_dict[modality_name] = torch.full(
+                (*tokens.shape[:-1], 1),
+                self._mlp_expert_of_modality.get(modality_name, 0),
+                dtype=torch.long,
+                device=tokens.device,
+            )
+        ids_dict.update(original_masks_dict)
+        expert_ids, _ = self.collapse_and_combine_hwtc(ids_dict)
+        if self.routed_mlp_routing == "random":
+            # Same experts, no specialisation: spread tokens over them by their index
+            # in the collapsed sequence (deterministic, so eval is repeatable).
+            n = expert_ids.shape[1]
+            by_position = torch.arange(n, device=expert_ids.device) % len(
+                self.routed_mlp_groups
+            )
+            expert_ids = by_position.view(1, n, 1).expand_as(expert_ids).contiguous()
+        return expert_ids
+
     def _maybe_get_attn_mask(
         self,
         new_mask: Tensor,
@@ -2965,6 +3030,11 @@ class Encoder(FlexiVitBase):
         # bottleneck read so registers attend over the encoded *visible* patch tokens
         # using their original coordinates (`positions` below is reduced/packed in place).
         register_kv_positions = positions
+        mlp_expert_ids: Tensor | None = None
+        if self.routed_mlp_depth > 0:
+            mlp_expert_ids = self.build_mlp_expert_ids(
+                tokens_only_dict, original_masks_dict
+            )
         # Passed in full (``(t, row, col)`` under 3D RoPE): the Perceiver takes the
         # spatial coordinates for its grid and latent blocks itself, and uses the
         # temporal one only when its reads are configured to rotate over time.
@@ -2980,6 +3050,10 @@ class Encoder(FlexiVitBase):
             positions, _, _, _, _ = self.remove_masked_tokens(positions, bool_mask)
         if cell_ids is not None and bool_mask is not None:
             cell_ids, _, _, _, _ = self.remove_masked_tokens(cell_ids, bool_mask)
+        if mlp_expert_ids is not None and bool_mask is not None:
+            mlp_expert_ids, _, _, _, _ = self.remove_masked_tokens(
+                mlp_expert_ids, bool_mask
+            )
 
         if exit_ids_seq is not None:
             exit_ids_seq, _, _, _, _ = self.remove_masked_tokens(
@@ -2997,6 +3071,8 @@ class Encoder(FlexiVitBase):
             tokens = self.pack_tokens(tokens, new_mask)
             if positions is not None:
                 positions = self.pack_tokens(positions, new_mask)
+            if mlp_expert_ids is not None:
+                mlp_expert_ids = self.pack_tokens(mlp_expert_ids, new_mask)
         else:
             cu_seqlens = None
 
@@ -3009,6 +3085,19 @@ class Encoder(FlexiVitBase):
             tokens, attn_mask = self.add_register_tokens_and_masks(tokens, attn_mask)
             if positions is not None:
                 positions = self.add_register_positions(positions)
+            if mlp_expert_ids is not None:
+                # Register tokens use expert 0.
+                mlp_expert_ids = torch.cat(
+                    [
+                        mlp_expert_ids.new_zeros(
+                            mlp_expert_ids.shape[0], self.num_register_tokens, 1
+                        ),
+                        mlp_expert_ids,
+                    ],
+                    dim=1,
+                )
+        if mlp_expert_ids is not None:
+            mlp_expert_ids = mlp_expert_ids[..., 0]
 
         # Apply attn with varying encoder depths
         for i_blk, blk in enumerate(self.blocks):
@@ -3035,6 +3124,9 @@ class Encoder(FlexiVitBase):
                 # we will have to specify k and q lens for cross attention
                 attn_mask=attn_mask,
                 rope_positions=positions,
+                mlp_expert_ids=(
+                    mlp_expert_ids if i_blk < self.routed_mlp_depth else None
+                ),
             )
 
         if self.has_register_tokens:
@@ -3927,6 +4019,14 @@ class EncoderConfig(Config):
     spatial_pos_encoding: str | None = None
     # Perceiver-style spatial Perceiver; None -> plain encoder.
     perceiver_config: PerceiverConfig | JointLatentConfig | None = None
+    # Routed MLPs (parameters without compute): the first ``routed_mlp_depth`` blocks
+    # hold one MLP per group of ``routed_mlp_groups`` (None -> one per supported
+    # modality) and each token uses one of them, chosen by ``routed_mlp_routing``:
+    # "modality" (the token's own group) or "random" (by sequence position; the
+    # capacity-without-specialisation control). 0 -> every block has one shared MLP.
+    routed_mlp_depth: int = 0
+    routed_mlp_routing: str = "modality"
+    routed_mlp_groups: list[list[str]] | None = None
 
     def __post_init__(self) -> None:
         """Coerce raw dicts to nested configs for old checkpoint compatibility."""
@@ -3986,6 +4086,29 @@ class EncoderConfig(Config):
                 encoder_num_heads=self.num_heads,
                 position_encoding=self.position_encoding,
             )
+        if not 0 <= self.routed_mlp_depth <= self.depth:
+            raise ValueError(
+                f"routed_mlp_depth must be in [0, depth={self.depth}], got "
+                f"{self.routed_mlp_depth}"
+            )
+        if self.routed_mlp_routing not in ("modality", "random"):
+            raise ValueError(
+                "routed_mlp_routing must be 'modality' or 'random', got "
+                f"{self.routed_mlp_routing}"
+            )
+        if self.routed_mlp_groups is not None:
+            grouped = [name for group in self.routed_mlp_groups for name in group]
+            if len(self.routed_mlp_groups) < 2 or any(
+                len(group) == 0 for group in self.routed_mlp_groups
+            ):
+                raise ValueError("routed_mlp_groups needs >= 2 non-empty groups")
+            if len(set(grouped)) != len(grouped):
+                raise ValueError("a modality appears in two routed_mlp_groups")
+            unknown = set(grouped) - set(self.supported_modality_names)
+            if unknown:
+                raise ValueError(
+                    f"routed_mlp_groups has unsupported modalities: {unknown}"
+                )
         if self.rope_mixed_base <= 0:
             raise ValueError(
                 f"rope_mixed_base must be positive, got {self.rope_mixed_base}"

@@ -59,3 +59,39 @@ def test_compiled_attention_applies_rope(
         assert not torch.allclose(no_rope(x), eager)
 
     torch.testing.assert_close(compiled, eager)
+
+
+def test_routed_mlp_applies_each_tokens_expert() -> None:
+    """Each token goes through its own expert, and only that one."""
+    from olmoearth_pretrain.nn.attention import RoutedMlp
+
+    torch.manual_seed(0)
+    mlp = RoutedMlp(3, in_features=8, hidden_features=16)
+    x = torch.randn(2, 5, 8)
+    ids = torch.tensor([[0, 1, 2, 1, 0], [2, 2, 0, 1, 1]])
+    out = mlp(x, ids)
+    assert out.shape == x.shape
+    for i, expert in enumerate(mlp.experts):
+        assert torch.allclose(out[ids == i], expert(x[ids == i]), atol=1e-6)
+
+
+def test_routed_mlp_unused_expert_still_gets_a_gradient() -> None:
+    """An expert with no tokens stays in the graph (zero gradient, not None)."""
+    from olmoearth_pretrain.nn.attention import RoutedMlp
+
+    mlp = RoutedMlp(3, in_features=8, hidden_features=16)
+    x = torch.randn(4, 8)
+    mlp(x, torch.tensor([0, 0, 1, 1])).sum().backward()
+    for name, param in mlp.named_parameters():
+        assert param.grad is not None, name
+    assert mlp.experts[2].fc1.weight.grad.abs().sum() == 0
+    assert mlp.experts[0].fc1.weight.grad.abs().sum() > 0
+
+
+def test_routed_mlp_rejects_mismatched_ids() -> None:
+    """Expert ids must match the token shape."""
+    from olmoearth_pretrain.nn.attention import RoutedMlp
+
+    mlp = RoutedMlp(2, in_features=8)
+    with pytest.raises(ValueError, match="expert_ids shape"):
+        mlp(torch.randn(2, 5, 8), torch.zeros(2, 4, dtype=torch.long))
