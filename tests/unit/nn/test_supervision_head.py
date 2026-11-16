@@ -171,6 +171,18 @@ class TestBuildValidMask:
         assert not mask[0, 0, 0, 0]
         assert mask[0, 0, 1, 0]
 
+    def test_mask_negatives(self) -> None:
+        """With mask_negatives, negative fill values are False too."""
+        target = torch.ones(B, H_PIX, W_PIX, 1, 1)
+        target[0, 0, 0, 0, 0] = -0.125
+        target[0, 0, 1, 0, 0] = MISSING_VALUE
+        target[0, 0, 2, 0, 0] = 0.0
+        assert _build_valid_mask(target)[0, 0, 0, 0]
+        mask = _build_valid_mask(target, mask_negatives=True)
+        assert not mask[0, 0, 0, 0]
+        assert not mask[0, 0, 1, 0]
+        assert mask[0, 0, 2, 0]
+
     def test_multitemporal(self) -> None:
         """Valid mask works with T > 1."""
         T = 3

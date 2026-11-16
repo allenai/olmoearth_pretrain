@@ -61,6 +61,9 @@ class SupervisionModalityConfig(Config):
             targets like SRTM/canopy where MSE overweights extreme outliers.
             Matches AlphaEarth's choice (Table S2 of arXiv:2507.22291) of L1
             across all continuous reconstruction targets.
+        mask_negatives: If True, negative targets are ignored like MISSING_VALUE. For
+            non-negative targets whose unlabelled pixels carry a negative fill value
+            (e.g. BlueTopo depth when it is also a decode target).
     """
 
     task_type: str  # stored as str for OmegaConf compat; coerced to SupervisionTaskType in __post_init__
@@ -70,6 +73,7 @@ class SupervisionModalityConfig(Config):
     norm_pix_loss: bool = False
     pos_weight: bool = False
     regression_loss_type: str = "mse"
+    mask_negatives: bool = False
 
     def __post_init__(self) -> None:
         """Validate and coerce task_type."""
@@ -260,7 +264,7 @@ def _compute_per_modality_losses(
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
             continue
 
-        valid_mask = _build_valid_mask(raw_target)
+        valid_mask = _build_valid_mask(raw_target, cfg.mask_negatives)
 
         if not valid_mask.any():
             per_modality_losses[name] = (0 * pred.sum()).to(dtype)
@@ -321,8 +325,10 @@ def compute_supervision_loss(
     return total_loss, per_modality_losses
 
 
-def _build_valid_mask(raw_target: Tensor) -> Tensor:
+def _build_valid_mask(raw_target: Tensor, mask_negatives: bool = False) -> Tensor:
     """Bool mask that is True where all bands are non-missing [B, H, W]."""
+    if mask_negatives:
+        return (raw_target >= 0).all(dim=-1)
     return (raw_target != MISSING_VALUE).all(dim=-1)
 
 

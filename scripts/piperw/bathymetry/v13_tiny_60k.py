@@ -7,12 +7,14 @@ maps, the single-pass LatentMIM train module and the decorrelated shape sampler.
 distilled student: it is detached and would not change the teacher.
 
 Run directly, this trains the baseline, with no depth signal. ``run(bluetopo=...)`` adds
-NOAA BlueTopo survey depth (US waters) in one of two ways; it is never an encoder input:
+NOAA BlueTopo survey depth (US waters) in one of three ways; it is never an encoder input:
 
 - ``SUPERVISION`` (v13_tiny_60k_bluetopo_sup.py): an L1 regression head on the location
   tokens whose loss reaches the encoder. Only that head reads BlueTopo.
 - ``DECODE`` (v13_tiny_60k_bluetopo_decode.py): a decode-only latent-MIM target, like
   v1.2's maps. No supervision head; unlabelled pixels get BLUETOPO_DECODE_FILL.
+- ``BOTH`` (v13_tiny_60k_bluetopo_both.py): the decode target plus the regression head,
+  which ignores the negative fill.
 
 The labels exclude the 1-degree cells held out for the BlueTopo depth eval.
 """
@@ -53,6 +55,7 @@ WANDB_PROJECT = "2026_10_29_bathymetry_direct_supervision"
 MAX_STEPS = 60_000
 SUPERVISION = "supervision"
 DECODE = "decode"
+BOTH = "both"
 # Below the 0-40 m depth range, so unlabelled pixels are distinct from shallow water.
 BLUETOPO_DECODE_FILL = -5.0
 BLUETOPO_DIR = "/weka/dfive-default/agent/piperbots/2026-10-29-piperw-bathymetry-direct-supervision/bluetopo_train"
@@ -180,6 +183,7 @@ def build_supervision_head_config(bluetopo: bool = False) -> SupervisionHeadConf
             num_output_channels=1,
             weight=_weight(regression),
             regression_loss_type="l1",
+            mask_negatives=True,
         )
     return config
 
@@ -189,9 +193,9 @@ def build_model_config(
 ) -> LatentMIMConfig:
     """v1.2 tiny + AttentionPooler + supervision heads.
 
-    As a supervision target, bluetopo is left out of the encoder/decoder modalities so
-    only its head reads it. As a decode target it stays in them, and the masking config
-    keeps it decode-only.
+    As a supervision target only, bluetopo is left out of the encoder/decoder modalities
+    so only its head reads it. As a decode target it stays in them, and the masking
+    config keeps it decode-only.
     """
     model_common = common
     if bluetopo == SUPERVISION:
@@ -216,7 +220,7 @@ def build_model_config(
     decoder_config.position_encoding = DECODER_POSITION_ENCODING
     config.projection_only_target = True
     config.supervision_head_config = build_supervision_head_config(
-        bluetopo == SUPERVISION
+        bluetopo in (SUPERVISION, BOTH)
     )
     return config
 
@@ -276,7 +280,7 @@ def build_dataset_config(
     config = base.build_dataset_config(common)
     if bluetopo is not None:
         config.bluetopo_dir = BLUETOPO_DIR
-    if bluetopo == DECODE:
+    if bluetopo in (DECODE, BOTH):
         config.bluetopo_fill_value = BLUETOPO_DECODE_FILL
     return config
 
@@ -290,8 +294,8 @@ def build_trainer_config(common: CommonComponents) -> TrainerConfig:
 
 
 def run(bluetopo: str | None = None) -> None:
-    """Run one arm: the baseline, or bluetopo as SUPERVISION or DECODE."""
-    assert bluetopo in (None, SUPERVISION, DECODE), bluetopo
+    """Run one arm: the baseline, or bluetopo as SUPERVISION, DECODE or BOTH."""
+    assert bluetopo in (None, SUPERVISION, DECODE, BOTH), bluetopo
     main(
         common_components_builder=lambda *a, **k: build_common_components(
             *a, bluetopo=bluetopo, **k
