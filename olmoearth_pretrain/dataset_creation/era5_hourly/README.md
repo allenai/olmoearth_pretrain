@@ -70,5 +70,16 @@ fallback to a neighbouring cell.
 CPU-only Beaker job (one job per shard; `plan` once, before the others) on a
 jupiter, neptune or saturn node: one job per node, at most 64 workers, at
 most 50 jobs at once. Every stage resumes or skips finished work. The token
-comes from the workspace secret `RSLEARN_EARTHDATAHUB_TOKEN` as
-`EARTHDATAHUB_TOKEN`.
+comes from the workspace secret named by `TOKEN_SECRET` (default
+`RSLEARN_EARTHDATAHUB_TOKEN`) as `EARTHDATAHUB_TOKEN`.
+
+## EarthDataHub quota
+
+EarthDataHub allows each user 500,000 requests per calendar month (one per
+chunk read; it resets at midnight on the 1st) and answers HTTP 429 after that.
+The corpus is 846,990 chunk reads, more than one key's month: the team key
+ran out on 2026-11-14 with 483,813 chunks done, and the rest uses a second
+user's key (`EARTHDATAHUB_TOKEN_PIPER`). Store reads retry network errors with
+backoff but stop the job at once on a 429; the tile markers keep what is done.
+Check usage at https://earthdatahub.destine.eu/quota-api-keys before a large
+run.

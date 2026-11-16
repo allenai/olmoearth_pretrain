@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import numpy as np
 
 from ..fluxnet.common import ERA5_MIRROR, NODATA  # noqa: F401
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 # The daily pretraining corpus. Read-only: windows are taken exactly as defined.
 CORPUS_ROOT = Path("/weka/dfive-default/helios/dataset/era5enc_pretrain")
@@ -27,6 +33,10 @@ EPOCH = np.datetime64("1950-01-01T00", "h")
 N_LAT, N_LON = 1472, 3600
 GRID_DEG = 0.1
 TIME_CHUNK, LAT_CHUNK, LON_CHUNK = 1440, 50, 100
+# EarthDataHub allows each user 500,000 requests (one per chunk read) per
+# calendar month, then answers HTTP 429 until the 1st. The full corpus is
+# ~847k chunk reads, more than one key's month.
+QUOTA_STATUS = 429
 
 WINDOW_HOURS = 365 * 24
 SHARD_WINDOWS = 10_000
@@ -181,3 +191,58 @@ def open_store(url: str = HOURLY_URL) -> Any:
         url, storage_options=edh_storage_options(), read_only=True
     )
     return zarr.open_group(store, mode="r")
+
+
+class QuotaExceeded(RuntimeError):
+    """EarthDataHub refused a request: the token's monthly quota is used up."""
+
+
+def is_quota_error(exc: BaseException | None) -> bool:
+    """Whether ``exc``, or an exception it was raised from, is an HTTP 429.
+
+    Args:
+        exc: The exception.
+
+    Returns:
+        True when some exception in the chain has ``status == 429``.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if getattr(exc, "status", None) == QUOTA_STATUS:
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+def with_retries(fn: Callable[[], T], what: str, attempts: int = 8) -> T:
+    """Call ``fn``, retrying failures with backoff (10 s, doubling, at most 300 s).
+
+    A 429 is not retried: the quota stays used up until the next month, so
+    the job stops at once (tile markers keep what is done).
+
+    Args:
+        fn: The request.
+        what: Description for the log.
+        attempts: Calls before giving up.
+
+    Returns:
+        What ``fn`` returns.
+
+    Raises:
+        QuotaExceeded: On an HTTP 429.
+    """
+    for attempt in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            if is_quota_error(exc):
+                raise QuotaExceeded(
+                    f"{what}: EarthDataHub request quota used up (HTTP 429)"
+                ) from exc
+            if attempt == attempts - 1:
+                raise
+            wait = min(300, 10 * 2**attempt)
+            logger.warning("%s failed (%r); retry in %ds", what, exc, wait)
+            time.sleep(wait)
+    raise AssertionError("unreachable")

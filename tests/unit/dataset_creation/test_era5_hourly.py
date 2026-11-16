@@ -4,14 +4,16 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from olmoearth_pretrain.dataset_creation.era5_hourly import plan
+from olmoearth_pretrain.dataset_creation.era5_hourly import common, plan
 from olmoearth_pretrain.dataset_creation.era5_hourly.common import (
     BANDS,
     N_LAT,
     WINDOW_HOURS,
+    QuotaExceeded,
     deaccumulate,
     grid_cell,
     hour_index,
+    with_retries,
 )
 from olmoearth_pretrain.dataset_creation.era5_hourly.shards import (
     create_shard_file,
@@ -99,3 +101,55 @@ def test_write_rows_round_trip(tmp_path) -> None:
     assert data.shape == (3, WINDOW_HOURS, len(BANDS))
     np.testing.assert_array_equal(data[1:], block)
     assert not data[0].any()
+
+
+class HTTPError(Exception):
+    """An HTTP error carrying a status, as aiohttp's ClientResponseError does."""
+
+    def __init__(self, status: int) -> None:
+        """Keep the status."""
+        super().__init__(status)
+        self.status = status
+
+
+def test_with_retries_backs_off_on_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr(common.time, "sleep", waits.append)
+    outcomes = iter([OSError("dns"), HTTPError(503), "ok"])
+
+    def request() -> str:
+        outcome = next(outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    assert with_retries(request, "read") == "ok"
+    assert waits == [10, 20]
+
+
+def test_with_retries_stops_at_once_on_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(common.time, "sleep", lambda s: pytest.fail("retried a 429"))
+    calls = []
+
+    def request() -> None:
+        calls.append(1)
+        try:
+            raise HTTPError(429)
+        except HTTPError as exc:
+            raise RuntimeError("zarr read failed") from exc
+
+    with pytest.raises(QuotaExceeded):
+        with_retries(request, "read")
+    assert calls == [1]
+
+
+def test_with_retries_gives_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(common.time, "sleep", lambda s: None)
+
+    def request() -> None:
+        raise OSError("down")
+
+    with pytest.raises(OSError):
+        with_retries(request, "read", attempts=3)

@@ -11,7 +11,8 @@ then renamed to ``shards/shard_XXX.npy``. Rows go to their byte offset with
 ``pwrite`` and ``fsync`` and are read back before the tile's marker
 (``progress/shard_XXX/tile_*.json``) is written: on weka, rows written through
 ``np.memmap`` by a restarted job were seen to read back as zeros. A rerun skips
-the tiles that have a marker, so retries and preemptions resume.
+the tiles that have a marker, so retries and preemptions resume. An HTTP 429
+(the token's monthly request quota is used up) stops the job at once.
 
 Usage::
 
@@ -43,6 +44,7 @@ from .common import (
     WINDOW_HOURS,
     deaccumulate,
     open_store,
+    with_retries,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -98,7 +100,7 @@ def write_rows(path: Path, at: int, block: np.ndarray) -> None:
 
 
 def read_chunk(array: Any, selection: tuple[slice, slice, slice]) -> np.ndarray:
-    """Read one store chunk, retrying with backoff.
+    """Read one store chunk, retrying with backoff (not on a used-up quota).
 
     Args:
         array: Zarr array.
@@ -107,18 +109,11 @@ def read_chunk(array: Any, selection: tuple[slice, slice, slice]) -> np.ndarray:
     Returns:
         The block as float32.
     """
-    for attempt in range(READ_ATTEMPTS):
-        try:
-            return np.asarray(array[selection], dtype=np.float32)
-        except Exception as exc:
-            if attempt == READ_ATTEMPTS - 1:
-                raise
-            wait = min(300, 10 * 2**attempt)
-            logger.warning(
-                "read %s %s failed (%r); retry in %ds", array.path, selection, exc, wait
-            )
-            time.sleep(wait)
-    raise AssertionError("unreachable")
+    return with_retries(
+        lambda: np.asarray(array[selection], dtype=np.float32),
+        f"read {array.path} {selection}",
+        READ_ATTEMPTS,
+    )
 
 
 def build_tile(
@@ -217,7 +212,7 @@ def run(root: Path, shard: int, fetch_workers: int) -> None:
     if not partial.exists():
         create_shard_file(partial, spec["n_windows"])
     offset = np.load(partial, mmap_mode="r").offset
-    group = open_store()
+    group = with_retries(open_store, "open store")
     started = time.time()
     tiles_stats = []
     for k, tile in enumerate(spec["tiles"]):

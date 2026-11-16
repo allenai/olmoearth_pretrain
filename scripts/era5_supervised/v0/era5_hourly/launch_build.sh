@@ -8,13 +8,16 @@
 # Usage (from the repo root; the commit must be pushed):
 #   HOST=jupiter-cs-aus-167.reviz.ai2.in bash scripts/era5_supervised/v0/era5_hourly/launch_build.sh  # pilot: shard 0
 #   STEPS="shard validate" SHARD=3 HOST=... bash ...
+#   TOKEN_SECRET=EARTHDATAHUB_TOKEN_PIPER STEPS=validate SHARD=28 HOST=... bash ...
 #   DRY_RUN=1 HOST=... bash ...                               # print the gantry command only
 #
 # CPU-only data job on a jupiter, neptune or saturn node (pick_nodes.sh), one
 # job per node, at most 64 workers, at most 50 jobs at once. No --cpus /
 # --memory (either would land the job on a GPU slot). The download is
 # network-bound: FETCH_WORKERS concurrent chunk reads (default 32, max 64).
-# The EarthDataHub token is the workspace secret RSLEARN_EARTHDATAHUB_TOKEN.
+# The EarthDataHub token is the workspace secret TOKEN_SECRET (default
+# RSLEARN_EARTHDATAHUB_TOKEN). EarthDataHub allows each user 500,000 chunk
+# requests per calendar month; a 429 stops the job (tile markers keep the rest).
 
 set -euo pipefail
 
@@ -23,6 +26,7 @@ STEPS="${STEPS:-plan static shard validate}"
 SHARD="${SHARD:-0}"
 FETCH_WORKERS="${FETCH_WORKERS:-32}"
 NAME="${NAME:-era5h_build_s${SHARD}}"
+TOKEN_SECRET="${TOKEN_SECRET:-RSLEARN_EARTHDATAHUB_TOKEN}"
 ACCOUNT=$(beaker account whoami --format text | awk 'NR==2{print $2}')
 REF=$(git rev-parse HEAD)
 MOD=olmoearth_pretrain.dataset_creation.era5_hourly
@@ -48,12 +52,12 @@ STAGES+="echo DONE"
 cmd=(
   "${GANTRY:-.venv/bin/gantry}" run
   --name "${NAME}"
-  --description "ERA5-Land hourly corpus build (${STEPS}; shard ${SHARD}); 0 GPU, ${FETCH_WORKERS} fetch workers; commit ${REF:0:9}"
+  --description "ERA5-Land hourly corpus build (${STEPS}; shard ${SHARD}); 0 GPU, ${FETCH_WORKERS} fetch workers; token ${TOKEN_SECRET}; commit ${REF:0:9}"
   --beaker-image tylerr/olmo-core-tch291cu128-2025-11-25
   --ref "${REF}" --branch "$(git branch --show-current)"
   --workspace ai2/earth-systems --budget ai2/atec-olmoearth
   --gh-token-secret "${ACCOUNT}_GITHUB_TOKEN"
-  --env-secret "EARTHDATAHUB_TOKEN=RSLEARN_EARTHDATAHUB_TOKEN"
+  --env-secret "EARTHDATAHUB_TOKEN=${TOKEN_SECRET}"
   --priority urgent --gpus 0 --hostname "${HOST}"
   --min-runtime 45m --retries 3
   --weka dfive-default:/weka/dfive-default

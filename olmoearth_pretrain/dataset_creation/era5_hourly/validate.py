@@ -7,8 +7,11 @@
 2. Physics: per band, the range, mean and no-data share over the shard, and
    mean daily transpiration and bare-soil evaporation per Koppen class
    (deserts should have almost no transpiration, rainforests the most).
-3. Cost: the compressed size of a sample of store chunks and the shard's build
-   time give the projected download and job time for every shard of the plan.
+3. Cost (``--cost`` only; 54 requests against the EarthDataHub quota): the
+   compressed size of a sample of store chunks and the shard's build time give
+   the projected download and job time for every shard of the plan.
+
+Store reads retry with backoff, except on HTTP 429 (quota used up).
 
 Writes ``progress/shard_XXX.validate.json``.
 
@@ -20,6 +23,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import time
@@ -39,6 +43,7 @@ from .common import (
     WINDOW_HOURS,
     edh_storage_options,
     open_store,
+    with_retries,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -62,9 +67,19 @@ def check_values(
     Returns:
         Max absolute difference per band and the number of slices compared.
     """
-    ds = xr.open_dataset(
-        HOURLY_URL, engine="zarr", chunks=None, storage_options=edh_storage_options()
-    )
+    ds = with_retries(
+        functools.partial(
+            xr.open_dataset, HOURLY_URL, engine="zarr", chunks=None,
+            storage_options=edh_storage_options(),
+        ),
+        "open store",
+    )  # fmt: skip
+
+    def read(source: str, h0: int, ilat: int, ilon: int) -> np.ndarray:
+        return ds[source].isel(
+            valid_time=slice(h0 - 1, h0 + SLICE_HOURS), latitude=ilat, longitude=ilon
+        ).values.astype(np.float32)  # fmt: skip
+
     by_name = {b.name: (k, b) for k, b in enumerate(BANDS)}
     worst = {name: 0.0 for name in CHECK_BANDS}
     rows = rng.choice(len(index), size=min(samples, len(index)), replace=False)
@@ -74,10 +89,10 @@ def check_values(
         h0 = int(w["first_hour"]) + k0
         for name in CHECK_BANDS:
             b, band = by_name[name]
-            raw = ds[band.source].isel(
-                valid_time=slice(h0 - 1, h0 + SLICE_HOURS),
-                latitude=int(w["ilat"]), longitude=int(w["ilon"]),
-            ).values.astype(np.float32)  # fmt: skip
+            raw = with_retries(
+                functools.partial(read, band.source, h0, int(w["ilat"]), int(w["ilon"])),
+                f"read {band.source}",
+            )  # fmt: skip
             expected = np.empty(SLICE_HOURS, np.float32)
             for i in range(SLICE_HOURS):
                 if not band.accumulated:
@@ -170,7 +185,7 @@ def check_cost(
     """
     plan = json.loads((root / "shards.json").read_text())["shards"]
     tiles = plan[shard]["tiles"]
-    group = open_store()
+    group = with_retries(open_store, "open store")
     fs = fsspec.filesystem("https", **edh_storage_options())
     sizes, seconds = [], []
     for band in BANDS:
@@ -181,7 +196,8 @@ def check_cost(
             coords = (tc, tile["tile_lat"], tile["tile_lon"])
             key = array.metadata.encode_chunk_key(coords)
             started = time.time()
-            sizes.append(len(fs.cat_file(f"{HOURLY_URL}/{band.source}/{key}")))
+            url = f"{HOURLY_URL}/{band.source}/{key}"
+            sizes.append(len(with_retries(functools.partial(fs.cat_file, url), url)))
             seconds.append(time.time() - started)
     mean_mb = float(np.mean(sizes)) / 1e6
     chunks_all = sum(len(t["time_chunks"]) for s in plan for t in s["tiles"]) * len(
@@ -202,7 +218,7 @@ def check_cost(
     return result
 
 
-def run(root: Path, shard: int, samples: int, seed: int) -> None:
+def run(root: Path, shard: int, samples: int, seed: int, cost: bool = False) -> None:
     """Validate one built shard.
 
     Args:
@@ -210,6 +226,7 @@ def run(root: Path, shard: int, samples: int, seed: int) -> None:
         shard: Shard number.
         samples: Windows for the value check.
         seed: Sampling seed.
+        cost: Also sample chunk sizes and project the corpus cost.
     """
     rng = np.random.default_rng(seed)
     index = pd.read_parquet(root / "index.parquet")
@@ -220,8 +237,9 @@ def run(root: Path, shard: int, samples: int, seed: int) -> None:
         shard=shard,
         values=check_values(data, index, samples, rng),
         physics=check_physics(data, index, rng),
-        cost=check_cost(root, shard, rng),
     )
+    if cost:
+        result["cost"] = check_cost(root, shard, rng)
     out = root / "progress" / f"shard_{shard:03d}.validate.json"
     out.write_text(json.dumps(result, indent=2))
     logger.info("wrote %s (values exact: %s)", out, result["values"]["exact"])
@@ -236,8 +254,9 @@ def main() -> None:
     ap.add_argument("--shard", type=int, required=True)
     ap.add_argument("--samples", type=int, default=16)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--cost", action="store_true", help="project the corpus cost")
     args = ap.parse_args()
-    run(Path(args.root), args.shard, args.samples, args.seed)
+    run(Path(args.root), args.shard, args.samples, args.seed, args.cost)
 
 
 if __name__ == "__main__":
