@@ -328,6 +328,7 @@
           "num_output_channels": 133,
           "pos_weight": false,
           "regression_loss_type": "mse",
+          "mask_negatives": false,
           "task_type": "classification",
           "weight": 0.1
         },
@@ -337,6 +338,7 @@
           "num_output_channels": 30,
           "pos_weight": true,
           "regression_loss_type": "mse",
+          "mask_negatives": false,
           "task_type": "binary_classification",
           "weight": 0.1
         },
@@ -346,6 +348,7 @@
           "num_output_channels": 1,
           "pos_weight": false,
           "regression_loss_type": "l1",
+          "mask_negatives": false,
           "task_type": "regression",
           "weight": 1.0
         },
@@ -355,6 +358,7 @@
           "num_output_channels": 8,
           "pos_weight": true,
           "regression_loss_type": "mse",
+          "mask_negatives": false,
           "task_type": "binary_classification",
           "weight": 0.1
         },
@@ -377,6 +381,7 @@
           "num_output_channels": 11,
           "pos_weight": false,
           "regression_loss_type": "mse",
+          "mask_negatives": false,
           "task_type": "classification",
           "weight": 0.1
         },
@@ -386,6 +391,7 @@
           "num_output_channels": 1,
           "pos_weight": false,
           "regression_loss_type": "l1",
+          "mask_negatives": false,
           "task_type": "regression",
           "weight": 1.0
         }
