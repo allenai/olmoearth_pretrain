@@ -66,6 +66,13 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
 
+from olmoearth_pretrain.clipearth.splits import (
+    HELD_CLASS,
+    HELD_LOCATION,
+    SPLITS,
+    SplitSpec,
+)
+
 logger = logging.getLogger(__name__)
 
 CATEGORIES = "/weka/oe-training-default/mm-olmo/rs_datasets/molmoearth_categories.json"
@@ -104,22 +111,31 @@ def load_regions(emb_dir: str, key: str) -> dict[str, np.ndarray]:
         raise FileNotFoundError(f"no embedding parts in {emb_dir}")
     window_split: dict[str, str] = {}
     window_slug: dict[str, str] = {}
+    window_lat_lon: dict[str, np.ndarray] = {}
     windows, classes, embeddings = [], [], []
     for path in paths:
         part = np.load(path)
         window_split.update(zip(part["window"], part["window_split"]))
         window_slug.update(zip(part["window"], part["window_slug"]))
+        tiles, inverse = np.unique(part["tile_window"], return_inverse=True)
+        centre = np.zeros((len(tiles), 2))
+        np.add.at(centre, inverse, part["tile_lat_lon"])
+        centre /= np.bincount(inverse, minlength=len(tiles))[:, None]
+        window_lat_lon.update(zip(tiles, centre))
         if len(part["region_class"]):
             windows.append(part["region_window"])
             classes.append(part["region_class"])
             embeddings.append(part[key].astype(np.float32))
     window = np.concatenate(windows)
+    lat_lon = np.array([window_lat_lon.get(w, (np.nan, np.nan)) for w in window])
     return {
         "window": window,
         "class": np.concatenate(classes),
         "embedding": np.concatenate(embeddings),
         "split": np.array([window_split[w] for w in window]),
         "slug": np.array([window_slug[w] for w in window]),
+        "lat": lat_lon[:, 0],
+        "lon": lat_lon[:, 1],
     }
 
 
@@ -157,6 +173,8 @@ def load_osm_regions(regions_path: str, texts_path: str) -> dict:
     return {
         "embedding": regions["embedding"].astype(np.float32) * norm[:, None],
         "split": regions["split"].astype(str),
+        "lat": regions.get("lat", np.full(len(regions["id"]), np.nan)),
+        "lon": regions.get("lon", np.full(len(regions["id"]), np.nan)),
         "category": np.array([texts[int(i)]["category"] for i in regions["id"]]),
         "levels": [texts[int(i)]["levels"] for i in regions["id"]],
     }
@@ -208,6 +226,12 @@ def load_pixel_samples(
     return {
         "id": arrays["id"][keep],
         "dataset": dataset,
+        "category": arrays["category"][keep]
+        if "category" in arrays
+        else np.zeros(n, int),
+        "category_names": arrays.get("category_names", np.array([""])).astype(str),
+        "lat": arrays["lat"][keep] if "lat" in arrays else np.full(n, np.nan),
+        "lon": arrays["lon"][keep] if "lon" in arrays else np.full(n, np.nan),
         "embedding": scaled("pixel"),
         "context": scaled("context"),
         "split": split,
@@ -388,11 +412,13 @@ def add_synonyms(
     group_levels: list[dict[str, list[int]]],
     text_index: dict[str, int],
     hold_last: bool,
+    excluded: frozenset[str] = frozenset(),
 ) -> int:
     """Add each class's synonyms to the name level of its groups; returns groups changed.
 
     A group's class is its first name-level text. With ``hold_last``, a class's last
-    synonym is left out when it has two or more, for a paraphrase check.
+    synonym is left out when it has two or more, for a paraphrase check. Synonyms whose
+    norm_key is in ``excluded`` (held-out classes) are never added.
     """
     by_name = {}
     for line in open(path):
@@ -415,7 +441,7 @@ def add_synonyms(
         by_level["name"] = names + [
             text_index.setdefault(t, len(text_index))
             for t in found
-            if norm_key(t) not in own
+            if norm_key(t) not in own and norm_key(t) not in excluded
         ]
         changed += 1
     logger.info(f"synonyms: {len(by_name)} classes, {changed} groups")
@@ -427,12 +453,14 @@ def load_distractors(
     holdout: float,
     group_levels: list[dict[str, list[int]]],
     text_index: dict[str, int],
+    excluded: frozenset[str] = frozenset(),
 ) -> np.ndarray:
     """``[groups, W]`` distractor text ids per group, -1 padded; ``W`` is 0 without ``path``.
 
     A group's class is its first name-level text. Distractor texts are added to
-    ``text_index``; a distractor matching one of the group's own names is dropped, and
-    ``holdout`` of the classes, by name hash, get none.
+    ``text_index``; a distractor matching one of the group's own names, or in
+    ``excluded`` (held-out classes), is dropped, and ``holdout`` of the classes, by name
+    hash, get none.
     """
     if not path:
         return np.full((len(group_levels), 0), -1)
@@ -454,7 +482,7 @@ def load_distractors(
         ids = [
             text_index.setdefault(t, len(text_index))
             for t in found
-            if norm_key(t) not in own
+            if norm_key(t) not in own and norm_key(t) not in excluded
         ]
         out[g, : len(ids)] = ids
     logger.info(
@@ -803,6 +831,13 @@ def main() -> None:
         help="train on every sample, held-out splits included; the logged held-out "
         "metrics then measure fit, not generalization",
     )
+    parser.add_argument(
+        "--split_spec",
+        default="",
+        help="JSON split spec (clipearth.splits): train without its held-out classes, "
+        "held-out regions and their buffer, and score the first two; replaces the "
+        "held-out datasets, osm_val, GEA-17 test and caption holdouts",
+    )
     parser.add_argument("--eval_every", type=int, default=500)
     parser.add_argument(
         "--save_every",
@@ -838,6 +873,8 @@ def main() -> None:
     rng = np.random.default_rng(args.seed)
     os.makedirs(args.out_dir, exist_ok=True)
     levels = [lv for lv in args.levels.split(",") if lv]
+    spec = SplitSpec.load(args.split_spec) if args.split_spec else None
+    excluded = spec.held_names if spec else frozenset()
     if not (args.emb_dir or args.captions or args.osm_regions or args.pixels):
         parser.error("give --emb_dir, --captions, --osm_regions, --pixels, or several")
     if bool(args.osm_regions) != bool(args.osm_texts):
@@ -875,7 +912,9 @@ def main() -> None:
         data = load_regions(args.emb_dir, args.embedding)
         keep = np.array([norm_key(c) not in GENERIC_LABELS for c in data["class"]])
         data = {k: v[keep] for k, v in data.items()}
-        unseen = np.array([is_holdout(s, args.holdout_frac) for s in data["slug"]])
+        unseen = np.array(
+            [not spec and is_holdout(s, args.holdout_frac) for s in data["slug"]]
+        )
         class_names = sorted(set(data["class"]))
         class_index = {c: i for i, c in enumerate(class_names)}
         labels = np.array([class_index[c] for c in data["class"]])
@@ -884,7 +923,17 @@ def main() -> None:
         embeddings += list(data["embedding"])
         contexts += list(data["embedding"])
         sample_group += [class_group[i] for i in labels]
-        split += ["unseen" if u else str(s) for u, s in zip(unseen, data["split"])]
+        if spec:
+            split += list(
+                spec.assign(
+                    spec.held_mask(data["class"]),
+                    data["lat"],
+                    data["lon"],
+                    data["split"],
+                )
+            )
+        else:
+            split += ["unseen" if u else str(s) for u, s in zip(unseen, data["split"])]
         source += ["class"] * len(labels)
         if args.class_boost:
             pattern, factor = args.class_boost.rsplit("=", 1)
@@ -930,10 +979,18 @@ def main() -> None:
                 embeddings.append(sample["embedding"])
                 contexts.append(sample["context"])
                 sample_group.append(add_group(sample["levels"]))
-                held = geo_holdout(
-                    sample["lat"], sample["lon"], args.caption_holdout_frac
-                )
-                split.append("val_caption" if held else "train")
+                if spec:
+                    texts = [t for ts in sample["levels"].values() for t in ts]
+                    split.append(
+                        HELD_CLASS
+                        if any(spec.mentions_held(t) for t in texts)
+                        else spec.location([sample["lat"]], [sample["lon"]])[0]
+                    )
+                else:
+                    held = geo_holdout(
+                        sample["lat"], sample["lon"], args.caption_holdout_frac
+                    )
+                    split.append("val_caption" if held else "train")
                 source.append(sample["source"])
                 weight.append(file_weights[file_index])
                 origin.append(file_index)
@@ -955,6 +1012,13 @@ def main() -> None:
         embeddings += list(osm["embedding"])
         contexts += list(osm["embedding"])
         sample_group += [add_group(levels_) for levels_ in osm["levels"]]
+        if spec:
+            osm["split"] = spec.assign(
+                spec.held_mask(osm["category"]),
+                osm["lat"],
+                osm["lon"],
+                np.full(len(osm["lat"]), "train"),
+            )
         split += list(osm["split"])
         source += ["osm"] * len(osm["split"])
         weight += [args.osm_weight] * len(osm["split"])
@@ -1006,11 +1070,21 @@ def main() -> None:
             sample_group += list(
                 groups[order][np.searchsorted(ids[order], pixels["text_id"])]
             )
-            # Pixels of the held-out source datasets are "unseen", like their windows.
-            split += [
-                "unseen" if s == "train" and is_holdout(d, args.holdout_frac) else s
-                for s, d in zip(pixels["split"], pixels["dataset"])
-            ]
+            if spec:
+                split += list(
+                    spec.assign(
+                        spec.held_mask(pixels["category_names"])[pixels["category"]],
+                        pixels["lat"],
+                        pixels["lon"],
+                        np.full(n, "train"),
+                    )
+                )
+            else:
+                # Pixels of the held-out source datasets are "unseen", like their windows.
+                split += [
+                    "unseen" if s == "train" and is_holdout(d, args.holdout_frac) else s
+                    for s, d in zip(pixels["split"], pixels["dataset"])
+                ]
             source += ["pixel"] * n
             weight += [pixel_weights[file_index]] * n
             origin += [file_index] * n
@@ -1018,14 +1092,23 @@ def main() -> None:
             logger.info(f"pixel samples: {n} from {pixels_path}")
 
     split_a, source_a = np.array(split), np.array(source)
+    if spec:
+        for src in np.unique(source_a):
+            in_src = split_a[source_a == src]
+            logger.info(
+                f"split spec, {src}: "
+                + ", ".join(f"{s} {(in_src == s).sum()}" for s in np.unique(in_src))
+            )
     weight_a, origin_a = np.array(weight), np.array(origin)
     group_a = np.array(sample_group)
     if args.synonyms:
         # Before the distractors, so a distractor equal to a synonym is dropped.
-        add_synonyms(args.synonyms, group_levels, text_index, args.synonym_holdout_last)
+        add_synonyms(
+            args.synonyms, group_levels, text_index, args.synonym_holdout_last, excluded
+        )
     # Only class, OSM and pixel samples use their group's distractors.
     group_distractors = load_distractors(
-        args.distractors, args.distractor_holdout, group_levels, text_index
+        args.distractors, args.distractor_holdout, group_levels, text_index, excluded
     )
     takes_distractors = np.isin(source_a, ["class", "osm", "pixel"])
     if args.mask_related:
@@ -1064,7 +1147,9 @@ def main() -> None:
 
     emb = np.stack(embeddings).astype(np.float32)
     del embeddings
-    if args.holdout_eval:
+    if spec:
+        train = ~np.isin(split_a, SPLITS)
+    elif args.holdout_eval:
         train = ~np.isin(split_a, HOLDOUT_SPLITS)
     elif args.train_on_all:
         train = np.ones(len(split_a), bool)
@@ -1228,11 +1313,18 @@ def main() -> None:
     # Fit only: a fixed subset of each --pixels file against the first-level texts in it.
     pixel_eval = []
     eval_rng = np.random.default_rng(args.seed + 1)
-    # "<file>_held" scores only the held-out splits (unseen data under --holdout_eval).
-    held_out = np.isin(split_a, HOLDOUT_SPLITS)
+    # "<file>_held" scores only the held-out splits (unseen data under --holdout_eval);
+    # with --split_spec, "<file>_held_class" and "<file>_held_location" score each.
+    held_masks = (
+        [(f"_{s}", split_a == s) for s in (HELD_CLASS, HELD_LOCATION)]
+        if spec
+        else [("_held", np.isin(split_a, HOLDOUT_SPLITS))]
+    )
     for o, name in enumerate(pixel_names):
         in_file = (source_a == "pixel") & (origin_a == o)
-        for label, mask in ((name, in_file), (name + "_held", in_file & held_out)):
+        for label, mask in [(name, in_file)] + [
+            (name + suffix, in_file & held) for suffix, held in held_masks
+        ]:
             rows = np.flatnonzero(mask)
             rows = rows[[bool(candidates[g][levels[0]]) for g in group_a[rows]]]
             if not len(rows):
@@ -1244,7 +1336,7 @@ def main() -> None:
 
     # The samples scored below; only these are projected at each evaluation.
     val_rows = np.flatnonzero(class_split == "val")
-    unseen_rows = np.flatnonzero(class_split == "unseen")
+    unseen_rows = np.flatnonzero(class_split == (HELD_CLASS if spec else "unseen"))
     held = np.flatnonzero(
         (split_a == "val_caption") & (source_a == "chip") & (origin_a == 0)
     )
