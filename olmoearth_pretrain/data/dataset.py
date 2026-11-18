@@ -40,6 +40,8 @@ from olmoearth_pretrain.types import ArrayTensor
 
 logger = logging.getLogger(__name__)
 
+BLUETOPO_MIN_VALID_FRACTION = 0.01
+
 
 # =============================================================================
 # Subsetting Functions
@@ -404,6 +406,8 @@ class OlmoEarthDataset(Dataset):
         seed: int = 0,
         apply_cutmix: bool = False,
         filter_idx_file: str | None = None,
+        bluetopo_dir: str | None = None,
+        bluetopo_fill_value: float = MISSING_VALUE,
     ):
         """Initialize the dataset.
 
@@ -429,6 +433,15 @@ class OlmoEarthDataset(Dataset):
             seed: For selecting the dataset percentage.
             apply_cutmix: Whether or not to apply CutMix augmentation during subsetting.
             filter_idx_file: If not None, filters indices by the values in this numpy array
+            bluetopo_dir: Directory with idx.npy (sorted sample indices) and depth_dm.npy
+                (int16 [M, h, w], BlueTopo depth in decimetres on each sample's grid, -1 =
+                no label). Only used when bluetopo is a training modality; samples not in
+                idx.npy, or with under BLUETOPO_MIN_VALID_FRACTION labelled pixels, treat
+                it as missing.
+            bluetopo_fill_value: Value for unlabelled BlueTopo pixels. MISSING_VALUE suits
+                pixel-level losses that skip missing pixels (the supervision head). As a
+                latent-MIM target, use a value outside the depth range instead: token masks
+                only look at one pixel per patch, so MISSING_VALUE would reach the encoder.
 
         Returns:
             None
@@ -468,6 +481,9 @@ class OlmoEarthDataset(Dataset):
             )
         else:
             self.indices_to_filter = None
+        self.bluetopo_dir = bluetopo_dir
+        self.bluetopo_fill_value = bluetopo_fill_value
+        self._bluetopo: tuple[np.ndarray, np.ndarray] | None = None
 
     @property
     def fingerprint_version(self) -> str:
@@ -647,6 +663,26 @@ class OlmoEarthDataset(Dataset):
             return self.normalizer_computed.normalize(modality, image)
         except Exception:
             return self.normalizer_predefined.normalize(modality, image)
+
+    def _bluetopo_depth(self, index: int) -> np.ndarray | None:
+        """BlueTopo depth [h, w, 1, 1] in metres (bluetopo_fill_value where unlabelled), if any."""
+        if self.bluetopo_dir is None:
+            return None
+        if self._bluetopo is None:
+            root = UPath(self.bluetopo_dir)
+            self._bluetopo = (
+                np.load(root / "idx.npy"),
+                np.load(root / "depth_dm.npy", mmap_mode="r"),
+            )
+        idx, depth_dm = self._bluetopo
+        pos = int(np.searchsorted(idx, index))
+        if pos == len(idx) or idx[pos] != index:
+            return None
+        d = np.asarray(depth_dm[pos])
+        if (d >= 0).mean() < BLUETOPO_MIN_VALID_FRACTION:
+            return None
+        depth = np.where(d >= 0, d.astype(np.float32) / 10, self.bluetopo_fill_value)
+        return depth[:, :, None, None]
 
     def _compute_ndvi(
         self,
@@ -914,6 +950,11 @@ class OlmoEarthDataset(Dataset):
         )
         sample_dict["timestamps"] = timestamps
         sample_dict, current_length = self._pad_timestamps(sample_dict)
+        # Samples without BlueTopo labels leave it out, which marks it missing.
+        if Modality.BLUETOPO.name in self.training_modalities:
+            bluetopo = self._bluetopo_depth(index)
+            if bluetopo is not None:
+                sample_dict[Modality.BLUETOPO.name] = bluetopo.astype(self.dtype)
         # fill sample currently takes like .08 seconds which may bottleneck smaller models
         sample, missing_modalities = self.fill_sample_with_missing_values(
             sample_dict, missing_timesteps_masks
@@ -994,6 +1035,8 @@ class OlmoEarthDatasetConfig(Config):
     seed: int = 0
     apply_cutmix: bool = False
     filter_idx_file: str | None = None
+    bluetopo_dir: str | None = None
+    bluetopo_fill_value: float = MISSING_VALUE
 
     def get_numpy_dtype(self) -> np.dtype:
         """Get the numpy dtype."""

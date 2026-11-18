@@ -435,3 +435,51 @@ def test_helios_dataset_config_deprecation_warning(tmp_path: Path) -> None:
             h5py_dir=str(tmp_path),
             training_modalities=[Modality.SENTINEL2_L2A.name],
         )
+
+
+class TestBlueTopoDepth:
+    """Test lookup of precomputed BlueTopo depth in OlmoEarthDataset."""
+
+    @pytest.fixture
+    def dataset(self, tmp_path: Path) -> OlmoEarthDataset:
+        """A dataset whose bluetopo_dir labels samples 3 and 7."""
+        root = tmp_path / "bluetopo"
+        root.mkdir()
+        depth_dm = np.full((2, 4, 4), -1, dtype=np.int16)
+        depth_dm[0, :2] = 25
+        np.save(root / "idx.npy", np.array([3, 7]))
+        np.save(root / "depth_dm.npy", depth_dm)
+        h5py_dir = tmp_path / "h5py_data"
+        h5py_dir.mkdir()
+        return OlmoEarthDataset(
+            h5py_dir=UPath(h5py_dir),
+            training_modalities=["sentinel2_l2a", "bluetopo"],
+            dtype=np.float32,
+            normalize=False,
+            bluetopo_dir=str(root),
+        )
+
+    def test_labelled_sample(self, dataset: OlmoEarthDataset) -> None:
+        """Depth is in metres with MISSING_VALUE where unlabelled."""
+        depth = dataset._bluetopo_depth(3)
+        assert depth is not None
+        assert depth.shape == (4, 4, 1, 1)
+        assert np.all(depth[:2] == 2.5)
+        assert np.all(depth[2:] == MISSING_VALUE)
+
+    def test_fill_value(self, dataset: OlmoEarthDataset) -> None:
+        """Unlabelled pixels take bluetopo_fill_value when it is set."""
+        dataset.bluetopo_fill_value = -5.0
+        depth = dataset._bluetopo_depth(3)
+        assert depth is not None
+        assert np.all(depth[:2] == 2.5)
+        assert np.all(depth[2:] == -5.0)
+
+    def test_unlisted_sample_is_missing(self, dataset: OlmoEarthDataset) -> None:
+        """Samples not in idx.npy have no BlueTopo modality."""
+        assert dataset._bluetopo_depth(5) is None
+        assert dataset._bluetopo_depth(100) is None
+
+    def test_unlabelled_sample_is_missing(self, dataset: OlmoEarthDataset) -> None:
+        """A listed sample with no labelled pixels has no BlueTopo modality."""
+        assert dataset._bluetopo_depth(7) is None
