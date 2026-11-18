@@ -51,6 +51,9 @@ class TextAlignmentHeadConfig(Config):
         num_label_distractors: Vocabulary labels drawn as extra negatives per microbatch.
         text_holdout_spec: Split spec (data/text_holdout.py) whose held-out labels are
             never drawn as distractors.
+        project_text: Map the text into the location-token space with an MLP instead of
+            projecting the tokens into the text space; the tokens are used as they are.
+        text_hidden: Hidden width of that MLP.
     """
 
     embeddings_dir: str
@@ -62,6 +65,8 @@ class TextAlignmentHeadConfig(Config):
     label_weight: float = 0.1
     num_label_distractors: int = 1024
     text_holdout_spec: str | None = None
+    project_text: bool = False
+    text_hidden: int = 1024
 
     def build(self, embedding_dim: int) -> TextAlignmentHead:
         """Build the head for a location-token grid of width ``embedding_dim``."""
@@ -80,6 +85,7 @@ class TextAlignmentHeadConfig(Config):
             ),
             label_weight=self.label_weight,
             num_label_distractors=self.num_label_distractors,
+            text_hidden=self.text_hidden if self.project_text else None,
         )
 
 
@@ -117,8 +123,19 @@ class LabelEmbeddings:
         return self.table[ids]
 
 
+def text_mlp(text_dim: int, hidden: int, embedding_dim: int) -> nn.Sequential:
+    """Text embeddings into the location-token space."""
+    return nn.Sequential(
+        nn.Linear(text_dim, hidden), nn.GELU(), nn.Linear(hidden, embedding_dim)
+    )
+
+
 class TextAlignmentHead(nn.Module):
-    """Linear projection of pooled location tokens and a learned temperature."""
+    """Linear projection of pooled location tokens and a learned temperature.
+
+    With ``text_hidden``, the tokens are left as they are and an MLP maps the text into
+    their space instead.
+    """
 
     def __init__(
         self,
@@ -130,6 +147,7 @@ class TextAlignmentHead(nn.Module):
         labels: LabelEmbeddings | None = None,
         label_weight: float = 0.1,
         num_label_distractors: int = 1024,
+        text_hidden: int | None = None,
     ):
         """Initialize the head."""
         super().__init__()
@@ -137,7 +155,12 @@ class TextAlignmentHead(nn.Module):
         self.labels = labels
         if labels is not None and labels.dim != embeddings.dim:
             raise ValueError(f"label dim {labels.dim} != caption dim {embeddings.dim}")
-        self.proj = nn.Linear(embedding_dim, embeddings.dim)
+        if text_hidden is None:
+            self.proj: nn.Module = nn.Linear(embedding_dim, embeddings.dim)
+            self.text_proj: nn.Module | None = None
+        else:
+            self.proj = nn.Identity()
+            self.text_proj = text_mlp(embeddings.dim, text_hidden, embedding_dim)
         self.log_scale = nn.Parameter(torch.tensor(math.log(1 / init_temperature)))
         self.weight = weight
         self.same_text_threshold = same_text_threshold
@@ -155,11 +178,14 @@ class TextAlignmentHead(nn.Module):
         """
         image = F.normalize(self.proj(pooled).float(), dim=-1)
         text = text.float()
+        mapped = text
+        if self.text_proj is not None:
+            mapped = F.normalize(self.text_proj(text.to(pooled.dtype)).float(), dim=-1)
         scale = self.log_scale.float().exp().clamp(max=100.0)
         if targets is not None:
-            return self._label_loss(scale * image @ text.T, text, targets)
+            return self._label_loss(scale * image @ mapped.T, text, targets)
         n = len(text)
-        logits = scale * image @ text.T
+        logits = scale * image @ mapped.T
         same = (text @ text.T >= self.same_text_threshold) & ~torch.eye(
             n, dtype=torch.bool, device=text.device
         )

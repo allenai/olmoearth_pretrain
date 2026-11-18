@@ -49,18 +49,35 @@ def read_annotations(path: str) -> pd.DataFrame:
 
 
 def sentence_encoder(info: dict) -> Callable[[list[str]], np.ndarray]:
-    """Embed texts as the head's training texts were: unit vectors, truncated."""
+    """Embed texts as the head's training texts were: unit vectors, truncated.
+
+    When ``info`` names a ``text_proj`` (a head that maps text into the token space),
+    the texts then go through it.
+    """
     import torch
     from sentence_transformers import SentenceTransformer
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(info["model"], device=device)
+    mlp = None
+    if "text_proj" in info:
+        from olmoearth_pretrain.nn.text_alignment import text_mlp
+
+        state = torch.load(info["text_proj"], map_location="cpu")
+        mlp = text_mlp(info["dim"], info["text_hidden"], info["token_dim"])
+        mlp.load_state_dict(state)
+        mlp.eval()
 
     def encode(texts: list[str]) -> np.ndarray:
         emb = model.encode(
             texts, prompt_name=info["prompt_name"], convert_to_numpy=True
         ).astype(np.float32)[:, : info["dim"]]
-        return emb / np.linalg.norm(emb, axis=1, keepdims=True)
+        emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+        if mlp is not None:
+            with torch.no_grad():
+                emb = mlp(torch.from_numpy(emb)).numpy()
+            emb = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+        return emb
 
     return encode
 
