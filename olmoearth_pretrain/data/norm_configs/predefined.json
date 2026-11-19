@@ -717,6 +717,12 @@
       "min": 0
     }
   },
+  "worldcover_pred": {
+    "B1": {
+      "max": 12,
+      "min": 0
+    }
+  },
   "worldpop": {
     "B1": {
       "count": 100,

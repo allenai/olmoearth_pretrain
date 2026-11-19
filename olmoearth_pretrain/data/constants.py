@@ -36,6 +36,13 @@ YEAR_NUM_TIMESTEPS = 12
 # modality expands that band into one channel per class (in this order).
 WORLDCOVER_CLASSES = [10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100]
 
+# Number of classes in the predicted WorldCover taxonomy (worldcover_pred modality).
+# These are the class indices output by the worldcover segmentation model (argmax over
+# the 13-class training taxonomy: nodata, bare, burnt, crops, fallow, grassland, lichen,
+# shrub, snow, tree, urban, water, wetland). Index 0 is nodata. The worldcover_pred
+# modality stores a single band of these indices; worldcover_pred_onehot expands it.
+WORLDCOVER_PRED_NUM_CLASSES = 13
+
 
 def get_resolution(resolution_factor: int) -> float | int:
     """Compute the resolution.
@@ -295,6 +302,32 @@ class Modality:
         name="worldcover_onehot",
         tile_resolution_factor=16,
         band_sets=[BandSet([f"class_{c}" for c in WORLDCOVER_CLASSES], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=True,
+        skip_normalization=True,
+    )
+
+    # Time-aligned land-cover map predicted by the worldcover segmentation model from
+    # each sample's own Sentinel-2 stack. Unlike WORLDCOVER (static ESA 2021 map), the
+    # metadata time range reflects the sample year. Stores a single band of class indices
+    # in [0, WORLDCOVER_PRED_NUM_CLASSES).
+    WORLDCOVER_PRED = ModalitySpec(
+        name="worldcover_pred",
+        tile_resolution_factor=16,
+        band_sets=[BandSet(["B1"], 16)],
+        is_multitemporal=False,
+        ignore_when_parsing=False,
+    )
+
+    # One-hot encoded version of WORLDCOVER_PRED. Derived modality (not stored on disk):
+    # computed at load time from the raw predicted class indices (see OlmoEarthDataset).
+    # One channel per class index; values are already 0/1 so normalization is skipped.
+    WORLDCOVER_PRED_ONEHOT = ModalitySpec(
+        name="worldcover_pred_onehot",
+        tile_resolution_factor=16,
+        band_sets=[
+            BandSet([f"class_{c}" for c in range(WORLDCOVER_PRED_NUM_CLASSES)], 16)
+        ],
         is_multitemporal=False,
         ignore_when_parsing=True,
         skip_normalization=True,
